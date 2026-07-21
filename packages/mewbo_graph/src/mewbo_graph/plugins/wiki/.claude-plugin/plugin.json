@@ -43,32 +43,38 @@
     {
       "tool_id": "wiki_query_graph",
       "module": "mewbo_graph.plugins.wiki.query_graph",
-      "class": "WikiQueryGraphTool"
+      "class": "WikiQueryGraphTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_graph_neighbors",
       "module": "mewbo_graph.plugins.wiki.graph_neighbors",
-      "class": "WikiGraphNeighborsTool"
+      "class": "WikiGraphNeighborsTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_search_pages",
       "module": "mewbo_graph.plugins.wiki.search_pages",
-      "class": "WikiSearchPagesTool"
+      "class": "WikiSearchPagesTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_read_page",
       "module": "mewbo_graph.plugins.wiki.read_page",
-      "class": "WikiReadPageTool"
+      "class": "WikiReadPageTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_code_search",
       "module": "mewbo_graph.plugins.wiki.code_search",
-      "class": "WikiCodeSearchTool"
+      "class": "WikiCodeSearchTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_list_pages",
       "module": "mewbo_graph.plugins.wiki.list_pages",
-      "class": "WikiListPagesTool"
+      "class": "WikiListPagesTool",
+      "unconditional": true
     },
     {
       "tool_id": "wiki_read_file",

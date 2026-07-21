@@ -97,6 +97,29 @@ def test_list_heads_token_injected_into_url() -> None:
     assert any("x-access-token" in arg and SECRET in arg for arg in captured[0])
 
 
+def test_list_heads_threads_credential_username() -> None:
+    """A credential's own username is injected (not x-access-token) — chain parity
+    with clone/freshness/validate, so a GitLab-oauth2/custom-username token works."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranchLister
+
+    SECRET = "glpat_token789"
+    captured: list = []
+
+    def _capture(cmd, **kwargs):
+        captured.append(list(cmd))
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout=_LS_REMOTE_STDOUT, stderr=b""
+        )
+
+    with patch("subprocess.run", side_effect=_capture):
+        RemoteBranchLister(
+            url="https://gitlab.com/org/repo", token=SECRET, username="oauth2"
+        ).list_heads()
+
+    assert any("oauth2" in arg and SECRET in arg for arg in captured[0])
+    assert not any("x-access-token" in arg for arg in captured[0])
+
+
 def test_list_heads_private_host_skips_tls() -> None:
     """A private-TLD host inserts ``-c http.sslVerify=false`` (mirrors clone)."""
     from mewbo_graph.plugins.wiki.branches import RemoteBranchLister
@@ -114,6 +137,29 @@ def test_list_heads_private_host_skips_tls() -> None:
 
     cmd = captured[0]
     assert "-c" in cmd and "http.sslVerify=false" in cmd
+
+
+def test_list_heads_hardened_argv_and_env() -> None:
+    """C2 regression: the branch lister disables the credential helper (argv) and
+    forces ``GIT_TERMINAL_PROMPT=0`` (env), so it can never wedge on the
+    read-only mounted credential file — the original EBUSY-masks-auth incident."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranchLister
+
+    captured: dict = {}
+
+    def _capture(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["env"] = dict(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout=_LS_REMOTE_STDOUT, stderr=b""
+        )
+
+    with patch("subprocess.run", side_effect=_capture):
+        RemoteBranchLister(url="https://git.home/org/repo").list_heads()
+
+    assert "credential.helper=" in captured["cmd"]
+    assert "ls-remote" in captured["cmd"] and "--symref" in captured["cmd"]
+    assert captured["env"].get("GIT_TERMINAL_PROMPT") == "0"
 
 
 # ── build_clone_command (shared clone argv) ─────────────────────────────────────

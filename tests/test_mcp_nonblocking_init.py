@@ -1,4 +1,4 @@
-"""Non-blocking async MCP initialization (Gitea #130).
+"""Non-blocking async MCP initialization.
 
 A slow/dead MCP server must never stall startup or the tool loop:
 - failures are classified (auth/config never retry; dns/refused/timeout back off);
@@ -212,7 +212,7 @@ class TestLazyConnectNoEagerDial:
 
 
 class TestNoPerCallRefreshChurn:
-    """Gitea #130 Phase 4: a healthy connected server must never trigger a
+    """Phase 4: a healthy connected server must never trigger a
     full-config reload + reconnect on every tool call (the mid-query stall)."""
 
     def setup_method(self):
@@ -260,7 +260,7 @@ class TestNoPerCallRefreshChurn:
 
 
 class TestStartupConfigHashGate:
-    """Gitea #130 Phase 1: an unchanged MCP config + a cached manifest must NOT
+    """Phase 1: an unchanged MCP config + a cached manifest must NOT
     trigger a blocking live connect — startup uses the cache and the pool
     connects lazily on first use, so a slow/dead server never stalls the banner."""
 

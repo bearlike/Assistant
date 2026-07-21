@@ -19,6 +19,7 @@
 import {
   FACETS,
   FALLBACK_FACET_ID,
+  type FacetId,
   type FacetMeta,
 } from "./facets";
 import { validateMarketplaceEntry } from "./marketplaceValidation";
@@ -62,8 +63,10 @@ export interface SectionNode {
 
 /** A presentation facet plus its resolved, ordered sections. */
 export interface GroupNode {
-  id: string;
+  /** Facet id — the union, so the shell can index the pane registry with it. */
+  id: FacetId;
   title: string;
+  blurb: string;
   iconName: string;
   order: number;
   sections: SectionNode[];
@@ -234,6 +237,7 @@ export class SettingsModel {
     return FACETS.map((facet: FacetMeta) => ({
       id: facet.id,
       title: facet.title,
+      blurb: facet.blurb,
       iconName: facet.iconName,
       order: facet.order,
       sections: (byFacet.get(facet.id) ?? []).sort(SettingsModel.compareSections),
@@ -254,6 +258,21 @@ export class SettingsModel {
    */
   groups(): GroupNode[] {
     return this._groups;
+  }
+
+  /**
+   * `groups()` narrowed to the ones worth showing a nav row for: a facet
+   * renders if it has schema sections OR the caller's `paneCounts` say it
+   * carries at least one custom pane (`settings/panes.ts`'s `PANE_COUNTS`).
+   * Lifted off the shell so a second facet-nav renderer (the NavRail settings
+   * section) can't drift by re-deriving "has sections OR has panes" its own
+   * way. Takes counts rather than the pane registry itself so this class
+   * stays React-free — the registry's values are `ComponentType`s.
+   */
+  visibleGroups(paneCounts: Partial<Record<string, number>>): GroupNode[] {
+    return this._groups.filter(
+      (g) => g.sections.length > 0 || (paneCounts[g.id] ?? 0) > 0
+    );
   }
 
   /** Look up a section by its top-level AppConfig id. */

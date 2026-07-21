@@ -5,7 +5,7 @@ all durable state lives in the injected agentic_search store; this class is the
 single read/write/build chokepoint with one ``_encode``/``_decode`` seam so
 encryption-at-rest is a one-line swap later. Keyed by **workspace id**.
 
-What it owns (#75): the resolved selection of MCP servers a workspace's runs may
+What it owns: the resolved selection of MCP servers a workspace's runs may
 reach — server name → :class:`McpServerDef` (transport / url / command, headers
 + env behind the encode seam). It is **the source of truth for what a run may
 reach**: built from ``Workspace.sources`` ∩ the merged ``configs/mcp.json`` chain
@@ -104,7 +104,7 @@ class WorkspaceMcpConfig:
         """Build (not persist) the virtual config for *source_ids*.
 
         ``nl_fingerprint`` stamps the workspace-prose digest that last drove a
-        map-time enrich (server-internal bookkeeping, #83); default empty keeps
+        map-time enrich (server-internal bookkeeping); default empty keeps
         the legacy shape for callers that don't track it.
         """
         return WorkspaceMcpConfigRecord(
@@ -131,7 +131,7 @@ class WorkspaceMcpConfig:
         merged config and overwrites any prior config, so a workspace update keeps
         the virtual config in lockstep with the (possibly changed) selection.
         ``nl_fingerprint`` stamps the workspace-prose digest driving the current
-        map-time enrich (#83) — the caller reads the prior value via
+        map-time enrich — the caller reads the prior value via
         :meth:`nl_fingerprint_of` BEFORE this overwrite to detect a prose change.
         """
         record = cls.build(
@@ -147,9 +147,9 @@ class WorkspaceMcpConfig:
         """Return the NL-context fingerprint stamped on the persisted config.
 
         ``""`` when no config is persisted yet (a fresh workspace) or it predates
-        #83 — both read as "no prior enrich prose", so the first prose-bearing
+        the fingerprint field — both read as "no prior enrich prose", so the first prose-bearing
         save always counts as a change. The seam the re-enrich gate compares
-        against (#83).
+        against.
         """
         record = cls.load(store, workspace_id)
         return record.nl_fingerprint if record is not None else ""

@@ -152,6 +152,31 @@ def test_fork_creates_new_session_and_notifies(tmp_path) -> None:
     assert len(notifier.calls) == 1
 
 
+def test_fork_refuses_a_terminated_session(tmp_path) -> None:
+    """A terminated session cannot be forked, even via the core command seam.
+
+    ``_handle_fork`` copies the transcript through the STORE, bypassing
+    ``resolve_session`` (where the kill switch normally lives), so without its
+    own guard any command-dispatching surface could launder a killed session
+    into a live one.
+    """
+    ctx = _make_ctx(tmp_path)
+    notifier = _RecordingNotifier()
+    ctx.notification_service = notifier
+    ctx.session_store.append_event(
+        ctx.session_id, {"type": "user", "payload": {"text": "hi"}}
+    )
+    ctx.session_store.terminate_session(ctx.session_id)
+    before = set(ctx.session_store.list_sessions())
+
+    result = asyncio.run(execute_command("fork", [], ctx))
+
+    assert result.metadata.get("session_terminated") is True
+    assert "new_session_id" not in result.metadata
+    assert set(ctx.session_store.list_sessions()) == before
+    assert not notifier.calls
+
+
 def test_fork_with_tag_argument(tmp_path) -> None:
     ctx = _make_ctx(tmp_path)
     notifier = _RecordingNotifier()

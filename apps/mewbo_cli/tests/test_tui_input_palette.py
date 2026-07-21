@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the palette provider + make_input_installer (issue #155, epic #149).
+"""Tests for the palette provider + make_input_installer.
 
 The installer is exercised against the real ``MewboApp`` (imported read-only) —
 the same integration path the controller wires in ``cli_master._build_installers``.

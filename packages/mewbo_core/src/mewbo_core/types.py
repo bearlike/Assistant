@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -81,8 +81,37 @@ class CompletionPayload(TypedDict):
     done: bool
     done_reason: str | None
     task_result: str | None
+    # Flat, bounded blurbs — legacy consumers (Aura's error card, the CLI)
+    # read these. Written from ``RunError.brief()``, so never longer than 500
+    # characters no matter what the provider stack emitted.
     error: NotRequired[str]
     last_error: NotRequired[str]
+    # Additive structured failure record — a serialized ``RunError``
+    # (``mewbo_core.run_error``), stored via ``model_dump(mode="json")`` so the
+    # value is plain JSON types for Mongo and the wire. Present only alongside
+    # ``error``; a client that only knows the flat keys is unaffected.
+    error_detail: NotRequired[dict[str, Any]]
+    # The last UNRECOVERED tool-envelope error code, and only when it is one a
+    # user can act on: ``repo_access`` / ``network`` / ``forbidden`` /
+    # ``quota_exceeded``. Projected from ``OrchestrationState.blocked_code``,
+    # which the loop clears per tool_id as soon as that tool succeeds again.
+    #
+    # This is the sole input to the derived ``blocked`` status
+    # (``session_runtime``): ``done_reason`` stays ``"completed"`` for a blocked
+    # run at the loop layer, so without this key the fact that a run died
+    # against a credential or a network path is unreachable from the record.
+    # NotRequired, so every payload written before it existed still validates.
+    blocked_code: NotRequired[str]
+
+
+# The user-actionable tool-envelope codes that a run carries as ``blocked_code``
+# and that derive the ``blocked`` status. Kept here beside the wire field so the
+# loop that STAMPS the code and the runtime that HONORS it read one set — a new
+# code added in only one place would stamp a completion the other never renders
+# as blocked, silently dropping the very signal.
+BLOCKED_CODES: frozenset[str] = frozenset(
+    {"repo_access", "network", "forbidden", "quota_exceeded"}
+)
 
 
 class SubAgentPayload(TypedDict):
@@ -242,6 +271,79 @@ class DeviceToolCallPayload(TypedDict):
     expires_at: float
 
 
+class UserQuestionOptionPayload(TypedDict):
+    """One selectable option on a ``user_question`` event."""
+
+    label: str
+    description: str | None
+
+
+class UserQuestionItemPayload(TypedDict):
+    """One question in a ``user_question`` event's group."""
+
+    header: str
+    question: str
+    options: list[UserQuestionOptionPayload]
+    multi_select: bool
+
+
+class UserQuestionPayload(TypedDict):
+    """Payload announcing a pending ask-user question group (``user_question``).
+
+    Emitted by the api's question dispatcher when the root agent calls
+    ``ask_user_question`` (see ``ask_user.py``); rides the session's SSE
+    stream + backlog replay so every attached surface renders the card.
+    ``call_token`` follows the ``device_tool_call`` threat model verbatim:
+    it proves session-stream read access and prevents replay — not which
+    surface answered. There is NO expiry: a question stays pending until it
+    is answered or the run is steered/interrupted/cancelled.
+    """
+
+    call_id: str
+    call_token: str
+    questions: list[UserQuestionItemPayload]
+
+
+class UserQuestionAnswerItemPayload(TypedDict):
+    """One delivered answer (indexes XOR text) on the answered event."""
+
+    selected_indexes: list[int] | None
+    text: str | None
+
+
+class UserQuestionAnsweredPayload(TypedDict):
+    """Resolution record for a question group (``user_question_answered``).
+
+    ``outcome`` is ``answered`` / ``declined`` (user sent a message instead)
+    / ``interrupted`` / ``cancelled``; ``answers`` is present only when
+    answered. Every surface — not just the one that answered — folds this
+    onto its pending card.
+    """
+
+    call_id: str
+    outcome: str
+    answered_via: str | None
+    answers: list[UserQuestionAnswerItemPayload] | None
+
+
+class VerificationPayload(TypedDict):
+    """One verifier-gate check verdict (``verification`` event).
+
+    Bounded scalars ONLY: the grounded verifier stdout/stderr is injected into
+    the model's own context (a SystemMessage), never onto the wire — so a
+    chatty command can't bloat transcripts. ``attempt`` is 1-based; ``passed``
+    is the interpreted verdict; ``exit_code``/``timed_out`` explain a failure.
+    """
+
+    agent_id: str
+    depth: int
+    step: int
+    passed: bool
+    attempt: int
+    exit_code: int
+    timed_out: bool
+
+
 EventPayload = (
     ActionPlanPayload
     | PermissionPayload
@@ -260,6 +362,9 @@ EventPayload = (
     | RecoveryHaltPayload
     | TodosPayload
     | DeviceToolCallPayload
+    | UserQuestionPayload
+    | UserQuestionAnsweredPayload
+    | VerificationPayload
     | dict[str, JsonValue]
 )
 

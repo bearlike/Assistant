@@ -1,4 +1,4 @@
-# System-prompt assembly sections (Gitea #89, phase 1).
+# System-prompt assembly sections.
 #
 # VERBATIM extraction from planning.py:PromptBuilder.build — the section wrappers
 # that prefix each contextual block before they are joined with "\n\n". The YAML

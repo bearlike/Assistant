@@ -272,10 +272,12 @@ class DummySession:
         """Initialize the session with a payload."""
         self.payload = payload
         self.last_request = None
+        self.requests = []
 
     async def request(self, method=None, url=None, headers=None, json=None):
         """Capture the request metadata and return a dummy response."""
         self.last_request = {"method": method, "url": url, "headers": headers, "json": json}
+        self.requests.append(self.last_request)
         return DummyResponse(self.payload)
 
 
@@ -303,7 +305,7 @@ class DummyResponse:
 def test_api_generate_includes_session_id():
     """Include session_id in API request payloads."""
     session = DummySession({"task_result": "ok"})
-    client = MewboApiClient(base_url="http://test", timeout=10, session=session)
+    client = MewboApiClient(base_url="http://test", api_key="tok", timeout=10, session=session)
     result = asyncio.run(client.async_generate({"prompt": "hello", "session_id": "abc"}))
     assert session.last_request["json"]["session_id"] == "abc"
     assert result["response"] == "ok"
@@ -313,7 +315,7 @@ def test_api_generate_includes_session_id():
 def test_api_generate_requires_prompt():
     """Raise when API requests omit a prompt."""
     session = DummySession({"task_result": "ok"})
-    client = MewboApiClient(base_url="http://test", timeout=10, session=session)
+    client = MewboApiClient(base_url="http://test", api_key="tok", timeout=10, session=session)
     try:
         asyncio.run(client.async_generate({}))
     except ValueError:
@@ -463,6 +465,8 @@ def test_config_flow_success(monkeypatch):
     result = asyncio.run(flow.async_step_user(user_input))
     assert result["type"] == "create_entry"
     assert result["data"]["base_url"] == "http://test"
+    # The user-entered API key must persist onto the entry (was dropped).
+    assert result["data"]["api_key"] == "token"
 
 
 def test_config_flow_error(monkeypatch):
@@ -599,7 +603,7 @@ def test_api_wrapper_decode_json_false():
         async def request(self, **_kwargs):
             return Response()
 
-    client = MewboApiClient(base_url="http://test", timeout=10, session=Session())
+    client = MewboApiClient(base_url="http://test", api_key="tok", timeout=10, session=Session())
     result = asyncio.run(client._mewbo_api_wrapper("get", "http://test", decode_json=False))
     assert result == "plain"
 
@@ -623,10 +627,86 @@ def test_api_wrapper_handles_404():
         async def request(self, **_kwargs):
             return Response()
 
-    client = MewboApiClient(base_url="http://test", timeout=10, session=Session())
+    client = MewboApiClient(base_url="http://test", api_key="tok", timeout=10, session=Session())
     try:
         asyncio.run(client._mewbo_api_wrapper("get", "http://test"))
     except Exception as exc:
         assert exc.__class__.__name__ == "ApiJsonError"
     else:
         assert False
+
+
+class _StubCoordinator:
+    """No-op coordinator so setup skips the real polling machinery."""
+
+    def __init__(self, *_args, **_kwargs):
+        """Accept and ignore any construction arguments."""
+
+    async def async_config_entry_first_refresh(self):
+        """Return without fetching to mimic a successful first refresh."""
+        return None
+
+
+def test_setup_entry_threads_configured_api_key_to_header(monkeypatch):
+    """The config-entry API key reaches the X-API-KEY request header (P1)."""
+    from mewbo_ha_conversation.const import CONF_API_KEY, CONF_BASE_URL, CONF_TIMEOUT
+
+    session = DummySession({"task_result": "ok", "response": "hi", "session_id": "s1"})
+    monkeypatch.setattr(ha_module, "MewboDataUpdateCoordinator", _StubCoordinator)
+    monkeypatch.setattr(ha_module, "async_get_clientsession", lambda _hass: session)
+
+    ConfigEntry = sys.modules["homeassistant.config_entries"].ConfigEntry
+    hass = types.SimpleNamespace(data={})
+    entry = ConfigEntry(
+        data={CONF_BASE_URL: "http://test", CONF_API_KEY: "secret-key"},
+        options={CONF_TIMEOUT: 10},
+    )
+    assert asyncio.run(ha_module.async_setup_entry(hass, entry)) is True
+
+    # Drive one real turn through the wired agent and read the outbound header.
+    asyncio.run(hass._agent.query({"prompt": "hello", "session_id": None}))
+    assert session.last_request["headers"]["X-API-KEY"] == "secret-key"
+
+
+def test_setup_entry_legacy_entry_falls_back_and_warns(monkeypatch):
+    """A key-less legacy entry uses the default token and logs a deprecation (P1)."""
+    from mewbo_ha_conversation.const import CONF_BASE_URL, CONF_TIMEOUT, DEFAULT_API_KEY
+
+    session = DummySession({"task_result": "ok", "response": "hi", "session_id": "s1"})
+    monkeypatch.setattr(ha_module, "MewboDataUpdateCoordinator", _StubCoordinator)
+    monkeypatch.setattr(ha_module, "async_get_clientsession", lambda _hass: session)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        ha_module.LOGGER, "warning", lambda *a, **k: warnings.append(str(a[0]) if a else "")
+    )
+
+    ConfigEntry = sys.modules["homeassistant.config_entries"].ConfigEntry
+    hass = types.SimpleNamespace(data={})
+    entry = ConfigEntry(
+        data={CONF_BASE_URL: "http://test"}, # legacy entry: no stored api_key
+        options={CONF_TIMEOUT: 10},
+    )
+    assert asyncio.run(ha_module.async_setup_entry(hass, entry)) is True
+
+    asyncio.run(hass._agent.query({"prompt": "hello", "session_id": None}))
+    assert session.last_request["headers"]["X-API-KEY"] == DEFAULT_API_KEY
+    assert any("deprecated" in msg.lower() for msg in warnings)
+
+
+def test_agent_multiturn_reuses_session_id_on_wire():
+    """A follow-up turn in the same HA conversation reuses the prior session id (P2)."""
+    session = DummySession({"task_result": "ok", "response": "hi", "session_id": "server-sid"})
+    client = MewboApiClient(base_url="http://test", api_key="tok", timeout=10, session=session)
+    agent = MewboAgent(types.SimpleNamespace(), types.SimpleNamespace(), client)
+
+    ConversationInput = sys.modules["homeassistant.components.conversation"].ConversationInput
+
+    first = asyncio.run(agent.async_process(ConversationInput("conv-x", "hello", "en")))
+    # A fresh conversation opens a new server session: no session_id on the wire.
+    assert session.requests[0]["json"].get("session_id") is None
+
+    followup = ConversationInput(first.conversation_id, "and again", "en")
+    asyncio.run(agent.async_process(followup))
+    # The follow-up reuses the server-issued session id captured on turn one.
+    assert session.requests[1]["json"]["session_id"] == "server-sid"

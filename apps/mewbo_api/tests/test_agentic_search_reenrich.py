@@ -1,4 +1,4 @@
-"""Route-level coverage for "workspace editing is a graph-lifecycle event" (#83).
+"""Route-level coverage for "workspace editing is a graph-lifecycle event".
 
 Drives the real ``POST`` / ``PATCH /workspaces`` routes against the real JSON
 agentic_search store and asserts which sources the map+enrich pipeline is driven
@@ -11,7 +11,7 @@ for, stubbing ONLY the two I/O boundaries the auto-map crosses:
 Covers the three gates the issue calls out:
 
 * an **instructions-only** PATCH (no ``sources`` key) re-drives the map for the
-  workspace's already-mapped sources (the #83 gap — a prose change is now a
+  workspace's already-mapped sources (the gap — a prose change is now a
   graph-lifecycle event);
 * a **sources** PATCH still maps the newly-enabled source; and
 * a **no-op** PATCH fires nothing.
@@ -122,14 +122,14 @@ def _create_workspace(client, **body) -> str:
     """Create a workspace via the route; return its id (fan-out settled)."""
     resp = client.post("/api/agentic_search/workspaces", json=body, headers=_auth())
     assert resp.status_code == 201, resp.get_json()
-    # The auto-map fan-out is async (#97) — settle it so a later
+    # The auto-map fan-out is async — settle it so a later
     # ``map_recorder.clear()`` can't race the create-time map.
     sync_mod.WorkspaceSourceSync.join_last_fan_out()
     return resp.get_json()["workspace"]["id"]
 
 
 def _patch_workspace(client, ws_id: str, body: dict):
-    """PATCH a workspace via the route; settle the async fan-out (#97)."""
+    """PATCH a workspace via the route; settle the async fan-out."""
     resp = client.patch(
         f"/api/agentic_search/workspaces/{ws_id}", json=body, headers=_auth()
     )
@@ -152,11 +152,11 @@ def test_sources_patch_maps_newly_enabled_source(map_recorder: _MapRecorder) -> 
     assert map_recorder.started == ["internet-search"]
 
 
-# ── instructions-only PATCH → re-enrich driven (the #83 gap) ────────────────
+# ── instructions-only PATCH → re-enrich driven (the gap) ────────────────
 
 
 def test_instructions_only_patch_redrives_map(map_recorder: _MapRecorder) -> None:
-    """An instructions-only PATCH re-drives the map for the mapped source (#83).
+    """An instructions-only PATCH re-drives the map for the mapped source.
 
     The source list is unchanged and the tool list didn't drift, so the ONLY
     reason a map fires is the changed NL-context prose. The mapped source is
@@ -179,7 +179,7 @@ def test_instructions_only_patch_redrives_map(map_recorder: _MapRecorder) -> Non
 
 
 def test_description_only_patch_redrives_map(map_recorder: _MapRecorder) -> None:
-    """A desc-only edit also counts as an enrich-worthy prose change (#83)."""
+    """A desc-only edit also counts as an enrich-worthy prose change."""
     map_recorder.mapped = {"gitea"}
     client = backend.app.test_client()
     ws_id = _create_workspace(client, name="W", sources=["gitea"], desc="old")
@@ -193,7 +193,7 @@ def test_description_only_patch_redrives_map(map_recorder: _MapRecorder) -> None
 def test_unmapped_source_not_reenriched_on_prose_change(
     map_recorder: _MapRecorder,
 ) -> None:
-    """A prose change on a NOT-yet-mapped source fires no re-enrich (#83 gate).
+    """A prose change on a NOT-yet-mapped source fires no re-enrich (gate).
 
     The re-enrich path only re-drives sources already in the GLOBAL SCG; an
     unmapped source's first map is the first-enable path, not a re-enrich.

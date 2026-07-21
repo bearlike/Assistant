@@ -27,10 +27,15 @@ object AuraShape {
     /** 16dp — small square icon tiles (waveform status tile). */
     val radiusThumb: Dp = 16.dp
 
-    /** 20dp — the assist overlay's Streaming-state response card (Gitea #181 P3, measured capture).
+    /** 20dp — the assist overlay's Streaming-state response card (measured capture).
      * Distinct from [radiusBubble]'s 28dp: the card is a smaller, tighter-cornered floating surface,
      * not a message bubble. */
     val radiusCard: Dp = 20.dp
+
+    /** 1dp — the single hairline stroke width, matching `HorizontalDivider`'s default; the one
+     * explicit border width (the widget card's outline) so no `.dp` literal leaks to a
+     * call site (theme discipline). Pair with [AuraColors.outlineHairline]. */
+    val hairlineWidth: Dp = 1.dp
 
     /**
      * M3 [Shapes] bridge for pre-migration call sites outside `ui/theme/` that still read

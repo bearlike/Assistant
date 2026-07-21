@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the orchestration tool cards (issue #161-C).
+"""Tests for the orchestration tool cards.
 
 Each renderer is fed a representative tool-result payload (mirroring the real
 ``SpawnAgentTool`` / ``check_agents`` / ``tool_search`` envelopes) and we assert

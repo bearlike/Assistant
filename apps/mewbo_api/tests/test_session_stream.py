@@ -1,4 +1,4 @@
-"""Tests for the push-based (#46) SSE session stream generator.
+"""Tests for the push-based SSE session stream generator.
 
 The generator must:
 - load the backlog exactly ONCE (no per-event full-transcript re-read),

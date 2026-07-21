@@ -3,6 +3,7 @@ import { CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { CopyButton } from './CopyButton';
 import { ModelLabel } from './ModelLabel';
 import { HighlightedCode } from './HighlightedCode';
+import { formatDuration } from '../utils/time';
 
 interface TerminalCardProps {
   command: string;
@@ -14,14 +15,6 @@ interface TerminalCardProps {
   defaultExpanded?: boolean;
   model?: string;
   agentId?: string;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
 }
 
 function shortenCwd(cwd: string): string {
@@ -65,7 +58,7 @@ export function TerminalCard({
       className={`rounded-lg overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[3px] transition-colors ${
         hasOutput ? 'cursor-pointer' : ''
       } ${
-        isError ? 'border-l-red-500' : 'border-l-emerald-500/60'
+        isError ? 'border-l-[hsl(var(--destructive))]' : 'border-l-[hsl(var(--success)/0.6)]'
       }`}
       onClick={() => hasOutput && setExpanded((p) => !p)}
     >
@@ -73,15 +66,15 @@ export function TerminalCard({
       <div className={`flex items-center gap-2 px-3 py-1.5 ${TITLE_BG}`}>
         {/* Traffic-light dots */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500' : 'bg-emerald-500'}`} />
-          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
-          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-red-500/30' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-[hsl(var(--destructive))]' : 'bg-[hsl(var(--success))]'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-[hsl(var(--destructive)/0.3)]' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${isError ? 'bg-[hsl(var(--destructive)/0.3)]' : 'bg-[hsl(var(--code-fg-subtle))]/30'}`} />
         </div>
 
         {/* CWD tab title */}
         {cwd && (
           <span
-            className="text-[11px] text-[hsl(var(--code-fg-muted))] truncate flex-1 min-w-0"
+            className="text-2xs text-[hsl(var(--code-fg-muted))] truncate flex-1 min-w-0"
             title={cwd}
           >
             {shortenCwd(cwd)}
@@ -90,16 +83,16 @@ export function TerminalCard({
         {!cwd && <span className="flex-1" />}
 
         {/* Model + Agent badges */}
-        {model && <ModelLabel modelId={model} className="text-[10px] text-[hsl(var(--code-fg-muted))]" />}
+        {model && <ModelLabel modelId={model} className="font-sans text-2xs text-[hsl(var(--code-fg-muted))]" />}
         {agentId && (
-          <span className="text-[10px] font-mono text-[hsl(var(--code-fg-muted))] px-1 rounded bg-[hsl(var(--code-border))]">
+          <span className="text-2xs font-mono text-[hsl(var(--code-fg-muted))] px-1 rounded bg-[hsl(var(--code-border))]">
             {agentId.slice(0, 6)}
           </span>
         )}
 
         {/* Duration */}
         {durationMs !== undefined && (
-          <span className="text-[10px] text-[hsl(var(--code-fg-subtle))] shrink-0 hidden sm:inline">
+          <span className="font-sans text-2xs text-[hsl(var(--code-fg-subtle))] shrink-0 hidden sm:inline">
             {formatDuration(durationMs)}
           </span>
         )}
@@ -109,11 +102,11 @@ export function TerminalCard({
           <span className="shrink-0">
             {isError ? (
               <span className="flex items-center gap-1">
-                <XCircle className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-[10px] text-red-400">{exitCode}</span>
+                <XCircle className="w-3.5 h-3.5 text-[hsl(var(--destructive))]" />
+                <span className="text-2xs text-[hsl(var(--destructive-text))]">{exitCode}</span>
               </span>
             ) : (
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500/70" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-[hsl(var(--success)/0.7)]" />
             )}
           </span>
         )}
@@ -131,7 +124,7 @@ export function TerminalCard({
             {/* Expand hint — shows line count and chevron when collapsed with output */}
             {hasOutput && !expanded && (
               <span className="flex items-center gap-1 shrink-0 text-[hsl(var(--code-fg-subtle))]">
-                <span className="text-[10px]">{outputLines} line{outputLines !== 1 ? 's' : ''}</span>
+                <span className="font-sans text-2xs">{outputLines} line{outputLines !== 1 ? 's' : ''}</span>
                 <ChevronRight className="w-3 h-3" />
               </span>
             )}

@@ -3,13 +3,17 @@ import {
   Mic,
   ArrowUp,
   ArrowUpRight,
+  ClipboardList,
   Paperclip,
+  Plus,
   Square,
   Loader2,
   Maximize2,
 } from 'lucide-react';
 import { QueryMode } from '../types';
+import { cn } from '../lib/utils';
 import { Button } from './ui/button';
+import { composerInputCls } from './ui/composer-shell';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import type { RunStatus } from './InputBar';
 import { RunTelemetry } from './RunTelemetry';
@@ -25,20 +29,23 @@ export interface InputComposerBodyProps {
   onSubmit: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   isSubmitting: boolean;
-  isExpanded: boolean;
+  expanded: boolean;
   isRunning?: boolean;
   /** Live snapshot fed into the running-state strip — phase/agents/tokens/elapsed. */
   runStatus?: RunStatus;
   onStop?: () => void;
-  onTogglePlusMenu?: (open: boolean) => void;
   queryMode: QueryMode;
+  /** Toggle plan/act. Rendered as a visible footer pill (plan pill stays while a run is in flight if active). */
+  onTogglePlanMode: () => void;
+  /** Open the native file picker for attachments. */
+  onAttach: () => void;
   onToggleFullScreen?: () => void;
   attachedFiles: File[];
   onClearAttachments: () => void;
-  /** Pre-rendered Plus menu (DropdownMenu trigger + items). */
-  plusMenu: React.ReactNode;
-  /** Pre-rendered Config menu. */
+  /** Pre-rendered session-config menu (ConfigMenu — owns its own popover). */
   configMenu: React.ReactNode;
+  /** Pre-rendered model selector (ModelSelector — owns its own popover). */
+  modelSelector: React.ReactNode;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   placeholder: string;
   ariaLabel: string;
@@ -56,24 +63,22 @@ function paddings(variant: InputComposerBodyProps['variant']) {
   switch (variant) {
     case 'home':
       return {
-        chip: 'px-4 pt-3 pb-0 flex items-center gap-2',
+        chip: 'px-1.5 pt-1 flex items-center gap-2',
         chipMaxName: 'max-w-[180px]',
-        textareaWrap: 'relative px-4 py-3',
-        textareaSize: 'text-base',
-        toolbar: 'flex items-center justify-between px-2 pb-1',
-        toolbarLeftGap: 'gap-2',
-        toolbarRightGap: 'gap-2',
-        maximizeAnchor: 'absolute top-2 right-2 opacity-60 hover:opacity-100',
+        textareaWrap: 'relative px-2.5 py-1.5',
+        toolbar: 'flex items-center justify-between px-1',
+        toolbarLeftGap: 'gap-1',
+        toolbarRightGap: 'gap-1.5',
+        maximizeAnchor: 'absolute top-1.5 right-1.5 opacity-60 hover:opacity-100',
       };
     case 'detail':
       return {
-        chip: 'px-3 pt-2 pb-0',
+        chip: 'px-1.5 pt-1',
         chipMaxName: 'max-w-[180px]',
-        textareaWrap: 'relative px-3 py-2',
-        textareaSize: 'text-sm',
-        toolbar: 'flex items-center justify-between px-1 pb-1',
+        textareaWrap: 'relative px-2.5 py-1',
+        toolbar: 'flex items-center justify-between px-1',
         toolbarLeftGap: 'gap-1',
-        toolbarRightGap: 'gap-1',
+        toolbarRightGap: 'gap-1.5',
         maximizeAnchor: 'absolute top-1 right-1 opacity-60 hover:opacity-100',
       };
     case 'dialog':
@@ -82,7 +87,6 @@ function paddings(variant: InputComposerBodyProps['variant']) {
         chip: 'px-4 pt-3 pb-0',
         chipMaxName: 'max-w-[240px]',
         textareaWrap: 'flex-1 px-4 py-3 overflow-hidden',
-        textareaSize: 'text-base',
         toolbar:
           'flex items-center justify-between px-3 py-2 border-t border-[hsl(var(--border))]',
         toolbarLeftGap: 'gap-2',
@@ -93,16 +97,16 @@ function paddings(variant: InputComposerBodyProps['variant']) {
 }
 
 /**
- * Bordered slot at the top of the composer that hosts RunTelemetry while a
- * run is in progress. The slot owns the chrome (hairline + padding); the
- * telemetry content (phase + agents + tokens + elapsed) comes from the
- * shared `<RunTelemetry>` component, which is also used by the workspace
- * FlowerSpinner — same data, two windows on one truth (E3, P8).
+ * Slot at the top of the composer that hosts RunTelemetry while a run is in
+ * progress. The slot owns the chrome (inset hairline + padding); the telemetry
+ * content (phase + agents + tokens + elapsed) comes from the shared
+ * `<RunTelemetry>` component, which is also used by the workspace FlowerSpinner
+ * — same data, two windows on one truth (E3, P8).
  */
 function RunIndicator({ status, active }: { status?: RunStatus; active: boolean }) {
   if (!active) return null;
   return (
-    <div className="border-b border-[hsl(var(--border))] pl-[14px] pr-3 py-2">
+    <div className="border-b border-[hsl(var(--border))] px-2 pb-1.5">
       <RunTelemetry data={status} variant="compact" />
     </div>
   );
@@ -134,9 +138,9 @@ function StopWithConfirm({
           tone="danger"
           aria-label="Stop run"
           title="Stop run (Esc)"
-          className="h-8 rounded-md px-3 text-xs"
+          className="px-3"
         >
-          <Square className="mr-1 h-3 w-3" />
+          <Square className="mr-1 h-3.5 w-3.5" />
           Stop
         </Button>
       </PopoverTrigger>
@@ -177,11 +181,60 @@ function StopWithConfirm({
 }
 
 /**
+ * Send / Queue button. Shows text in the detail composer ("Send" idle,
+ * "Queue" while steering a live run); collapses to an icon-only circular
+ * button in the home + dialog composers (vendor look). Running tints it with
+ * the steering accent so the flip from Send→Queue reads at a glance.
+ */
+function SendButton({
+  variant,
+  isRunning,
+  isSubmitting,
+  disabled,
+  onSubmit,
+}: {
+  variant: InputComposerBodyProps['variant'];
+  isRunning: boolean;
+  isSubmitting: boolean;
+  disabled: boolean;
+  onSubmit: () => void;
+}) {
+  const hasText = variant === 'detail';
+  const icon = isSubmitting ? (
+    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  ) : isRunning ? (
+    <ArrowUpRight className="h-3.5 w-3.5" />
+  ) : (
+    <ArrowUp className="h-3.5 w-3.5" />
+  );
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      iconOnly={!hasText}
+      onClick={onSubmit}
+      aria-label={isRunning ? 'Queue steering message' : 'Send query'}
+      title={isRunning ? 'Queue steering message (⌘↵)' : 'Send (⌘↵)'}
+      disabled={disabled}
+      leadingIcon={hasText ? icon : undefined}
+      className={cn(
+        hasText && 'px-3.5',
+        isRunning &&
+          'bg-[hsl(var(--permission))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--permission))]/90',
+      )}
+    >
+      {hasText ? (isRunning ? 'Queue' : 'Send') : icon}
+    </Button>
+  );
+}
+
+/**
  * Shared composer body used by home, detail, and full-screen Dialog InputBar
  * variants. Owns the visual structure (run-indicator → attached-file chip →
  * textarea → toolbar) but holds NO state — the parent InputBar drives every
- * value via props. Only chrome (border, position, max-width) lives in the
- * outer wrapper.
+ * value via props. Only chrome (the rounded card, position, max-width) lives in
+ * the outer wrapper. Footer toolbar (§I): left = [+ attach] [session config]
+ * [model] [plan]; right = [mic] [stop] [send].
  */
 export function InputComposerBody(props: InputComposerBodyProps) {
   const {
@@ -191,16 +244,18 @@ export function InputComposerBody(props: InputComposerBodyProps) {
     onSubmit,
     onKeyDown,
     isSubmitting,
-    isExpanded,
+    expanded,
     isRunning = false,
     runStatus,
     onStop,
     queryMode,
+    onTogglePlanMode,
+    onAttach,
     onToggleFullScreen,
     attachedFiles,
     onClearAttachments,
-    plusMenu,
     configMenu,
+    modelSelector,
     textareaRef,
     placeholder,
     ariaLabel,
@@ -228,6 +283,10 @@ export function InputComposerBody(props: InputComposerBodyProps) {
     onKeyDown?.(e);
   };
 
+  // Plan pill is visible as a toggle when idle; while a run is in flight it is
+  // hidden UNLESS plan is active, where it stays as a locked indicator.
+  const showPlanPill = !isRunning || queryMode === 'plan';
+
   return (
     <>
       <RunIndicator status={runStatus} active={(isRunning || isSubmitting) && variant === 'detail'} />
@@ -238,11 +297,11 @@ export function InputComposerBody(props: InputComposerBodyProps) {
             <Paperclip className="w-3 h-3" />
             <span className={`truncate ${p.chipMaxName}`}>{attachedFiles[0].name}</span>
             {attachedFiles.length > 1 && (
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                 +{attachedFiles.length - 1}
               </span>
             )}
-            <button onClick={onClearAttachments} className="hover:opacity-70">
+            <button onClick={onClearAttachments} className="hover:opacity-70" aria-label="Clear attachments">
               ×
             </button>
           </div>
@@ -264,9 +323,9 @@ export function InputComposerBody(props: InputComposerBodyProps) {
           rows={fillHeight ? undefined : 1}
           className={
             fillHeight
-              ? `w-full h-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] ${p.textareaSize} resize-none`
-              : `w-full bg-transparent border-none outline-none text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] ${p.textareaSize} resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${
-                  isExpanded ? 'min-h-[72px]' : 'min-h-[24px]'
+              ? `w-full h-full bg-transparent border-none outline-none caret-[hsl(var(--primary))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] ${composerInputCls()} resize-none`
+              : `w-full bg-transparent border-none outline-none caret-[hsl(var(--primary))] text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] ${composerInputCls()} resize-none max-h-[200px] pr-7 ${TEXTAREA_TRANSITION} ${
+                  expanded ? 'min-h-[72px]' : 'min-h-[24px]'
                 }`
           }
         />
@@ -286,22 +345,48 @@ export function InputComposerBody(props: InputComposerBodyProps) {
 
       <div className={p.toolbar}>
         <div className={`flex items-center min-w-0 flex-nowrap ${p.toolbarLeftGap}`}>
-          {/* Mid-run, the composer narrows to "proj-pill | spacer | Stop | Send" —
-              the user's hands are here, so the toolbar should read as a steering
-              instrument, not a setup panel. (§I, P5) */}
-          {!isRunning && plusMenu}
-          {!isRunning && queryMode === 'plan' && (
-            <Button variant="neutral" size="sm" className="uppercase tracking-wide text-[10px]">
-              Plan
+          {/* Mid-run, the composer narrows to a steering instrument — attach
+              and the plan toggle drop away; the session-config + model triggers
+              stay (locked) so the run's context is still legible. (§I, P5) */}
+          {!isRunning && (
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
+              onClick={onAttach}
+              aria-label="Attach files"
+              title="Attach files"
+            >
+              <Plus className="h-4 w-4" />
             </Button>
           )}
           {configMenu}
+          {modelSelector}
+          {showPlanPill && (
+            <Button
+              variant={queryMode === 'plan' ? 'neutral' : 'ghost'}
+              size="sm"
+              onClick={onTogglePlanMode}
+              disabled={isRunning}
+              aria-pressed={queryMode === 'plan'}
+              aria-label="Toggle plan mode"
+              title={
+                isRunning
+                  ? 'Plan mode is locked while the agent is running'
+                  : 'Plan mode — review a plan before acting'
+              }
+              className={cn('gap-1.5 px-2.5', queryMode === 'plan' && 'text-[hsl(var(--primary-text))]')}
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              <span>Plan</span>
+            </Button>
+          )}
         </div>
 
         <div className={`flex items-center flex-shrink-0 ${p.toolbarRightGap}`}>
           {showVoice && !isRunning && (
-            <Button variant="ghost" size="md" iconOnly aria-label="Voice input">
-              <Mic className="w-4 h-4" />
+            <Button variant="ghost" size="sm" iconOnly aria-label="Voice input" title="Voice input">
+              <Mic className="h-4 w-4" />
             </Button>
           )}
           {showStop && isRunning && (
@@ -312,30 +397,13 @@ export function InputComposerBody(props: InputComposerBodyProps) {
               onStop={onStop}
             />
           )}
-          <Button
-            variant="primary"
-            size="md"
-            onClick={onSubmit}
-            aria-label={isRunning ? 'Queue steering message' : 'Send query'}
-            title={isRunning ? 'Queue steering message (⌘↵)' : 'Send (⌘↵)'}
+          <SendButton
+            variant={variant}
+            isRunning={isRunning}
+            isSubmitting={isSubmitting}
             disabled={isSubmitting || !inputValue.trim()}
-            className={`h-8 rounded-md px-3 text-xs ${
-              isRunning
-                ? 'bg-[hsl(var(--permission))] text-white hover:bg-[hsl(var(--permission))]/90'
-                : ''
-            }`}
-            leadingIcon={
-              isSubmitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : isRunning ? (
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              ) : (
-                <ArrowUp className="h-3.5 w-3.5" />
-              )
-            }
-          >
-            {variant === 'detail' ? (isRunning ? 'Queue' : 'Send') : null}
-          </Button>
+            onSubmit={onSubmit}
+          />
         </div>
       </div>
     </>

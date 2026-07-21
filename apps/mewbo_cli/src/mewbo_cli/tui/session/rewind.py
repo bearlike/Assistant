@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-turn workspace checkpoints for ``/rewind`` (#157).
+"""Per-turn workspace checkpoints for ``/rewind``.
 
 ``/rewind`` undoes a conversation turn AND the code it changed, together. The
 hard, valuable half is the *workspace* checkpoint: a git ref captured BEFORE a

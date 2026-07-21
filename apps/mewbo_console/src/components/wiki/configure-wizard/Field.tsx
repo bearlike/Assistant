@@ -20,18 +20,18 @@ export function Field({ label, hint, required, error, children }: FieldProps) {
         <label className="text-xs font-medium text-[hsl(var(--foreground))]">
           {label}
           {required && (
-            <span aria-hidden className="text-[hsl(var(--primary))] ml-0.5">
+            <span aria-hidden className="text-[hsl(var(--primary-text))] ml-0.5">
               *
             </span>
           )}
         </label>
         {hint && (
-          <span className="text-[11px] text-[hsl(var(--muted-foreground))]">{hint}</span>
+          <span className="text-2xs text-[hsl(var(--muted-foreground))]">{hint}</span>
         )}
       </div>
       {children}
       {error && (
-        <div className="inline-flex items-center gap-1.5 text-[11px] text-red-500 mt-1">
+        <div className="inline-flex items-center gap-1.5 text-2xs text-red-500 mt-1">
           <AlertCircle className="h-3 w-3" />
           {error}
         </div>

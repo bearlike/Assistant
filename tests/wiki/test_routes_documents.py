@@ -1,6 +1,6 @@
 """Route tests for POST /v1/wiki/projects/<slug>/documents (catalog ingest).
 
-Proves the issue #49 REST acceptance: a non-git project is created AND
+Proves the issue REST acceptance: a non-git project is created AND
 populated purely over HTTP, and the existing retrieval layer grounds over it.
 Reuses the route harness from ``test_routes`` (shared store + stub runtime).
 """

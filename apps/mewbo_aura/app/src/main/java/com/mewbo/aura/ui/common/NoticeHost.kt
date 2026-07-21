@@ -91,7 +91,7 @@ fun NoticeHost(controller: NoticeController, modifier: Modifier = Modifier) {
 private fun NoticePill(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            // fix-round-3 minor #11: without this, the pill rendered BEHIND the keyboard - the
+            // fix-round-3 minor: without this, the pill rendered BEHIND the keyboard - the
             // bottomInset below only clears the nav bar, never the IME.
             .imePadding()
             .fillMaxWidth()

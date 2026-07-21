@@ -112,19 +112,66 @@ annotation class ApplicationScope
 
 /**
  * `X-API-Key` header auth (`api_key` query param is reserved for SSE, which can't rely on this
- * interceptor - see [com.mewbo.aura.data.sse.SessionStreamClient]). `X-Mewbo-Capabilities` is
- * deliberately omitted: Aura is a plain chat client and doesn't need wiki/scg-gated tools (per
- * data/CLAUDE.md's verified contract notes - this diverges from an earlier task-brief draft that
- * suggested always sending it).
+ * interceptor - see [com.mewbo.aura.data.sse.SessionStreamClient]).
+ *
+ * **`X-Mewbo-Capabilities`** (`apps` added by the Mewbo Apps design spec §2.4/§4D;
+ * `ask_user` added by the ask-user-question tool) — the comma-separated capability list the
+ * backend parses into `context.client_capabilities` (verified against the same
+ * `request.headers.get("X-Mewbo-Capabilities", "")` split used for `stlite`). THREE capabilities ride
+ * this ONE header now, gated independently:
+ * - **`apps`** sent UNCONDITIONALLY — Mewbo Apps is a permanent nav surface (the drawer's "Apps" row),
+ *   not an opt-in chat feature like widgets, so it carries no settings toggle of its own (spec §4D
+ *   lists no such flag). Per the two-surface capability-gating law (`feedback_capability_two_surface_gating`
+ *   memory / spec §2.4 "gated by client capability `apps`"), this is the advertise half; the answer
+ *   half is [com.mewbo.aura.data.repo.AppRepository] + the `ui/apps/` screens rendering whatever the
+ *   `/api/apps` surface returns - never advertising a capability the app won't service.
+ * - **`ask_user`** sent UNCONDITIONALLY. Aura always renders the question card
+ *   ([com.mewbo.aura.data.model.ChatItem.Question]) and POSTs the answer
+ *   ([com.mewbo.aura.data.repo.RunRepository.answerQuestion]), so it can always service a blocked
+ *   `ask_user_question` tool call — the "advertise AND answer at the SAME seam" law (root CLAUDE.md).
+ *   Without it the backend never binds the tool and the agent proceeds on its own judgment.
+ * - **`stlite`** sent ONLY while [SettingsStore.streamlitWidgetsEnabled] is on - unlocks the
+ *   `widget_builder` plugin's `widget_ready` events ([com.mewbo.aura.ui.chat.widget.WidgetCard]); the
+ *   render-half (reducer + WebView card) is gated on the SAME flag, so the app never advertises a
+ *   capability it won't service.
+ *
+ * Reading the flag here (blocking `first()`, the same way [apiKey] is already read - DataStore
+ * caches it in memory after the first read, and this runs off the main thread on OkHttp's
+ * dispatcher) keeps the whole gate at ONE seam rather than per-request.
  */
 class AuthInterceptor @Inject constructor(private val settingsStore: SettingsStore) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val apiKey = runBlocking { settingsStore.apiKey.first() }
+        val widgetsEnabled = runBlocking { settingsStore.streamlitWidgetsEnabled.first() }
+        // `apps` and `ask_user` are always advertised; `stlite` only while the render-half is
+        // enabled. The backend splits this header on commas into `context.client_capabilities`.
+        val capabilities = buildList {
+            add(APPS_CAPABILITY_ID)
+            add(ASK_USER_CAPABILITY_ID)
+            if (widgetsEnabled) add(WIDGET_CAPABILITY_ID)
+        }.joinToString(",")
         val request = chain.request().newBuilder()
             .header("X-Mewbo-Surface", "android")
-            .apply { if (!apiKey.isNullOrBlank()) header("X-API-Key", apiKey) }
+            .header("X-Mewbo-Capabilities", capabilities)
+            .apply {
+                if (!apiKey.isNullOrBlank()) header("X-API-Key", apiKey)
+            }
             .build()
         return chain.proceed(request)
+    }
+
+    private companion object {
+        /** Matches the `widget_builder` plugin's `requires-capabilities` (hardcoded server-side) and
+         * the console's own `WIDGET_CAPABILITY_ID` - there is no capability-discovery endpoint. */
+        const val WIDGET_CAPABILITY_ID = "stlite"
+
+        /** Matches the `app_builder` plugin's `requires-capabilities: ["apps"]` (design spec §4B)
+         * and the console's own apps capability id (spec §4C `realClient.ts` advertise). */
+        const val APPS_CAPABILITY_ID = "apps"
+
+        /** Matches core's `ASK_USER_CAPABILITY` (`mewbo_core.ask_user`) — the client's promise that a
+         * human can be asked to answer a blocking `ask_user_question` tool call. */
+        const val ASK_USER_CAPABILITY_ID = "ask_user"
     }
 }
 

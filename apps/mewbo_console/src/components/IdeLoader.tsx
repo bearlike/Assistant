@@ -200,7 +200,7 @@ export function IdeLoader({ sessionId }: IdeLoaderProps) {
             {phase === "error" ? (
               <AlertCircle className="w-4 h-4 text-red-500" />
             ) : (
-              <Loader2 className="w-4 h-4 text-[hsl(var(--primary))] animate-spin" />
+              <Loader2 className="w-4 h-4 text-[hsl(var(--primary-text))] animate-spin" />
             )}
           </div>
           <div className="min-w-0">
@@ -243,7 +243,7 @@ export function IdeLoader({ sessionId }: IdeLoaderProps) {
             <p className="text-sm font-medium text-red-500">
               Failed to open Web IDE
             </p>
-            <p className="text-xs font-mono text-red-500/80 break-words whitespace-pre-wrap">
+            <p className="text-xs text-red-500/80 break-words whitespace-pre-wrap">
               {errorMessage}
             </p>
             <div className="flex gap-2">
@@ -269,5 +269,3 @@ export function IdeLoader({ sessionId }: IdeLoaderProps) {
     </div>
   );
 }
-
-export default IdeLoader;

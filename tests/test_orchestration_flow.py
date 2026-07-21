@@ -293,12 +293,11 @@ class TestPlannerGenerate:
         return chain
 
     def test_plan_mode_uses_all_specs(self):
-        """Line 209: mode='plan' calls list_specs() (not list_specs_for_mode)."""
+        """mode='plan' calls list_specs() to see the full tool set."""
         from mewbo_core.classes import Plan
 
         registry = MagicMock(spec=ToolRegistry)
         registry.list_specs.return_value = [_make_spec("tool_a")]
-        registry.list_specs_for_mode.return_value = []
 
         planner = Planner(tool_registry=registry)
 
@@ -335,10 +334,8 @@ class TestPlannerGenerate:
 
                     planner.generate("do task", "test-model", mode="plan")
 
-        # plan mode should call list_specs (not list_specs_for_mode)
+        # plan mode should call list_specs
         registry.list_specs.assert_called()
-        # The mode='plan' branch specifically avoids list_specs_for_mode
-        registry.list_specs_for_mode.assert_not_called()
 
     def test_feedback_appended_to_prompt(self):
         """Line 232: feedback string is appended when provided."""
@@ -346,7 +343,6 @@ class TestPlannerGenerate:
 
         registry = MagicMock(spec=ToolRegistry)
         registry.list_specs.return_value = [_make_spec("tool_a")]
-        registry.list_specs_for_mode.return_value = []
 
         planner = Planner(tool_registry=registry)
         plan_result = Plan(steps=[])
@@ -499,7 +495,7 @@ class TestSessionCapabilities:
         assert caps == ()
 
     def test_runtime_provider_grants_capability_to_plain_session(self, tmp_path):
-        """#83-B: a registered runtime provider surfaces ``scg`` to a PLAIN session.
+        """A registered runtime provider surfaces ``scg`` to a PLAIN session.
 
         An ordinary session advertises NO capabilities, yet the single read-point
         (`_session_capabilities`, consumed by every downstream gate) unions in the
@@ -549,7 +545,7 @@ class TestSessionCapabilities:
             reset_session_capability_providers()
 
     def test_runtime_granted_capability_lands_in_trace_metadata(self, tmp_path):
-        """#84: a RUNTIME-granted capability shows in the Langfuse trace facet.
+        """A RUNTIME-granted capability shows in the Langfuse trace facet.
 
         The merged context carries only the advertised caps; ``run`` overlays the
         augmented set (advertised ∪ provider grants) before deriving provenance,
@@ -593,16 +589,39 @@ class TestSessionCapabilities:
         assert isinstance(captured.get("tags"), list)
 
     # -----------------------------------------------------------------
-    # allowed_tools-derived capability (Gitea #182)
+    # allowed_tools-derived capability
     # -----------------------------------------------------------------
 
     def _register_gated_tool(self, orch, *, tool_id: str, capability: str) -> None:
-        from mewbo_core.session_tools import SessionToolFactory
+        from mewbo_core.session_tools import DEFAULT_SESSION_TOOL_MODES, SessionToolFactory
+
+        class _GatedStub:
+            """A minimal real ``SessionTool`` — the symmetry test now BUILDS it.
+
+            The factory must return a genuine tool: ``build_for`` types its
+            builder ``-> SessionTool`` (a production ``_build`` does
+            ``return cls(...)`` and can never yield ``None``), and one test here
+            asserts surface (b) actually builds the tool and finds it in
+            ``built_ids`` — which is meaningful only against a real return.
+            """
+
+            def __init__(self, session_id, event_logger=None):
+                self.tool_id = tool_id
+                self.schema = {"name": tool_id, "parameters": {"type": "object"}}
+                self.modes = DEFAULT_SESSION_TOOL_MODES
+
+            async def handle(self, action_step):  # pragma: no cover - never invoked here
+                from mewbo_core.common import MockSpeaker
+
+                return MockSpeaker(content="ok")
+
+            def should_terminate_run(self) -> bool:
+                return False
 
         orch._session_tool_registry.register(
             SessionToolFactory(
                 tool_id=tool_id,
-                build=lambda sid, el: None,  # never actually built in these tests
+                build=lambda sid, el: _GatedStub(sid, el),
                 requires_capabilities=(capability,),
             )
         )
@@ -610,7 +629,7 @@ class TestSessionCapabilities:
     def test_allowed_tools_derives_capability_for_a_gated_product_tool(self, tmp_path):
         """Naming a product tool in ``allowed_tools`` grants its capability.
 
-        This is the #182 fix: previously only the client-advertised header (or
+        This is the fix: previously only the client-advertised header (or
         a runtime provider) could grant a capability, so surface (a) — the
         AgentDef/skill catalog — stayed blind to a tool selected purely via
         ``context.mcp_tools``. Now the SAME allowlist that already reaches
@@ -681,7 +700,7 @@ class TestSessionCapabilities:
     def test_derived_capability_reaches_both_gating_surfaces_symmetrically(self, tmp_path):
         """End-to-end: the SAME derived caps unlock surface (a) AND surface (b).
 
-        Regression target for the #84 asymmetry this issue closes: a tool bound
+        Regression target for the asymmetry this issue closes: a tool bound
         via ``build_for``'s allowlist gate is useless if the agent meant to use
         it is invisible to ``filter_by_capabilities`` (the AgentDef/skill
         catalog gate). Both gates must see the identical capability tuple.
@@ -707,10 +726,19 @@ class TestSessionCapabilities:
         built = orch._session_tool_registry.build_for(
             ["wiki_search_pages"], session_id=session_id, event_logger=None
         )
-        assert len(built) == 1
+        built_ids = {t.tool_id for t in built}
+        assert "wiki_search_pages" in built_ids
+        # Anything ELSE built came through the unconditional gate, not this
+        # allowlist: a PERMISSIVE scope (``strict_tool_scope`` False, as here)
+        # deliberately does not cap a default-on session tool — the df875 law.
+        # Asserted per-id rather than as a bare count so this stays exact.
+        factories = orch._session_tool_registry._factories
+        assert all(
+            factories[tid].unconditional for tid in built_ids - {"wiki_search_pages"}
+        )
 
         # Surface (a): the wiki-qa AgentDef, gated purely on capability, is now
-        # visible too — this is what was BROKEN before #182 when a tool was
+        # visible too — this is what was BROKEN before when a tool was
         # selected only via allowed_tools with no advertised header.
         agent_defs = [
             _FakeAgentDef("wiki-qa", requires_capabilities=("wiki",)),
@@ -877,6 +905,61 @@ class TestToolScopeIntegration:
         # "read_file" is a local builtin so it must always be present.
         captured_ids = {s.tool_id for s in captured_specs}
         assert "read_file" in captured_ids
+
+    def _captured_ids_for(self, tmp_path, *, allowed_tools, strict_tool_scope):
+        """Run one turn and return the tool ids the loop was actually handed."""
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+        captured_specs = []
+
+        async def capturing_run(self_loop, *args, tool_specs=None, **kwargs):
+            if tool_specs is not None:
+                captured_specs.extend(tool_specs)
+            from mewbo_core.classes import OrchestrationState, TaskQueue
+
+            tq = TaskQueue(action_steps=[])
+            tq.task_result = "Done"
+            state = OrchestrationState(goal="test", session_id=session_id)
+            state.done = True
+            state.done_reason = "completed"
+            return tq, state
+
+        with patch.object(ToolUseLoop, "run", capturing_run):
+            orch.run(
+                user_query="do something",
+                session_id=session_id,
+                allowed_tools=allowed_tools,
+                strict_tool_scope=strict_tool_scope,
+                max_iters=1,
+            )
+        return {s.tool_id for s in captured_specs}
+
+    def test_strict_EMPTY_allowlist_binds_no_tools(self, tmp_path):
+        """The root-session limb of the three-state law.
+
+        ``if allowed_tools:`` skipped the whole scoping block, so an empty
+        strict allowlist — a role ceiling that granted nothing — fell through to
+        the unfiltered registry and bound EVERY tool.
+        """
+        captured_ids = self._captured_ids_for(
+            tmp_path, allowed_tools=[], strict_tool_scope=True
+        )
+
+        assert "read_file" not in captured_ids
+        assert "aider_shell_tool" not in captured_ids
+
+    def test_permissive_empty_allowlist_keeps_builtins_and_drops_mcp(self, tmp_path):
+        """An empty permissive ceiling narrows MCP tools only — it strands nobody.
+
+        This is why preserving ``[]`` at the persisted-context seam is safe: a
+        client that advertised no MCP tools still gets the full built-in set.
+        """
+        captured_ids = self._captured_ids_for(
+            tmp_path, allowed_tools=[], strict_tool_scope=False
+        )
+
+        assert "read_file" in captured_ids
+        assert not {tid for tid in captured_ids if tid.startswith("mcp_")}
 
 
 # ---------------------------------------------------------------------------

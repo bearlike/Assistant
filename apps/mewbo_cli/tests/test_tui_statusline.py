@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for StatusLineRunner — JSON-on-stdin script contract (issue #156)."""
+"""Tests for StatusLineRunner — JSON-on-stdin script contract."""
 
 from __future__ import annotations
 

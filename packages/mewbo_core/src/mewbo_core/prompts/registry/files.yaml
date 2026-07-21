@@ -44,7 +44,7 @@ file.tools.aider-shell:
 file.tools.file-edit:
   purpose: Tool guidance — file edit.
   template_file: tools/file-edit.txt
-  # Tool-variant-paired prompt (Gitea #113, Phase A — item 4). This guidance is
+  # Tool-variant-paired prompt (item 4). This guidance is
   # for the `structured_patch` exact-string edit tool, which the model→tool-
   # variant map (`model_variants.yaml`) hands to the structured-patch-preferring
   # family (gpt-4/gpt-5/o3/o4/codex). This override PAIRS with that map by the

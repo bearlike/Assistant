@@ -22,14 +22,19 @@
  * matching `SourceCard` via the shared `CitationRef.domId` id.
  */
 
-import { createContext, useContext, type ReactNode } from "react";
-import { Github } from "lucide-react";
-import type { Components } from "react-markdown";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import {
+  defaultUrlTransform,
+  type Components,
+  type UrlTransform,
+} from "react-markdown";
 
 import { cn } from "@/lib/utils";
 
 import { MermaidBlock } from "./MermaidBlock";
 import { CitationRef, type Citation } from "./citations";
+import { PlatformIcon } from "./configure-wizard/PlatformIcon";
+import type { PlatformId } from "./router";
 
 /**
  * Resolves a cited source to an external "open the file in its repo" URL
@@ -44,17 +49,53 @@ import { CitationRef, type Citation } from "./citations";
  */
 export type SourceHrefResolver = (citation: Citation) => string | null;
 
-const SourceHrefContext = createContext<SourceHrefResolver | null>(null);
+/** Citation href scheme — the BE emits `[label](src:path#L1-9)`. */
+const SRC_SCHEME = "src:";
 
-/** Wrap any wiki markdown subtree to make its citation chips link to the repo. */
+/**
+ * URL sanitizer for every wiki `ReactMarkdown` mount.
+ *
+ * react-markdown rewrites hrefs with `defaultUrlTransform` BEFORE handing
+ * them to the component map, and that transform blanks any scheme outside
+ * http(s)/mailto/irc/xmpp. Our citation grammar rides a custom `src:` scheme,
+ * so the default silently turned `[label](src:path#L1-9)` into an empty-href
+ * anchor and the chip branch below could never fire on real page content.
+ * Pass this to `urlTransform` wherever the wiki renders markdown: it lets the
+ * one scheme we own through and defers everything else — `javascript:` very
+ * much included — to the upstream sanitizer.
+ */
+export const wikiUrlTransform: UrlTransform = (value) => {
+  if (value.startsWith(SRC_SCHEME)) return value;
+  return defaultUrlTransform(value);
+};
+
+interface SourceHrefContextValue {
+  resolve: SourceHrefResolver | null;
+  /** VCS host of the indexed repo — drives the chip's provider glyph. */
+  platform: PlatformId | null;
+}
+
+const SourceHrefContext = createContext<SourceHrefContextValue>({
+  resolve: null,
+  platform: null,
+});
+
+/**
+ * Wrap any wiki markdown subtree to make its citation chips link to the repo.
+ * `platform` (usually `IndexedSnapshot.source`) picks the provider glyph on
+ * each chip; omitted/null falls back to the generic git mark.
+ */
 export function SourceHrefProvider({
   resolve,
+  platform = null,
   children,
 }: {
   resolve: SourceHrefResolver | null;
+  platform?: PlatformId | null;
   children: ReactNode;
 }) {
-  return <SourceHrefContext.Provider value={resolve}>{children}</SourceHrefContext.Provider>;
+  const value = useMemo(() => ({ resolve, platform }), [resolve, platform]);
+  return <SourceHrefContext.Provider value={value}>{children}</SourceHrefContext.Provider>;
 }
 
 /**
@@ -79,10 +120,44 @@ export interface MarkdownComponentOptions {
 }
 
 const SRC_CHIP_CLASS =
-  "inline-flex items-center gap-1 px-1.5 py-px rounded font-mono text-[11px] align-baseline cursor-pointer border-0 no-underline bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/20 transition-colors";
+  "inline-flex items-stretch overflow-hidden align-baseline rounded-sm border border-[hsl(var(--border))] bg-[hsl(var(--muted))] font-mono text-2xs text-[hsl(var(--foreground))] cursor-pointer no-underline transition-colors hover:bg-[hsl(var(--muted))]/70 hover:border-[hsl(var(--border-strong))]";
 
 /**
- * Inline citation chip — accent-tinted, monospace, `path:line`.
+ * Two-cell citation badge — the code-ref pill: provider glyph + mono path on
+ * the muted cell, then (when the citation carries a range) a step-toned
+ * `Lstart–Lend` cell behind a hairline divider. Mirrors the docs-site
+ * code-ref badge so file references read the same across surfaces. The glyph
+ * comes from the enclosing {@link SourceHrefProvider}'s `platform`; a null
+ * platform degrades to the generic git mark, never an empty cell.
+ */
+function SrcChipBody({ citation, platform }: { citation: Citation; platform: PlatformId | null }) {
+  const { startLine, endLine } = citation;
+  const range =
+    startLine != null
+      ? endLine != null && endLine !== startLine
+        ? `L${startLine}–${endLine}`
+        : `L${startLine}`
+      : null;
+  return (
+    <>
+      <span className="inline-flex items-center gap-1 px-1.5 py-px min-w-0">
+        <PlatformIcon
+          platformId={platform ?? "git"}
+          className="h-2.5 w-2.5 shrink-0 opacity-60"
+        />
+        <span className="truncate max-w-[240px]">{citation.path || citation.raw}</span>
+      </span>
+      {range && (
+        <span className="inline-flex items-center px-1.5 py-px border-l border-[hsl(var(--border))] bg-[hsl(var(--foreground))]/[0.05] text-[hsl(var(--muted-foreground))] tabular-nums">
+          {range}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Inline citation chip — see {@link SrcChipBody} for the badge anatomy.
  *
  * When the enclosing {@link SourceHrefProvider} can resolve the citation to a
  * repo blob URL, the chip is a real anchor that opens that file (at the cited
@@ -94,9 +169,8 @@ const SRC_CHIP_CLASS =
  * harmless no-op when no card exists.
  */
 export function SrcChip({ citation }: { citation: Citation }) {
-  const resolveHref = useContext(SourceHrefContext);
-  const href = resolveHref?.(citation) ?? null;
-  const label = CitationRef.label(citation);
+  const { resolve, platform } = useContext(SourceHrefContext);
+  const href = resolve?.(citation) ?? null;
 
   if (href) {
     return (
@@ -107,8 +181,7 @@ export function SrcChip({ citation }: { citation: Citation }) {
         title={citation.raw}
         className={SRC_CHIP_CLASS}
       >
-        <Github className="h-2.5 w-2.5" />
-        <span className="truncate max-w-[260px]">{label}</span>
+        <SrcChipBody citation={citation} platform={platform} />
       </a>
     );
   }
@@ -123,8 +196,7 @@ export function SrcChip({ citation }: { citation: Citation }) {
 
   return (
     <button type="button" onClick={onClick} title={citation.raw} className={SRC_CHIP_CLASS}>
-      <Github className="h-2.5 w-2.5" />
-      <span className="truncate max-w-[260px]">{label}</span>
+      <SrcChipBody citation={citation} platform={platform} />
     </button>
   );
 }
@@ -156,7 +228,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       const isBlock = Boolean(className) || node?.position?.start.line !== node?.position?.end.line;
       if (isBlock) {
         return (
-          <pre className="my-4 overflow-x-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--code-body))] text-[hsl(var(--code-fg))] p-3 text-[12.5px] font-mono leading-[1.55] [&_code.hljs]:bg-transparent [&_code.hljs]:p-0">
+          <pre className="my-4 overflow-x-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--code-body))] text-[hsl(var(--code-fg))] p-3 text-sm font-mono leading-[1.55] [&_code.hljs]:bg-transparent [&_code.hljs]:p-0">
             <code className={cn("hljs", className)}>{text}</code>
           </pre>
         );
@@ -170,8 +242,8 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
 
     // ── Links: src: chips, relative internal page links, external ──────
     a({ href, children, ...rest }) {
-      if (href?.startsWith("src:")) {
-        const stripped = href.slice(4);
+      if (href?.startsWith(SRC_SCHEME)) {
+        const stripped = href.slice(SRC_SCHEME.length);
         const [path, range] = stripped.split("#");
         return <SrcChip citation={CitationRef.fromSrc(path, range)} />;
       }
@@ -180,7 +252,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
           <button
             type="button"
             onClick={() => onNavigatePage(href)}
-            className="inline text-[hsl(var(--primary))] hover:underline underline-offset-2 cursor-pointer bg-transparent border-0 p-0 font-inherit text-[14.5px]"
+            className="inline text-[hsl(var(--primary-text))] hover:underline underline-offset-2 cursor-pointer bg-transparent border-0 p-0 font-inherit text-base"
           >
             {children}
           </button>
@@ -191,7 +263,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
           href={href}
           target={href?.startsWith("http") ? "_blank" : undefined}
           rel={href?.startsWith("http") ? "noopener noreferrer" : undefined}
-          className="text-[hsl(var(--primary))] hover:underline underline-offset-2"
+          className="text-[hsl(var(--primary-text))] hover:underline underline-offset-2"
           {...rest}
         >
           {children}
@@ -200,11 +272,14 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
     },
 
     // ── Typography ─────────────────────────────────────────────────────
+    // Editorial reading scale for rendered wiki documents — deliberately
+    // outside the §8b chrome ramp (reading measure ≠ chrome density);
+    // LiveBlocks mirrors it.
     h1({ children, ...rest }) {
       return (
         <h1
           {...rest}
-          className="text-[clamp(24px,3vw,30px)] font-semibold tracking-[-0.02em] mt-1 mb-6 [text-wrap:balance]"
+          className="text-2xl font-semibold tracking-[-0.02em] mt-1 mb-6 [text-wrap:balance]"
         >
           {children}
         </h1>
@@ -214,7 +289,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <h2
           {...rest}
-          className="text-[22px] font-semibold tracking-[-0.02em] mt-10 mb-3 scroll-mt-20"
+          className="text-xl font-semibold tracking-[-0.02em] mt-10 mb-3 scroll-mt-20"
         >
           {children}
         </h2>
@@ -224,7 +299,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <h3
           {...rest}
-          className="text-[16px] font-semibold tracking-tight mt-7 mb-2 scroll-mt-20"
+          className="text-lg font-semibold tracking-tight mt-7 mb-2 scroll-mt-20"
         >
           {children}
         </h3>
@@ -234,7 +309,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <p
           {...rest}
-          className="text-[14.5px] leading-[1.7] text-[hsl(var(--foreground))] [text-wrap:pretty] my-4"
+          className="text-base leading-[1.7] text-[hsl(var(--foreground))] [text-wrap:pretty] my-4"
         >
           {children}
         </p>
@@ -244,7 +319,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <ul
           {...rest}
-          className="my-4 space-y-1.5 list-disc pl-5 marker:text-[hsl(var(--muted-foreground))] text-[14.5px] leading-[1.7]"
+          className="my-4 space-y-1.5 list-disc pl-5 marker:text-[hsl(var(--muted-foreground))] text-base leading-[1.7]"
         >
           {children}
         </ul>
@@ -254,7 +329,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <ol
           {...rest}
-          className="my-4 space-y-1.5 list-decimal pl-5 marker:text-[hsl(var(--muted-foreground))] text-[14.5px] leading-[1.7]"
+          className="my-4 space-y-1.5 list-decimal pl-5 marker:text-[hsl(var(--muted-foreground))] text-base leading-[1.7]"
         >
           {children}
         </ol>
@@ -300,7 +375,7 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       return (
         <th
           {...rest}
-          className="text-left font-medium text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] px-3 py-2"
+          className="text-left text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] px-3 py-2"
         >
           {children}
         </th>

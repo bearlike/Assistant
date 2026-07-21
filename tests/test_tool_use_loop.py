@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from mewbo_core.agent_context import AgentContext
-from mewbo_core.classes import ActionStep, Plan, PlanStep
+from mewbo_core.classes import ActionStep, OrchestrationState, Plan, PlanStep
 from mewbo_core.context import ContextSnapshot
 from mewbo_core.hooks import HookManager
-from mewbo_core.hypervisor import AgentHypervisor
+from mewbo_core.hypervisor import AgentHandle, AgentHypervisor, DelegationContract
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
 from mewbo_core.token_budget import TokenBudget
 from mewbo_core.tool_registry import ToolRegistry, ToolSpec
@@ -48,7 +48,12 @@ def _make_context() -> ContextSnapshot:
     )
 
 
-def _make_spec(tool_id: str = "test_tool", description: str = "A test tool") -> ToolSpec:
+def _make_spec(
+    tool_id: str = "test_tool",
+    description: str = "A test tool",
+    *,
+    capability: str | None = None,
+) -> ToolSpec:
     return ToolSpec(
         tool_id=tool_id,
         name=tool_id,
@@ -56,6 +61,7 @@ def _make_spec(tool_id: str = "test_tool", description: str = "A test tool") -> 
         factory=lambda: MagicMock(),
         enabled=True,
         kind="local",
+        capability=capability,
         metadata={
             "schema": {
                 "type": "object",
@@ -115,6 +121,77 @@ def _tool_call_response(tool_id: str, args: dict, call_id: str = "call_1") -> AI
         content="",
         tool_calls=[{"name": tool_id, "args": args, "id": call_id}],
     )
+
+
+class TestSpawnScopedByAllowlist:
+    """A leaf agent scoped without spawn_agent must not be able to delegate.
+
+    Regression for the widget-builder recursion storm (mobile session
+    8c04e341…): the st-widget-builder's ``tools:`` allowlist omits spawn_agent,
+    yet spawn was injected on depth alone (``can_spawn``), bypassing the
+    allowlist — so each builder spawned another builder into copies of itself,
+    stopped only by the depth cap. Spawning must honour the tool scope: an
+    explicit allowlist that omits spawn_agent means no delegation.
+    """
+
+    def _build_loop(self, allowed_tools, *, strict_tool_scope=False):
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            return ToolUseLoop(
+                agent_context=_make_agent_context(),  # depth 0 → can_spawn True
+                tool_registry=_make_registry(_make_spec("read_file", "Read a file")),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                allowed_tools=allowed_tools,
+                strict_tool_scope=strict_tool_scope,
+            )
+
+    def test_strict_allowlist_without_spawn_agent_disables_spawning(self):
+        # A spawned leaf (st-widget-builder) carries an AUTHORITATIVE allowlist
+        # (strict scope). Omitting spawn_agent there must disable delegation —
+        # the recursion-storm regression this whole gate exists for.
+        loop = self._build_loop(["read_file", "submit_widget"], strict_tool_scope=True)
+        assert loop._spawn_agent_tool is None
+
+    def test_no_allowlist_keeps_spawning(self):
+        # Root/ad-hoc agents (unrestricted scope) are unchanged.
+        loop = self._build_loop(None)
+        assert loop._spawn_agent_tool is not None
+
+    def test_allowlist_including_spawn_agent_keeps_spawning(self):
+        loop = self._build_loop(["read_file", "spawn_agent"])
+        assert loop._spawn_agent_tool is not None
+
+    def test_permissive_allowlist_without_spawn_agent_keeps_spawning(self):
+        # FE regression (session 04ea546e…): the console/Aura pass
+        # ``allowed_tools = context.mcp_tools`` — a PERMISSIVE ceiling that only
+        # scopes MCP tools (built-ins stay) and never lists the internal
+        # spawn_agent. Treating that ceiling as an authoritative allowlist
+        # silently disabled root delegation, so the st-widget-builder skill
+        # (which mandates spawn_agent) had no way to run. A permissive scope
+        # must keep spawning enabled.
+        loop = self._build_loop(["mcp_github_search_repositories", "submit_widget"])
+        assert loop._spawn_agent_tool is not None
+
+    def test_strict_EMPTY_allowlist_disables_spawning(self):
+        # The three-state law at the gate that matters most. A role-bounded
+        # viewer's composed allowlist omits the spawn family DELIBERATELY (that
+        # omission IS the lever that denies delegation) and can compose all the
+        # way down to empty. Under truthiness ``not []`` is True, so the gate
+        # read "no allowlist declared" and re-injected spawn_agent — handing
+        # delegation back to the exact principal the read-only ceiling exists to
+        # deny. Empty is a grant of NOTHING, never of everything.
+        loop = self._build_loop([], strict_tool_scope=True)
+        assert loop._spawn_agent_tool is None
+
+    def test_permissive_empty_allowlist_still_keeps_spawning(self):
+        # The df875 carve-out is orthogonal to the three-state fix and must
+        # survive it: under a PERMISSIVE scope ``allowed_tools`` is an MCP-only
+        # ceiling, so it never governs the internal spawn family regardless of
+        # whether it is empty.
+        loop = self._build_loop([], strict_tool_scope=False)
+        assert loop._spawn_agent_tool is not None
 
 
 # ---------------------------------------------------------------------------
@@ -945,6 +1022,82 @@ class TestLlmCallTimeoutCeiling:
                 asyncio.run(loop.run("hang", tool_specs=[spec], context=_make_context()))
 
 
+class TestCheckAgentsWaitTimeout:
+    """A wait tool's requested ``timeout`` must not be clipped by the flat ceiling.
+
+    Regression: ``check_agents`` has no registry spec, so
+    ``_get_tool_timeout`` returned the 120s fallback and the outer
+    ``asyncio.wait_for`` aborted a ``wait=true, timeout=300`` call at 120s —
+    "Tool 'check_agents' timed out after 120.0s" (seen three times in
+    production). The wait tool self-bounds on ``timeout``; the ceiling must sit
+    above it plus render headroom.
+    """
+
+    def _loop(self) -> ToolUseLoop:
+        registry = _make_registry(_make_spec())
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            return ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+    def _tc(self, name: str, **args) -> dict:
+        return {"name": name, "args": args, "id": "c1"}
+
+    def test_wait_true_honors_requested_timeout(self):
+        loop = self._loop()
+        # 300 requested + 30 render margin, above the 120s flat ceiling.
+        assert (
+            loop._tool_execution_timeout(
+                "check_agents", self._tc("check_agents", wait=True, timeout=300)
+            )
+            == 330.0
+        )
+
+    def test_wait_false_keeps_flat_ceiling(self):
+        loop = self._loop()
+        assert (
+            loop._tool_execution_timeout(
+                "check_agents", self._tc("check_agents", wait=False, timeout=300)
+            )
+            == 120.0
+        )
+
+    def test_small_requested_wait_never_below_ceiling(self):
+        loop = self._loop()
+        # 10 + 30 = 40 < 120 → keep the flat ceiling (max()).
+        assert (
+            loop._tool_execution_timeout(
+                "check_agents", self._tc("check_agents", wait=True, timeout=10)
+            )
+            == 120.0
+        )
+
+    def test_non_wait_tool_ignores_requested_wait(self):
+        loop = self._loop()
+        # Not in DOOM_LOOP_EXEMPT_TOOLS → the wait/timeout args are irrelevant.
+        assert (
+            loop._tool_execution_timeout(
+                "some_tool", self._tc("some_tool", wait=True, timeout=300)
+            )
+            == 120.0
+        )
+
+    def test_bool_timeout_arg_is_ignored(self):
+        loop = self._loop()
+        # A bool is not a numeric timeout — fall back to the ceiling.
+        assert (
+            loop._tool_execution_timeout(
+                "check_agents", self._tc("check_agents", wait=True, timeout=True)
+            )
+            == 120.0
+        )
+
+
 # ---------------------------------------------------------------------------
 # File-read dedup cache
 # ---------------------------------------------------------------------------
@@ -1213,16 +1366,17 @@ class TestBudgetWarningStillFires:
         ]
         assert len(budget_warnings) >= 1
 
-    def test_budget_exhaustion_hard_stops_runaway_loop(self):
-        """At budget exhaustion the loop HARD-STOPS (#62): a model that always
-        returns a tool call would loop forever, but the budget check breaks out
-        with ``done_reason == "halted_no_progress"``. If the ``break`` were
-        removed this test would HANG — that's the point."""
+    def test_budget_exhaustion_runs_one_wrapup_turn(self):
+        """At budget exhaustion the loop no longer bare-halts: a model
+        that always returns a tool call would loop forever, but the budget
+        check forces exactly ONE unbound wrap-up turn, then stops with
+        ``done_reason == "budget_exhausted"`` and a non-empty task_result. If
+        the wrap-up weren't forced this test would HANG — that's the point."""
         spec = _make_spec("aider_shell_tool", "Run shell")
         registry = _make_registry(spec)
 
-        # The model NEVER returns text → it never naturally stops. Only the
-        # budget hard-stop can terminate the run.
+        # The model NEVER returns text on the BOUND path → it never naturally
+        # stops. Only the budget hard-stop's forced wrap-up can terminate it.
         def _always_tool_call(msgs, **kwargs):
             return _tool_call_response("aider_shell_tool", {"command": "x"}, "c1")
 
@@ -1236,12 +1390,17 @@ class TestBudgetWarningStillFires:
         mock_speaker.content = "ok"
         mock_tool.run.return_value = mock_speaker
 
+        # The wrap-up turn goes through a SEPARATE (unbound) build_chat_model()
+        # call than the bound one above — configure its ainvoke distinctly.
+        wrapup_invoke = AsyncMock(return_value=_text_response("Wrapping up: partial progress."))
+
         with (
             patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
             patch.object(registry, "get", return_value=mock_tool),
         ):
             mock_build.return_value = MagicMock()
             mock_build.return_value.bind_tools.return_value = bound
+            mock_build.return_value.ainvoke = wrapup_invoke
 
             ctx = _make_agent_context()
             # Budget already exhausted → the top-of-loop check hard-stops on the
@@ -1258,7 +1417,394 @@ class TestBudgetWarningStillFires:
             tq, state = asyncio.run(loop.run("do work", tool_specs=[spec], context=_make_context()))
 
         assert state.done is True
-        assert state.done_reason == "halted_no_progress"
+        assert state.done_reason == "budget_exhausted"
+        assert tq.task_result == "Wrapping up: partial progress."
+        wrapup_invoke.assert_awaited_once()
+        # The wrap-up call must not re-trip the very budget that triggered it.
+        assert ctx.registry._total_steps == 2
+        # Exhaustion is checked top-of-turn, before the (never-reached) tool
+        # execution / write-progress site — no reminder could ever be
+        # injected here, even though this session is otherwise write-capable
+        # and armed.
+        wrapup_messages = wrapup_invoke.call_args.args[0]
+        assert not any(
+            isinstance(m, SystemMessage) and "Reminder — your task" in m.content
+            for m in wrapup_messages
+        )
+
+
+def _run_write_progress_agent(events: list) -> tuple[OrchestrationState, list]:
+    """Drive a write-capable agent past the write-progress threshold with
+    only non-write tool calls. Returns ``(final_state, messages_seen)``."""
+    read_spec = _make_spec("aider_shell_tool", "Run shell")
+    # Never actually called by the fake model — its only job is to make
+    # this session write-capable so the two-gate arming check sees a
+    # write-tier tool bound (capability_mode defaults to "all").
+    write_spec = _make_spec("write_file", "Write a file", capability="write")
+    registry = _make_registry(read_spec, write_spec)
+
+    messages_seen: list = []
+    call_n = {"i": 0}
+
+    def _capture_invoke(msgs, **kwargs):
+        messages_seen.extend(msgs)
+        call_n["i"] += 1
+        n = call_n["i"]
+        if n > 26:  # past threshold(25) + 1 -> guaranteed at least one event
+            return _text_response("Done.")
+        # Distinct args every turn — a doom-loop guard must not trip here.
+        return _tool_call_response("aider_shell_tool", {"command": f"x{n}"}, f"c{n}")
+
+    fake_model = MagicMock()
+    fake_model.ainvoke = AsyncMock(side_effect=_capture_invoke)
+    bound = MagicMock()
+    bound.ainvoke = fake_model.ainvoke
+
+    run_n = {"i": 0}
+
+    def _tool_run(step):
+        run_n["i"] += 1
+        speaker = MagicMock()
+        speaker.content = f"ok-{run_n['i']}"  # distinct result every turn
+        return speaker
+
+    mock_tool = MagicMock()
+    mock_tool.run.side_effect = _tool_run
+
+    with (
+        patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+        patch.object(registry, "get", return_value=mock_tool),
+    ):
+        mock_build.return_value = MagicMock()
+        mock_build.return_value.bind_tools.return_value = bound
+
+        ctx = _make_agent_context(event_logger=events.append)
+        loop = ToolUseLoop(
+            agent_context=ctx,
+            tool_registry=registry,
+            permission_policy=_allow_all_policy(),
+            hook_manager=_make_hook_manager(),
+        )
+        tq, state = asyncio.run(
+            loop.run(
+                "do work",
+                tool_specs=[read_spec, write_spec],
+                context=_make_context(),
+            )
+        )
+    return state, messages_seen
+
+
+class TestWriteProgressSignalInjection:
+    """A write-capable agent stuck on non-write (read/execute/
+    search/unknown-tier) steps crosses the write-progress threshold: the
+    ``write_progress_signal`` telemetry event always fires; the
+    criterion-blind objective reminder is opt-in and default OFF."""
+
+    def test_no_reminder_injected_by_default(self):
+        state, messages_seen = _run_write_progress_agent([])
+        assert state.done is True
+        assert not any(
+            isinstance(m, SystemMessage) and "Reminder — your task" in m.content
+            for m in messages_seen
+        )
+
+    def test_write_progress_signal_event_fires_past_threshold(self):
+        events: list = []
+        state, _ = _run_write_progress_agent(events)
+        assert state.done is True
+        signal_events = [e for e in events if e.get("type") == "write_progress_signal"]
+        assert len(signal_events) >= 1
+        payload = signal_events[0]["payload"]
+        assert payload["threshold"] == 25
+        assert payload["steps_since_write"] == 25
+
+    def test_reminder_message_when_enabled(self):
+        with patch(
+            "mewbo_core.config.get_config_value",
+            side_effect=lambda *keys, default=None: (
+                True
+                if keys == ("agent", "write_progress_signal_reminder_enabled")
+                else default
+            ),
+        ):
+            state, messages_seen = _run_write_progress_agent([])
+
+        assert state.done is True
+        reminder_msgs = [
+            m
+            for m in messages_seen
+            if isinstance(m, SystemMessage) and "Reminder — your task" in m.content
+        ]
+        assert len(reminder_msgs) >= 1
+        for m in reminder_msgs:
+            assert "do work" in m.content
+            lowered = m.content.lower()
+            assert "write" not in lowered
+            assert "steps" not in lowered
+            assert "laziness" not in lowered
+
+
+# ---------------------------------------------------------------------------
+# DelegationContract — per-agent step budget
+# ---------------------------------------------------------------------------
+
+
+class TestDelegationContractStepBudget:
+    """A spawned agent's OWN step budget, layered UNDER the shared session
+    budget: checked in addition to it, never instead of it."""
+
+    def test_step_budget_warn_injects_once(self):
+        """The warn message fires exactly once, even though a tight max_steps
+        relative to step_warn_headroom keeps every pre-exhaustion turn inside
+        the warn band."""
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        # Capture only the LAST call's full message list — ``messages`` is the
+        # whole growing transcript on every invocation, so accumulating across
+        # calls would double-count a warning injected once but still present
+        # in every later turn's history.
+        last_msgs: dict = {"messages": None}
+        call_n = {"i": 0}
+
+        def _capture_invoke(msgs, **kwargs):
+            last_msgs["messages"] = list(msgs)
+            call_n["i"] += 1
+            n = call_n["i"]
+            # Distinct args every turn — a doom-loop guard must not trip here.
+            return _tool_call_response("aider_shell_tool", {"command": f"x{n}"}, f"c{n}")
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=_capture_invoke)
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        run_n = {"i": 0}
+
+        def _tool_run(step):
+            run_n["i"] += 1
+            speaker = MagicMock()
+            speaker.content = f"ok-{run_n['i']}"
+            return speaker
+
+        mock_tool = MagicMock()
+        mock_tool.run.side_effect = _tool_run
+
+        # The BOUND model never returns text — only the contract's own step
+        # budget (not natural completion) can end this run.
+        wrapup_invoke = AsyncMock(return_value=_text_response("Agent wrap-up."))
+
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            mock_build.return_value.ainvoke = wrapup_invoke
+
+            ctx = _make_agent_context()
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                contract=DelegationContract(max_steps=2),
+            )
+            tq, state = asyncio.run(
+                loop.run("do work", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done is True
+        assert state.done_reason == "halted_agent_budget"
+        warn_msgs = [
+            m
+            for m in last_msgs["messages"]
+            if isinstance(m, SystemMessage) and "AGENT BUDGET WARNING" in m.content
+        ]
+        assert len(warn_msgs) == 1
+
+    def test_session_budget_still_dominates(self):
+        """When the SHARED session budget is already exhausted, that check
+        fires first — the contract's own (roomy) budget never even gets
+        evaluated, and the halt reason stays 'budget_exhausted'."""
+        spec = _make_spec("aider_shell_tool", "Run shell")
+        registry = _make_registry(spec)
+
+        def _always_tool_call(msgs, **kwargs):
+            return _tool_call_response("aider_shell_tool", {"command": "x"}, "c1")
+
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=_always_tool_call)
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        wrapup_invoke = AsyncMock(return_value=_text_response("Session wrap-up."))
+
+        with (
+            patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            mock_build.return_value.ainvoke = wrapup_invoke
+
+            ctx = _make_agent_context()
+            # Session budget already exhausted -> hard-stops on the first turn.
+            ctx.registry._session_step_budget = 2
+            ctx.registry._total_steps = 2
+
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                # A roomy contract — never the binding constraint in this test.
+                contract=DelegationContract(max_steps=1000),
+            )
+            tq, state = asyncio.run(
+                loop.run("do work", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done is True
+        assert state.done_reason == "budget_exhausted"
+        wrapup_invoke.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# DelegationContract — atomic delegation firebreak
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicDelegationFirebreak:
+    def test_atomic_strips_spawn_family(self):
+        """An atomic child has spawn_agent/spawn_agents unbound even though it
+        CAN spawn by depth and its scope is otherwise fully permissive."""
+        root = AgentContext.root(model_name="test-model", max_depth=5)
+        atomic_ctx = root.child(atomic=True)
+        assert atomic_ctx.can_spawn is True  # depth alone would allow it
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            loop = ToolUseLoop(
+                agent_context=atomic_ctx,
+                tool_registry=_make_registry(_make_spec("read_file", "Read a file")),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                # Fully permissive scope — only ``atomic`` disables spawning.
+                allowed_tools=None,
+                strict_tool_scope=False,
+            )
+        assert loop._spawn_agent_tool is None
+
+    def test_non_atomic_sibling_keeps_spawning(self):
+        """Sanity check: the SAME permissive scope keeps spawning enabled when
+        the context isn't atomic — atomic is the only thing that changed."""
+        root = AgentContext.root(model_name="test-model", max_depth=5)
+        open_ctx = root.child(atomic=False)
+
+        with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            loop = ToolUseLoop(
+                agent_context=open_ctx,
+                tool_registry=_make_registry(_make_spec("read_file", "Read a file")),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                allowed_tools=None,
+                strict_tool_scope=False,
+            )
+        assert loop._spawn_agent_tool is not None
+
+
+# ---------------------------------------------------------------------------
+# DelegationContract — wall-clock deadline watchdog sweep
+# ---------------------------------------------------------------------------
+
+
+class TestWallDeadlineWatchdog:
+    """Two-strike by design: the 80% warn always precedes the 100% cancel —
+    ``cancel_agent`` from the watchdog is the ONE contract-driven kill switch
+    in the codebase."""
+
+    def test_wall_deadline_sweep(self):
+        import queue
+        import time
+
+        async def _test():
+            ctx = _make_agent_context()
+            loop = ToolUseLoop(
+                agent_context=ctx,
+                tool_registry=_make_registry(_make_spec()),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            registry = ctx.registry
+
+            warn_handle = AgentHandle(
+                agent_id="child-warn",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="m",
+                task_description="t",
+                status="running",
+                contract=DelegationContract(max_wall_s=100.0),
+                message_queue=queue.Queue(),
+            )
+            warn_handle.started_at = time.monotonic() - 85.0  # 85% -> warn
+
+            over_handle = AgentHandle(
+                agent_id="child-over",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="m",
+                task_description="t",
+                status="running",
+                contract=DelegationContract(max_wall_s=100.0),
+            )
+            over_handle.started_at = time.monotonic() - 150.0  # over
+            # A real, not-yet-done asyncio.Task — cancel_agent() is a no-op
+            # diagnostic without one. Blocks on an Event (never asyncio.sleep)
+            # so patching asyncio.sleep below can't interfere with it.
+            never = asyncio.Event()
+            over_task = asyncio.create_task(never.wait())
+            over_handle.asyncio_task = over_task
+
+            await registry.register(warn_handle)
+            await registry.register(over_handle)
+
+            # Drive exactly ONE watchdog sweep with no real waiting: the fake
+            # sleep raises CancelledError on its second call, which the
+            # watchdog's own except clause treats as normal shutdown.
+            call_n = {"i": 0}
+
+            async def _fake_sleep(_delay):
+                call_n["i"] += 1
+                if call_n["i"] > 1:
+                    raise asyncio.CancelledError()
+
+            with patch("mewbo_core.tool_use_loop.asyncio.sleep", side_effect=_fake_sleep):
+                await loop._watchdog()
+
+            assert warn_handle.status == "running"  # warn alone never cancels
+            assert not warn_handle.message_queue.empty()
+            warned_msg = warn_handle.message_queue.get_nowait()
+            assert "WALL DEADLINE WARNING" in warned_msg
+
+            assert over_handle.status == "cancelled"
+
+            try:
+                await over_task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_test())
 
 
 # ---------------------------------------------------------------------------
@@ -1317,7 +1863,7 @@ class TestModelFallback:
         asyncio.run(_test())
 
     def test_sticky_pin_uses_rescue_client_next_turn(self):
-        """Regression (#54): after a sticky escalation pins a rescue model, the
+        """Regression: after a sticky escalation pins a rescue model, the
         NEXT turn must invoke the RESCUE model's client — not silently re-call the
         dead primary. Guards the ``tool_use_loop._invoke`` discriminant (key off
         the model NAME, not ``is_fallback``: a pinned rescue reorders to idx 0
@@ -1781,7 +2327,7 @@ class TestEnableSkillsOptOut:
 
 
 # ---------------------------------------------------------------------------
-# Batch fan-out through the loop: spawn_agents in a SINGLE turn  (Gitea #117)
+# Batch fan-out through the loop: spawn_agents in a SINGLE turn
 # ---------------------------------------------------------------------------
 
 
@@ -1856,7 +2402,7 @@ class TestToolUseLoopBatchFanOut:
 
 
 # ---------------------------------------------------------------------------
-# Token streaming (RC1 / Gitea #137)
+# Token streaming (RC1)
 # ---------------------------------------------------------------------------
 
 
@@ -1926,7 +2472,7 @@ class TestToolUseLoopStreaming:
         ]
         assert deltas == ["The ", "answer ", "is 42."]
 
-        # Token accounting survives streaming (load-bearing for #54).
+        # Token accounting survives streaming (load-bearing for).
         end = [e for e in events if e.get("type") == "llm_call_end" and e["payload"].get("success")]
         assert end and end[-1]["payload"]["output_tokens"] == 5
 

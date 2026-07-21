@@ -1,29 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  AlertTriangle,
+  ArrowLeft,
   Blocks,
   ChevronDown,
   ChevronUp,
   Circle,
-  Cpu,
   FolderOpen,
   GitBranch,
   GitFork,
-  Layers,
   Loader2,
   Plus,
   RefreshCw,
   RotateCcw,
   Sliders,
   Trash2,
-  X,
   Zap,
 } from 'lucide-react';
 import { ProjectSummary, SkillSummary, ToolScope } from '../api/client';
 import { CreateWorktreeInput, WorktreeSummary } from '../types';
-import { getProviderIcon } from '../utils/modelIcon';
-import { isUnsupportedModel } from '../utils/modelSupport';
-import { ModelBrandIcon } from './ModelBrandIcon';
+import {
+  MEWBO_BRANCH_PREFIX,
+  defaultMewboBranchName,
+} from '../utils/branchName';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
   Command,
@@ -33,8 +31,6 @@ import {
   CommandItem,
   CommandList,
 } from './ui/command';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Switch } from './ui/switch';
 
 export type McpStatus = 'active' | 'disabled' | 'error';
 
@@ -53,12 +49,9 @@ type ConfigMenuProps = {
   mcpOptions: McpOption[];
   skills: SkillSummary[];
   projects: ProjectSummary[];
-  models: string[];
-  defaultModel: string | null;
   // Active state
   activeProject: string | null;
   activeSkill: string | null;
-  activeModel: string | null;
   // Loading/error per category
   mcpLoading: boolean;
   mcpError: string | null;
@@ -66,27 +59,16 @@ type ConfigMenuProps = {
   skillsError: string | null;
   projectsLoading: boolean;
   projectsError: string | null;
-  modelsLoading: boolean;
-  modelsError: string | null;
   // Refresh callbacks
   onRefreshMcp: () => void;
   onRefreshSkills: () => void;
   onRefreshProjects: () => void;
-  onRefreshModels: () => void;
   // Selection callbacks
   onToggleMcp: (id: string) => void;
   onSelectProject: (name: string | null) => void;
   onSelectSkill: (name: string | null) => void;
-  onSelectModel: (name: string | null) => void;
   onResetAll: () => void;
-  // Cross-model fallback (opt-in). ``fallbackModels`` is an ordered list; the
-  // run tries each after the primary fails. Empty + enabled is inert until the
-  // user picks at least one, mirroring the backend's "omit/empty = no fallback".
-  fallbackEnabled: boolean;
-  fallbackModels: string[];
-  onToggleFallbackEnabled: (enabled: boolean) => void;
-  onToggleFallbackModel: (model: string) => void;
-  // Branch / worktree (optional — if ``gitRepo`` is false the tabs hide)
+  // Branch / worktree (optional — if ``gitRepo`` is false the git rows hide)
   gitRepo?: boolean;
   branches?: string[];
   currentBranch?: string | null;
@@ -116,7 +98,7 @@ type ConfigMenuProps = {
   onDeleteWorktree?: (worktreeId: string) => void;
   onRefreshGit?: () => void;
   // Popover control
-  isOpen: boolean;
+  open: boolean;
   onToggleOpen: () => void;
   direction?: 'up' | 'down';
   compact?: boolean;
@@ -125,19 +107,14 @@ type ConfigMenuProps = {
   disabled?: boolean;
 };
 
-type Tab = 'root' | 'project' | 'branch' | 'worktree' | 'model' | 'fallback' | 'skills' | 'mcps';
+/** Drill-in views. `root` is the summary list; the rest are focused panels. */
+type View = 'root' | 'project' | 'branch' | 'worktree' | 'skills' | 'mcps';
 
 const DOT_CLASSES: Record<McpStatus, string> = {
-  active: 'fill-emerald-500 text-emerald-500',
-  disabled: 'fill-amber-500 text-amber-500',
-  error: 'fill-red-500 text-red-500',
+  active: 'fill-[hsl(var(--success))] text-[hsl(var(--success))]',
+  disabled: 'fill-[hsl(var(--warning))] text-[hsl(var(--warning))]',
+  error: 'fill-[hsl(var(--destructive))] text-[hsl(var(--destructive-text))]',
 };
-
-/** Truncate a model ID for display (e.g. "openai/gpt-4o-mini" → "gpt-4o-mini"). */
-function shortModel(id: string): string {
-  const slash = id.lastIndexOf('/');
-  return slash >= 0 ? id.slice(slash + 1) : id;
-}
 
 /** Selection key for a project entry — managed projects use a `managed:` prefix. */
 function projectKey(p: ProjectSummary): string {
@@ -149,18 +126,38 @@ function projectKey(p: ProjectSummary): string {
 // Visual overrides to restore the dense pre-migration look on top of shadcn's
 // roomier desktop-command-palette defaults. Behavior (search, keyboard nav,
 // selection state) still comes from cmdk via shadcn — only typography/spacing
-// is being re-themed here.
-const COMMAND_INPUT_CLS = 'h-7 py-1 text-xs';
-const COMMAND_EMPTY_CLS = 'py-3 text-xs text-[hsl(var(--muted-foreground))]';
-const COMMAND_GROUP_CLS =
-  'p-0 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[hsl(var(--muted-foreground))]';
+// is being re-themed here. Exported so the sibling ModelSelector popover reads
+// as one family (DRY — one dense command vocabulary for both composer menus).
+//
+// Two type steps only, and they mean different things. `text-xs` is the prose
+// register: a row's label AND its secondary line are the same size, separated
+// by colour, because a one-step size drop is too weak to carry hierarchy and
+// only costs legibility. `text-2xs` is the micro register — uppercase group
+// headings, inline badge pills, count pips — where the shape of the element
+// already says "this is chrome" and the smaller size is density, not rank.
+// The filter box deliberately sets NO font size. `ui/command.tsx` already gives
+// its `<input>` the responsive iOS floor (`text-field md:text-sm` — 16px on
+// narrow viewports, 13px from `md:` up), and `cn()` is last-wins, so ANY size
+// passed here would replace that base step and drop the floor on phones. The
+// primitive owns the type; a caller passes layout. This constant used to carry
+// `text-xs` and did exactly that, silently, while reading as a harmless density
+// tweak — which is the whole argument for not restating type at a call site.
+//
+// The height still has to follow the same breakpoint, or the 16px text is
+// cramped: 32px clears a 16px line box, 28px keeps the dense desktop look.
+// `py-1` is load-bearing against the vendored `py-3`, which would eat a fixed
+// height from the inside.
+export const COMMAND_INPUT_CLS = 'h-8 md:h-7 py-1';
+export const COMMAND_EMPTY_CLS = 'py-3 text-xs text-[hsl(var(--muted-foreground))]';
+export const COMMAND_GROUP_CLS =
+  'p-0 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[hsl(var(--muted-foreground))]';
 // Two-line item (e.g., project name + description). Override shadcn's
 // `gap-2 items-center` (single-line) and `text-sm px-2 py-1.5` (roomy) with
 // `flex-col items-start gap-0 text-xs px-3 py-2` (dense vertical stack).
-const COMMAND_ITEM_TWO_LINE_CLS =
+export const COMMAND_ITEM_TWO_LINE_CLS =
   'flex-col items-start gap-0 px-3 py-2 text-xs rounded-none';
 // Single-line item (e.g., "Default", "Temporary directory", "None").
-const COMMAND_ITEM_SINGLE_LINE_CLS = 'px-3 py-2 text-xs rounded-none';
+export const COMMAND_ITEM_SINGLE_LINE_CLS = 'px-3 py-2 text-xs rounded-none';
 
 function StatusDot({ status, active }: { status: McpStatus; active: boolean }) {
   if (status === 'active' && !active) {
@@ -169,7 +166,7 @@ function StatusDot({ status, active }: { status: McpStatus; active: boolean }) {
   return <Circle className={`w-2 h-2 shrink-0 ${DOT_CLASSES[status]}`} />;
 }
 
-function RefreshIcon({ onRefresh, label }: { onRefresh?: () => void; label: string }) {
+export function RefreshIcon({ onRefresh, label }: { onRefresh?: () => void; label: string }) {
   if (!onRefresh) return null;
   return (
     <button
@@ -183,11 +180,28 @@ function RefreshIcon({ onRefresh, label }: { onRefresh?: () => void; label: stri
   );
 }
 
-function ErrorBanner({ error }: { error?: string | null }) {
+export function ErrorBanner({ error }: { error?: string | null }) {
   if (!error) return null;
   return (
-    <div className="px-3 py-2 text-xs text-red-500 border-b border-[hsl(var(--border))] bg-red-500/5">
+    <div className="px-3 py-2 text-xs text-[hsl(var(--destructive-text))] border-b border-[hsl(var(--border))] bg-[hsl(var(--destructive)/0.05)]">
       {error}
+    </div>
+  );
+}
+
+/** Back-arrow header shared by every drill-in panel. */
+function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-[hsl(var(--border))] shrink-0">
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label="Back"
+        className="p-1 rounded hover:bg-[hsl(var(--accent))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" />
+      </button>
+      <span className="text-xs font-medium text-[hsl(var(--foreground))]">{title}</span>
     </div>
   );
 }
@@ -196,32 +210,21 @@ export function ConfigMenu({
   mcpOptions,
   skills,
   projects,
-  models,
-  defaultModel,
   activeProject,
   activeSkill,
-  activeModel,
   mcpLoading,
   mcpError,
   skillsLoading,
   skillsError,
   projectsLoading,
   projectsError,
-  modelsLoading,
-  modelsError,
   onRefreshMcp,
   onRefreshSkills,
   onRefreshProjects,
-  onRefreshModels,
   onToggleMcp,
   onSelectProject,
   onSelectSkill,
-  onSelectModel,
   onResetAll,
-  fallbackEnabled,
-  fallbackModels,
-  onToggleFallbackEnabled,
-  onToggleFallbackModel,
   gitRepo = false,
   branches = [],
   currentBranch = null,
@@ -238,48 +241,36 @@ export function ConfigMenu({
   onCreateWorktree,
   onDeleteWorktree,
   onRefreshGit,
-  isOpen,
+  open,
   onToggleOpen,
   direction = 'up',
   compact = false,
   disabled = false,
 }: ConfigMenuProps) {
-  const [tab, setTab] = useState<Tab>('root');
-  const showGitTabs = gitRepo;
+  const [view, setView] = useState<View>('root');
+  const showGit = gitRepo;
 
   // Reset to root when the menu closes.
   useEffect(() => {
-    if (!isOpen) setTab('root');
-  }, [isOpen]);
+    if (!open) setView('root');
+  }, [open]);
 
-  // Don't leave the user stranded on a tab whose surface just disappeared
+  // Don't leave the user stranded on a panel whose surface just disappeared
   // (e.g. they switched from a git project to "Temporary directory").
   useEffect(() => {
-    if (!showGitTabs && (tab === 'branch' || tab === 'worktree')) {
-      setTab('root');
+    if (!showGit && (view === 'branch' || view === 'worktree')) {
+      setView('root');
     }
-  }, [showGitTabs, tab]);
+  }, [showGit, view]);
 
   const activeMcpCount = mcpOptions.filter((m) => m.active).length;
-  const modelIsNonDefault = activeModel !== null && activeModel !== defaultModel;
-  const effectiveModelId = activeModel ?? defaultModel;
-  // Fallback counts as "active" only when enabled AND at least one model is
-  // chosen — an empty enabled chain is inert (matches the submit-time guard).
-  const fallbackActive = fallbackEnabled && fallbackModels.length > 0;
-  const fallbackLabel = fallbackActive
-    ? `${fallbackModels.length} model${fallbackModels.length === 1 ? '' : 's'}`
-    : fallbackEnabled
-      ? 'No models'
-      : 'Off';
   const branchIsNonDefault =
-    showGitTabs &&
+    showGit &&
     activeBranch !== null &&
     currentBranch !== null &&
     activeBranch !== currentBranch;
   const totalActive =
     (activeProject ? 1 : 0) +
-    (modelIsNonDefault ? 1 : 0) +
-    (fallbackActive ? 1 : 0) +
     (activeSkill ? 1 : 0) +
     activeMcpCount +
     (branchIsNonDefault ? 1 : 0) +
@@ -291,11 +282,10 @@ export function ConfigMenu({
   );
   const projectLabel =
     activeProjectEntry?.name ?? (activeProject ? activeProject : 'Temporary directory');
-  const modelLabel = activeModel ? shortModel(activeModel) : 'Default';
   const skillLabel = activeSkill ? `/${activeSkill}` : 'None';
   const mcpLabel = activeMcpCount > 0 ? `${activeMcpCount} active` : 'None';
   const branchLabel = (() => {
-    if (!showGitTabs) return 'Not a git repo';
+    if (!showGit) return 'Not a git repo';
     if (activeBranch) return activeBranch;
     if (currentBranch) return currentBranch;
     return 'Detached HEAD';
@@ -308,24 +298,13 @@ export function ConfigMenu({
       ? worktrees.find((w) => w.project_id === activeWorktree)
       : undefined;
   const worktreeLabel = (() => {
-    if (!showGitTabs) return '—';
+    if (!showGit) return '—';
     if (activeWorktreeEntry) return activeWorktreeEntry.branch;
     return 'Parent repo';
   })();
   // Project groupings
   const configProjects = projects.filter((p) => p.source !== 'managed');
   const managedProjects = projects.filter((p) => p.source === 'managed');
-
-  // Model ordering — unsupported (whisper/embedding) sink to the bottom.
-  const orderedModels = useMemo(
-    () =>
-      [...models].sort((a, b) => {
-        const aUn = isUnsupportedModel(a) ? 1 : 0;
-        const bUn = isUnsupportedModel(b) ? 1 : 0;
-        return aUn - bUn;
-      }),
-    [models],
-  );
 
   // MCP scope groups (worst-status-wins indicator already computed by caller)
   const pluginOptions = mcpOptions.filter((o) => o.scope === 'plugin');
@@ -337,12 +316,14 @@ export function ConfigMenu({
     { label: 'Project', items: projectOptions },
   ].filter((s) => s.items.length > 0);
 
+  const back = () => setView('root');
+
   return (
     <Popover
-      open={disabled ? false : isOpen}
+      open={disabled ? false : open}
       onOpenChange={(next) => {
         if (disabled) return;
-        if (next !== isOpen) onToggleOpen();
+        if (next !== open) onToggleOpen();
       }}
     >
       <PopoverTrigger asChild>
@@ -350,15 +331,20 @@ export function ConfigMenu({
           aria-label={disabled ? 'Session config (locked while running)' : 'Configure session'}
           disabled={disabled}
           title={disabled ? 'Locked while the agent is running' : undefined}
-          className={`flex items-center gap-1.5 ${compact ? 'p-1.5' : 'px-2.5 py-1.5'} rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${isOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${hasAnyActive ? 'text-[hsl(var(--foreground))]' : ''} disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[hsl(var(--muted-foreground))]`}
+          className={`flex items-center gap-1.5 ${compact ? 'h-7 px-1.5' : 'h-7 px-2.5'} rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-normal text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${open ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''} ${hasAnyActive ? 'text-[hsl(var(--foreground))]' : ''} disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[hsl(var(--muted-foreground))]`}
         >
           <Sliders className={`w-3.5 h-3.5 ${hasAnyActive ? '' : 'opacity-50'}`} />
           {compact ? (
-            <span className="text-[10px] font-medium truncate max-w-[80px]">{projectLabel}</span>
+            <span className="text-2xs truncate max-w-[80px]">{projectLabel}</span>
           ) : (
             <>
               <span className="truncate max-w-[160px]">{projectLabel}</span>
-              {isOpen ? (
+              {hasAnyActive && (
+                <span className="shrink-0 min-w-[16px] h-4 px-1 inline-flex items-center justify-center rounded-full bg-[hsl(var(--primary))]/15 text-2xs font-medium text-[hsl(var(--primary-text))]">
+                  {totalActive}
+                </span>
+              )}
+              {open ? (
                 <ChevronUp className="w-3 h-3 opacity-50" />
               ) : (
                 <ChevronDown className="w-3 h-3 opacity-50" />
@@ -370,37 +356,25 @@ export function ConfigMenu({
       <PopoverContent
         side={direction === 'up' ? 'top' : 'bottom'}
         align="start"
-        className="w-80 max-h-[420px] p-0 flex flex-col overflow-hidden"
+        className="w-80 max-h-[440px] p-0 flex flex-col overflow-hidden"
       >
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex flex-col flex-1 min-h-0">
-          <TabsList
-            className={`grid ${showGitTabs ? 'grid-cols-8' : 'grid-cols-6'} m-2 mb-0 h-8`}
-          >
-            <TabsTrigger value="root" className="text-[10px] px-1">Root</TabsTrigger>
-            <TabsTrigger value="project" className="text-[10px] px-1">Project</TabsTrigger>
-            {showGitTabs && (
-              <TabsTrigger value="branch" className="text-[10px] px-1">Branch</TabsTrigger>
-            )}
-            {showGitTabs && (
-              <TabsTrigger value="worktree" className="text-[10px] px-1">Worktree</TabsTrigger>
-            )}
-            <TabsTrigger value="model" className="text-[10px] px-1">Model</TabsTrigger>
-            <TabsTrigger value="fallback" className="text-[10px] px-1">Fallback</TabsTrigger>
-            <TabsTrigger value="skills" className="text-[10px] px-1">Skills</TabsTrigger>
-            <TabsTrigger value="mcps" className="text-[10px] px-1">Tools</TabsTrigger>
-          </TabsList>
-
-          {/* Root: summary rows that drill into other tabs */}
-          <TabsContent value="root" className="m-0 flex-1 min-h-0 overflow-y-auto">
+        {/* Root: summary rows that drill into focused panels. */}
+        {view === 'root' && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {/* Sanctioned identity accents, not decoration: the five root rows
+                render side by side and each needs its own recognizable color
+                so an "active" glance doesn't require reading the label —
+                same rationale as AGENT_COLOR_CLASSES. Blue=Project,
+                sky=Branch, violet=Worktree, amber=Skills, emerald=Integrations. */}
             <div className="py-1">
               <CategoryRow
                 icon={<FolderOpen className={`w-3.5 h-3.5 ${activeProject ? 'text-blue-500' : 'opacity-50'}`} />}
                 label="Project"
                 value={projectLabel}
                 emphasized={!!activeProject}
-                onClick={() => setTab('project')}
+                onClick={() => setView('project')}
               />
-              {showGitTabs && (
+              {showGit && (
                 <CategoryRow
                   icon={
                     <GitBranch
@@ -410,10 +384,10 @@ export function ConfigMenu({
                   label="Branch"
                   value={branchLabel}
                   emphasized={branchIsNonDefault}
-                  onClick={() => setTab('branch')}
+                  onClick={() => setView('branch')}
                 />
               )}
-              {showGitTabs && (
+              {showGit && (
                 <CategoryRow
                   icon={
                     <GitFork
@@ -423,42 +397,22 @@ export function ConfigMenu({
                   label="Worktree"
                   value={worktreeLabel}
                   emphasized={!!activeWorktree}
-                  onClick={() => setTab('worktree')}
+                  onClick={() => setView('worktree')}
                 />
               )}
-              <CategoryRow
-                icon={
-                  effectiveModelId && getProviderIcon(effectiveModelId) ? (
-                    <ModelBrandIcon modelId={effectiveModelId} size={14} />
-                  ) : (
-                    <Cpu className={`w-3.5 h-3.5 ${modelIsNonDefault ? 'text-purple-500' : 'opacity-50'}`} />
-                  )
-                }
-                label="Model"
-                value={modelLabel}
-                emphasized={modelIsNonDefault}
-                onClick={() => setTab('model')}
-              />
-              <CategoryRow
-                icon={<Layers className={`w-3.5 h-3.5 ${fallbackActive ? 'text-teal-500' : 'opacity-50'}`} />}
-                label="Fallback"
-                value={fallbackLabel}
-                emphasized={fallbackActive}
-                onClick={() => setTab('fallback')}
-              />
               <CategoryRow
                 icon={<Zap className={`w-3.5 h-3.5 ${activeSkill ? 'text-amber-500' : 'opacity-50'}`} />}
                 label="Skills"
                 value={skillLabel}
                 emphasized={!!activeSkill}
-                onClick={() => setTab('skills')}
+                onClick={() => setView('skills')}
               />
               <CategoryRow
                 icon={<Blocks className={`w-3.5 h-3.5 ${activeMcpCount > 0 ? 'text-emerald-500' : 'opacity-50'}`} />}
                 label="Integrations"
                 value={mcpLabel}
                 emphasized={activeMcpCount > 0}
-                onClick={() => setTab('mcps')}
+                onClick={() => setView('mcps')}
               />
             </div>
             {hasAnyActive && (
@@ -474,23 +428,26 @@ export function ConfigMenu({
                 </button>
               </>
             )}
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Project tab */}
-          <TabsContent value="project" className="m-0 flex-1 min-h-0 flex flex-col">
+        {/* Project panel */}
+        {view === 'project' && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <SubHeader title="Project" onBack={back} />
             <Command className="flex-1 min-h-0">
               <div className="flex items-center justify-between pr-2">
                 <CommandInput placeholder="Filter projects..." className={COMMAND_INPUT_CLS} />
                 <RefreshIcon onRefresh={onRefreshProjects} label="Refresh projects" />
               </div>
               <ErrorBanner error={projectsError} />
-              <CommandList className="max-h-[280px]">
+              <CommandList className="max-h-[300px]">
                 <CommandEmpty className={COMMAND_EMPTY_CLS}>
                   {projectsLoading ? 'Loading...' : 'No matches.'}
                 </CommandEmpty>
                 <CommandItem
                   value="__temp__ Temporary directory"
-                  onSelect={() => { onSelectProject(null); setTab('root'); }}
+                  onSelect={() => { onSelectProject(null); back(); }}
                   className={`${COMMAND_ITEM_SINGLE_LINE_CLS} ${!activeProject ? 'font-medium' : ''}`}
                 >
                   Temporary directory
@@ -503,12 +460,12 @@ export function ConfigMenu({
                         <CommandItem
                           key={key}
                           value={`${project.name} ${project.description ?? ''}`}
-                          onSelect={() => { onSelectProject(key); setTab('root'); }}
+                          onSelect={() => { onSelectProject(key); back(); }}
                           className={`${COMMAND_ITEM_TWO_LINE_CLS} ${activeProject === key ? 'font-medium' : ''}`}
                         >
                           <span>{project.name}</span>
                           {project.description && (
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                            <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
                               {project.description}
                             </span>
                           )}
@@ -525,12 +482,12 @@ export function ConfigMenu({
                         <CommandItem
                           key={key}
                           value={`${project.name} ${project.description ?? ''}`}
-                          onSelect={() => { onSelectProject(key); setTab('root'); }}
+                          onSelect={() => { onSelectProject(key); back(); }}
                           className={`${COMMAND_ITEM_TWO_LINE_CLS} ${activeProject === key ? 'font-medium' : ''}`}
                         >
                           <span>{project.name}</span>
                           {project.description && (
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                            <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
                               {project.description}
                             </span>
                           )}
@@ -541,369 +498,226 @@ export function ConfigMenu({
                 )}
               </CommandList>
             </Command>
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Branch tab — visible only when the active project is a git repo. */}
-          {showGitTabs && (
-            <TabsContent value="branch" className="m-0 flex-1 min-h-0 flex flex-col">
-              <Command className="flex-1 min-h-0">
-                <div className="flex items-center justify-between pr-2">
-                  <CommandInput placeholder="Filter branches..." className={COMMAND_INPUT_CLS} />
-                  <RefreshIcon onRefresh={onRefreshGit} label="Refresh git state" />
-                </div>
-                <ErrorBanner error={gitError} />
-                <CommandList className="max-h-[280px]">
-                  <CommandEmpty className={COMMAND_EMPTY_CLS}>
-                    {gitLoading ? 'Loading...' : 'No matches.'}
-                  </CommandEmpty>
-                  {currentBranch && (
-                    <CommandItem
-                      value={`__current__ ${currentBranch}`}
-                      onSelect={() => {
-                        if (gitReadOnly) return;
-                        onSelectBranch?.(currentBranch);
-                        // Picking the current branch implies "no worktree"
-                        // — back out of any active worktree selection so the
-                        // session runs against the parent repo.
-                        onSelectWorktree?.(null);
-                        setTab('root');
-                      }}
-                      disabled={gitReadOnly}
-                      className={`${COMMAND_ITEM_TWO_LINE_CLS} ${activeBranch === currentBranch || (!activeBranch && !branchIsNonDefault) ? 'font-medium' : ''}`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <GitBranch className="w-3 h-3" />
-                        <span className="font-mono">{currentBranch}</span>
-                        <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded">
-                          current
-                        </span>
-                      </span>
-                    </CommandItem>
-                  )}
-                  <CommandGroup heading="Branches" className={COMMAND_GROUP_CLS}>
-                    {branches
-                      .filter((b) => b !== currentBranch)
-                      .map((branch) => {
-                        const matchedWorktree = worktrees.find((w) => w.branch === branch);
-                        const isActive = activeBranch === branch;
-                        return (
-                          <CommandItem
-                            key={branch}
-                            value={branch}
-                            onSelect={() => {
-                              if (gitReadOnly) return;
-                              onSelectBranch?.(branch);
-                              // If the picked branch already has a managed
-                              // worktree, lock onto it so the session uses
-                              // that directory instead of the parent.
-                              if (matchedWorktree && matchedWorktree.managed) {
-                                onSelectWorktree?.(matchedWorktree.project_id);
-                              } else {
-                                onSelectWorktree?.(null);
-                              }
-                              setTab('root');
-                            }}
-                            disabled={gitReadOnly}
-                            className={`${COMMAND_ITEM_TWO_LINE_CLS} ${isActive ? 'font-medium' : ''}`}
-                          >
-                            <span className="flex items-center gap-2 truncate">
-                              <GitBranch className="w-3 h-3 shrink-0" />
-                              <span className="font-mono truncate">{branch}</span>
-                            </span>
-                            {matchedWorktree && (
-                              <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5 flex items-center gap-1">
-                                <GitFork className="w-3 h-3" />
-                                {matchedWorktree.managed ? 'Has managed worktree' : 'Has user worktree'}
-                              </span>
-                            )}
-                          </CommandItem>
-                        );
-                      })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </TabsContent>
-          )}
-
-          {/* Worktree tab — visible only when the active project is a git repo. */}
-          {showGitTabs && (
-            <TabsContent value="worktree" className="m-0 flex-1 min-h-0 flex flex-col">
-              <Command className="flex-1 min-h-0">
-                <div className="flex items-center justify-between pr-2">
-                  <CommandInput placeholder="Filter worktrees..." className={COMMAND_INPUT_CLS} />
-                  <RefreshIcon onRefresh={onRefreshGit} label="Refresh worktrees" />
-                </div>
-                <ErrorBanner error={gitError} />
-                <CommandList className="max-h-[280px]">
-                  <CommandEmpty className={COMMAND_EMPTY_CLS}>
-                    {gitLoading ? 'Loading...' : 'No matches.'}
-                  </CommandEmpty>
+        {/* Branch panel — visible only when the active project is a git repo. */}
+        {view === 'branch' && showGit && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <SubHeader title="Branch" onBack={back} />
+            <Command className="flex-1 min-h-0">
+              <div className="flex items-center justify-between pr-2">
+                <CommandInput placeholder="Filter branches..." className={COMMAND_INPUT_CLS} />
+                <RefreshIcon onRefresh={onRefreshGit} label="Refresh git state" />
+              </div>
+              <ErrorBanner error={gitError} />
+              <CommandList className="max-h-[300px]">
+                <CommandEmpty className={COMMAND_EMPTY_CLS}>
+                  {gitLoading ? 'Loading...' : 'No matches.'}
+                </CommandEmpty>
+                {currentBranch && (
                   <CommandItem
-                    value="__parent__ Parent repo"
+                    value={`__current__ ${currentBranch}`}
                     onSelect={() => {
                       if (gitReadOnly) return;
+                      onSelectBranch?.(currentBranch);
+                      // Picking the current branch implies "no worktree"
+                      // — back out of any active worktree selection so the
+                      // session runs against the parent repo.
                       onSelectWorktree?.(null);
-                      // Snap branch back to parent's current to keep the two
-                      // selectors in sync — picking "no worktree" is the
-                      // same gesture as "use whatever's checked out".
-                      onSelectBranch?.(currentBranch ?? null);
-                      setTab('root');
+                      back();
                     }}
                     disabled={gitReadOnly}
-                    className={`${COMMAND_ITEM_TWO_LINE_CLS} ${!activeWorktree ? 'font-medium' : ''}`}
+                    className={`${COMMAND_ITEM_TWO_LINE_CLS} ${activeBranch === currentBranch || (!activeBranch && !branchIsNonDefault) ? 'font-medium' : ''}`}
                   >
                     <span className="flex items-center gap-2">
-                      <FolderOpen className="w-3 h-3" />
-                      <span>Parent repo</span>
-                    </span>
-                    <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                      {currentBranch
-                        ? `Run against ${currentBranch} in the parent working tree`
-                        : 'Run against the parent working tree'}
+                      <GitBranch className="w-3 h-3" />
+                      <span className="font-mono">{currentBranch}</span>
+                      <span className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded">
+                        current
+                      </span>
                     </span>
                   </CommandItem>
-                  {worktrees.length > 0 && (
-                    <CommandGroup heading="Worktrees" className={COMMAND_GROUP_CLS}>
-                      {worktrees.map((wt) => {
-                        const id = wt.project_id ?? `unmanaged:${wt.branch}`;
-                        const isActive =
-                          activeWorktree !== null &&
-                          wt.project_id !== null &&
-                          activeWorktree === wt.project_id;
-                        const selectable = !gitReadOnly && wt.managed;
-                        return (
-                          <CommandItem
-                            key={id}
-                            value={`${wt.branch} ${wt.path}`}
-                            onSelect={() => {
-                              if (!selectable || !wt.project_id) return;
-                              onSelectBranch?.(wt.branch);
-                              onSelectWorktree?.(wt.project_id);
-                              setTab('root');
-                            }}
-                            disabled={!selectable}
-                            className={`${COMMAND_ITEM_TWO_LINE_CLS} ${isActive ? 'font-medium' : ''}`}
-                          >
-                            <span className="flex items-center gap-2 truncate">
-                              <GitFork className="w-3 h-3 shrink-0" />
-                              <span className="font-mono truncate">{wt.branch}</span>
-                              <span
-                                className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded shrink-0"
-                                title={wt.managed ? 'Created by Mewbo' : 'Existing git worktree on disk'}
-                              >
-                                {wt.managed ? 'managed' : 'user'}
-                              </span>
-                              {wt.clean === false && (
-                                <span
-                                  className="text-amber-400 text-[10px] shrink-0"
-                                  title="Uncommitted changes or unpushed commits"
-                                >
-                                  ●
-                                </span>
-                              )}
-                              {!gitReadOnly && wt.managed && wt.project_id && onDeleteWorktree && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onDeleteWorktree(wt.project_id as string);
-                                  }}
-                                  aria-label={`Delete worktree ${wt.branch}`}
-                                  className="ml-auto p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              )}
+                )}
+                <CommandGroup heading="Branches" className={COMMAND_GROUP_CLS}>
+                  {branches
+                    .filter((b) => b !== currentBranch)
+                    .map((branch) => {
+                      const matchedWorktree = worktrees.find((w) => w.branch === branch);
+                      const isActive = activeBranch === branch;
+                      return (
+                        <CommandItem
+                          key={branch}
+                          value={branch}
+                          onSelect={() => {
+                            if (gitReadOnly) return;
+                            onSelectBranch?.(branch);
+                            // If the picked branch already has a managed
+                            // worktree, lock onto it so the session uses
+                            // that directory instead of the parent.
+                            if (matchedWorktree && matchedWorktree.managed) {
+                              onSelectWorktree?.(matchedWorktree.project_id);
+                            } else {
+                              onSelectWorktree?.(null);
+                            }
+                            back();
+                          }}
+                          disabled={gitReadOnly}
+                          className={`${COMMAND_ITEM_TWO_LINE_CLS} ${isActive ? 'font-medium' : ''}`}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <GitBranch className="w-3 h-3 shrink-0" />
+                            <span className="font-mono truncate">{branch}</span>
+                          </span>
+                          {matchedWorktree && (
+                            <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5 flex items-center gap-1">
+                              <GitFork className="w-3 h-3" />
+                              {matchedWorktree.managed ? 'Has managed worktree' : 'Has user worktree'}
                             </span>
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                              {wt.path}
-                              {!wt.managed && ' (use git CLI to remove)'}
-                            </span>
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  )}
-                  {!gitReadOnly && onCreateWorktree && branches.length > 0 && (
-                    <CommandGroup heading="Create new worktree" className={COMMAND_GROUP_CLS}>
-                      <NewWorktreeForm
-                        branches={branches}
-                        currentBranch={currentBranch}
-                        branchesInUse={branchesInUse}
-                        existingWorktreeBranches={worktrees.map((w) => w.branch)}
-                        busy={gitMutating}
-                        onSubmit={onCreateWorktree}
-                      />
-                    </CommandGroup>
-                  )}
-                </CommandList>
-              </Command>
-            </TabsContent>
-          )}
+                          )}
+                        </CommandItem>
+                      );
+                    })}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </div>
+        )}
 
-          {/* Model tab */}
-          <TabsContent value="model" className="m-0 flex-1 min-h-0 flex flex-col">
+        {/* Worktree panel — visible only when the active project is a git repo. */}
+        {view === 'worktree' && showGit && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <SubHeader title="Worktree" onBack={back} />
             <Command className="flex-1 min-h-0">
               <div className="flex items-center justify-between pr-2">
-                <CommandInput placeholder="Filter models..." className={COMMAND_INPUT_CLS} />
-                <RefreshIcon onRefresh={onRefreshModels} label="Refresh models" />
+                <CommandInput placeholder="Filter worktrees..." className={COMMAND_INPUT_CLS} />
+                <RefreshIcon onRefresh={onRefreshGit} label="Refresh worktrees" />
               </div>
-              <ErrorBanner error={modelsError} />
-              <CommandList className="max-h-[280px]">
+              <ErrorBanner error={gitError} />
+              <CommandList className="max-h-[300px]">
                 <CommandEmpty className={COMMAND_EMPTY_CLS}>
-                  {modelsLoading ? 'Loading...' : 'No matches.'}
+                  {gitLoading ? 'Loading...' : 'No matches.'}
                 </CommandEmpty>
                 <CommandItem
-                  value="__default__ Default"
-                  onSelect={() => { onSelectModel(null); setTab('root'); }}
-                  className={`${COMMAND_ITEM_SINGLE_LINE_CLS} ${!activeModel ? 'font-medium' : ''}`}
+                  value="__parent__ Parent repo"
+                  onSelect={() => {
+                    if (gitReadOnly) return;
+                    onSelectWorktree?.(null);
+                    // Snap branch back to parent's current to keep the two
+                    // selectors in sync — picking "no worktree" is the
+                    // same gesture as "use whatever's checked out".
+                    onSelectBranch?.(currentBranch ?? null);
+                    back();
+                  }}
+                  disabled={gitReadOnly}
+                  className={`${COMMAND_ITEM_TWO_LINE_CLS} ${!activeWorktree ? 'font-medium' : ''}`}
                 >
-                  Default
+                  <span className="flex items-center gap-2">
+                    <FolderOpen className="w-3 h-3" />
+                    <span>Parent repo</span>
+                  </span>
+                  <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                    {currentBranch
+                      ? `Run against ${currentBranch} in the parent working tree`
+                      : 'Run against the parent working tree'}
+                  </span>
                 </CommandItem>
-                {orderedModels.map((model) => {
-                  const unsupported = isUnsupportedModel(model);
-                  const isActive = activeModel === model;
-                  return (
-                    <CommandItem
-                      key={model}
-                      value={model}
-                      onSelect={() => { onSelectModel(model); setTab('root'); }}
-                      title={unsupported ? 'Not supported for chat or agents' : undefined}
-                      className={`${COMMAND_ITEM_TWO_LINE_CLS} ${unsupported ? 'text-[hsl(var(--muted-foreground))]' : ''} ${isActive ? 'font-medium' : ''}`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <ModelBrandIcon modelId={model} size={14} />
-                        {unsupported && (
-                          <span role="img" aria-label="Not supported for chat" className="text-amber-500">
-                            ⚠️
+                {worktrees.length > 0 && (
+                  <CommandGroup heading="Worktrees" className={COMMAND_GROUP_CLS}>
+                    {worktrees.map((wt) => {
+                      const id = wt.project_id ?? `unmanaged:${wt.branch}`;
+                      const isActive =
+                        activeWorktree !== null &&
+                        wt.project_id !== null &&
+                        activeWorktree === wt.project_id;
+                      const selectable = !gitReadOnly && wt.managed;
+                      return (
+                        <CommandItem
+                          key={id}
+                          value={`${wt.branch} ${wt.path}`}
+                          onSelect={() => {
+                            if (!selectable || !wt.project_id) return;
+                            onSelectBranch?.(wt.branch);
+                            onSelectWorktree?.(wt.project_id);
+                            back();
+                          }}
+                          disabled={!selectable}
+                          className={`${COMMAND_ITEM_TWO_LINE_CLS} ${isActive ? 'font-medium' : ''}`}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <GitFork className="w-3 h-3 shrink-0" />
+                            <span className="font-mono truncate">{wt.branch}</span>
+                            <span
+                              className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded shrink-0"
+                              title={wt.managed ? 'Created by Mewbo' : 'Existing git worktree on disk'}
+                            >
+                              {wt.managed ? 'managed' : 'user'}
+                            </span>
+                            {wt.clean === false && (
+                              <span
+                                className="text-amber-400 text-2xs shrink-0"
+                                title="Uncommitted changes or unpushed commits"
+                              >
+                                ●
+                              </span>
+                            )}
+                            {!gitReadOnly && wt.managed && wt.project_id && onDeleteWorktree && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteWorktree(wt.project_id as string);
+                                }}
+                                aria-label={`Delete worktree ${wt.branch}`}
+                                className="ml-auto p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
                           </span>
-                        )}
-                        <span>{shortModel(model)}</span>
-                      </span>
-                      {model.includes('/') && (
-                        <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                          {model}
-                        </span>
-                      )}
-                    </CommandItem>
-                  );
-                })}
+                          <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                            {wt.path}
+                            {!wt.managed && ' (use git CLI to remove)'}
+                          </span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                )}
+                {!gitReadOnly && onCreateWorktree && branches.length > 0 && (
+                  <CommandGroup heading="Create new worktree" className={COMMAND_GROUP_CLS}>
+                    <NewWorktreeForm
+                      branches={branches}
+                      currentBranch={currentBranch}
+                      branchesInUse={branchesInUse}
+                      existingWorktreeBranches={worktrees.map((w) => w.branch)}
+                      loading={gitMutating}
+                      onSubmit={onCreateWorktree}
+                    />
+                  </CommandGroup>
+                )}
               </CommandList>
             </Command>
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Fallback tab — opt-in cross-model retry chain. */}
-          <TabsContent value="fallback" className="m-0 flex-1 min-h-0 flex flex-col">
-            {/* Toggle + warning are pinned; the model list scrolls below. */}
-            <div className="px-3 pt-2 pb-1.5 border-b border-[hsl(var(--border))] space-y-2">
-              <label className="flex items-center justify-between gap-2 cursor-pointer">
-                <span className="text-xs font-medium text-[hsl(var(--foreground))]">
-                  Enable model fallback
-                </span>
-                <Switch
-                  checked={fallbackEnabled}
-                  onCheckedChange={onToggleFallbackEnabled}
-                  aria-label="Enable model fallback"
-                />
-              </label>
-              <div className="flex items-start gap-1.5 text-[10px] leading-snug text-[hsl(var(--muted-foreground))]">
-                <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5 text-amber-500" />
-                <span>
-                  Falling back to another model can change cost, latency, output
-                  style, and prompt-cache behaviour. Models are tried in the order
-                  shown.
-                </span>
-              </div>
-            </div>
-            {/* Selected chain — ordered, with remove buttons. */}
-            {fallbackEnabled && fallbackModels.length > 0 && (
-              <div className="px-3 py-1.5 border-b border-[hsl(var(--border))] flex flex-col gap-1">
-                {fallbackModels.map((model, i) => (
-                  <div
-                    key={model}
-                    className="flex items-center gap-1.5 text-xs text-[hsl(var(--foreground))]"
-                  >
-                    <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] w-4 shrink-0">
-                      {i + 1}.
-                    </span>
-                    <ModelBrandIcon modelId={model} size={12} />
-                    <span className="truncate flex-1">{shortModel(model)}</span>
-                    <button
-                      type="button"
-                      onClick={() => onToggleFallbackModel(model)}
-                      aria-label={`Remove ${shortModel(model)} from fallback chain`}
-                      className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <Command className="flex-1 min-h-0">
-              <div className="flex items-center justify-between pr-2">
-                <CommandInput placeholder="Add fallback models..." className={COMMAND_INPUT_CLS} />
-                <RefreshIcon onRefresh={onRefreshModels} label="Refresh models" />
-              </div>
-              <ErrorBanner error={modelsError} />
-              <CommandList className="max-h-[200px]">
-                <CommandEmpty className={COMMAND_EMPTY_CLS}>
-                  {modelsLoading ? 'Loading...' : 'No matches.'}
-                </CommandEmpty>
-                {orderedModels.map((model) => {
-                  const unsupported = isUnsupportedModel(model);
-                  const selectedIndex = fallbackModels.indexOf(model);
-                  const isSelected = selectedIndex >= 0;
-                  return (
-                    <CommandItem
-                      key={model}
-                      value={model}
-                      disabled={!fallbackEnabled || unsupported}
-                      onSelect={() => onToggleFallbackModel(model)}
-                      title={unsupported ? 'Not supported for chat or agents' : undefined}
-                      className={`${COMMAND_ITEM_TWO_LINE_CLS} ${unsupported ? 'text-[hsl(var(--muted-foreground))]' : ''} ${isSelected ? 'font-medium' : ''}`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <ModelBrandIcon modelId={model} size={14} />
-                        {unsupported && (
-                          <span role="img" aria-label="Not supported for chat" className="text-amber-500">
-                            ⚠️
-                          </span>
-                        )}
-                        <span>{shortModel(model)}</span>
-                        {isSelected && (
-                          <span className="text-[10px] text-teal-500 font-mono">
-                            #{selectedIndex + 1}
-                          </span>
-                        )}
-                      </span>
-                      {model.includes('/') && (
-                        <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                          {model}
-                        </span>
-                      )}
-                    </CommandItem>
-                  );
-                })}
-              </CommandList>
-            </Command>
-          </TabsContent>
-
-          {/* Skills tab */}
-          <TabsContent value="skills" className="m-0 flex-1 min-h-0 flex flex-col">
+        {/* Skills panel */}
+        {view === 'skills' && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <SubHeader title="Skills" onBack={back} />
             <Command className="flex-1 min-h-0">
               <div className="flex items-center justify-between pr-2">
                 <CommandInput placeholder="Filter skills..." className={COMMAND_INPUT_CLS} />
                 <RefreshIcon onRefresh={onRefreshSkills} label="Refresh skills" />
               </div>
               <ErrorBanner error={skillsError} />
-              <CommandList className="max-h-[280px]">
+              <CommandList className="max-h-[300px]">
                 <CommandEmpty className={COMMAND_EMPTY_CLS}>
                   {skillsLoading ? 'Loading...' : 'No matches.'}
                 </CommandEmpty>
                 <CommandItem
                   value="__none__ None"
-                  onSelect={() => { onSelectSkill(null); setTab('root'); }}
+                  onSelect={() => { onSelectSkill(null); back(); }}
                   className={`${COMMAND_ITEM_SINGLE_LINE_CLS} ${!activeSkill ? 'font-medium' : ''}`}
                 >
                   None
@@ -912,33 +726,36 @@ export function ConfigMenu({
                   <CommandItem
                     key={skill.name}
                     value={`${skill.name} ${skill.description ?? ''}`}
-                    onSelect={() => { onSelectSkill(skill.name); setTab('root'); }}
+                    onSelect={() => { onSelectSkill(skill.name); back(); }}
                     className={`${COMMAND_ITEM_TWO_LINE_CLS} ${activeSkill === skill.name ? 'font-medium' : ''}`}
                   >
                     <span className="flex items-center gap-1.5">
                       <span>/{skill.name}</span>
-                      <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded">
+                      <span className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded">
                         {skill.source}
                       </span>
                     </span>
-                    <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
+                    <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
                       {skill.description}
                     </span>
                   </CommandItem>
                 ))}
               </CommandList>
             </Command>
-          </TabsContent>
+          </div>
+        )}
 
-          {/* Integrations (MCPs) tab — multi-select, so do NOT auto-return to root on toggle. */}
-          <TabsContent value="mcps" className="m-0 flex-1 min-h-0 flex flex-col">
+        {/* Integrations (MCPs) panel — multi-select, so do NOT auto-return to root on toggle. */}
+        {view === 'mcps' && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <SubHeader title="Integrations" onBack={back} />
             <Command className="flex-1 min-h-0">
               <div className="flex items-center justify-between pr-2">
                 <CommandInput placeholder="Filter integrations..." className={COMMAND_INPUT_CLS} />
                 <RefreshIcon onRefresh={onRefreshMcp} label="Refresh MCP tools" />
               </div>
               <ErrorBanner error={mcpError} />
-              <CommandList className="max-h-[280px]">
+              <CommandList className="max-h-[300px]">
                 <CommandEmpty className={COMMAND_EMPTY_CLS}>
                   {mcpLoading ? 'Loading...' : 'No matches.'}
                 </CommandEmpty>
@@ -961,12 +778,12 @@ export function ConfigMenu({
                         <span className="flex items-center gap-2 truncate flex-1">
                           <span className="truncate">{mcp.name}</span>
                           {mcp.scope && (
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded shrink-0">
+                            <span className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1 py-0.5 rounded shrink-0">
                               {mcp.scope}
                             </span>
                           )}
                           {typeof mcp.count === 'number' && (
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
+                            <span className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
                               {mcp.count}
                             </span>
                           )}
@@ -978,8 +795,8 @@ export function ConfigMenu({
                 ))}
               </CommandList>
             </Command>
-          </TabsContent>
-        </Tabs>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -1032,42 +849,13 @@ function CategoryRow({
 // field and submits without ``base``.
 // ---------------------------------------------------------------------------
 
-const MEWBO_BRANCH_PREFIX = 'mewbo/';
-
-/** Slugify a branch name into a directory-safe token. Mirrors the Python
- * ``slugify_branch`` helper closely enough for default-name generation. */
-function slugifyBranchClient(branch: string): string {
-  return branch
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^[-._]+|[-._]+$/g, '')
-    || 'branch';
-}
-
-/** Browser-compatible 6-hex token. ``crypto.randomUUID`` is widely
- * available; we slice it for compactness. Falls back to ``Math.random`` so
- * tests and ancient environments don't crash. */
-function shortId(): string {
-  const c = (globalThis as unknown as { crypto?: Crypto }).crypto;
-  if (c?.getRandomValues) {
-    const bytes = new Uint8Array(3);
-    c.getRandomValues(bytes);
-    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-  }
-  return Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
-}
-
-function defaultMewboBranchName(base: string): string {
-  return `${MEWBO_BRANCH_PREFIX}${slugifyBranchClient(base)}-${shortId()}`;
-}
-
 type NewWorktreeFormProps = {
   branches: string[];
   currentBranch: string | null;
   branchesInUse: string[];
   /** Branches that already back a managed worktree — disabled in "reuse" mode. */
   existingWorktreeBranches: string[];
-  busy: boolean;
+  loading: boolean;
   onSubmit: (input: CreateWorktreeInput) => void;
 };
 
@@ -1076,7 +864,7 @@ function NewWorktreeForm({
   currentBranch,
   branchesInUse,
   existingWorktreeBranches,
-  busy,
+  loading,
   onSubmit,
 }: NewWorktreeFormProps) {
   // Mode toggle. Default = "new" (the recommended workflow).
@@ -1108,7 +896,7 @@ function NewWorktreeForm({
   const existingWtSet = new Set(existingWorktreeBranches);
 
   const canSubmit = (() => {
-    if (busy) return false;
+    if (loading) return false;
     if (!base) return false;
     if (mode === 'new') {
       const trimmed = newBranch.trim();
@@ -1134,14 +922,19 @@ function NewWorktreeForm({
     }
   };
 
-  // Tailwind shorthand reused for both inputs.
+  // Tailwind shorthand reused for both inputs. These are bare `<select>`/
+  // `<input>` elements rather than the vendored `ui/input.tsx`, so they inherit
+  // no floor of their own — they carry the same `text-field md:text-sm` pair the
+  // shadcn input does, or iOS zooms the viewport when either one takes focus.
+  // Mono is earned here: both hold a git ref, which is machine text the user
+  // copies and compares character by character.
   const inputCls =
-    'w-full text-xs rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 font-mono';
+    'w-full text-field md:text-sm rounded border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 font-mono';
 
   return (
     <div className="px-3 py-2 flex flex-col gap-2 text-xs">
       {/* Mode toggle: explicit + transparent, no surprise behaviour. */}
-      <div className="flex items-center gap-1 text-[10px] text-[hsl(var(--muted-foreground))]">
+      <div className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))]">
         <button
           type="button"
           onClick={() => setMode('new')}
@@ -1168,13 +961,13 @@ function NewWorktreeForm({
 
       {/* Base branch picker — in "existing" mode this IS the branch. */}
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        <span className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
           {mode === 'new' ? 'Base branch' : 'Branch'}
         </span>
         <select
           value={base}
           onChange={(e) => setBase(e.target.value)}
-          disabled={busy || branches.length === 0}
+          disabled={loading || branches.length === 0}
           className={inputCls}
         >
           {branches.map((b) => {
@@ -1201,7 +994,7 @@ function NewWorktreeForm({
       {/* New branch name — only visible in "new" mode. */}
       {mode === 'new' && (
         <label className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+          <span className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
             New branch name
           </span>
           <div className="flex items-center gap-1">
@@ -1210,13 +1003,13 @@ function NewWorktreeForm({
               value={newBranch}
               onChange={(e) => setNewBranch(e.target.value)}
               placeholder="mewbo/feature-x-ab12cd"
-              disabled={busy}
+              disabled={loading}
               className={inputCls}
             />
             <button
               type="button"
               onClick={() => setNewBranch(defaultMewboBranchName(base))}
-              disabled={busy || !base}
+              disabled={loading || !base}
               title="Generate a fresh mewbo/<base>-<id> name"
               className="shrink-0 px-1.5 py-1 rounded hover:bg-[hsl(var(--accent))] text-[hsl(var(--muted-foreground))]"
             >
@@ -1224,7 +1017,7 @@ function NewWorktreeForm({
             </button>
           </div>
           {newBranch && branches.includes(newBranch.trim()) && (
-            <span className="text-[10px] text-amber-400">
+            <span className="text-xs text-amber-400">
               Branch already exists — pick a different name or switch to
               &ldquo;Use existing branch&rdquo;.
             </span>
@@ -1233,7 +1026,7 @@ function NewWorktreeForm({
       )}
 
       {/* Transparency: spell out what the click is going to do. */}
-      <p className="text-[10px] text-[hsl(var(--muted-foreground))] leading-snug">
+      <p className="text-xs text-[hsl(var(--muted-foreground))] leading-snug">
         {mode === 'new' && base && newBranch.trim()
           ? `Will run: git worktree add -b ${newBranch.trim()} <path> ${base}`
           : mode === 'existing' && base
@@ -1247,7 +1040,7 @@ function NewWorktreeForm({
         disabled={!canSubmit}
         className="self-start inline-flex items-center gap-1.5 px-2 py-1 rounded border border-[hsl(var(--border))] bg-[hsl(var(--accent))] text-[hsl(var(--foreground))] disabled:opacity-50"
       >
-        {busy ? (
+        {loading ? (
           <Loader2 className="w-3 h-3 animate-spin" />
         ) : (
           <Plus className="w-3 h-3" />

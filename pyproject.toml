@@ -29,6 +29,12 @@ dev = [
   "altair>=6.1.0",
   "autopep8==2.3.2",
   "flake8==7.3.0",
+  "mewbo-demo-seeder",
+  # The identity drivers live behind extras so a deployment installs only what
+  # it federates with. The suite needs every one of them present, or the driver
+  # paths import-guard themselves out and the run reports green having tested
+  # nothing.
+  "mewbo-iam[ldap,oidc,saml]",
   "mongomock==4.3.0",
   "mypy==1.19.1",
   "pandas>=2.3.3",
@@ -38,6 +44,10 @@ dev = [
   "pytest-cov==7.1.0",
   "ruff==0.15.8",
   "streamlit>=1.56.0",
+  # zoneinfo has no tz database of its own: uv's managed CPython ships none, so
+  # ZoneInfo("US/Eastern") (the IDE TTL tests) raises ZoneInfoNotFoundError on
+  # any machine without a system tzdb. Pin it for the suite, not for runtime.
+  "tzdata>=2026.1",
   "types-requests==2.33.0.20260327",
   "vulture==2.16",
 ]
@@ -61,7 +71,20 @@ docs = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/*"]
+# Apps are members (not bare path deps) so images can install one app and its
+# locked dependency closure with the STANDARD `uv sync --frozen --package
+# mewbo-api` — no export/constraints contortions (see docker/Dockerfile.api).
+# mewbo_ha_conversation stays a PATH source (below), not a member: it declares
+# homeassistant as a dependency (host platform, Python >=3.14), which cannot
+# intersect the workspace's requires-python — and it deploys out-of-band on a
+# separate host anyway.
+members = [
+  "packages/*",
+  "apps/mewbo_api",
+  "apps/mewbo_cli",
+  "apps/mewbo_mcp",
+  "demo/seeder",
+]
 
 [tool.uv]
 default-groups = []
@@ -70,9 +93,11 @@ default-groups = []
 mewbo-core = { workspace = true }
 mewbo-tools = { workspace = true }
 mewbo-graph = { workspace = true }
-mewbo-cli = { path = "apps/mewbo_cli", editable = true }
-mewbo-api = { path = "apps/mewbo_api", editable = true }
-mewbo-mcp = { path = "apps/mewbo_mcp", editable = true }
+mewbo-iam = { workspace = true }
+mewbo-cli = { workspace = true }
+mewbo-api = { workspace = true }
+mewbo-mcp = { workspace = true }
+mewbo-demo-seeder = { workspace = true }
 mewbo-ha-conversation = { path = "apps/mewbo_ha_conversation", editable = true }
 
 [build-system]
@@ -109,6 +134,7 @@ files = [
   "packages/mewbo_core/src/mewbo_core/**/*.py",
   "packages/mewbo_tools/src/mewbo_tools/**/*.py",
   "packages/mewbo_graph/src/mewbo_graph/**/*.py",
+  "packages/mewbo_iam/src/mewbo_iam/**/*.py",
   "apps/mewbo_api/src/mewbo_api/**/*.py",
   "apps/mewbo_mcp/src/mewbo_mcp/**/*.py",
   "apps/mewbo_cli/src/mewbo_cli/**/*.py",

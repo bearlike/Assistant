@@ -184,26 +184,6 @@ export class CitationRef {
 }
 
 /**
- * Parse a list of raw citation strings into the unique set of file-source
- * cards (in first-seen order), dropping provenance schemes and dups. This is
- * the card-set builder QAScreen feeds the right panel.
- */
-export function fileCitations(raws: Iterable<string>): Citation[] {
-  const seen = new Set<string>();
-  const out: Citation[] = [];
-  for (const raw of raws) {
-    if (!raw) continue;
-    const c = CitationRef.parse(raw);
-    if (!c.isFileSource) continue;
-    const k = CitationRef.key(c);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(c);
-  }
-  return out;
-}
-
-/**
  * A citation classified by how its card should render. Unlike the flat
  * {@link Citation} (which collapses every kind onto a file path), this keeps
  * the three distinct shapes the answer can cite:
@@ -250,8 +230,8 @@ function parseOneCitation(ref: string): ParsedCitation {
 
 /**
  * Parse a list of raw citation strings into the unique, kind-tagged card set
- * (first-seen order, dups + empties dropped). Superset of {@link fileCitations}
- * — it KEEPS the ``wiki:`` page and ``graph:`` node refs that the answer made,
+ * (first-seen order, dups + empties dropped). Unlike a flat file-only parser,
+ * this KEEPS the ``wiki:`` page and ``graph:`` node refs that the answer made,
  * instead of silently discarding them.
  */
 export function parseCitations(raws: Iterable<string>): ParsedCitation[] {

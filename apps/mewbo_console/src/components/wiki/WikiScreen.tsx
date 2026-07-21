@@ -1,30 +1,45 @@
 /**
- * Wiki page — three-column grid: sidebar nav, content, right rail.
+ * Wiki page — two-column grid: content, right rail.
  *
- *   Sidebar    : "Last indexed" caption + tree of pages from the nav.
  *   Content    : block renderer for the active page; click diagrams to zoom.
- *   TOC rail   : "On this page" with scroll-spy; Featured + Refresh cards.
+ *   Right rail : Featured card, provenance + re-index card
+ *                (`RefreshThisWiki`), then "On this page" with scroll-spy
+ *                (`WikiToc`) — intra-document navigation belongs beside the
+ *                document.
  *   Q&A dock   : floating, viewport-centered.
+ *
+ * Page-to-page (site) navigation — the wiki's page tree — no longer lives on
+ * this screen. It moved onto the app's own NavRail (`WikiPagesSection` in
+ * `nav-rail/sections.tsx`, keyed off the same cached `useWikiPage` payload
+ * this screen fetches), which is what freed the left column this grid used
+ * to reserve for it.
+ *
+ * Below the grid's breakpoint nothing is lost: a sticky trigger strip opens
+ * a Sheet drawer rendering the SAME `RefreshThisWiki` / `WikiToc` components
+ * the desktop right rail mounts (the `AppLayout` mobile-drawer convention).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Loader2, Network, Sparkles, X } from "lucide-react";
+import { ListTree, Loader2, Network, Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { cardSurface } from "@/components/ui/card-surface";
 import { cn } from "@/lib/utils";
 
 import { DiagramZoom } from "./DiagramZoom";
-import { IndexedSnapshotCaption } from "./IndexedSnapshotCaption";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { SourceHrefProvider } from "./markdownComponents";
 import { QADock } from "./QADock";
 import { RefreshThisWiki } from "./RefreshThisWiki";
+import { WikiToc } from "./WikiToc";
 import { WikiTopBar } from "./WikiTopBar";
 import { IndexedSnapshot } from "./indexedSnapshot";
 import type { Citation } from "./citations";
 import { useWikiPage, useWikiProjectBySlug } from "./api/hooks";
 import { buildHref, type PlatformId } from "./router";
+import { DEFAULT_WIKI_SLUG } from "./slug";
 import { useStoredModel } from "./useStoredModel";
 
 interface WikiScreenProps {
@@ -41,12 +56,14 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
   const [activeToc, setActiveToc] = useState("page-top");
   const [zoomDiagId, setZoomDiagId] = useState<string | null>(null);
   const [showFeatured, setShowFeatured] = useState(true);
-  const [showRefresh, setShowRefresh] = useState(true);
+  // Bumped by surfaces that hand off to the re-index CTA (settings dialog);
+  // the snapshot card opens its confirm step rather than a second path.
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [tocOpen, setTocOpen] = useState(false);
   const [model, setModel] = useStoredModel();
 
   const page = pageQuery.data;
-  const nav = page?.nav ?? [];
-  const repoSlug = slug ?? "bearlike/Assistant";
+  const repoSlug = slug ?? DEFAULT_WIKI_SLUG;
   const projectQuery = useWikiProjectBySlug(repoSlug);
   const snapshot = useMemo(
     () => (projectQuery.data ? IndexedSnapshot.fromProject(projectQuery.data) : null),
@@ -108,7 +125,7 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
     [snapshot]
   );
 
-  const onJump = (id: string) => {
+  const onNavigate = (id: string) => {
     const el = document.getElementById(id);
     const scroller = document.getElementById("wiki-scroller");
     if (!el || !scroller) return;
@@ -137,6 +154,8 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
         badgePageId={projectQuery.data?.landingPageId ?? pageId}
         showEditWiki
         showBackToAll
+        showSettings
+        onRefresh={() => setRefreshSignal((n) => n + 1)}
       />
       <div id="wiki-scroller" className="flex-1 overflow-y-auto pb-32">
         {graphOnly ? (
@@ -149,41 +168,40 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
             Loading page…
           </div>
         ) : (
-          <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_240px] gap-0">
-            {/* Sidebar */}
-            <aside className="hidden lg:block border-r border-[hsl(var(--border))] px-3 py-6 sticky top-0 self-start max-h-screen overflow-y-auto">
-              <IndexedSnapshotCaption snapshot={snapshot} className="px-2 mb-2.5" />
-              <nav className="space-y-px">
-                {nav.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => goPage(n.id)}
-                    className={cn(
-                      "w-full text-left text-[13px] px-2 py-1 rounded transition-colors block",
-                      n.lvl === 1 && "pl-2 font-medium",
-                      n.lvl === 2 && "pl-4",
-                      n.lvl === 3 && "pl-6 text-[12px]",
-                      n.id === pageId
-                        ? "bg-[hsl(var(--muted))]/70 text-[hsl(var(--foreground))]"
-                        : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]/30"
-                    )}
-                  >
-                    <span className="truncate block [text-wrap:pretty]">{n.label}</span>
-                  </button>
-                ))}
-              </nav>
-            </aside>
+          <>
+            {/* Mobile/tablet drawer trigger — sticky so it stays reachable
+                mid-article. Covers the < xl ToC rail; ≥ xl the strip is
+                gone because the rail itself is visible. Page-to-page nav has
+                no trigger here any more — the app's own NavRail already
+                covers every viewport. */}
+            <div className="xl:hidden sticky top-0 z-10 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/95 backdrop-blur-sm">
+              <div className="max-w-[1400px] mx-auto px-2 sm:px-4 h-10 flex items-center justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setTocOpen(true)}
+                  leadingIcon={<ListTree className="h-3.5 w-3.5" />}
+                  aria-label="Open on-this-page navigation"
+                >
+                  On this page
+                </Button>
+              </div>
+            </div>
 
-            {/* Content */}
-            <main className="px-5 sm:px-14 py-8 max-w-[880px] w-full mx-auto">
+            <div className="max-w-[1400px] mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-0">
+            {/* Content — a `<div>`, not `<main>`: `AppLayout.tsx` already
+                renders the app shell's `<main>` on every route, and a
+                nested `<main>` here is invalid landmark structure that
+                leaves "skip to main content" pointed at an ambiguous
+                target. */}
+            <div className="px-6 sm:px-14 py-8 max-w-[880px] w-full mx-auto">
               <h1
                 id="page-top"
-                className="text-[clamp(24px,3vw,30px)] font-semibold tracking-[-0.02em] mb-6 [text-wrap:balance]"
+                className="text-2xl font-semibold tracking-[-0.02em] mb-6 [text-wrap:balance]"
               >
                 {page.title}
               </h1>
-              <SourceHrefProvider resolve={resolveSourceHref}>
+              <SourceHrefProvider resolve={resolveSourceHref} platform={snapshot?.source ?? null}>
                 <MarkdownBlock
                   body={page.body}
                   frontmatter={page.frontmatter}
@@ -191,12 +209,23 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
                   onZoomDiagram={setZoomDiagId}
                 />
               </SourceHrefProvider>
-            </main>
+            </div>
 
             {/* Right rail — maintainer-edited badge lives in WikiTopBar
-                (single source of truth; DRY). */}
-            <aside className="hidden xl:block px-3 py-6 sticky top-0 self-start max-h-screen overflow-y-auto">
-              {showFeatured && (
+                (single source of truth; DRY). Labelled as its own
+                complementary region ("Page details": provenance + re-index +
+                on-this-page nav) — distinct from `WikiToc`'s own inner
+                `<nav aria-label="On this page">`, which names the list, not
+                the region around it. */}
+            <aside
+              aria-label="Page details"
+              className="hidden xl:block px-3 py-6 sticky top-0 self-start max-h-screen overflow-y-auto"
+            >
+              {/* Featured card: gated on the persisted grounder-presence flag
+                  (.mewbo/wiki.json or .devin/wiki.json detected at index
+                  time) — a wiki without a maintainer grounder is not
+                  "featured in the repository". */}
+              {showFeatured && snapshot?.maintainerEdited && (
                 <div className="relative rounded-lg border border-[hsl(var(--primary))]/30 bg-[hsl(var(--primary))]/[0.05] p-3 text-xs text-[hsl(var(--muted-foreground))] mb-3">
                   <button
                     type="button"
@@ -206,7 +235,7 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
                   >
                     <X className="h-3 w-3" />
                   </button>
-                  <div className="inline-flex items-center gap-1.5 mb-1 text-[hsl(var(--primary))]">
+                  <div className="inline-flex items-center gap-1.5 mb-1 text-[hsl(var(--primary-text))]">
                     <Sparkles className="h-3 w-3" />
                     <span className="font-medium">Featured</span>
                   </div>
@@ -216,37 +245,50 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
                 </div>
               )}
 
-              {showRefresh && (
-                <RefreshThisWiki slug={repoSlug} onDismiss={() => setShowRefresh(false)} />
-              )}
+              {/* Provenance + drift + re-index in one card, above the
+                  in-page ToC — the snapshot facts and the remedy stay
+                  adjacent, and both are "about this page". */}
+              <RefreshThisWiki
+                slug={repoSlug}
+                snapshot={snapshot}
+                openSignal={refreshSignal}
+                className="mb-3"
+              />
 
-              <div className="mt-5 text-[10px] uppercase tracking-wider font-medium text-[hsl(var(--muted-foreground))] mb-1.5 px-1">
-                On this page
-              </div>
-              <nav className="space-y-px text-[12px]">
-                {tocItems.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => onJump(t.id)}
-                    className={cn(
-                      "block w-full text-left px-2 py-1 border-l-2 transition-colors",
-                      t.lvl === 1 && "pl-2",
-                      t.lvl === 2 && "pl-3",
-                      t.lvl === 3 && "pl-5 text-[11px]",
-                      activeToc === t.id
-                        ? "border-[hsl(var(--primary))] text-[hsl(var(--primary))]"
-                        : "border-transparent text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                    )}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </nav>
+              <WikiToc items={tocItems} activeId={activeToc} onNavigate={onNavigate} />
             </aside>
-          </div>
+            </div>
+          </>
         )}
       </div>
+
+      {/* Drawer mount for the sticky trigger strip above — the same
+          components the desktop right rail renders, per the AppLayout Sheet
+          convention. Selecting an entry closes the drawer first so the
+          scroll target isn't behind the overlay. */}
+      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
+        <SheetContent side="right" className="w-[86vw] max-w-xs p-0">
+          <SheetTitle className="sr-only">On this page</SheetTitle>
+          <div className="h-full overflow-y-auto px-3 py-6">
+            {/* Mirrors the desktop right rail — provenance + re-index above
+                the in-page ToC. */}
+            <RefreshThisWiki
+              slug={repoSlug}
+              snapshot={snapshot}
+              openSignal={refreshSignal}
+              className="mb-3"
+            />
+            <WikiToc
+              items={tocItems}
+              activeId={activeToc}
+              onNavigate={(id) => {
+                setTocOpen(false);
+                onNavigate(id);
+              }}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {!graphOnly && (
         <QADock
@@ -271,14 +313,15 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
 function GraphOnlyEmptyState({ href }: { href: string }) {
   return (
     <div className="flex items-center justify-center px-4 py-20">
-      <div className="max-w-[520px] w-full rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-[0_6px_22px_rgba(0,0,0,0.12)] p-8 text-center">
+      <div className={cn(cardSurface({ radius: "modal", elevation: "elev-3" }), "max-w-[520px] w-full p-8 text-center")}>
         <span
           aria-hidden
           className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
         >
+          {/* Hero mark inside the 48px badge — sits above the icon ramp by design. */}
           <Network className="h-6 w-6" />
         </span>
-        <h2 className="mt-4 text-lg font-semibold tracking-[-0.01em]">
+        <h2 className="mt-4 text-base font-medium tracking-[-0.01em]">
           No documentation available
         </h2>
         <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] [text-wrap:pretty]">

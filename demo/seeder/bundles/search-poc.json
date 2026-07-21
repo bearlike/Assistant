@@ -1,0 +1,2748 @@
+{
+  "workspaces": [
+    {
+      "id": "ws-oss-repo-scout",
+      "name": "OSS Repo Scout",
+      "desc": "Discover the best open-source packages, libraries, and repos across GitHub, HuggingFace, docs and the web.",
+      "sources": [
+        "github",
+        "huggingface",
+        "gitmcp",
+        "deepwiki",
+        "context7",
+        "internet-search",
+        "filesystem"
+      ],
+      "instructions": "Scout open-source repositories: rank by stars and recent activity, prefer permissively-licensed projects, and always cite the repo and one primary source.",
+      "created": "May 02, 2026",
+      "created_offset": -6220800,
+      "past_queries": [
+        {
+          "q": "What are the most popular Claude Code plugins repos out there?",
+          "ran_at_offset": -18000,
+          "results": 8,
+          "when": "5h ago",
+          "run_id": "run-cc-plugins",
+          "status": "completed"
+        },
+        {
+          "q": "All AI coding agent projects like Claude Code and Codex",
+          "ran_at_offset": -7200,
+          "results": 12,
+          "when": "2h ago",
+          "run_id": "run-oss-agents",
+          "status": "completed"
+        },
+        {
+          "q": "What is bearlike/Assistant?",
+          "ran_at_offset": -43200,
+          "results": 3,
+          "when": "12h ago",
+          "run_id": "run-bearlike",
+          "status": "completed"
+        },
+        {
+          "q": "Best local-first vector databases written in Rust",
+          "ran_at_offset": -180000,
+          "results": 9,
+          "when": "2d ago"
+        },
+        {
+          "q": "Compare Tabby vs Continue vs Cody licensing",
+          "ran_at_offset": -360000,
+          "results": 7,
+          "when": "4d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-knowledge-graph",
+      "name": "Knowledge graph",
+      "desc": "Live wikidata probe workspace.",
+      "sources": [
+        "wikidata",
+        "internet-search"
+      ],
+      "instructions": "Answer factual questions from Wikidata SPARQL first; corroborate with one public web source and cite the QID.",
+      "created": "Jun 20, 2026",
+      "created_offset": -2073600,
+      "past_queries": [
+        {
+          "q": "Which countries border the Baltic Sea?",
+          "ran_at_offset": -9000,
+          "results": 2,
+          "when": "3h ago",
+          "run_id": "run-kg",
+          "status": "completed"
+        },
+        {
+          "q": "Capital cities of the Nordic countries",
+          "ran_at_offset": -95000,
+          "results": 5,
+          "when": "1d ago"
+        },
+        {
+          "q": "Rivers longer than 3000km in Asia",
+          "ran_at_offset": -190000,
+          "results": 6,
+          "when": "2d ago"
+        },
+        {
+          "q": "Which elements were discovered in the 1800s?",
+          "ran_at_offset": -280000,
+          "results": 8,
+          "when": "3d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-beacon-ops",
+      "name": "Beacon Ops",
+      "desc": "Flag-platform ops: rulesets, rollout policy, SDK docs.",
+      "sources": [
+        "filesystem",
+        "internet-search",
+        "github"
+      ],
+      "instructions": "Answer flag-platform questions from the internal policy files first; cross-check the public SDK docs and cite the file path.",
+      "created": "Mar 15, 2026",
+      "created_offset": -10454400,
+      "past_queries": [
+        {
+          "q": "What is our rollout policy for flags that gate payment paths?",
+          "ran_at_offset": -6000,
+          "results": 2,
+          "when": "1h ago",
+          "run_id": "run-bo",
+          "status": "completed"
+        },
+        {
+          "q": "Which flags have been stuck at 100% for over 90 days?",
+          "ran_at_offset": -50000,
+          "results": 11,
+          "when": "14h ago"
+        },
+        {
+          "q": "Which services still read the legacy ruleset endpoint?",
+          "ran_at_offset": -120000,
+          "results": 4,
+          "when": "1d ago"
+        },
+        {
+          "q": "How is the bucketing hash seeded across environments?",
+          "ran_at_offset": -200000,
+          "results": 6,
+          "when": "2d ago"
+        },
+        {
+          "q": "Which flags were changed during last week's incident?",
+          "ran_at_offset": -300000,
+          "results": 9,
+          "when": "3d ago"
+        },
+        {
+          "q": "What is the cache TTL for SDK ruleset polling?",
+          "ran_at_offset": -400000,
+          "results": 3,
+          "when": "4d ago"
+        },
+        {
+          "q": "Retention policy for flag audit history",
+          "ran_at_offset": -520000,
+          "results": 5,
+          "when": "6d ago"
+        },
+        {
+          "q": "Which environments have targeting rules that never match?",
+          "ran_at_offset": -640000,
+          "results": 7,
+          "when": "1w ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-research-copilot",
+      "name": "Research Copilot",
+      "desc": "Papers, product docs and internal notes for the research team.",
+      "sources": [
+        "web",
+        "drive",
+        "notion"
+      ],
+      "instructions": "Cite primary sources with published date and author; prefer peer-reviewed or first-party material.",
+      "created": "Feb 08, 2026",
+      "created_offset": -13478400,
+      "past_queries": [
+        {
+          "q": "Latest parallel tool-calling benchmarks for agents",
+          "ran_at_offset": -12000,
+          "results": 2,
+          "when": "3h ago",
+          "run_id": "run-rc",
+          "status": "completed"
+        },
+        {
+          "q": "Prompt-caching cost models across providers",
+          "ran_at_offset": -70000,
+          "results": 8,
+          "when": "20h ago"
+        },
+        {
+          "q": "State-of-the-art long-context retrieval 2026",
+          "ran_at_offset": -160000,
+          "results": 6,
+          "when": "2d ago"
+        },
+        {
+          "q": "Speculative decoding survey",
+          "ran_at_offset": -240000,
+          "results": 5,
+          "when": "3d ago"
+        },
+        {
+          "q": "RLHF vs DPO empirical comparisons",
+          "ran_at_offset": -330000,
+          "results": 7,
+          "when": "4d ago"
+        },
+        {
+          "q": "Agent memory architectures reading list",
+          "ran_at_offset": -450000,
+          "results": 9,
+          "when": "5d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-infra-runbooks",
+      "name": "Infra Runbooks",
+      "desc": "Runbooks, incident notes and infra how-tos.",
+      "sources": [
+        "filesystem",
+        "web"
+      ],
+      "instructions": "Answer operationally from the runbooks; give exact commands and cite the runbook path.",
+      "created": "Apr 11, 2026",
+      "created_offset": -8035200,
+      "past_queries": [
+        {
+          "q": "Runbook: database host at 75% disk",
+          "ran_at_offset": -21600,
+          "results": 1,
+          "when": "6h ago",
+          "run_id": "run-ir",
+          "status": "completed"
+        },
+        {
+          "q": "How to rotate the API TLS certificate",
+          "ran_at_offset": -80000,
+          "results": 3,
+          "when": "22h ago"
+        },
+        {
+          "q": "Nightly backup job schedule and retention",
+          "ran_at_offset": -170000,
+          "results": 4,
+          "when": "2d ago"
+        },
+        {
+          "q": "Steps to drain a Kubernetes node safely",
+          "ran_at_offset": -260000,
+          "results": 5,
+          "when": "3d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-design-system-audit",
+      "name": "Design System Audit",
+      "desc": "Tokens, components and design-review decisions.",
+      "sources": [
+        "figma",
+        "github"
+      ],
+      "instructions": "Tie a component decision to its Figma review and the token map in code; cite both.",
+      "created": "Feb 21, 2026",
+      "created_offset": -12355200,
+      "past_queries": [
+        {
+          "q": "Why is the rejected-plan color amber not red?",
+          "ran_at_offset": -30000,
+          "results": 2,
+          "when": "8h ago",
+          "run_id": "run-ds",
+          "status": "completed"
+        },
+        {
+          "q": "Which components still use the legacy radius scale?",
+          "ran_at_offset": -110000,
+          "results": 6,
+          "when": "1d ago"
+        },
+        {
+          "q": "Contrast ratio audit for status badges",
+          "ran_at_offset": -220000,
+          "results": 4,
+          "when": "3d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-support-triage",
+      "name": "Support Triage",
+      "desc": "Customer tickets, escalations and support threads.",
+      "sources": [
+        "slack",
+        "linear",
+        "jira"
+      ],
+      "instructions": "Cluster results by customer; flag any ticket older than 14 days as stale.",
+      "created": "Mar 28, 2026",
+      "created_offset": -9331200,
+      "past_queries": [
+        {
+          "q": "Open tickets about the file-edit matcher",
+          "ran_at_offset": -3600,
+          "results": 2,
+          "when": "1h ago",
+          "run_id": "run-st",
+          "status": "completed"
+        },
+        {
+          "q": "Escalations tagged billing this week",
+          "ran_at_offset": -60000,
+          "results": 5,
+          "when": "17h ago"
+        },
+        {
+          "q": "Customers hitting the rate-limit error",
+          "ran_at_offset": -150000,
+          "results": 8,
+          "when": "2d ago"
+        },
+        {
+          "q": "Stale tickets older than 14 days",
+          "ran_at_offset": -250000,
+          "results": 12,
+          "when": "3d ago"
+        },
+        {
+          "q": "Feature requests for the CLI",
+          "ran_at_offset": -370000,
+          "results": 6,
+          "when": "4d ago"
+        }
+      ]
+    },
+    {
+      "id": "ws-wikidata-probe",
+      "name": "Wikidata Probe",
+      "desc": "Structured knowledge probes over Wikidata.",
+      "sources": [
+        "wikidata",
+        "web"
+      ],
+      "instructions": "Prefer SPARQL over Wikidata; return QIDs and one corroborating source.",
+      "created": "Jun 05, 2026",
+      "created_offset": -3369600,
+      "past_queries": [
+        {
+          "q": "Nobel laureates in Physics born in Japan",
+          "ran_at_offset": -50400,
+          "results": 2,
+          "when": "14h ago",
+          "run_id": "run-wp",
+          "status": "completed"
+        },
+        {
+          "q": "Tallest mountains on each continent",
+          "ran_at_offset": -130000,
+          "results": 7,
+          "when": "1d ago"
+        },
+        {
+          "q": "Programming languages created before 1980",
+          "ran_at_offset": -210000,
+          "results": 9,
+          "when": "2d ago"
+        },
+        {
+          "q": "UNESCO world heritage sites in Peru",
+          "ran_at_offset": -300000,
+          "results": 6,
+          "when": "3d ago"
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "run-oss-agents",
+      "workspace_id": "ws-oss-repo-scout",
+      "query": "All AI coding agent projects like Claude Code and Codex",
+      "tier": "auto",
+      "model": "gpt-oss-120b",
+      "created_offset": -7200,
+      "total_ms": 21400,
+      "source_ids": [
+        "github",
+        "internet-search",
+        "gitmcp"
+      ],
+      "allowed_tools": [
+        "mcp_github_search_repositories",
+        "mcp_github_list_commits",
+        "mcp_internet-search_searxng_web_search",
+        "mcp_gitmcp_search_generic_code"
+      ],
+      "answer": {
+        "tldr": "The open-source AI coding-agent space in 2026 splits into two camps. **Terminal-native agents** that own a shell and your git repo lead on autonomy: `anthropics/claude-code` (133k stars, Python), OpenAI's `openai/codex`, and the Go-based `charmbracelet/crush` are the most active. **IDE-embedded assistants** `cline/cline` and `continuedev/continue` trade some autonomy for an inline editor loop, while `TabbyML/tabby` targets self-hosted, Copilot-style completion.\n\n| Rank | Repo | Stars | Language |\n|---|---|---|---|\n| 1 | anthropics/claude-code | 133k | Python |\n| 2 | All-Hands-AI/OpenHands | 63.9k | Python |\n| 3 | cline/cline | 51.2k | TypeScript |\n| 4 | Aider-AI/aider | 42.8k | Python |\n| 5 | openai/codex | 38.2k | Rust |",
+        "bullets": [
+          {
+            "text": "`anthropics/claude-code` (133k) leads terminal-native agents; Python, updated within 2 days.",
+            "cites": [
+              "r1"
+            ]
+          },
+          {
+            "text": "`openai/codex` and `charmbracelet/crush` round out the actively-maintained terminal tier.",
+            "cites": [
+              "r2",
+              "r3"
+            ]
+          },
+          {
+            "text": "`cline/cline` and `continuedev/continue` lead the IDE-embedded camp.",
+            "cites": [
+              "r6",
+              "r8"
+            ]
+          },
+          {
+            "text": "`TabbyML/tabby` is the notable self-hosted, Copilot-style alternative.",
+            "cites": [
+              "r9"
+            ]
+          },
+          {
+            "text": "Two 2026 field guides corroborate the terminal-vs-IDE taxonomy.",
+            "cites": [
+              "r11",
+              "r12"
+            ]
+          }
+        ],
+        "confidence": 0.86,
+        "sources_count": 3
+      },
+      "results": [
+        {
+          "id": "r1",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.98,
+          "confidence": 0.95,
+          "title": "anthropics/claude-code",
+          "url": "github.com/anthropics/claude-code",
+          "snippet": "An agentic <mark>coding tool</mark> that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks.",
+          "author": "anthropics",
+          "timestamp": "Updated 2d ago",
+          "meta": {
+            "stars": 133000,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "r2",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.95,
+          "confidence": 0.92,
+          "title": "openai/codex",
+          "url": "github.com/openai/codex",
+          "snippet": "Lightweight coding agent that runs in your terminal. The Codex CLI pairs a local sandbox with the Responses API.",
+          "author": "openai",
+          "timestamp": "Updated 4d ago",
+          "meta": {
+            "stars": 38200,
+            "language": "Rust"
+          }
+        },
+        {
+          "id": "r3",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.91,
+          "confidence": 0.9,
+          "title": "charmbracelet/crush",
+          "url": "github.com/charmbracelet/crush",
+          "snippet": "The glamourous AI coding agent for your favourite terminal. Multi-model, MCP-native, session-aware.",
+          "author": "charmbracelet",
+          "timestamp": "Updated 1d ago",
+          "meta": {
+            "stars": 25400,
+            "language": "Go"
+          }
+        },
+        {
+          "id": "r4",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.88,
+          "confidence": 0.86,
+          "title": "HKUDS/DeepCode",
+          "url": "github.com/HKUDS/DeepCode",
+          "snippet": "Open agentic coding: Paper2Code, Text2Web and Text2Backend from a single research-grade planner.",
+          "author": "HKUDS",
+          "timestamp": "Updated 6d ago",
+          "meta": {
+            "stars": 18900,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "r5",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.86,
+          "confidence": 0.84,
+          "title": "block/goose",
+          "url": "github.com/block/goose",
+          "snippet": "An open-source, extensible AI agent that goes beyond code suggestions to install, execute and test with any LLM.",
+          "author": "block",
+          "timestamp": "Updated 3d ago",
+          "meta": {
+            "stars": 17600,
+            "language": "Rust"
+          }
+        },
+        {
+          "id": "r6",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.85,
+          "confidence": 0.83,
+          "title": "cline/cline",
+          "url": "github.com/cline/cline",
+          "snippet": "Autonomous coding agent right in your IDE, capable of creating/editing files and running commands with your permission.",
+          "author": "cline",
+          "timestamp": "Updated 12h ago",
+          "meta": {
+            "stars": 51200,
+            "language": "TypeScript"
+          }
+        },
+        {
+          "id": "r7",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.83,
+          "confidence": 0.82,
+          "title": "Aider-AI/aider",
+          "url": "github.com/Aider-AI/aider",
+          "snippet": "AI pair programming in your terminal. Aider works with your local git repo to edit code across multiple files.",
+          "author": "Aider-AI",
+          "timestamp": "Updated 1d ago",
+          "meta": {
+            "stars": 42800,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "r8",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.81,
+          "confidence": 0.8,
+          "title": "continuedev/continue",
+          "url": "github.com/continuedev/continue",
+          "snippet": "The leading open-source AI code assistant. Build custom autocomplete and chat experiences inside the IDE.",
+          "author": "continuedev",
+          "timestamp": "Updated 5d ago",
+          "meta": {
+            "stars": 31500,
+            "language": "TypeScript"
+          }
+        },
+        {
+          "id": "r9",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.79,
+          "confidence": 0.78,
+          "title": "TabbyML/tabby",
+          "url": "github.com/TabbyML/tabby",
+          "snippet": "Self-hosted AI coding assistant, an open alternative to GitHub Copilot. No DB or cloud dependency.",
+          "author": "TabbyML",
+          "timestamp": "Updated 8d ago",
+          "meta": {
+            "stars": 31800,
+            "language": "Rust"
+          }
+        },
+        {
+          "id": "r10",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.77,
+          "confidence": 0.76,
+          "title": "All-Hands-AI/OpenHands",
+          "url": "github.com/All-Hands-AI/OpenHands",
+          "snippet": "A platform for software-development agents powered by AI. Write less code, ship more.",
+          "author": "All-Hands-AI",
+          "timestamp": "Updated 2d ago",
+          "meta": {
+            "stars": 63900,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "r11",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.72,
+          "title": "State of AI coding agents, mid-2026",
+          "url": "https://devnotes.example/ai-coding-agents-2026",
+          "snippet": "A field guide contrasting terminal-native agents (Claude Code, Codex, Aider) with IDE-embedded ones (Cline, Continue) on autonomy and cost.",
+          "author": "devnotes.example",
+          "timestamp": "Jun 28, 2026"
+        },
+        {
+          "id": "r12",
+          "source": "gitmcp",
+          "kind": "web",
+          "relevance": 0.68,
+          "title": "Awesome AI coding agents (curated list)",
+          "url": "https://github.com/e2b-dev/awesome-ai-agents",
+          "snippet": "A continually-updated catalog of open-source coding agents with stars, license and language columns.",
+          "author": "e2b-dev",
+          "timestamp": "Updated weekly"
+        }
+      ],
+      "trace": [
+        {
+          "id": "a-coord",
+          "agent_id": "a-coord",
+          "name": "scg-search",
+          "source_id": "",
+          "slot": 0,
+          "kind": "coordinator",
+          "model": "gpt-oss-120b",
+          "steps": 6,
+          "duration_ms": 21400,
+          "input_tokens": 8200,
+          "output_tokens": 1900,
+          "results_count": 0,
+          "returned_count": 0,
+          "lines": [
+            {
+              "t_ms": 80,
+              "glyph": ">",
+              "text": "decompose: rank OSS coding agents by stars + activity",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 600,
+              "glyph": "·",
+              "text": "route 3 qualified pathways across github, web, docs",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 1200,
+              "glyph": "✓",
+              "text": "synthesize ranked market overview",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "PLAN: fan out over github search + web + docs, rank by stars and recency, cite the repo and a primary source."
+        },
+        {
+          "id": "a-scg",
+          "agent_id": "a-scg",
+          "name": "scg-search",
+          "source_id": "github",
+          "slot": 1,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 4,
+          "duration_ms": 9200,
+          "input_tokens": 5100,
+          "output_tokens": 900,
+          "results_count": 10,
+          "returned_count": 12,
+          "lines": [
+            {
+              "t_ms": 120,
+              "glyph": ">",
+              "text": "scg_route(query=coding agents) -> github#search_repositories",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 700,
+              "glyph": "·",
+              "text": "search_repositories(sort=stars) -> 42 candidates",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2100,
+              "glyph": "·",
+              "text": "list_commits: recency filter -> 10 active repos",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 4200,
+              "glyph": "✓",
+              "text": "returned 10 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: github#search_repositories -> github#list_commits): 10 repos, stars 17k-133k, all active in the last 14 days."
+        },
+        {
+          "id": "a-probe2",
+          "agent_id": "a-probe2",
+          "name": "scg-search",
+          "source_id": "internet-search",
+          "slot": 3,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 3,
+          "duration_ms": 7100,
+          "input_tokens": 3300,
+          "output_tokens": 600,
+          "results_count": 2,
+          "returned_count": 3,
+          "lines": [
+            {
+              "t_ms": 200,
+              "glyph": ">",
+              "text": "searxng_web_search(state of AI coding agents 2026)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 1400,
+              "glyph": "·",
+              "text": "web_url_read: read 4 primary sources",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 3100,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: internet-search#searxng_web_search): 2 field-guide sources corroborating the terminal-vs-IDE split."
+        }
+      ],
+      "related_questions": [
+        "How does Claude Code compare to GitHub Copilot on autonomy?",
+        "What licensing terms does TabbyML/tabby ship under?",
+        "Which of these agents are MCP-native?",
+        "Which terminal agents work fully offline?"
+      ],
+      "related_people": [
+        {
+          "name": "Anthropic",
+          "role": "publishes claude-code",
+          "initials": "AN",
+          "color": 1
+        },
+        {
+          "name": "OpenAI",
+          "role": "publishes codex",
+          "initials": "OA",
+          "color": 2
+        },
+        {
+          "name": "Charm",
+          "role": "publishes crush",
+          "initials": "CH",
+          "color": 4
+        }
+      ],
+      "stats": {
+        "probes": 2,
+        "tool_calls": 9,
+        "input_tokens": 16600,
+        "output_tokens": 3400,
+        "setup_ms": 1900,
+        "search_ms": 19500
+      }
+    },
+    {
+      "run_id": "run-cc-plugins",
+      "workspace_id": "ws-oss-repo-scout",
+      "query": "What are the most popular Claude Code plugins repos out there?",
+      "tier": "fast",
+      "model": "claude-sonnet-4-6",
+      "created_offset": -18000,
+      "total_ms": 8600,
+      "source_ids": [
+        "github",
+        "internet-search",
+        "gitmcp"
+      ],
+      "allowed_tools": [
+        "mcp_github_search_repositories",
+        "mcp_internet-search_searxng_web_search"
+      ],
+      "answer": {
+        "tldr": "The most-starred **Claude Code plugin** repos are curated indexes and marketplaces rather than single plugins. `hesreallyhim/awesome-claude-code` (9.6k) is the canonical list; `wshobson/agents` and `davila7/claude-code-templates` are the busiest ready-to-fork sources.\n\n| Rank | Repo | Stars | Type | URL |\n|---|---|---|---|---|\n| 1 | hesreallyhim/awesome-claude-code | 9.6k | index | github.com/hesreallyhim/awesome-claude-code |\n| 2 | wshobson/agents | 7.2k | marketplace | github.com/wshobson/agents |\n| 3 | davila7/claude-code-templates | 5.4k | templates | github.com/davila7/claude-code-templates |\n| 4 | getAsterisk/claudia | 4.9k | gui+host | github.com/getAsterisk/claudia |\n| 5 | sanjeed5/awesome-claude-code-plugins | 2.6k | index | github.com/sanjeed5/awesome-claude-code-plugins |",
+        "bullets": [
+          {
+            "text": "`hesreallyhim/awesome-claude-code` (9.6k) is the canonical curated index.",
+            "cites": [
+              "b1"
+            ]
+          },
+          {
+            "text": "`wshobson/agents` and `davila7/claude-code-templates` are the busiest fork sources.",
+            "cites": [
+              "b2",
+              "b3"
+            ]
+          },
+          {
+            "text": "Anthropic's own plugin announcement frames the marketplace model.",
+            "cites": [
+              "b7"
+            ]
+          }
+        ],
+        "confidence": 0.9,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "b1",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.96,
+          "confidence": 0.94,
+          "title": "hesreallyhim/awesome-claude-code",
+          "url": "github.com/hesreallyhim/awesome-claude-code",
+          "snippet": "A curated list of <mark>Claude Code</mark> plugins, slash-commands, hooks and workflows.",
+          "author": "hesreallyhim",
+          "timestamp": "Updated 1d ago",
+          "meta": {
+            "stars": 9600,
+            "language": "Markdown"
+          }
+        },
+        {
+          "id": "b2",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.9,
+          "confidence": 0.88,
+          "title": "wshobson/agents",
+          "url": "github.com/wshobson/agents",
+          "snippet": "A marketplace of production-ready Claude Code sub-agents and plugin bundles.",
+          "author": "wshobson",
+          "timestamp": "Updated 3d ago",
+          "meta": {
+            "stars": 7200,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "b3",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.86,
+          "confidence": 0.85,
+          "title": "davila7/claude-code-templates",
+          "url": "github.com/davila7/claude-code-templates",
+          "snippet": "Ready-to-fork Claude Code plugin templates: hooks, MCP servers and agent definitions.",
+          "author": "davila7",
+          "timestamp": "Updated 2d ago",
+          "meta": {
+            "stars": 5400,
+            "language": "TypeScript"
+          }
+        },
+        {
+          "id": "b4",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.82,
+          "confidence": 0.8,
+          "title": "getAsterisk/claudia",
+          "url": "github.com/getAsterisk/claudia",
+          "snippet": "A desktop GUI + plugin host for managing Claude Code sessions and marketplaces.",
+          "author": "getAsterisk",
+          "timestamp": "Updated 5d ago",
+          "meta": {
+            "stars": 4900,
+            "language": "Rust"
+          }
+        },
+        {
+          "id": "b5",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.79,
+          "confidence": 0.78,
+          "title": "anthropics/claude-code-action",
+          "url": "github.com/anthropics/claude-code-action",
+          "snippet": "Official GitHub Action wrapping Claude Code for CI-driven agent pickups.",
+          "author": "anthropics",
+          "timestamp": "Updated 1w ago",
+          "meta": {
+            "stars": 3100,
+            "language": "TypeScript"
+          }
+        },
+        {
+          "id": "b6",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.75,
+          "confidence": 0.74,
+          "title": "sanjeed5/awesome-claude-code-plugins",
+          "url": "github.com/sanjeed5/awesome-claude-code-plugins",
+          "snippet": "Community index of Claude Code plugins grouped by marketplace and capability.",
+          "author": "sanjeed5",
+          "timestamp": "Updated 4d ago",
+          "meta": {
+            "stars": 2600,
+            "language": "Markdown"
+          }
+        },
+        {
+          "id": "b7",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.7,
+          "title": "Claude Code plugins: the marketplace ecosystem",
+          "url": "https://www.anthropic.com/news/claude-code-plugins",
+          "snippet": "Overview of the plugin + marketplace model: skills, hooks, MCP servers and agent definitions.",
+          "author": "anthropic.com",
+          "timestamp": "Jun 12, 2026"
+        },
+        {
+          "id": "b8",
+          "source": "gitmcp",
+          "kind": "docs",
+          "relevance": 0.66,
+          "title": "Claude Code plugin authoring guide",
+          "url": "https://docs.claude.com/claude-code/plugins",
+          "snippet": "How a plugin ships skills, hooks, agent definitions and MCP tools via a plugin.json manifest.",
+          "timestamp": "Jun 2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "b-coord",
+          "agent_id": "b-coord",
+          "name": "scg-search",
+          "source_id": "",
+          "slot": 0,
+          "kind": "coordinator",
+          "model": "claude-sonnet-4-6",
+          "steps": 4,
+          "duration_ms": 8600,
+          "input_tokens": 4200,
+          "output_tokens": 900,
+          "results_count": 0,
+          "returned_count": 0,
+          "lines": [
+            {
+              "t_ms": 60,
+              "glyph": ">",
+              "text": "decompose: find most-starred Claude Code plugin repos",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 500,
+              "glyph": "·",
+              "text": "route github + web pathways",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 900,
+              "glyph": "✓",
+              "text": "rank by stars, group by plugin type",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "PLAN: github search scoped to claude-code plugins, rank by stars, tag repo type."
+        },
+        {
+          "id": "b-gh",
+          "agent_id": "b-gh",
+          "name": "scg-search",
+          "source_id": "github",
+          "slot": 1,
+          "kind": "scg-path-probe",
+          "model": "claude-sonnet-4-6",
+          "steps": 3,
+          "duration_ms": 6100,
+          "input_tokens": 3100,
+          "output_tokens": 700,
+          "results_count": 6,
+          "returned_count": 8,
+          "lines": [
+            {
+              "t_ms": 140,
+              "glyph": ">",
+              "text": "search_repositories(q=claude code plugin, sort=stars)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 1600,
+              "glyph": "·",
+              "text": "22 candidates -> dedupe -> 6 kept",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 3900,
+              "glyph": "✓",
+              "text": "returned 6 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: github#search_repositories): 6 plugin index/marketplace repos, 2.6k-9.6k stars."
+        }
+      ],
+      "related_questions": [
+        "How do I publish a plugin to a Claude Code marketplace?",
+        "What is in a plugin.json manifest?",
+        "Which plugins ship MCP servers vs just skills?"
+      ],
+      "related_people": [
+        {
+          "name": "Anthropic",
+          "role": "ships the plugin model",
+          "initials": "AN",
+          "color": 1
+        }
+      ],
+      "stats": {
+        "probes": 1,
+        "tool_calls": 4,
+        "input_tokens": 8300,
+        "output_tokens": 1600,
+        "setup_ms": 900,
+        "search_ms": 7700
+      }
+    },
+    {
+      "run_id": "run-bearlike",
+      "workspace_id": "ws-oss-repo-scout",
+      "query": "What is bearlike/Assistant?",
+      "tier": "deep",
+      "model": "gpt-oss-120b",
+      "created_offset": -43200,
+      "total_ms": 15200,
+      "source_ids": [
+        "github",
+        "deepwiki",
+        "context7"
+      ],
+      "answer": {
+        "tldr": "**bearlike/Assistant** (a.k.a. Mewbo) is an AI assistant modelled as a conversation state machine with a hierarchical agent hypervisor. A single async `ToolUseLoop` binds an LLM via native tool-calling; sub-agents are admitted through `spawn_agent` and tracked by an `AgentHypervisor`. Interfaces span a CLI, a web console, a REST API, Home Assistant and an Android client, all sharing one core engine.",
+        "bullets": [
+          {
+            "text": "The core engine is one async `ToolUseLoop` bound to an LLM.",
+            "cites": [
+              "c1"
+            ]
+          },
+          {
+            "text": "Sub-agents resolve to one of four terminal states via the hypervisor.",
+            "cites": [
+              "c1"
+            ]
+          },
+          {
+            "text": "The DeepWiki entry summarizes the monorepo's layered architecture.",
+            "cites": [
+              "c2"
+            ]
+          }
+        ],
+        "confidence": 0.82,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "c1",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.94,
+          "confidence": 0.9,
+          "title": "bearlike/Assistant",
+          "url": "github.com/bearlike/Assistant",
+          "snippet": "An AI assistant modelled as a conversation state machine with a hierarchical agent hypervisor (Mewbo).",
+          "author": "bearlike",
+          "timestamp": "Updated 6h ago",
+          "meta": {
+            "stars": 1240,
+            "language": "Python"
+          }
+        },
+        {
+          "id": "c2",
+          "source": "deepwiki",
+          "kind": "docs",
+          "relevance": 0.88,
+          "title": "bearlike/Assistant - architecture overview",
+          "url": "https://deepwiki.com/bearlike/Assistant",
+          "snippet": "Layered monorepo: mewbo_core (SDK) -> mewbo_tools, mewbo_graph -> apps (CLI, API, console, HA, Aura).",
+          "timestamp": "Jul 2026"
+        },
+        {
+          "id": "c3",
+          "source": "context7",
+          "kind": "docs",
+          "relevance": 0.8,
+          "title": "Mewbo tool-use loop reference",
+          "url": "https://context7.com/bearlike/assistant/tool-use-loop",
+          "snippet": "API reference for the single ToolUseLoop.run() engine and the spawn_agent bridge.",
+          "timestamp": "Jul 2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "c-coord",
+          "agent_id": "c-coord",
+          "name": "scg-search",
+          "source_id": "",
+          "slot": 0,
+          "kind": "coordinator",
+          "model": "gpt-oss-120b",
+          "steps": 5,
+          "duration_ms": 15200,
+          "input_tokens": 6100,
+          "output_tokens": 1400,
+          "results_count": 0,
+          "returned_count": 0,
+          "lines": [
+            {
+              "t_ms": 90,
+              "glyph": ">",
+              "text": "resolve repo identity bearlike/Assistant",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 1100,
+              "glyph": "·",
+              "text": "fan out github + deepwiki + context7",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2200,
+              "glyph": "✓",
+              "text": "synthesize architecture summary",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "PLAN: identify the repo, read its wiki + docs, summarize architecture."
+        },
+        {
+          "id": "c-dw",
+          "agent_id": "c-dw",
+          "name": "scg-search",
+          "source_id": "deepwiki",
+          "slot": 2,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 3,
+          "duration_ms": 6800,
+          "input_tokens": 2900,
+          "output_tokens": 700,
+          "results_count": 2,
+          "returned_count": 2,
+          "lines": [
+            {
+              "t_ms": 160,
+              "glyph": ">",
+              "text": "ask_question(architecture of bearlike/Assistant)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 3200,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: deepwiki#ask_question): monorepo layering + core engine confirmed."
+        }
+      ],
+      "related_questions": [
+        "How does the agent hypervisor admit sub-agents?",
+        "What interfaces share the Mewbo core engine?"
+      ],
+      "stats": {
+        "probes": 1,
+        "tool_calls": 5,
+        "input_tokens": 9800,
+        "output_tokens": 2100,
+        "setup_ms": 1200,
+        "search_ms": 14000
+      }
+    },
+    {
+      "run_id": "run-kg",
+      "workspace_id": "ws-knowledge-graph",
+      "query": "Which countries border the Baltic Sea?",
+      "tier": "fast",
+      "model": "gpt-5.4-nano",
+      "created_offset": -9000,
+      "total_ms": 5200,
+      "source_ids": [
+        "wikidata",
+        "internet-search"
+      ],
+      "answer": {
+        "tldr": "Nine countries border the **Baltic Sea**: Sweden, Finland, Russia, Estonia, Latvia, Lithuania, Poland, Germany and Denmark. Wikidata's `located next to body of water` statements enumerate them precisely.",
+        "bullets": [
+          {
+            "text": "Baltic Sea (Q545) is the top hit.",
+            "cites": [
+              "kg1"
+            ]
+          }
+        ],
+        "confidence": 0.92,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "kg1",
+          "source": "wikidata",
+          "kind": "web",
+          "relevance": 0.95,
+          "title": "Baltic Sea (Q545)",
+          "url": "https://www.wikidata.org/wiki/Q545",
+          "snippet": "shares border with: Sweden, Finland, Russia, Estonia, Latvia, Lithuania, Poland, Germany, Denmark.",
+          "author": "wikidata.org",
+          "timestamp": "Q545"
+        },
+        {
+          "id": "kg2",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.8,
+          "title": "List of countries bordering the Baltic Sea",
+          "url": "https://en.wikipedia.org/wiki/Baltic_Sea",
+          "snippet": "The Baltic Sea is bordered by nine countries across Northern and Central Europe.",
+          "author": "wikipedia.org",
+          "timestamp": "2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "kg-l",
+          "agent_id": "kg-l",
+          "name": "scg-search",
+          "source_id": "wikidata",
+          "slot": 1,
+          "kind": "scg-path-probe",
+          "model": "gpt-5.4-nano",
+          "steps": 2,
+          "duration_ms": 4100,
+          "input_tokens": 1800,
+          "output_tokens": 400,
+          "results_count": 2,
+          "returned_count": 2,
+          "lines": [
+            {
+              "t_ms": 120,
+              "glyph": ">",
+              "text": "execute_sparql(shares border with Q545)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2600,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: wikidata#execute_sparql): 9 bordering countries."
+        }
+      ],
+      "related_questions": [
+        "What is the largest island in the Baltic Sea?"
+      ]
+    },
+    {
+      "run_id": "run-bo",
+      "workspace_id": "ws-beacon-ops",
+      "query": "What is our rollout policy for flags that gate payment paths?",
+      "tier": "auto",
+      "model": "gpt-oss-120b",
+      "created_offset": -6000,
+      "total_ms": 9800,
+      "source_ids": [
+        "filesystem",
+        "internet-search",
+        "github"
+      ],
+      "answer": {
+        "tldr": "Payment-path flags follow the **staged rollout** rule: ramp 1% -> 10% -> 50% with a 24-hour soak at each step, and never widen two payment flags in the same window. The policy lives in `policies/rollouts.md`.",
+        "bullets": [
+          {
+            "text": "policies/rollouts.md is the top hit.",
+            "cites": [
+              "bo1"
+            ]
+          }
+        ],
+        "confidence": 0.84,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "bo1",
+          "source": "filesystem",
+          "kind": "docs",
+          "relevance": 0.93,
+          "title": "policies/rollouts.md",
+          "url": "file:///workspace/policies/rollouts.md",
+          "snippet": "Payment-path flags ramp 1% -> 10% -> 50% with a 24-hour soak at each step.",
+          "timestamp": "Updated Jun 2026"
+        },
+        {
+          "id": "bo2",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.78,
+          "title": "Beacon docs - progressive rollouts",
+          "url": "https://beacon.example/docs/rollouts",
+          "snippet": "Public documentation for stable percentage bucketing and ramp steps.",
+          "author": "beacon.example",
+          "timestamp": "2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "bo-l",
+          "agent_id": "bo-l",
+          "name": "scg-search",
+          "source_id": "filesystem",
+          "slot": 0,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 3,
+          "duration_ms": 5200,
+          "input_tokens": 2400,
+          "output_tokens": 600,
+          "results_count": 2,
+          "returned_count": 3,
+          "lines": [
+            {
+              "t_ms": 140,
+              "glyph": ">",
+              "text": "grep(rollout ramp) -> policies/",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2900,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: filesystem#grep): ramp steps found in policies/rollouts.md."
+        }
+      ],
+      "related_questions": [
+        "How do we roll back a flag mid-ramp?"
+      ]
+    },
+    {
+      "run_id": "run-rc",
+      "workspace_id": "ws-research-copilot",
+      "query": "Latest parallel tool-calling benchmarks for agents",
+      "tier": "deep",
+      "model": "gpt-oss-120b",
+      "created_offset": -12000,
+      "total_ms": 13400,
+      "source_ids": [
+        "web",
+        "drive",
+        "notion"
+      ],
+      "answer": {
+        "tldr": "The strongest 2026 **parallel tool-calling** results come from the BFCL v3 multi-turn track and the internal 'fan-out latency' memo: batching independent tool calls cut wall-clock by 38-52% versus serial dispatch on the same model.",
+        "bullets": [
+          {
+            "text": "Fan-out latency memo (Q2 2026) is the top hit.",
+            "cites": [
+              "rc1"
+            ]
+          }
+        ],
+        "confidence": 0.79,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "rc1",
+          "source": "drive",
+          "kind": "docs",
+          "relevance": 0.9,
+          "title": "Fan-out latency memo (Q2 2026)",
+          "url": "https://docs.google.com/d/fanout-memo",
+          "snippet": "Batching independent tool calls cut end-to-end latency 38-52% across three models.",
+          "timestamp": "Apr 2026"
+        },
+        {
+          "id": "rc2",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.82,
+          "title": "Berkeley Function-Calling Leaderboard v3",
+          "url": "https://gorilla.cs.berkeley.edu/leaderboard",
+          "snippet": "Multi-turn, parallel and irrelevance categories for tool-calling models.",
+          "author": "berkeley.edu",
+          "timestamp": "2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "rc-l",
+          "agent_id": "rc-l",
+          "name": "scg-search",
+          "source_id": "web",
+          "slot": 3,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 3,
+          "duration_ms": 7200,
+          "input_tokens": 3300,
+          "output_tokens": 800,
+          "results_count": 2,
+          "returned_count": 2,
+          "lines": [
+            {
+              "t_ms": 200,
+              "glyph": ">",
+              "text": "web_search(parallel tool calling benchmark 2026)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 4100,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: web#web_search): BFCL v3 + internal memo."
+        }
+      ],
+      "related_questions": [
+        "How does batching interact with prompt caching?"
+      ]
+    },
+    {
+      "run_id": "run-ir",
+      "workspace_id": "ws-infra-runbooks",
+      "query": "Runbook: database host at 75% disk",
+      "tier": "fast",
+      "model": "gpt-5.4-nano",
+      "created_offset": -21600,
+      "total_ms": 4800,
+      "source_ids": [
+        "filesystem",
+        "web"
+      ],
+      "answer": {
+        "tldr": "The **disk-pressure runbook** says: at 75% on a db host, rotate WAL + old backups first, then plan an expansion before 80%. `runbooks/db-disk.md` has the exact commands.",
+        "bullets": [
+          {
+            "text": "runbooks/db-disk.md is the top hit.",
+            "cites": [
+              "ir1"
+            ]
+          }
+        ],
+        "confidence": 0.9,
+        "sources_count": 1
+      },
+      "results": [
+        {
+          "id": "ir1",
+          "source": "filesystem",
+          "kind": "docs",
+          "relevance": 0.94,
+          "title": "runbooks/db-disk.md",
+          "url": "file:///workspace/runbooks/db-disk.md",
+          "snippet": "At 75% disk: rotate WAL, prune backups older than 14 days, schedule an expansion before 80%.",
+          "timestamp": "Updated May 2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "ir-l",
+          "agent_id": "ir-l",
+          "name": "scg-search",
+          "source_id": "filesystem",
+          "slot": 0,
+          "kind": "scg-path-probe",
+          "model": "gpt-5.4-nano",
+          "steps": 2,
+          "duration_ms": 3600,
+          "input_tokens": 1500,
+          "output_tokens": 300,
+          "results_count": 1,
+          "returned_count": 1,
+          "lines": [
+            {
+              "t_ms": 120,
+              "glyph": ">",
+              "text": "grep(disk 75%) -> runbooks/",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2400,
+              "glyph": "✓",
+              "text": "returned 1 result",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: filesystem#grep): db-disk runbook."
+        }
+      ],
+      "related_questions": []
+    },
+    {
+      "run_id": "run-ds",
+      "workspace_id": "ws-design-system-audit",
+      "query": "Why is the rejected-plan color amber not red?",
+      "tier": "auto",
+      "model": "gpt-oss-120b",
+      "created_offset": -30000,
+      "total_ms": 7600,
+      "source_ids": [
+        "figma",
+        "github"
+      ],
+      "answer": {
+        "tldr": "The **rejected-plan** state uses amber, not red, because red is reserved for destructive actions in the design system. The decision is recorded in the Figma review and the token map in `tokens/status.ts`.",
+        "bullets": [
+          {
+            "text": "Status tokens - review is the top hit.",
+            "cites": [
+              "ds1"
+            ]
+          }
+        ],
+        "confidence": 0.83,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "ds1",
+          "source": "figma",
+          "kind": "docs",
+          "relevance": 0.91,
+          "title": "Status tokens - review",
+          "url": "https://figma.com/file/status-tokens",
+          "snippet": "Amber = recoverable/attention; red = destructive only. Rejected plan is recoverable.",
+          "timestamp": "Apr 2026"
+        },
+        {
+          "id": "ds2",
+          "source": "github",
+          "kind": "code",
+          "relevance": 0.84,
+          "confidence": 0.8,
+          "title": "bearlike/Assistant",
+          "url": "https://github.com/bearlike/Assistant",
+          "snippet": "apps/mewbo_console tokens/status.ts maps rejected-plan -> --warning (amber), not --destructive (red).",
+          "author": "bearlike",
+          "timestamp": "Updated Apr 2026",
+          "meta": {
+            "stars": 210,
+            "language": "TypeScript"
+          }
+        }
+      ],
+      "trace": [
+        {
+          "id": "ds-l",
+          "agent_id": "ds-l",
+          "name": "scg-search",
+          "source_id": "figma",
+          "slot": 7,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 2,
+          "duration_ms": 5100,
+          "input_tokens": 2200,
+          "output_tokens": 500,
+          "results_count": 2,
+          "returned_count": 2,
+          "lines": [
+            {
+              "t_ms": 160,
+              "glyph": ">",
+              "text": "figma_search(rejected plan color)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 3400,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: figma#figma_search): amber = recoverable rationale."
+        }
+      ],
+      "related_questions": []
+    },
+    {
+      "run_id": "run-st",
+      "workspace_id": "ws-support-triage",
+      "query": "Open tickets about the file-edit matcher",
+      "tier": "auto",
+      "model": "gpt-oss-120b",
+      "created_offset": -3600,
+      "total_ms": 8100,
+      "source_ids": [
+        "slack",
+        "linear",
+        "jira"
+      ],
+      "answer": {
+        "tldr": "There are **6 open tickets** clustered on the file-edit matcher, all reporting the same 'no match found' failure on whitespace-sensitive diffs. The oldest is 9 days old and should be flagged stale.",
+        "bullets": [
+          {
+            "text": "BEA-231 - file-edit matcher misses on trailing whitespace is the top hit.",
+            "cites": [
+              "st1"
+            ]
+          }
+        ],
+        "confidence": 0.81,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "st1",
+          "source": "linear",
+          "kind": "docs",
+          "relevance": 0.9,
+          "title": "BEA-231 - file-edit matcher misses on trailing whitespace",
+          "url": "https://linear.app/acme/issue/BEA-231",
+          "snippet": "Search/replace fails when the target block has trailing whitespace differences.",
+          "timestamp": "In progress"
+        },
+        {
+          "id": "st2",
+          "source": "slack",
+          "kind": "docs",
+          "relevance": 0.78,
+          "title": "#support thread - matcher failures",
+          "url": "https://slack.com/#support/p172",
+          "snippet": "Three customers hit the same 'no match found' on file edits this week.",
+          "timestamp": "2d ago"
+        }
+      ],
+      "trace": [
+        {
+          "id": "st-l",
+          "agent_id": "st-l",
+          "name": "scg-search",
+          "source_id": "linear",
+          "slot": 5,
+          "kind": "scg-path-probe",
+          "model": "gpt-oss-120b",
+          "steps": 3,
+          "duration_ms": 5400,
+          "input_tokens": 2500,
+          "output_tokens": 600,
+          "results_count": 2,
+          "returned_count": 3,
+          "lines": [
+            {
+              "t_ms": 180,
+              "glyph": ">",
+              "text": "linear_search(label:file-edit)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 3600,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: linear#linear_search): 6 open matcher tickets, 1 stale."
+        }
+      ],
+      "related_questions": [
+        "Which customers are most affected by the matcher bug?"
+      ]
+    },
+    {
+      "run_id": "run-wp",
+      "workspace_id": "ws-wikidata-probe",
+      "query": "Nobel laureates in Physics born in Japan",
+      "tier": "fast",
+      "model": "gpt-5.4-nano",
+      "created_offset": -50400,
+      "total_ms": 5600,
+      "source_ids": [
+        "wikidata",
+        "web"
+      ],
+      "answer": {
+        "tldr": "Wikidata lists **several** Japanese-born Physics laureates, including Hideki Yukawa, Sin-Itiro Tomonaga, Leo Esaki, Masatoshi Koshiba, Yoichiro Nambu and Takaaki Kajita, via the `award received (Nobel Prize in Physics)` + `place of birth (Japan)` join.",
+        "bullets": [
+          {
+            "text": "SPARQL: Physics laureates born in Japan is the top hit.",
+            "cites": [
+              "wp1"
+            ]
+          }
+        ],
+        "confidence": 0.9,
+        "sources_count": 2
+      },
+      "results": [
+        {
+          "id": "wp1",
+          "source": "wikidata",
+          "kind": "web",
+          "relevance": 0.93,
+          "title": "SPARQL: Physics laureates born in Japan",
+          "url": "https://query.wikidata.org/#physics-jp",
+          "snippet": "Query joining P166 (award) with P19 (place of birth) returns the laureate list.",
+          "author": "wikidata.org",
+          "timestamp": "Q38104"
+        },
+        {
+          "id": "wp2",
+          "source": "internet-search",
+          "kind": "web",
+          "relevance": 0.8,
+          "title": "List of Japanese Nobel laureates",
+          "url": "https://en.wikipedia.org/wiki/Japanese_Nobel_laureates",
+          "snippet": "Encyclopedic list corroborating the Physics category.",
+          "author": "wikipedia.org",
+          "timestamp": "2026"
+        }
+      ],
+      "trace": [
+        {
+          "id": "wp-l",
+          "agent_id": "wp-l",
+          "name": "scg-search",
+          "source_id": "wikidata",
+          "slot": 1,
+          "kind": "scg-path-probe",
+          "model": "gpt-5.4-nano",
+          "steps": 2,
+          "duration_ms": 4200,
+          "input_tokens": 1900,
+          "output_tokens": 500,
+          "results_count": 2,
+          "returned_count": 2,
+          "lines": [
+            {
+              "t_ms": 140,
+              "glyph": ">",
+              "text": "execute_sparql(P166=Nobel Physics, P19=Japan)",
+              "done": false,
+              "empty": false
+            },
+            {
+              "t_ms": 2900,
+              "glyph": "✓",
+              "text": "returned 2 results",
+              "done": true,
+              "empty": false
+            }
+          ],
+          "result": "EVIDENCE (pathway: wikidata#execute_sparql): 6 laureates matched."
+        }
+      ],
+      "related_questions": []
+    }
+  ],
+  "scg": {
+    "memory_workspace": "ws-oss-repo-scout",
+    "sources": [
+      {
+        "source_id": "github",
+        "tools": [
+          {
+            "name": "search_repositories",
+            "description": "Search public repositories, ranked by stars or recency.",
+            "input_fields": [
+              "q",
+              "sort",
+              "order"
+            ],
+            "required": [
+              "q"
+            ],
+            "output_fields": [
+              "items",
+              "total_count"
+            ]
+          },
+          {
+            "name": "list_commits",
+            "description": "List commits on a branch of a repository.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "sha"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "commits"
+            ]
+          },
+          {
+            "name": "get_repository",
+            "description": "Fetch a repository's metadata (stars, language, license).",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "repository"
+            ]
+          },
+          {
+            "name": "search_code",
+            "description": "Search code across public repositories.",
+            "input_fields": [
+              "q",
+              "language"
+            ],
+            "required": [
+              "q"
+            ],
+            "output_fields": [
+              "items"
+            ]
+          },
+          {
+            "name": "list_pull_requests",
+            "description": "List pull requests for a repository.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "state"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "pull_requests"
+            ]
+          },
+          {
+            "name": "get_file_contents",
+            "description": "Read a file's contents at a ref.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "path",
+              "ref"
+            ],
+            "required": [
+              "owner",
+              "repo",
+              "path"
+            ],
+            "output_fields": [
+              "content"
+            ]
+          },
+          {
+            "name": "list_issues",
+            "description": "List issues for a repository.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "state"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "issues"
+            ]
+          },
+          {
+            "name": "search_issues",
+            "description": "Search issues and PRs across repositories.",
+            "input_fields": [
+              "q"
+            ],
+            "required": [
+              "q"
+            ],
+            "output_fields": [
+              "items"
+            ]
+          },
+          {
+            "name": "list_branches",
+            "description": "List branches of a repository.",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "branches"
+            ]
+          },
+          {
+            "name": "get_latest_release",
+            "description": "Fetch the latest release of a repository.",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "release"
+            ]
+          },
+          {
+            "name": "list_releases",
+            "description": "List releases of a repository.",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "releases"
+            ]
+          },
+          {
+            "name": "list_tags",
+            "description": "List tags of a repository.",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "tags"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "huggingface",
+        "tools": [
+          {
+            "name": "hub_repo_search",
+            "description": "Search models, datasets and spaces on the Hub.",
+            "input_fields": [
+              "query",
+              "type"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "results"
+            ]
+          },
+          {
+            "name": "hub_repo_details",
+            "description": "Fetch details for a Hub repo (downloads, tags, license).",
+            "input_fields": [
+              "repo_id"
+            ],
+            "required": [
+              "repo_id"
+            ],
+            "output_fields": [
+              "details"
+            ]
+          },
+          {
+            "name": "model_search",
+            "description": "Search models by task, library or tag.",
+            "input_fields": [
+              "query",
+              "task"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "models"
+            ]
+          },
+          {
+            "name": "dataset_search",
+            "description": "Search datasets by task or modality.",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "datasets"
+            ]
+          },
+          {
+            "name": "space_search",
+            "description": "Search Spaces (hosted demos).",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "spaces"
+            ]
+          },
+          {
+            "name": "hf_doc_search",
+            "description": "Search the Hugging Face documentation.",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "hits"
+            ]
+          },
+          {
+            "name": "hf_doc_fetch",
+            "description": "Fetch a documentation page.",
+            "input_fields": [
+              "url"
+            ],
+            "required": [
+              "url"
+            ],
+            "output_fields": [
+              "markdown"
+            ]
+          },
+          {
+            "name": "hf_fs",
+            "description": "Browse the Hub filesystem for a repo.",
+            "input_fields": [
+              "path"
+            ],
+            "required": [
+              "path"
+            ],
+            "output_fields": [
+              "entries"
+            ]
+          },
+          {
+            "name": "hf_whoami",
+            "description": "Identify the authenticated Hub user.",
+            "input_fields": [],
+            "required": [],
+            "output_fields": [
+              "user"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "gitmcp",
+        "tools": [
+          {
+            "name": "fetch_generic_documentation",
+            "description": "Fetch a project's documentation for a repo.",
+            "input_fields": [
+              "owner",
+              "repo"
+            ],
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "output_fields": [
+              "docs"
+            ]
+          },
+          {
+            "name": "search_generic_code",
+            "description": "Search code inside a specific repo.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "query"
+            ],
+            "required": [
+              "owner",
+              "repo",
+              "query"
+            ],
+            "output_fields": [
+              "matches"
+            ]
+          },
+          {
+            "name": "search_generic_documentation",
+            "description": "Search a repo's documentation.",
+            "input_fields": [
+              "owner",
+              "repo",
+              "query"
+            ],
+            "required": [
+              "owner",
+              "repo",
+              "query"
+            ],
+            "output_fields": [
+              "hits"
+            ]
+          },
+          {
+            "name": "fetch_generic_url_content",
+            "description": "Fetch and clean the content of a URL.",
+            "input_fields": [
+              "url"
+            ],
+            "required": [
+              "url"
+            ],
+            "output_fields": [
+              "content"
+            ]
+          },
+          {
+            "name": "match_common_libs_owner_repo_mapping",
+            "description": "Resolve a library name to its owner/repo.",
+            "input_fields": [
+              "library"
+            ],
+            "required": [
+              "library"
+            ],
+            "output_fields": [
+              "mapping"
+            ]
+          },
+          {
+            "name": "fetch_url_content",
+            "description": "Fetch raw content for a documentation URL.",
+            "input_fields": [
+              "url"
+            ],
+            "required": [
+              "url"
+            ],
+            "output_fields": [
+              "content"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "deepwiki",
+        "tools": [
+          {
+            "name": "ask_question",
+            "description": "Ask a question about a repository's codebase.",
+            "input_fields": [
+              "repo",
+              "question"
+            ],
+            "required": [
+              "repo",
+              "question"
+            ],
+            "output_fields": [
+              "answer"
+            ]
+          },
+          {
+            "name": "read_wiki_contents",
+            "description": "Read the generated wiki contents for a repo.",
+            "input_fields": [
+              "repo"
+            ],
+            "required": [
+              "repo"
+            ],
+            "output_fields": [
+              "contents"
+            ]
+          },
+          {
+            "name": "read_wiki_structure",
+            "description": "List documentation topics for a repo.",
+            "input_fields": [
+              "repo"
+            ],
+            "required": [
+              "repo"
+            ],
+            "output_fields": [
+              "topics"
+            ]
+          },
+          {
+            "name": "list_available_repos",
+            "description": "List repositories with a generated wiki.",
+            "input_fields": [],
+            "required": [],
+            "output_fields": [
+              "repos"
+            ]
+          },
+          {
+            "name": "search_wiki_pages",
+            "description": "Search across a repo's wiki pages.",
+            "input_fields": [
+              "repo",
+              "query"
+            ],
+            "required": [
+              "repo",
+              "query"
+            ],
+            "output_fields": [
+              "pages"
+            ]
+          },
+          {
+            "name": "get_repo_overview",
+            "description": "Fetch a repo's high-level overview.",
+            "input_fields": [
+              "repo"
+            ],
+            "required": [
+              "repo"
+            ],
+            "output_fields": [
+              "overview"
+            ]
+          },
+          {
+            "name": "resolve_repo",
+            "description": "Resolve a fuzzy name to a canonical owner/repo.",
+            "input_fields": [
+              "name"
+            ],
+            "required": [
+              "name"
+            ],
+            "output_fields": [
+              "repo"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "context7",
+        "tools": [
+          {
+            "name": "resolve_library_id",
+            "description": "Resolve a library name to a Context7 id.",
+            "input_fields": [
+              "name"
+            ],
+            "required": [
+              "name"
+            ],
+            "output_fields": [
+              "library_id"
+            ]
+          },
+          {
+            "name": "query_docs",
+            "description": "Query a library's documentation with a topic.",
+            "input_fields": [
+              "library_id",
+              "topic"
+            ],
+            "required": [
+              "library_id"
+            ],
+            "output_fields": [
+              "snippets"
+            ]
+          },
+          {
+            "name": "get_library_docs",
+            "description": "Fetch the docs bundle for a library.",
+            "input_fields": [
+              "library_id"
+            ],
+            "required": [
+              "library_id"
+            ],
+            "output_fields": [
+              "docs"
+            ]
+          },
+          {
+            "name": "list_versions",
+            "description": "List indexed versions of a library.",
+            "input_fields": [
+              "library_id"
+            ],
+            "required": [
+              "library_id"
+            ],
+            "output_fields": [
+              "versions"
+            ]
+          },
+          {
+            "name": "search_symbols",
+            "description": "Search API symbols in a library.",
+            "input_fields": [
+              "library_id",
+              "query"
+            ],
+            "required": [
+              "library_id",
+              "query"
+            ],
+            "output_fields": [
+              "symbols"
+            ]
+          },
+          {
+            "name": "fetch_examples",
+            "description": "Fetch usage examples for a symbol.",
+            "input_fields": [
+              "library_id",
+              "symbol"
+            ],
+            "required": [
+              "library_id",
+              "symbol"
+            ],
+            "output_fields": [
+              "examples"
+            ]
+          },
+          {
+            "name": "list_libraries",
+            "description": "List libraries indexed by Context7.",
+            "input_fields": [],
+            "required": [],
+            "output_fields": [
+              "libraries"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "internet-search",
+        "tools": [
+          {
+            "name": "searxng_web_search",
+            "description": "Search the public web via a SearXNG instance.",
+            "input_fields": [
+              "query",
+              "categories"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "results"
+            ]
+          },
+          {
+            "name": "web_url_read",
+            "description": "Fetch and clean the readable content of a URL.",
+            "input_fields": [
+              "url"
+            ],
+            "required": [
+              "url"
+            ],
+            "output_fields": [
+              "content"
+            ]
+          },
+          {
+            "name": "searxng_search_suggestions",
+            "description": "Fetch query suggestions.",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "suggestions"
+            ]
+          },
+          {
+            "name": "searxng_instance_info",
+            "description": "Report the SearXNG instance configuration.",
+            "input_fields": [],
+            "required": [],
+            "output_fields": [
+              "info"
+            ]
+          },
+          {
+            "name": "image_search",
+            "description": "Search public images.",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "images"
+            ]
+          },
+          {
+            "name": "news_search",
+            "description": "Search recent news articles.",
+            "input_fields": [
+              "query"
+            ],
+            "required": [
+              "query"
+            ],
+            "output_fields": [
+              "articles"
+            ]
+          },
+          {
+            "name": "fetch_page",
+            "description": "Fetch a page's HTML/markdown.",
+            "input_fields": [
+              "url"
+            ],
+            "required": [
+              "url"
+            ],
+            "output_fields": [
+              "page"
+            ]
+          }
+        ]
+      }
+    ],
+    "memory": [
+      {
+        "content": "github#search_repositories ranks best by stars then pushed-at; combine both for 'popular + active'.",
+        "anchor": "github#search_repositories",
+        "polarity": "positive",
+        "relates_to": [
+          1,
+          2
+        ],
+        "created_offset": -3600
+      },
+      {
+        "content": "github#list_commits confirms activity: filter to commits in the last 14 days to drop stale repos.",
+        "anchor": "github#list_commits",
+        "polarity": "positive",
+        "relates_to": [
+          7
+        ],
+        "created_offset": -3720
+      },
+      {
+        "content": "github#get_repository is the source of truth for license + primary language on a result card.",
+        "anchor": "github#get_repository",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -3840
+      },
+      {
+        "content": "github#search_code is noisy for library discovery; prefer search_repositories then read code.",
+        "anchor": "github#search_code",
+        "polarity": "dead_end",
+        "relates_to": [],
+        "created_offset": -3960
+      },
+      {
+        "content": "github#search_issues surfaces 'awesome-*' lists indirectly; scope with 'in:name awesome'.",
+        "anchor": "github#search_issues",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4080
+      },
+      {
+        "content": "github#get_file_contents on README.md yields the pitch line for a snippet.",
+        "anchor": "github#get_file_contents",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4200
+      },
+      {
+        "content": "github#get_latest_release dates tell you maintenance cadence better than stars alone.",
+        "anchor": "github#get_latest_release",
+        "polarity": "positive",
+        "relates_to": [
+          1
+        ],
+        "created_offset": -4320
+      },
+      {
+        "content": "github#list_pull_requests open-count is a cheap liveness signal for a repo.",
+        "anchor": "github#list_pull_requests",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4440
+      },
+      {
+        "content": "huggingface#hub_repo_search spans models, datasets and spaces; set type to disambiguate.",
+        "anchor": "huggingface#hub_repo_search",
+        "polarity": "positive",
+        "relates_to": [
+          9,
+          10
+        ],
+        "created_offset": -4560
+      },
+      {
+        "content": "huggingface#hub_repo_details downloads count is the Hub analog of GitHub stars.",
+        "anchor": "huggingface#hub_repo_details",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4680
+      },
+      {
+        "content": "huggingface#model_search by task is the fastest path to 'best model for X'.",
+        "anchor": "huggingface#model_search",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4800
+      },
+      {
+        "content": "huggingface#dataset_search modality filter avoids returning models by mistake.",
+        "anchor": "huggingface#dataset_search",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -4920
+      },
+      {
+        "content": "huggingface#space_search finds live demos but rarely source; pair with a GitHub lookup.",
+        "anchor": "huggingface#space_search",
+        "polarity": "dead_end",
+        "relates_to": [],
+        "created_offset": -5040
+      },
+      {
+        "content": "huggingface#hf_doc_search is good for API usage, weak for repo discovery.",
+        "anchor": "huggingface#hf_doc_search",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -5160
+      },
+      {
+        "content": "gitmcp#fetch_generic_documentation needs owner+repo already resolved; run the mapping first.",
+        "anchor": "gitmcp#fetch_generic_documentation",
+        "polarity": "positive",
+        "relates_to": [
+          15
+        ],
+        "created_offset": -5280
+      },
+      {
+        "content": "gitmcp#match_common_libs_owner_repo_mapping resolves a bare library name to owner/repo cheaply.",
+        "anchor": "gitmcp#match_common_libs_owner_repo_mapping",
+        "polarity": "positive",
+        "relates_to": [
+          17
+        ],
+        "created_offset": -5400
+      },
+      {
+        "content": "gitmcp#search_generic_code is scoped to one repo; do not use it for cross-repo discovery.",
+        "anchor": "gitmcp#search_generic_code",
+        "polarity": "dead_end",
+        "relates_to": [],
+        "created_offset": -5520
+      },
+      {
+        "content": "gitmcp#fetch_generic_url_content cleans doc pages well for citation snippets.",
+        "anchor": "gitmcp#fetch_generic_url_content",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -5640
+      },
+      {
+        "content": "deepwiki#ask_question is the fastest architecture summary for a known repo.",
+        "anchor": "deepwiki#ask_question",
+        "polarity": "positive",
+        "relates_to": [
+          19,
+          20
+        ],
+        "created_offset": -5760
+      },
+      {
+        "content": "deepwiki#read_wiki_structure lists topics; use it to target read_wiki_contents.",
+        "anchor": "deepwiki#read_wiki_structure",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -5880
+      },
+      {
+        "content": "deepwiki#resolve_repo tolerates fuzzy names; run before ask_question on ambiguous input.",
+        "anchor": "deepwiki#resolve_repo",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6000
+      },
+      {
+        "content": "deepwiki#list_available_repos is small; not every repo has a generated wiki.",
+        "anchor": "deepwiki#list_available_repos",
+        "polarity": "dead_end",
+        "relates_to": [],
+        "created_offset": -6120
+      },
+      {
+        "content": "context7#resolve_library_id must run before any query_docs call.",
+        "anchor": "context7#resolve_library_id",
+        "polarity": "positive",
+        "relates_to": [
+          23,
+          24
+        ],
+        "created_offset": -6240
+      },
+      {
+        "content": "context7#query_docs with a tight topic beats fetching the whole docs bundle.",
+        "anchor": "context7#query_docs",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6360
+      },
+      {
+        "content": "context7#search_symbols is the right tool for 'does library X expose API Y'.",
+        "anchor": "context7#search_symbols",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6480
+      },
+      {
+        "content": "context7#list_versions matters when a question pins a specific release.",
+        "anchor": "context7#list_versions",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6600
+      },
+      {
+        "content": "internet-search#searxng_web_search is the discovery entry point; read the top pages after.",
+        "anchor": "internet-search#searxng_web_search",
+        "polarity": "positive",
+        "relates_to": [
+          27,
+          28
+        ],
+        "created_offset": -6720
+      },
+      {
+        "content": "internet-search#web_url_read is the cite-quality reader; always read before quoting.",
+        "anchor": "internet-search#web_url_read",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6840
+      },
+      {
+        "content": "internet-search#news_search is better than web_search for 'latest' or 'this week' queries.",
+        "anchor": "internet-search#news_search",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -6960
+      },
+      {
+        "content": "internet-search#searxng_search_suggestions helps widen a thin query, not to answer it.",
+        "anchor": "internet-search#searxng_search_suggestions",
+        "polarity": "positive",
+        "relates_to": [],
+        "created_offset": -7080
+      },
+      {
+        "content": "internet-search#image_search rarely helps repo discovery; skip it for code queries.",
+        "anchor": "internet-search#image_search",
+        "polarity": "dead_end",
+        "relates_to": [],
+        "created_offset": -7200
+      },
+      {
+        "content": "Cross-source: resolve a library via gitmcp mapping, then confirm stars via github#get_repository.",
+        "anchor": "github#get_repository",
+        "polarity": "positive",
+        "relates_to": [
+          15
+        ],
+        "created_offset": -7320
+      }
+    ]
+  }
+}

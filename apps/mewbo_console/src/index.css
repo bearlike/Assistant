@@ -1,63 +1,192 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
 @layer base {
   :root {
     /* ── Dark mode (default) ──
-       Source: Anthropic Claude docs CSS variables (platform.claude.com)
-       Gray scale uses Anthropic's warm→neutral gradient:
-       lighter grays = hue 60 (warm), deeper grays = hue 0 (neutral black) */
-    --background: 60 2.7% 14.5%; /* #262624 — Anthropic dark app bg */
+       Dark = docs-site warm carbon (mkdocs-shadcn-mewbo mewbo.css) — keep in sync.
+       Warm-carbon gray ramp on hue ~40; clay primary + status tokens shared with docs. */
+    --background: 40 6% 8%; /* #161513 — docs warm carbon */
     --foreground: 60 14% 97%; /* _gray-20 */
 
-    --muted: 60 3% 21%; /* _gray-700 — elevated surfaces */
-    --muted-foreground: 48 5% 57%; /* _gray-350 */
+    --muted: 40 4% 16%; /* #2a2927 — elevated surfaces */
+    /* Secondary text. Lightness is set by measurement, not taste: this token
+       carries most of the app's small type, so it must clear WCAG AA (4.5:1)
+       on EVERY surface it lands on, not just --background. At 66% it measures
+       7.99:1 on --background, 7.19:1 on --card, 6.97:1 on --rail-bg.
+       Never compose it with an alpha modifier — see the .light twin. */
+    --muted-foreground: 48 6% 66%;
 
-    --popover: 60 2.7% 14.5%; /* same as bg — popover sits on overlay */
+    --popover: 40 5% 11%; /* #1d1d1b — own value, one step above bg */
     --popover-foreground: 60 14% 97%;
 
     --border: 55 9% 74% / 0.15; /* _gray-200 at 15% — subtle card hairline */
     --border-strong: 55 9% 74% / 0.35; /* _gray-200 at 35% — structural dividers (nav, panels) */
-    --input: 60 2% 17%; /* _gray-750 */
+    /* Input BORDER, not fill: shadcn consumes --input as `border-input`
+       (ui/input.tsx + ui/textarea.tsx); every fill that used to borrow it moved
+       to --muted. As a border it owes WCAG 1.4.11's 3:1 against the surfaces a
+       field sits on. The old 15% sat one step off --card and measured 1.10:1
+       (invisible), so it moved up into the warm-grey border zone — 3.32:1 on
+       --card, 3.70:1 on --background. */
+    --input: 48 8% 42%;
 
-    --card: 60 2% 17%; /* _gray-750 — card surfaces above bg */
+    --card: 40 5% 12%; /* #201f1d — card surfaces above bg */
     --card-foreground: 60 14% 97%;
 
-    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay — FILL (buttons, indicators) */
     --primary-foreground: 0 0% 100%;
+    /* The same clay, tuned for GLYPHS. A single token cannot be both a fill and
+       legible text against that fill — the two pull in opposite directions, so
+       one of the roles always loses. --primary keeps the brand exactly as it is
+       and this carries anywhere the colour becomes type (`text-[hsl(var(...))]`).
+       Measured against all four surfaces text actually lands on, not just
+       --background: at 59.6% the dark clay already clears 4.5 on every one
+       (5.86 / 5.27 / 4.63 / 5.11), so here the value MIRRORS --primary. It is
+       still declared rather than omitted, because a token defined in one block
+       only silently inherits the other's value across the theme boundary. */
+    --primary-text: 14.8 63.1% 59.6%;
 
-    --secondary: 60 3% 11%; /* _gray-820 */
+    --secondary: 40 4% 14%; /* #252422 */
     --secondary-foreground: 55 9% 74%; /* _gray-200 */
 
-    --accent: 60 3% 21%; /* _gray-700 — hover/active states */
+    --accent: 40 4% 17%; /* #2d2c2a — hover/active states */
     --accent-foreground: 60 14% 97%;
 
-    --destructive: 0 73% 59%; /* _red-400 */
+    /* ── NavRail surfaces (dark) ── the rail canvas is a whisper off --background
+       so the inset content card reads as the floating focal sheet; --rail-selected
+       is the full-row selection fill (its own knob, ≈ the --accent family). */
+    --rail-bg: 40 5% 13%; /* nav canvas — see --rail-border for why this moved */
+    --rail-selected: 40 4% 20%; /* full-row selection fill */
+    /* Rail SECTION-HEADING / date-bucket eyebrow text (RailSectionHeader,
+       RailDateGroup, apps InstrumentSection). One size now carries the rail, so
+       colour is the only channel separating a heading from metadata: this
+       recedes BELOW --muted-foreground (~7:1 here) while staying a real text
+       label — tuned to the AA floor, not taste: 5.33:1 on --rail-bg, 5.50:1 on
+       --card, 6.11:1 on --background. Metadata keeps the FULL --muted-foreground;
+       do NOT harmonize this back toward it — the gap IS the hierarchy. */
+    --rail-heading: 48 6% 57%;
+    /* The rail's edge and its internal zone dividers. A dedicated token, not a
+       reuse of --border-strong, so the navigation boundary can be tuned without
+       moving every panel hairline in the app.
+       Why it exists at all: the desktop rail shipped with NO border-right, and
+       --rail-bg sat 2% off --background — a 1.05:1 surface step, below the
+       threshold of perception, so the primary navigation had no visible edge.
+       The fix is both halves: a real border AND a wider surface step (now
+       1.15:1). Neither alone reads as a boundary. */
+    /* Quiet structure, not a hard rule. At the original 0.35 the light hue
+       composited into a loud ~2:1 line (read as "a straight white line"); the
+       alpha drops to 0.19 so every rail rule reads as a mild seam — composite
+       1.54:1 vs --rail-bg / --card, 1.50:1 vs --background — that fits
+       organically instead of shouting. A zone divider is decorative structure,
+       not a UI component boundary, so there is no WCAG floor; the floor is
+       perceptual presence, and 0.19 stays DECISIVELY above the invisibility
+       --border hits on this canvas (0.15a = 1.40:1). Softened in lockstep with
+       the .light twin; a softened line alone reads organic, so no shadow seam. */
+    --rail-border: 55 9% 74% / 0.19;
+
+    /* Scrollbar thumbs. Their own tokens rather than an alpha on
+       --muted-foreground, because they are not text: the no-alpha rule on that
+       token exists to protect a TEXT contrast floor, and applying it to a
+       scrollbar collapsed the thumb and its :hover onto the same value, which
+       silently deleted the hover affordance. A control that changes on hover
+       needs two values, so it gets two tokens.
+       A thumb is an interactive control, so it owes 3:1 (WCAG 1.4.11) against
+       the surface behind it; at 66%/0.45 the dark thumb measured 2.55:1 on
+       --card and 2.59:1 on --background, so the rest state moved up. The hover
+       state is untouched — it was already clear. */
+    --scrollbar-thumb: 48 6% 76% / 0.45;
+    --scrollbar-thumb-hover: 48 6% 66% / 0.8;
+
+    --destructive: 0 73% 59%; /* _red-400 — FILL (danger buttons) */
     --destructive-foreground: 0 0% 100%;
+    /* Same split as --primary-text, and here it is forced rather than tidy: in
+       this theme the red needs ~62% lightness to clear 4.5:1 as text on the
+       elevated surfaces, and ~52% to keep white --destructive-foreground legible
+       on it as a fill. Those ranges do not overlap at ANY saturation, so one
+       token provably cannot do both jobs — error TEXT reads off this one and the
+       danger button keeps --destructive. */
+    --destructive-text: 0 73% 66%;
 
     --ring: 14.8 63.1% 59.6%;
 
     --radius: 0.5rem;
 
-    --success: 81 100% 30%; /* _green-400 */
+    /* ── Typography ──
+       The CSS mirror of tailwind.config.js `theme.extend.fontSize`. Hand-written
+       CSS rules below (and anything that can't reach a Tailwind utility) resolve
+       through these so there is exactly ONE place a size is decided. The two
+       must stay in sync, for the same reason the font stacks do: a rule that
+       hardcodes px silently drifts from the scale and nothing catches it.
+
+       --font-sans / --font-mono were previously REFERENCED (`var(--font-sans,
+       inherit)`) but never DEFINED, so every such rule silently fell through to
+       `inherit`. Defining them makes those rules mean what they say. */
+    --font-sans: 'Inter Variable', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+    --text-2xs: 0.6875rem; /* 11px */
+    --text-xs: 0.75rem; /* 12px */
+    --text-sm: 0.8125rem; /* 13px */
+    --text-base: 0.875rem; /* 14px */
+    --text-lg: 1rem; /* 16px */
+    --text-xl: 1.25rem; /* 20px */
+    --text-2xl: 1.75rem; /* 28px */
+    /* Not part of the visual ramp above — a platform floor. Text inputs ONLY:
+       below 16px, iOS Safari zooms the viewport on focus and the user is left
+       scrolled sideways in a form. Sized in rem like the rest of the scale so
+       it still honours a user's root font-size preference. */
+    --text-field: 1rem; /* 16px */
+
+    /* ── assistant-ui vendor tokens (chat surface) ──
+       Structural knobs consumed by the source-copied assistant-ui thread /
+       composer / attachment components. Kept faithful to the vendor design
+       system but expressed through our own hsl tokens (the vendor ships
+       Tailwind-v4 `var(--color-*)` names we don't define). `--composer-bg` is
+       the SINGLE background knob for every composer surface (Tasks, Search, and
+       the siblings converging onto `ComposerShell`); it resolves to the card
+       colour so composers sit on the same plane as other cards. NOTE: the
+       copied components reference these via the Tailwind-v4 shorthand
+       `bg-(--composer-bg)` / `max-w-(--thread-max-width)`, which our Tailwind v3
+       build does not emit — a consuming agent flips those to
+       `bg-[var(--composer-bg)]` when it wires the surface up. */
+    --thread-max-width: 44rem;
+    --composer-radius: 1rem;
+    --composer-padding: 8px;
+    --composer-bg: hsl(var(--card));
+
+    --success: 137 55% 48%; /* docs github-semantic success green (≈#3fb950) */
     --success-foreground: 0 0% 100%;
 
-    --warning: 39 100% 50%; /* _amber-400 — caution/one-time banners */
+    --warning: 43 72% 48%; /* docs github-semantic warning amber (≈#d29922) */
     --warning-foreground: 0 0% 100%;
+    /* Warning as GLYPHS on a warning/15 tint chip — the --primary-text split,
+       applied to status. This dark amber already clears 4.5:1 on its own dark
+       tint (5.30:1 on warning/15 over --card), so it MIRRORS --warning; the
+       light twin is where the darkening happens. Declared anyway — a token
+       defined in one block silently inherits the other across the theme
+       boundary. */
+    --warning-text: 43 72% 48%;
 
-    --surface: 60 2% 12%; /* _gray-800 — recessed surfaces */
-    --surface-deep: 0 0% 7%; /* _gray-860 — deepest layer */
+    --info: 212 100% 67%; /* docs github-semantic info blue (≈#58a6ff) */
+    --info-foreground: 0 0% 100%;
+    /* Info as GLYPHS on an info/15 tint chip. Passes on its own dark tint
+       (5.03:1 on info/15 over --card), so it mirrors --info — see --warning-text. */
+    --info-text: 212 100% 67%;
+
+    --surface: 40 6% 6%; /* #10100e — recessed (below bg) */
+    --surface-deep: 40 7% 4.5%; /* #0c0c0b — deepest layer */
 
     /* ── Semantic: orchestration (from Anthropic palette) ── */
     --permission: 213 80% 79%; /* _blue-200 — Anthropic accent-000 */
     --plan-mode: 158 52% 49%; /* _aqua-300 — Anthropic aqua for plan context */
-    --user-message-bg: 60 3% 21%; /* _gray-700 — user bubbles above card */
-    --user-message-bg-hover: 60 2% 26%; /* _gray-650 */
-    --bash-bg: 60 2% 12%; /* _gray-800 — code/shell areas */
-    --memory-bg: 60 2% 17%; /* _gray-750 — context/memory areas */
+    --user-message-bg: 40 4% 17%; /* #2d2c2a — user bubbles above card */
+    --user-message-bg-hover: 40 4% 21%; /* #383633 */
+    --bash-bg: 40 6% 6%; /* #10100e — code/shell areas */
+    --memory-bg: 40 5% 12%; /* #201f1d — context/memory areas */
 
     /* ── Agent color cycling (8 slots, Anthropic spectrum) ── */
     --agent-0: 0 73% 59%; /* _red-400 */
@@ -75,14 +204,17 @@
     --diff-del-text: 0 78% 91%; /* _red-100 */
     --diff-hunk-text: 213 80% 79%; /* _blue-200 */
 
-    /* ── Code-surface tokens (Terminal, Diff, Review cards) — dark mode ── */
-    --widget-panel-bg: 220 5% 10%;       /* stlite widget panel background */
+    /* ── Code-surface tokens (Terminal, Diff, Review cards) — dark mode ──
+       Warm-carbon family (hue ~40), NOT the docs cool #0d1117 code bg (docs flags
+       that as its own inconsistency). Hierarchy preserved: body (inset, below bg) <
+       widget-panel < chrome (between bg and card). fg/prompt/stderr keep their roles. */
+    --widget-panel-bg: 40 6% 7%;         /* #131211 — stlite widget panel backing (inset) */
 
-    --code-chrome: 220 5% 12%;          /* title bar / window chrome */
-    --code-body: 220 5% 7%;             /* deep terminal body */
+    --code-chrome: 40 5% 10%;           /* #1b1a18 — title bar / window chrome */
+    --code-body: 40 6% 5%;              /* #0e0d0c — deep terminal body (inset below bg) */
     --code-fg: 60 14% 92%;              /* primary text */
     --code-fg-muted: 60 5% 55%;         /* line numbers, hints, cwd */
-    --code-fg-subtle: 60 4% 38%;        /* placeholders, dim chevrons */
+    --code-fg-subtle: 60 4% 39%;        /* placeholders, dim chevrons — 3:1 on --code-chrome */
     --code-border: 60 9% 74% / 0.06;    /* hairline inside code areas */
     --code-prompt: 158 64% 52%;         /* the `$ ` prefix */
     --code-stderr: 0 73% 65%;           /* stderr text */
@@ -95,7 +227,7 @@
     --hl-builtin: 207 100% 78%;         /* echo, sudo, return */
     --hl-variable: 207 60% 79%;         /* $var, var name */
     --hl-function: 280 60% 78%;         /* function names */
-    --hl-meta: 220 14% 50%;             /* shebang, preprocessor */
+    --hl-meta: 220 14% 54%;             /* shebang, preprocessor — 4.5:1 syntax text on --code-body (was 50%: 4.47) */
     --hl-attr: 207 100% 78%;            /* attributes */
     --hl-tag: 351 78% 75%;              /* HTML tags */
     --hl-deletion: 0 65% 70%;           /* diff -- */
@@ -103,7 +235,11 @@
 
     /* ── Elevation system — three layered surface tiers (dark) ──
        Each tier composes: faint inner top-edge highlight + tight key shadow + soft ambient drop.
-       Apply via `shadow-[var(--elev-N)]`. Used by agentic_search and any future card surface. */
+       Apply via `[box-shadow:var(--elev-N)]`. NOT `shadow-[var(--elev-N)]`: the `shadow-`
+       prefix maps to two utilities (boxShadow and boxShadowColor), so a bare `var()` is
+       ambiguous and Tailwind resolves it to the COLOR one — that class compiles to
+       `--tw-shadow-color` with no `box-shadow` property, i.e. it silently renders nothing.
+       `shadow-[shadow:var(--elev-N)]` also works if the utility prefix is wanted. */
     --elev-1: 0 1px 0 0 hsl(0 0% 100% / 0.025) inset, 0 1px 2px 0 rgba(0,0,0,0.18), 0 4px 12px -6px rgba(0,0,0,0.35);
     --elev-2: 0 1px 0 0 hsl(0 0% 100% / 0.03) inset, 0 2px 4px -1px rgba(0,0,0,0.20), 0 10px 24px -8px rgba(0,0,0,0.45);
     --elev-3: 0 1px 0 0 hsl(0 0% 100% / 0.04) inset, 0 4px 8px -2px rgba(0,0,0,0.22), 0 18px 40px -12px rgba(0,0,0,0.55);
@@ -137,20 +273,52 @@
     --foreground: 0 0% 4%; /* _gray-900 */
 
     --muted: 48 25% 92.2%; /* #f0eee6 — Anthropic light accent */
-    --muted-foreground: 45 3% 52%; /* _gray-400 */
+    /* Light mode's secondary text was the app's worst accessibility defect:
+       at 52% lightness it measured 3.44:1 on --background, 3.29:1 on --rail-bg
+       and 3.62:1 on --card — failing WCAG AA on every surface it was used on,
+       while being the token behind most of the console's small type. At 38% it
+       measures 5.72 / 5.25 / 6.02 respectively. Do not lighten it back toward
+       the source palette without re-measuring all three. */
+    --muted-foreground: 45 4% 38%;
 
     --popover: 0 0% 100%; /* pure white */
     --popover-foreground: 0 0% 4%;
 
-    --border: 53 12% 87% / 0.4; /* _gray-100 at 40% — subtle card hairline */
-    --border-strong: 53 12% 74% / 0.5; /* _gray-200 at 50% — structural dividers */
-    --input: 48 25% 92.2%; /* matches muted */
+    /* Hairlines are measured in CIELAB ΔL*, not contrast ratio: a border's job
+       is separation, and ratio is asymmetric between a light and a dark
+       backdrop, so it makes the two themes look comparable when they are not.
+       The light block used to be 3-5x perceptually weaker than the dark twin —
+       ΔL* 1.9-4.2 against dark's 10.4-12.6 — which is why light-mode cards read
+       as edgeless. These values restore parity (ΔL* 10.4-12.7 / 25.0-27.5).
+       The ALPHA is deliberately low rather than the lightness being high: a
+       translucent hairline blends toward whatever surface it lands on, so the
+       perceived step stays near-constant across --background / --card / --muted
+       / --rail-bg. Raising alpha and lightening the base instead widens that
+       spread (12.7 → 16.3 on --card at α=1). Never append a slash modifier to
+       either token — see the .session-ts-rail note. */
+    --border: 53 12% 61% / 0.4; /* subtle card hairline */
+    --border-strong: 53 12% 37% / 0.5; /* structural dividers (nav, panels) */
+    /* Input BORDER, not fill. shadcn reads --input as `border-input`
+       (ui/input.tsx + ui/textarea.tsx), but the old value matched --muted
+       (92.2%) and rendered a 1.16:1 hairline on --card — every text field was
+       boundary-less. It now lives in the same warm hue family as
+       --border-strong (53 12%), one step lighter, clearing WCAG 1.4.11's 3:1:
+       3.44:1 on --card, 3.27:1 on --background. Fills that used to borrow this
+       token moved to --muted (its former value), so nothing greyed out. */
+    --input: 53 12% 50%;
 
     --card: 0 0% 100%; /* white */
     --card-foreground: 0 0% 4%;
 
-    --primary: 14.8 63.1% 59.6%; /* _brand-clay */
+    --primary: 14.8 63.1% 59.6%; /* _brand-clay — FILL, shared with dark, untouched */
     --primary-foreground: 0 0% 100%;
+    /* Where the split actually earns its keep. The shared clay is a light-on-
+       light colour here: as TEXT it measures 2.97:1 on --background and only
+       2.69:1 on --muted — the weakest legible-text pairing in the theme. Same
+       hue and saturation, moved down in lightness until it clears 4.5:1 on all
+       four surfaces (5.03 / 5.29 / 4.56 / 4.61). Buttons and the brand keep
+       --primary, so nothing about the identity moves. */
+    --primary-text: 14.8 63.1% 43%;
 
     --secondary: 48 25% 92.2%; /* #f0eee6 */
     --secondary-foreground: 60 3% 21%; /* _gray-700 */
@@ -158,26 +326,101 @@
     --accent: 48 25% 92.2%; /* #f0eee6 — Anthropic accent bg */
     --accent-foreground: 60 3% 21%;
 
-    --destructive: 0 55% 47%; /* _red-500 */
+    /* ── NavRail surfaces (light) ── slightly deeper cream than the app bg so the
+       inset content card (white/--background) floats on the rail canvas. */
+    --rail-bg: 48 20% 93%; /* deeper cream than --background (1.09:1 step) */
+    /* Full-row selection fill. Deepened from 88% (a 1.10:1 step off --rail-bg,
+       far below dark's 1.28 — the current nav item read as flat) to a 1.27:1
+       step, parity with dark's selection legibility. Safe to deepen: selected
+       and hover rows carry --foreground (near-black, 13.6:1 here), never
+       --muted-foreground, which only sits on idle rows over --rail-bg. */
+    --rail-selected: 48 25% 81%; /* full-row selection fill, ≈ --accent */
+    /* Rail SECTION-HEADING / date-bucket eyebrow text — the light twin of the
+       :root token. Here headings go LIGHTER than --muted-foreground (5.25:1 on
+       --rail-bg) to recede, and the AA floor sits close, so this is tuned to the
+       floor, not taste: 4.67:1 on --rail-bg, 5.36:1 on --card, 5.09:1 on
+       --background, all above 4.5. Do NOT lighten it further toward the canvas
+       (it drops under AA), and do NOT harmonize it back to --muted-foreground. */
+    --rail-heading: 45 4% 41%;
+    /* Rail edge + zone dividers, softened in lockstep with the dark twin: the
+       0.5a dark-ink line read as loud on cream (~2:1), so the alpha drops to
+       0.30 for a mild seam — composite 1.49:1 vs --rail-bg, 1.52:1 vs --card,
+       1.51:1 vs --background — while staying above light --border's own
+       invisibility on this canvas (0.4a = 1.33:1). No shadow seam needed. */
+    --rail-border: 53 12% 37% / 0.30;
+    /* See the :root twin for why these are not --muted-foreground. A scrollbar
+       thumb IS an interactive control, so 3:1 is a real floor, not a nicety —
+       at 38%/0.4 the light thumb measured 1.79:1 on --background and no
+       lightness at that alpha could reach 3:1, so the alpha moved too. */
+    --scrollbar-thumb: 45 6% 21% / 0.55;
+    --scrollbar-thumb-hover: 45 6% 21% / 0.78; /* same ink, more of it */
+
+    --destructive: 0 55% 47%; /* _red-500 — FILL (danger buttons) */
     --destructive-foreground: 0 0% 100%;
+    /* Mirrors --destructive: this red already clears 4.5:1 as text on all four
+       surfaces (5.45 / 5.74 / 4.94 / 5.00) AND carries white at 5.74:1 as a
+       fill, so light mode never had the conflict the dark twin has. Declared
+       anyway — see --primary-text on why a one-block token is a trap. */
+    --destructive-text: 0 55% 47%;
 
-    --ring: 14.8 63.1% 59.6%;
+    /* Focus indicator (FOCUS_RING, shadcn ring-ring, the kit) — deliberately
+       DARKER than --primary, and NOT to be re-unified with it. At --primary's
+       59.6% the ring met WCAG 2.4.11's 3:1 only on white cards (3.12:1) and
+       failed every cream surface: 2.69:1 on --muted/--surface, 2.72:1 on
+       --rail-bg, 2.97:1 on --background. At 50% it clears 3:1 on all of them
+       (4.14 card / 3.93 background / 3.56 muted+surface / 3.60 rail-bg). The
+       floor is the reason for the split; do not harmonize it back to --primary. */
+    --ring: 14.8 63.1% 50%;
 
-    --success: 79 94% 37%; /* _green-300 */
+    /* ── assistant-ui vendor tokens (chat surface) — light ──
+       Same structural knobs as the dark block; `--composer-bg` resolves
+       through the light `--card` value automatically. */
+    --thread-max-width: 44rem;
+    --composer-radius: 1rem;
+    --composer-padding: 8px;
+    --composer-bg: hsl(var(--card));
+
+    --success: 134 51% 30%; /* docs github-semantic success green (≈#1a7f37) */
     --success-foreground: 0 0% 100%;
 
-    --warning: 33 100% 42%; /* _amber-500 — caution/one-time banners */
+    /* Status colour is a functional readout — an illegible run state is a bug,
+       not a cosmetic slip — so these clear 4.5:1 on EVERY surface status text
+       lands on, --muted and --rail-bg included. Those two elevated creams are
+       where the source palette's ochre and blue fell short (4.25 and 4.33), so
+       both dropped ~1% in lightness; the hues are untouched and still read as
+       the github-semantic pair. */
+    --warning: 40 100% 28.5%; /* github-semantic warning ochre */
     --warning-foreground: 0 0% 100%;
+    /* Warning as GLYPHS on a warning/15 tint chip. Status text on a same-hue
+       tint loses the ground the flat token stood on: raw --warning measured
+       4.37:1 on warning/15 over --card, under AA. Same hue and saturation,
+       darkened until it clears with margin on the tinted chip — 5.33:1 over
+       --card, 5.09:1 over --background. Parallels --primary-text/--destructive-text. */
+    --warning-text: 40 100% 25%;
+
+    --info: 212 92% 43%; /* github-semantic info blue */
+    --info-foreground: 0 0% 100%;
+    /* Info as GLYPHS on an info/15 tint chip — raw --info measured 4.35:1
+       there, under AA. Darkened to 5.26:1 over --card / 5.02:1 over
+       --background; see --warning-text. */
+    --info-text: 212 92% 38%;
 
     --surface: 48 25% 92.2%; /* #f0eee6 */
-    --surface-deep: 45 28.6% 97.3%; /* #faf9f6 */
+    /* Recession runs the same direction in both themes: deeper = darker. The
+       light block used to set --surface-deep to the --background value, i.e.
+       LIGHTER than --surface, so "deepest layer" was actually the shallowest
+       and the workspace panel had no recess at all. */
+    --surface-deep: 48 25% 89.5%;
 
     /* ── Semantic: orchestration (from Anthropic palette) ── */
-    --permission: 213 77% 56%; /* _blue-400 */
-    --plan-mode: 159 73% 40%; /* _aqua-350 */
+    --permission: 213 77% 47%; /* darkened from _blue-400: 3.49:1 as text on cream */
+    --plan-mode: 159 73% 29%; /* darkened from _aqua-350: 2.63:1 as text on cream */
     --user-message-bg: 48 25% 92.2%; /* #f0eee6 — matches accent */
-    --user-message-bg-hover: 45 28.6% 97.3%; /* #faf9f6 — lift to bg */
-    --bash-bg: 0 0% 100%; /* white — code on white */
+    /* Hover moves AWAY from the page background, as it does in dark (bg 8% →
+       bubble 17% → hover 21%). Lifting toward --background instead made the
+       bubble dissolve into the page on hover — the state read as a loss. */
+    --user-message-bg-hover: 48 25% 88.5%;
+    --bash-bg: 48 25% 92.2%; /* mirrors dark, where --bash-bg == --surface */
     --memory-bg: 48 25% 92.2%; /* #f0eee6 */
 
     /* ── Agent color cycling (8 slots, Anthropic spectrum -500 for light bg) ── */
@@ -191,41 +434,56 @@
     --agent-7: 162 79% 28%; /* _aqua-500 */
 
     --diff-add-bg: 79 94% 37% / 0.12; /* _green-300 */
-    --diff-add-text: 81 100% 30%; /* _green-400 */
+    /* Measured ON its own tinted row, not on the bare code surface — that is
+       where the added line actually renders, and _green-400 scored 3.12:1 there
+       (vs 3.45 on plain --code-body), which is the gap that made light-mode
+       additions the hardest thing in the app to read. */
+    --diff-add-text: 81 100% 23%;
     --diff-del-bg: 0 55% 47% / 0.12; /* _red-500 */
-    --diff-del-text: 0 55% 47%; /* _red-500 */
-    --diff-hunk-text: 213 77% 56%; /* _blue-400 */
+    --diff-del-text: 0 55% 46%; /* _red-500 — measures 4.78:1 on its own row */
+    --diff-hunk-text: 213 77% 47%; /* tracks --permission, same blue */
 
     /* ── Code-surface tokens — light mode ── */
-    --widget-panel-bg: 220 5% 96%;       /* stlite widget panel background */
+    --widget-panel-bg: 45 18% 95%;      /* stlite widget panel — warm, not hue-220 grey */
 
     --code-chrome: 48 25% 92.2%;        /* #f0eee6 — Anthropic accent cream */
-    --code-body: 0 0% 100%;             /* white — code on white */
+    /* Recessed BELOW --background, mirroring dark (body 5% under bg 8%). It was
+       pure white, i.e. lighter than both --background and every card it sits
+       inside, which made the terminal/diff body the brightest plane in the app
+       and left the inset reading as a raised sheet. */
+    --code-body: 45 22% 96%;
     --code-fg: 0 0% 13%;                /* near-black */
-    --code-fg-muted: 0 0% 40%;          /* gray */
-    --code-fg-subtle: 0 0% 60%;         /* lighter gray */
-    --code-border: 0 0% 0% / 0.08;      /* hairline */
-    --code-prompt: 158 73% 32%;         /* deeper green for contrast on white */
+    --code-fg-muted: 0 0% 36%;          /* gutter line numbers — the CodeMirror active-line gutter darkens under --code-border, where 40% fell to 4.14:1 (now 4.84:1) */
+    --code-fg-subtle: 0 0% 53%;         /* line numbers, placeholders — 3:1 floor */
+    --code-border: 0 0% 0% / 0.08;      /* hairline — measures ΔL* 7.1, above the dark twin's 4.5 */
+    --code-prompt: 158 73% 27%;         /* the `$ ` prefix */
     --code-stderr: 0 65% 47%;           /* deeper red */
 
     /* ── Syntax highlighting — light mode (github light palette) ── */
     --hl-keyword: 354 75% 41%;          /* #d73a49 */
     --hl-string: 217 71% 33%;           /* #032f62 */
-    --hl-comment: 220 14% 56%;          /* #6a737d */
+    --hl-comment: 220 14% 44%;          /* darkened from #6a737d: 3.23:1 -> 4.96:1 as syntax text on --code-body */
     --hl-number: 26 91% 32%;            /* #b08800 darker */
     --hl-builtin: 211 100% 38%;         /* #005cc5 */
     --hl-variable: 8 85% 36%;           /* #b31d28 */
     --hl-function: 273 65% 41%;         /* #6f42c1 */
-    --hl-meta: 220 14% 56%;
+    --hl-meta: 220 14% 44%;             /* tracks --hl-comment — 4.5:1 syntax-text floor on --code-body */
     --hl-attr: 211 100% 38%;
     --hl-tag: 134 50% 33%;              /* #22863a */
     --hl-deletion: 0 65% 47%;
     --hl-addition: 134 50% 33%;
 
-    /* ── Elevation system — softer warm tints for light mode ── */
-    --elev-1: 0 1px 2px 0 rgba(15, 15, 12, 0.04), 0 2px 6px -2px rgba(15, 15, 12, 0.06);
-    --elev-2: 0 2px 4px -1px rgba(15, 15, 12, 0.05), 0 8px 18px -6px rgba(15, 15, 12, 0.10);
-    --elev-3: 0 4px 8px -2px rgba(15, 15, 12, 0.06), 0 16px 32px -10px rgba(15, 15, 12, 0.14);
+    /* ── Elevation system — softer warm tints for light mode ──
+       Same geometry as the dark tiers (so nothing shifts position when the
+       theme flips), warm-tinted rather than pure black so the shadow reads as
+       depth on cream instead of a grey smudge, and with no inset top highlight
+       — a white inset does nothing on a near-white surface. The alphas are ~1.5x
+       what they were: at 0.04/0.06 the elev-1 tier was below the threshold of
+       perception on a 97%-lightness ground, so light-mode cards were relying on
+       a hairline that was itself too faint to see. */
+    --elev-1: 0 1px 2px 0 rgba(15, 15, 12, 0.06), 0 2px 6px -2px rgba(15, 15, 12, 0.09);
+    --elev-2: 0 2px 4px -1px rgba(15, 15, 12, 0.07), 0 8px 18px -6px rgba(15, 15, 12, 0.14);
+    --elev-3: 0 4px 8px -2px rgba(15, 15, 12, 0.09), 0 16px 32px -10px rgba(15, 15, 12, 0.20);
 
     /* ── Knowledge-graph node palette (light) ── Slightly darker discs so
        the white glyph still reads on a near-white canvas. */
@@ -263,13 +521,24 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    /* The token, not a repeat of the stack: --font-sans is the one place a
+       family is decided, so a future swap is a single edit and these rules
+       cannot drift from it. (They still have to agree with
+       tailwind.config.js `theme.extend.fontFamily` — the app root carries
+       `font-sans`, and that utility beats this rule.) */
+    font-family: var(--font-sans);
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
   code, pre, .font-mono {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: var(--font-mono); /* see the body rule */
+    /* JetBrains Mono puts its coding ligatures on the standard `calt`, which is
+       already on by default — naming it here is explicit, not load-bearing.
+       (The previous stack needed a font-specific stylistic set for the same
+       effect, which is why this used to read `ss11`; that set means nothing to
+       this family.) tnum/zero keep numeric chips fixed-width + slashed. */
+    font-feature-settings: "calt" 1, "tnum" 1, "zero" 1;
   }
 }
 
@@ -311,6 +580,19 @@
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
 
+/* ── CodeMirror Jinja control-flow decorations (system-instructions editor) —
+   same --hl-* tokens as .hljs-* above, painted by a hand-driven jinja2
+   StreamParser instead of rehype-highlight. See settings/panes/
+   systemInstructionsCodeMirror.ts. ── */
+.cm-jinja-tag { color: hsl(var(--hl-builtin)); font-weight: 600; }
+.cm-jinja-keyword { color: hsl(var(--hl-keyword)); }
+.cm-jinja-string { color: hsl(var(--hl-string)); }
+.cm-jinja-number { color: hsl(var(--hl-number)); }
+.cm-jinja-comment { color: hsl(var(--hl-comment)); font-style: italic; }
+.cm-jinja-atom { color: hsl(var(--hl-builtin)); }
+.cm-jinja-operator { color: hsl(var(--hl-meta)); }
+.cm-jinja-variable { color: hsl(var(--hl-variable)); }
+
 /* Scroll-reveal rows used by HomeView session lists. One IntersectionObserver
    at the page level toggles `.is-visible`. `--row-index` (set inline) staggers
    siblings without per-component JS. Skipped by prefers-reduced-motion. */
@@ -331,15 +613,6 @@
     transform: none;
     transition: none;
   }
-}
-
-/* Soft fade at the top edge of the sessions region so rows peeking below
-   the hero bleed softly into the background — signals "there's more below"
-   without a hard seam. The mask is anchored to the element's own box so
-   it only affects the top ~72px; once scrolled past, content renders normally. */
-.sessions-peek-fade {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 72px);
 }
 
 /* Scroll affordance — chevron bobs gently at the bottom of the hero and
@@ -411,7 +684,7 @@
   align-items: center;
   gap: 7px;
   padding: 2px 2px 2px 4px;
-  font: 400 10.5px/1 var(--font-sans, inherit);
+  font: 400 var(--text-2xs)/1 var(--font-sans);
   color: hsl(var(--muted-foreground));
 }
 .pending-dot {
@@ -462,7 +735,7 @@
   background: transparent;
   border-radius: 4px;
   color: hsl(var(--muted-foreground));
-  font: 500 10px/1 var(--font-sans, inherit);
+  font: 400 var(--text-2xs)/1 var(--font-sans);
   cursor: pointer;
   transition: background 120ms, color 120ms;
 }
@@ -502,22 +775,29 @@
   background: hsl(var(--background) / 0.72);
   -webkit-backdrop-filter: blur(10px) saturate(120%);
           backdrop-filter: blur(10px) saturate(120%);
+  /* The ring uses the plain --border / --border-strong tokens, never a slash
+     modifier: both already embed their own alpha, so `hsl(var(--border-strong)
+     / 0.55)` expands to a four-value hsl() with two slashes. One invalid value
+     invalidates the WHOLE box-shadow declaration — which is what used to happen
+     here, silently deleting the frosted backplate's drop shadows along with the
+     ring. Two tiers of ring = the two tiers of the border family. */
   box-shadow:
     inset 0 1px 0 hsl(var(--foreground) / 0.04),
-    0 0 0 1px hsl(var(--border-strong) / 0.55),
+    0 0 0 1px hsl(var(--border)),
     0 6px 18px hsl(0 0% 0% / 0.28),
     0 1px 2px hsl(0 0% 0% / 0.18);
   /* Cap so the pill never crosses into the 820px message column. Rail is
-     position:fixed at left-2 (8px); expanded segments cap at 22px + px-1.5
-     padding (12px) → ~42px from viewport. Hard cap at 2rem (32px) keeps it
-     a margin glyph at any pane width. */
+     position:absolute at left-2 (8px) within `.conv-scroll`; expanded
+     segments cap at 22px + px-1.5 padding (12px) → ~42px from the pane's
+     left edge. Hard cap at 2rem (32px) keeps it a margin glyph at any pane
+     width. */
   max-width: 2rem;
 }
 .session-ts-rail.is-expanded {
   background: hsl(var(--card) / 0.92);
   box-shadow:
     inset 0 1px 0 hsl(var(--foreground) / 0.06),
-    0 0 0 1px hsl(var(--border-strong) / 0.7),
+    0 0 0 1px hsl(var(--border-strong)),
     0 8px 24px hsl(0 0% 0% / 0.34),
     0 1px 2px hsl(0 0% 0% / 0.22);
 }
@@ -558,7 +838,7 @@
   /* Firefox — `auto` width reads as ~16px (browser default) so the rail is
      noticeable; `scrollbar-color` paints thumb against the widget bg. */
   scrollbar-width: auto;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.55) hsl(var(--muted) / 0.4);
+  scrollbar-color: hsl(var(--scrollbar-thumb)) hsl(var(--muted) / 0.4);
 }
 /* Chromium / WebKit get a slightly wider rail than the Firefox default so
    it reads as "scrollable surface" at a glance rather than a hairline. */
@@ -572,7 +852,11 @@
   background-color: hsl(var(--muted) / 0.4);
 }
 .stAppViewContainer::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.5);
+  /* The --scrollbar-* tokens, not an alpha on --muted-foreground: this block
+     predates them and was the last surface still hand-rolling the exact pattern
+     those tokens were introduced to replace (see the :root twin). Riding the
+     tokens is also what gives this thumb the 3:1 floor for free. */
+  background-color: hsl(var(--scrollbar-thumb));
   border-radius: 6px;
   /* Transparent border + padding-box clip inset the thumb inside the rail
      so the colored track is still visible around it. */
@@ -580,7 +864,7 @@
   background-clip: padding-box;
 }
 .stAppViewContainer::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.75);
+  background-color: hsl(var(--scrollbar-thumb-hover));
   background-clip: padding-box;
 }
 
@@ -588,56 +872,41 @@
    Additive CSS for the session-page refresh. Behavior wires up component
    by component in subsequent commits; this block is purely additive. */
 
-/* Composer detail shell — replaces the old border-t + ring-2 glow. The
-   container itself is calmer (8px radius, single hairline, soft 4px halo
-   on focus). Running state tints the border blue and brightens the halo
-   so the composer reads as "alive" while preserving its silhouette. (§F,
-   §G, P5) data-attributes drive every state — no class concatenation
-   soup (E2). */
-.composer-shell {
-  background: hsl(var(--card));
-  border: 1px solid hsl(var(--border-strong));
-  border-radius: 0.5rem;
-  padding: 0.25rem;
-  transition: box-shadow 200ms ease-out, border-color 200ms ease-out;
-}
-.composer-shell[data-focused="true"] {
-  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.10);
-}
-.composer-shell[data-running="true"] {
-  border-color: hsl(var(--permission) / 0.45);
-}
-.composer-shell[data-running="true"][data-focused="true"] {
-  box-shadow: 0 0 0 4px hsl(var(--permission) / 0.18);
-}
-/* Slash-command mode: input is a command, not a chat message. Border tints to
-   the brand accent so the user knows submit will fire a command, not send a
-   message. The accent color is a state container per the design philosophy. */
-.composer-shell[data-command-mode="true"] {
-  border-color: hsl(var(--primary) / 0.55);
-}
-.composer-shell[data-command-mode="true"][data-focused="true"] {
-  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.15);
-}
+/* ── Composer surface — the ONE chrome family for every composer ─────────────
+   `.composer-surface` + its `data-*` attributes own ALL composer chrome states
+   (base + focus border, focus halo, running tint, slash-command tint) for
+   EVERY surface: the Tasks composer (`InputBar.tsx` `composerCard()`), the
+   Search composer (`ui/composer-shell.tsx` → `composerSurface()`), and the
+   siblings converging onto `ComposerShell` (Wiki's QADock, Apps' HeroComposer).
+   `composerCard()` only layers Tasks' own elevation/padding ON TOP of this
+   family — the border colour, the focus bloom, and the running/command tints
+   all live here, so the composers read as one system.
 
-/* ── Agentic Search composer surface (shared kit) ───────────────────────────
-   Sibling of `.composer-shell`: same family, same focus language. The Search
-   composer (`ui/composer-shell.tsx` → `composerSurface()`) is a CARD surface
-   (border-strong hairline + an `--elev-N` base shadow) that BLOOMS on focus
-   into a primary-tinted halo, exactly like the Tasks composer's
-   `[data-focused="true"]` glow — so the two composers read as one family.
-
-   Halo strength is picked by `data-halo` (set via `composerSurfaceData`; the
-   base elevation is baked into the Tailwind shadow class). Focus-within layers a
-   stronger elevation + a primary halo ring + a tinted border — the "expand"
-   bloom — and transitions over 200ms ease-out (mirrors `.composer-shell`).
-   `prefers-reduced-motion` kills the transition (the console kills every
-   keyframe/transition under it). */
+   A bordered card (border-strong hairline + an `--elev-N` base shadow supplied
+   by the Tailwind class) that BLOOMS on focus into a primary-tinted halo +
+   border. `data-halo` picks the halo strength (set via `composerSurfaceData`);
+   `data-running`/`data-command` swap in the behavioural tints — the steering
+   permission accent while a run is live, the brand accent while a slash command
+   is armed. Everything transitions over 200ms ease-out; `prefers-reduced-motion`
+   kills it (the console kills every keyframe/transition under it). */
 .composer-surface {
   border: 1px solid hsl(var(--border-strong));
   transition: box-shadow 200ms ease-out, border-color 200ms ease-out;
 }
 .composer-surface:focus-within {
+  border-color: hsl(var(--primary) / 0.55);
+}
+/* Running (steering) tint — the permission accent, at rest AND on focus. The
+   `:focus-within` variant is higher-specificity so the permission border wins
+   over the base focus border above while a run is live. */
+.composer-surface[data-running="true"],
+.composer-surface[data-running="true"]:focus-within {
+  border-color: hsl(var(--permission) / 0.28);
+}
+/* Slash-command armed — brand tint (the same colour as the focus border, so an
+   armed command reads as "ready to fire"). Suppressed during a run so the
+   permission tint above always wins. */
+.composer-surface[data-command="true"]:not([data-running="true"]) {
   border-color: hsl(var(--primary) / 0.55);
 }
 /* Bloom target per base elevation — focus layers the stronger elevation under
@@ -648,6 +917,12 @@
 }
 .composer-surface[data-halo="strong"]:focus-within {
   box-shadow: var(--elev-3), 0 0 0 4px hsl(var(--primary) / 0.12);
+}
+/* Running composer blooms with the permission accent at the SAME geometry (the
+   Tasks composer is the only `data-running` surface and always sets
+   `data-halo="soft"`). Higher specificity than the base soft halo, so it wins. */
+.composer-surface[data-running="true"][data-halo="soft"]:focus-within {
+  box-shadow: var(--elev-2), 0 0 0 4px hsl(var(--permission) / 0.10);
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-surface { transition: none; }
@@ -804,8 +1079,8 @@
 .edit-kbd {
   display: inline-flex;
   align-items: center;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   line-height: 1;
   padding: 2px 5px;
   border: 1px solid hsl(var(--border));

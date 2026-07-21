@@ -3,13 +3,20 @@ package com.mewbo.aura.ui.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -19,9 +26,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.material3.Text
 import com.mewbo.aura.data.model.ComposerScope
 import com.mewbo.aura.ui.aurora.AuroraState
@@ -52,7 +64,7 @@ fun ChatSurface(
     modifier: Modifier = Modifier,
 ) {
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
-    // Gitea #180 P2: which modality the NEXT send should be tagged with - Voice once a dictation
+    // which modality the NEXT send should be tagged with - Voice once a dictation
     // Final/stop has landed text in the field, reset to Text by any subsequent REAL keystroke (the
     // onDraftChange callback below - never touched by the LaunchedEffect's own programmatic fill,
     // which assigns `draft` directly). Ephemeral by design, matching InputModality's own accepted
@@ -117,7 +129,7 @@ fun ChatSurface(
     // without this the keyboard fully occludes it (found in the W2 on-device gate).
     Column(modifier = modifier.fillMaxSize().imePadding()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // The aurora wash itself is NOT rendered here anymore (#181 follow-up, user report):
+            // The aurora wash itself is NOT rendered here anymore (user report):
             // inside the Scaffold BODY it could never extend under the top bar, so the header row
             // sat on a solid containerColor band - the reference landing runs the wash beneath the
             // header and status bar. ChatScreen hosts the wash behind a transparent Scaffold now;
@@ -138,6 +150,8 @@ fun ChatSurface(
                     speakingKey = state.speakingKey,
                     onNotice = callbacks.onNotice,
                     onReadAloudToggle = callbacks.onReadAloudToggle,
+                    onUserMessageLongPress = callbacks.onUserMessageLongPress,
+                    onSubmitQuestionAnswer = callbacks.onSubmitQuestionAnswer,
                     isLoadingHistory = state.isLoadingHistory,
                     overWash = washActive,
                     modifier = Modifier.fillMaxSize(),
@@ -146,12 +160,13 @@ fun ChatSurface(
         }
 
         if (state.sessionEnded) {
-            // Spec §6.12: composer disables with this placeholder. AuraComposer's own "Ask Mewbo"
-            // placeholder is internal to ui/composer (out of this task's ownership) and has no
-            // override hook yet - this quiet block carries the message instead, and `enabled =
-            // false` below still disables the composer itself. Flagged in the task report.
+            // The session is permanently terminated: the composer is disabled below
+            // (`enabled = false`) and this quiet caption carries the reason. AuraComposer's own
+            // "Ask Mewbo" placeholder is internal to ui/composer and has no override hook, so the
+            // message lives here rather than in the field. Calm by design - a terminal state is not
+            // a failure, so no warning glyph and no accentError (DESIGN.md §6: no error residue).
             Text(
-                text = "This session ended",
+                text = "This session was ended and can't continue",
                 style = AuraType.caption,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
@@ -164,10 +179,11 @@ fun ChatSurface(
         // options sheet's own frozen-scope rows (ComposerOptionsSheet) are the source of truth for
         // "what this chat is scoped to," not a second indicator floating above the composer.
         if (state.sessionId == null && state.items.isEmpty()) {
+            // No vertical padding here: the row's own heightIn(min = 48dp a11y target) plus the
+            // composer's 12dp top inset already separate it; stacking more would read as a chunky band.
             ComposerScopeIndicator(
                 scope = state.composerScope,
                 onClick = callbacks.onScopeIndicatorTap,
-                modifier = Modifier.padding(horizontal = AuraSpacing.Composer.horizontalMargin, vertical = AuraSpacing.Composer.gapTight),
             )
         }
 
@@ -199,7 +215,7 @@ fun ChatSurface(
                 }
             },
             onStop = callbacks.onStop,
-            // ChatScreen wires real dictation (Gitea #180 P2) - the permission-gated
+            // ChatScreen wires real dictation - the permission-gated
             // startDictation() call itself lives there; a host that hasn't wired it yet (fix-round-3
             // Important #4's honest-fallback convention) falls through to a notice, not a dead tap.
             onMicTap = { callbacks.onMicTap?.invoke() ?: callbacks.onNotice("Dictation: coming to this surface") },
@@ -221,7 +237,7 @@ fun ChatSurface(
     }
 }
 
-/** Gitea #180 P2 / P0 capture: how long the dictation-entry hint stays visible before auto-
+/** capture: how long the dictation-entry hint stays visible before auto-
  * dismissing on its own - no matching [AuraSpacing]/duration token exists for this one-shot coach
  * mark (same convention this file's [GreetingTopWeight] already established for a genuinely missing
  * token). */
@@ -267,16 +283,114 @@ private fun GreetingScreen(displayName: String, isOffline: Boolean, modifier: Mo
 private const val GreetingTopWeight = 0.42f
 
 /**
- * Pre-session project/tool scope, tappable through to the composer options sheet (Gitea #178
- * W1-B) - `<ProjectName>` alone while [ComposerScope.activeToolCount] hasn't resolved yet (no
- * spinner, no placeholder count), `<ProjectName> · <N> tools` once it has.
+ * Pre-session project/tool scope, tappable through to the composer options sheet
+ * (icons/colors/facets user directive 2026-07-14). A leading project glyph
+ * ([ChatIcons.ProjectScope], tinted [AuraColors.scopeProject]) before the project name, then a
+ * tools glyph ([ChatIcons.ToolScope], tinted [AuraColors.scopeTool]) before a provenance-faceted
+ * summary ("2 project · 5 system" — [ComposerScope.toolsFacetSummary]). The tools half appears only
+ * once the catalog resolves (`toolsFacetSummary` non-null), so the row is `<glyph> <project>` alone
+ * until then — no spinner, no placeholder count. When no real project is selected the leading glyph
+ * switches to the ephemeral [ChatIcons.TemporaryProjectScope] (a muted tint) so "Temporary" reads as
+ * the throwaway scratch cwd it is. Left-inset to [AuraSpacing.Composer.scopeRowStartInset] (aligns
+ * with the composer pill's straight-edge start); both edges sit well within the screen.
+ *
+ * **Truncation is a last resort.** The row previously gave both chips an equal
+ * `Modifier.weight(1f, fill = false)`, which caps EACH chip's max width at exactly half of whatever
+ * space is left over — regardless of what either chip's content actually needs. A short project name
+ * ("Temporary") left half its share unused while a long facet breakdown ("111 system · 31 plugin")
+ * was still hard-capped at its own half and ellipsized, even though the row had plenty of total width.
+ * [BoxWithConstraints] + a one-shot [rememberTextMeasurer] pre-measurement replace that fixed split
+ * with a content-aware, three-rung ladder, decided ONCE per available width / content change (no
+ * flicker, no custom [androidx.compose.ui.layout.Layout]):
+ * 1. Both chips render at their natural width when [ComposerScope.toolsFacetSummary] fits alongside
+ *    the project name in the available width — neither chip reserves space it doesn't need.
+ * 2. Otherwise the facet breakdown collapses to [ComposerScope.toolsCompactSummary] ("142 tools") —
+ *    strictly BEFORE any ellipsis.
+ * 3. Only if even the compact total doesn't leave room for the project name does the project name's
+ *    own `maxLines = 1` / [TextOverflow.Ellipsis] engage, capped to whatever the compact total left.
  */
 @Composable
 private fun ComposerScopeIndicator(scope: ComposerScope, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val label = scope.activeToolCount?.let { count -> "${scope.projectDisplayName} · $count tools" } ?: scope.projectDisplayName
-    Text(
-        text = label,
-        style = AuraType.chipLabel,
-        modifier = modifier.clickable(onClick = onClick),
-    )
+    val temporary = scope.selectedProjectKey == null
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = AuraSpacing.ActionRow.cellSize) // ≥48dp a11y touch target for the whole tap
+            .clickable(onClickLabel = "Edit project and tools scope", onClick = onClick)
+            .padding(start = AuraSpacing.Composer.scopeRowStartInset, end = AuraSpacing.screenGutter),
+    ) {
+        val density = LocalDensity.current
+        val textMeasurer = rememberTextMeasurer()
+        val fullFacet = scope.toolsFacetSummary
+        val compactFacet = scope.toolsCompactSummary
+        val projectName = scope.projectDisplayName
+
+        val (facetLabel, projectMaxWidth) = remember(projectName, fullFacet, compactFacet, maxWidth, density) {
+            if (fullFacet == null) {
+                return@remember null to Dp.Unspecified
+            }
+            // Fixed chrome: both glyphs + the three gaps between glyph/text/glyph/text. Everything
+            // else in the row is negotiable between the two text chips.
+            val chromePx = with(density) {
+                (AuraSpacing.Composer.scopeRowIconSize * 2 + AuraSpacing.Composer.gapTight * 2 + AuraSpacing.Composer.internalPadding).toPx()
+            }
+            val availablePx = with(density) { maxWidth.toPx() }
+            val projectPx = textMeasurer.measure(projectName, AuraType.chipLabel).size.width
+            val fullFacetPx = textMeasurer.measure(fullFacet, AuraType.chipLabel).size.width
+            if (chromePx + projectPx + fullFacetPx <= availablePx) {
+                // Rung 1: both fit at natural width.
+                fullFacet to Dp.Unspecified
+            } else {
+                // Rung 2: collapse the facet breakdown to its compact total first.
+                val compactFacetPx = textMeasurer.measure(compactFacet.orEmpty(), AuraType.chipLabel).size.width
+                if (chromePx + projectPx + compactFacetPx <= availablePx) {
+                    compactFacet to Dp.Unspecified
+                } else {
+                    // Rung 3 (last resort): the compact total still doesn't leave room for the full
+                    // project name - cap the project chip to whatever's left so ITS OWN maxLines=1 +
+                    // TextOverflow.Ellipsis ellipsizes it, never the already-compacted facet chip.
+                    val projectBudgetPx = (availablePx - chromePx - compactFacetPx).coerceAtLeast(0f)
+                    compactFacet to with(density) { projectBudgetPx.toDp() }
+                }
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                imageVector = if (temporary) ChatIcons.TemporaryProjectScope else ChatIcons.ProjectScope,
+                contentDescription = null, // the project name beside it carries the meaning for TalkBack
+                tint = if (temporary) AuraColors.textSecondary else AuraColors.scopeProject,
+                modifier = Modifier.size(AuraSpacing.Composer.scopeRowIconSize),
+            )
+            Spacer(modifier = Modifier.width(AuraSpacing.Composer.gapTight))
+            Text(
+                text = projectName,
+                style = AuraType.chipLabel,
+                color = AuraColors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (projectMaxWidth.isSpecified) Modifier.widthIn(max = projectMaxWidth) else Modifier,
+            )
+            facetLabel?.let { label ->
+                Spacer(modifier = Modifier.width(AuraSpacing.Composer.internalPadding))
+                Icon(
+                    imageVector = ChatIcons.ToolScope,
+                    contentDescription = null, // the summary beside it carries the meaning for TalkBack
+                    tint = AuraColors.scopeTool,
+                    modifier = Modifier.size(AuraSpacing.Composer.scopeRowIconSize),
+                )
+                Spacer(modifier = Modifier.width(AuraSpacing.Composer.gapTight))
+                Text(
+                    text = label,
+                    style = AuraType.chipLabel,
+                    color = AuraColors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }

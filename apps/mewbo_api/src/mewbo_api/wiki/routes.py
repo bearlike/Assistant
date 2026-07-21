@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import collections
 import time
+from collections.abc import Iterable
+from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from mewbo_core.common import get_logger
+from mewbo_graph.wiki.resume import ResumeCountError
 from mewbo_graph.wiki.store import WikiStoreBase
-from mewbo_graph.wiki.types import IndexingJob, WikiError, WizardSubmission
+from mewbo_graph.wiki.types import IndexingJob, WikiError, WikiPage, WizardSubmission
 from pydantic import BaseModel, ConfigDict, Field
+
+from mewbo_api.auth.guard_registry import guard
 
 from .catalogues import LANGUAGES, PLATFORMS
 from .errors import (
@@ -25,6 +30,7 @@ from .errors import (
 from .events import WikiQaSseGenerator, WikiSseGenerator
 from .jobs import QaSessionEndHook, WikiIndexingJob, WikiIndexingSessionEndHook, WikiQaSession
 from .resume import WikiResume
+from .settings import WikiProjectSettings
 
 logging = get_logger(name="api.wiki.routes")
 
@@ -44,6 +50,19 @@ _DEFAULT_RATE_LIMIT = 10
 # start/end). ``totalLines`` still reports the true count so the FE can flag a
 # truncated view. Keeps a giant file from blowing up the cited-sources panel.
 _SOURCE_MAX_LINES = 2_000
+
+# ---------------------------------------------------------------------------
+# In-process TTL cache for GET .../freshness (a ``git ls-remote`` + platform
+# compare API call per check — cheap but not free-to-poll). Keyed by slug;
+# ``?force=1`` busts a cached entry, and ``refresh_project``/``delete_project``
+# evict the slug's entry so a re-index or removal never serves a stale badge.
+# A negative result (remote unreachable) is cached like any other body for the
+# full TTL, so a dead remote can't re-block every request. Module-level (not
+# per-blueprint-instance) to mirror the rate-limiter convention above.
+# ---------------------------------------------------------------------------
+
+_freshness_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_FRESHNESS_TTL_SECONDS = 300.0
 
 
 def _get_rate_limit() -> int:
@@ -82,32 +101,6 @@ def _pydantic_fields(exc: Exception) -> dict[str, str]:
     except Exception:
         pass
     return {}
-
-
-def _require_auth():
-    """Validate the API key; mirrors backend._require_api_key.
-
-    Lazily imports from backend so the import side-effects only happen
-    when the first request arrives, not at module load time.  This keeps
-    test fixtures that build a bare Flask app from pulling in the full
-    API server.
-    """
-    try:
-        from mewbo_api.backend import _require_api_key
-
-        return _require_api_key()
-    except ImportError:
-        # Fallback when backend is not importable (e.g. unit-test stubs
-        # that build a Flask app without the full mewbo_api.backend).
-        import os
-
-        master_token = os.environ.get("MASTER_API_TOKEN", "msk-strong-password")
-        api_token = request.headers.get("X-API-Key") or request.args.get("api_key")
-        if api_token is None:
-            return {"message": "API token is not provided."}, 401
-        if api_token != master_token:
-            return {"message": "Unauthorized"}, 401
-        return None
 
 
 def _store() -> WikiStoreBase:
@@ -155,29 +148,6 @@ def _make_insight_llm() -> Any | None:
         return build_chat_model(str(model))
     except Exception:
         return None
-
-
-def _has_git_submission(slug: str) -> bool:
-    """True iff *slug* has a stored job submission carrying a real clone URL.
-
-    Mirrors ``WikiIndexingJob.refresh``'s submission discovery: if any prior
-    job's persisted submission validates as a ``WizardSubmission`` with a
-    non-empty ``repo_url``, refresh can reconstruct a real git clone — so the
-    project is git-backed, NOT a catalog. Used by the refresh route to tell a
-    catalog project (no URL, nothing to reconstruct) from a git project whose
-    Project record merely omits ``repo_url``.
-    """
-    try:
-        store = _store()
-        for job in store.list_jobs(slug=slug):
-            sub = store.get_job_submission(job.job_id)
-            if sub and str(sub.get("repoUrl") or "").strip():
-                return True
-    except Exception:
-        # On any read hiccup, don't block a refresh (the git pipeline will
-        # surface its own error if the URL is genuinely missing).
-        return True
-    return False
 
 
 def _hydrate_platform(job: IndexingJob) -> IndexingJob:
@@ -233,6 +203,77 @@ class BranchListRequest(BaseModel):
     token: str | None = None
 
 
+class ResumeIndexRequest(BaseModel):
+    """``POST /v1/wiki/index/<job_id>/resume`` request body — every field optional.
+
+    Transport-only, never persisted as-is (mirrors ``BranchListRequest`` above).
+    ``restart`` reaches the previously-unwired ``ResumePlan.for_restart()`` — the
+    deliberate "rebuild from scratch" intent (as opposed to the default
+    checkpoint resume, which skips already-done phases). ``extra="forbid"`` so a
+    client typo doesn't silently no-op into the default resume behaviour.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    restart: bool = False
+
+
+class WikiPageIndexQuery(BaseModel):
+    """``GET /v1/wiki/projects/<slug>/pages`` query contract.
+
+    Bounds live HERE, at the query, so the answer is always complete and small
+    rather than a severed prefix of a large one — a caller that wants the rest
+    asks for the next ``offset``.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    title_contains: str | None = Field(
+        default=None,
+        alias="titleContains",
+        description="Case-insensitive substring filter on page titles.",
+    )
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+
+    def page(self, pages: Iterable[WikiPage]) -> dict[str, Any]:
+        """Filter, sort and slice *pages* into one wire page of ``{id, title}``.
+
+        The store read arrives as an ARGUMENT — this model never reaches for it,
+        so the whole contract is testable against a plain list.
+        """
+        needle = (self.title_contains or "").strip().lower()
+        rows = [
+            {"id": p.id, "title": p.title or p.id}
+            for p in pages
+            if not needle or needle in (p.title or p.id).lower()
+        ]
+        rows.sort(key=lambda r: r["title"].lower())
+        window = rows[self.offset : self.offset + self.limit]
+        next_offset = self.offset + len(window)
+        truncated = next_offset < len(rows)
+        return {
+            "pages": window,
+            "count": len(window),
+            "total": len(rows),
+            "truncated": truncated,
+            "nextOffset": next_offset if truncated else None,
+        }
+
+
+def _query_args() -> dict[str, str]:
+    """Return the request's query params as a plain dict for model validation.
+
+    Lives at module level, not on a wire model, because reading ``flask.request``
+    is I/O and a model must never import it (the same rule that keeps the clock
+    out of ``TriggerSpec``). ``api_key`` is dropped: the key guard accepts it
+    as a query param for SSE consumers that cannot set headers, so it is auth
+    TRANSPORT rather than a query argument — leaving it in would make every
+    ``extra="forbid"`` query model reject an authenticated request.
+    """
+    return {k: v for k, v in request.args.items() if k != "api_key"}
+
+
 def register(app, runtime, hook_manager=None) -> None:
     """Mount /v1/wiki/* routes on the given Flask app + attach runtime ref.
 
@@ -244,7 +285,7 @@ def register(app, runtime, hook_manager=None) -> None:
     - :class:`WikiIndexingSessionEndHook`: marks non-terminal indexing jobs
       ``interrupted`` when their session ends — defense-in-depth so infra
       failures (tool-internal network / IO errors) hand off to ``JobRecovery``
-      on next restart (Gitea #56).
+      on next restart.
     """
     global _runtime, _hook_manager
     _runtime = runtime
@@ -263,29 +304,75 @@ def _build_blueprint() -> Blueprint:
     bp = Blueprint("wiki", __name__)
 
     @bp.route("/projects", methods=["GET"])
+    @guard.requires("wiki.read")
     def list_projects():
-        auth = _require_auth()
-        if auth:
-            return auth
         projects = _store().list_projects()
         return jsonify([p.model_dump(mode="json", by_alias=True) for p in projects])
 
     @bp.route("/projects/<path:slug>", methods=["DELETE"])
+    @guard.requires("wiki.admin")
     def delete_project(slug: str):
-        auth = _require_auth()
-        if auth:
-            return auth
-        from mewbo_graph.wiki.credentials import CredentialStore  # noqa: PLC0415
+        from mewbo_graph.wiki.credentials import (  # noqa: PLC0415
+            CredentialScope,
+            CredentialStore,
+        )
 
         deleted = _store().delete_project(slug)
-        CredentialStore.delete(_store(), slug)
+        # Exact-match delete on the repo scope ONLY — a host-scoped credential
+        # is shared across every repo on that host (``CredentialScope.covers``),
+        # so deleting one project must never cascade and take down auth for its
+        # siblings.
+        repo_scope = CredentialScope.coerce(slug)
+        if repo_scope is not None:
+            CredentialStore.delete(_store(), repo_scope)
+        # Drop the editable settings record for the same reason the freshness
+        # entry is evicted below: a re-created project with this slug must not
+        # inherit the dead one's configuration (its model/ref/scope/graph-only).
+        _store().delete_project_settings(slug)
+        # Evict any cached freshness so a re-created project with the same slug
+        # never inherits the deleted one's stale badge.
+        _freshness_cache.pop(slug, None)
         return jsonify({"deleted": deleted})
 
+    @bp.route("/projects/<path:slug>/settings", methods=["GET"])
+    @guard.requires("wiki.read")
+    def get_project_settings(slug: str):
+        """Return the editable settings + credential status for a project.
+
+        The settings a re-index would actually run with — the slug-keyed record if
+        one exists, else reconstructed from the newest job submission, else derived
+        from the Project. ``credential`` reports only WHETHER a git credential is on
+        file and under which scope; a value is never echoed. A catalog (non-git)
+        project returns the reduced ``kind: "catalog"`` shape.
+        """
+        return jsonify(WikiProjectSettings(_store()).read(slug))
+
+    @bp.route("/projects/<path:slug>", methods=["PATCH"])
+    @guard.requires("wiki.admin")
+    def patch_project(slug: str):
+        """Update a project's settings. Body is partial; omitted fields persist.
+
+        Writable: ``model``, ``ref``, ``depth``, ``language``, ``filterMode``,
+        ``dirs``, ``files``, ``graphOnly``, ``desc``, and a same-repo re-normalising
+        ``repoUrl``/``platform``. A ``token``, a ``slug`` rename, or any system-owned
+        field is rejected (400) rather than silently ignored — credentials go through
+        the ONE registry at ``/v1/git/credentials/<scope>``.
+
+        **This does not start a re-index.** Everything but ``desc`` takes effect the
+        next time the project is indexed (the user drives that with Refresh), which
+        is also why a settings edit doesn't touch the per-IP indexing rate limiter.
+
+        One consequence worth knowing: turning ``graphOnly`` ON means the next index
+        runs the deterministic zero-LLM path, which DROPS this project's existing
+        documentation pages (they would otherwise linger unreachable behind the
+        graph-only doc-read guard). Turning it back off regenerates them.
+        """
+        body = request.get_json(silent=True) or {}
+        return jsonify(WikiProjectSettings(_store()).patch(slug, body))
+
     @bp.route("/projects/<path:slug>/pages/<string:page_id>", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_page(slug: str, page_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         store = _store()
         page = store.get_page(slug, page_id)
         if page is None:
@@ -312,16 +399,80 @@ def _build_blueprint() -> Blueprint:
         enriched = page.model_copy(update={"nav": nav, "toc": toc})
         return jsonify(enriched.model_dump(mode="json", by_alias=True))
 
+    @bp.route("/projects/<path:slug>/pages", methods=["GET"])
+    @guard.requires("wiki.read")
+    def list_project_pages(slug: str):
+        """Return the page INDEX for *slug* — ``{id, title}`` rows, paginated.
+
+        The page-content route above reads ONE page by id; nothing exposed a way
+        to discover those ids. Bounded at the QUERY layer rather than by cutting
+        a response: ``limit``/``offset`` (and an optional case-insensitive
+        ``titleContains``) return a complete, small page of rows plus
+        ``truncated`` + ``nextOffset``, so a caller pages forward instead of
+        parsing a severed prefix.
+
+        Not doc-guarded: ``list_pages`` is the roster, not page CONTENT (a
+        graph-only project simply has none and returns an empty list) — the 409
+        guard lives on ``get_page``.
+        """
+        store = _store()
+        if store.get_project(slug) is None:
+            return wiki_error_response(
+                WikiError(code="not_found", message=f"project {slug} not found")
+            )
+        try:
+            query = WikiPageIndexQuery.model_validate(_query_args())
+        except Exception as exc:  # noqa: BLE001 — Pydantic validation → clean 400
+            return wiki_error_response(
+                WikiError(
+                    code="validation",
+                    message="invalid page-index query",
+                    fields=_pydantic_fields(exc) or None,
+                )
+            )
+        return jsonify(query.page(store.list_pages(slug)))
+
+    @bp.route("/projects/<path:slug>/graph/neighbors", methods=["GET"])
+    @guard.requires("wiki.read")
+    def get_graph_neighbors(slug: str):
+        """Traverse the code graph outward from one node — no model call, no run.
+
+        Query params ARE :class:`WikiGraphNeighborsArgs` (the same model the
+        in-session ``wiki_graph_neighbors`` tool parses), so ``hops``/``limit``
+        bounds, the direction/edge-kind vocabularies and ``extra="forbid"`` have
+        exactly one definition. Restating them here is how the two surfaces would
+        drift apart the first time either bound changed.
+        """
+        store = _store()
+        if store.get_project(slug) is None:
+            return wiki_error_response(
+                WikiError(code="not_found", message=f"project {slug} not found")
+            )
+        from mewbo_graph.plugins.wiki.graph_neighbors import (  # noqa: PLC0415
+            WikiGraphNeighbors,
+            WikiGraphNeighborsArgs,
+        )
+
+        try:
+            args = WikiGraphNeighborsArgs.model_validate(_query_args())
+        except Exception as exc:  # noqa: BLE001 — Pydantic validation → clean 400
+            return wiki_error_response(
+                WikiError(
+                    code="validation",
+                    message="invalid traversal query",
+                    fields=_pydantic_fields(exc) or None,
+                )
+            )
+        return jsonify(WikiGraphNeighbors(slug=slug, store=store).traverse(args))
+
     @bp.route("/projects/<path:slug>/graph", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_project_graph(slug: str):
         """Return the persisted knowledge graph for *slug* (Cytoscape shape).
 
         Returns 404 when the project is unknown so the FE can render a
         sensible "not indexed" empty state.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_project(slug) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"project {slug} not found")
@@ -343,6 +494,7 @@ def _build_blueprint() -> Blueprint:
         return jsonify(view.to_wire())
 
     @bp.route("/projects/<path:slug>/source", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_project_source(slug: str):
         """Return a source-file excerpt (with 1-based line numbers) for *slug*.
 
@@ -357,9 +509,6 @@ def _build_blueprint() -> Blueprint:
         :func:`resolve_qa_clone_dir`; path-safety (no ``..`` escape outside the
         clone root) and decoding are delegated to :class:`WikiSourceAccess`.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_project(slug) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"project {slug} not found")
@@ -448,21 +597,86 @@ def _build_blueprint() -> Blueprint:
             "content": "\n".join(clip),
         })
 
+    @bp.route("/projects/<path:slug>/freshness", methods=["GET"])
+    @guard.requires("wiki.read")
+    def get_project_freshness(slug: str):
+        """Compare the indexed commit against the remote HEAD; ``?force=1`` busts the cache.
+
+        Indexed sha comes off the ``Project`` record, falling back to the latest
+        ``complete`` job's recorded commit for older projects that predate the
+        field. Results are cached for :data:`_FRESHNESS_TTL_SECONDS` per slug (a
+        check is a ``git ls-remote`` plus a platform compare-API call — cheap, but
+        not free to poll on every card render); ``force=1`` bypasses a cached read
+        and always recomputes (still refreshing the cache for the next caller).
+        """
+        store = _store()
+        project = store.get_project(slug)
+        if project is None:
+            return wiki_error_response(
+                WikiError(code="not_found", message=f"project {slug} not found")
+            )
+
+        force = request.args.get("force", "").lower() in {"1", "true", "yes"}
+        now = time.monotonic()
+        cached = _freshness_cache.get(slug)
+        if not force and cached is not None and (now - cached[0]) < _FRESHNESS_TTL_SECONDS:
+            return jsonify(cached[1])
+
+        indexed_sha = project.commit_sha
+        if not indexed_sha:
+            # job_id is a uuid4 hex — RANDOM, so it can't order jobs by recency
+            # (the old sort picked an arbitrary job's commit as the baseline).
+            # Order the complete-with-commit jobs by phase_started_at (ISO-8601,
+            # so lexicographic == chronological), newest first, jobs missing the
+            # timestamp last.
+            complete = [
+                j for j in store.list_jobs(slug=slug)
+                if j.status == "complete" and j.commit_sha
+            ]
+            complete.sort(key=lambda j: j.phase_started_at or "", reverse=True)
+            if complete:
+                indexed_sha = complete[0].commit_sha
+        if not indexed_sha:
+            return wiki_error_response(
+                WikiError(
+                    code="not_found",
+                    message=f"project {slug} has no indexed commit to compare",
+                )
+            )
+
+        from mewbo_graph.plugins.wiki.freshness import RepoFreshness  # noqa: PLC0415
+
+        repo_url = project.repo_url or f"https://{slug}"
+        result = RepoFreshness.check(
+            repo_url,
+            indexed_sha,
+            ref=project.branch,
+            platform=project.source,
+            store=store,
+            slug=slug,
+        )
+        body = {
+            "indexedSha": indexed_sha,
+            "remoteSha": result.remote_sha,
+            "behindBy": result.behind_by,
+            "upToDate": result.up_to_date,
+            "checkedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        _freshness_cache[slug] = (now, body)
+        return jsonify(body)
+
     @bp.route("/platforms", methods=["GET"])
+    @guard.requires("wiki.read")
     def list_platforms():
-        auth = _require_auth()
-        if auth:
-            return auth
         return jsonify([p.model_dump(mode="json", by_alias=True) for p in PLATFORMS])
 
     @bp.route("/languages", methods=["GET"])
+    @guard.requires("wiki.read")
     def list_languages():
-        auth = _require_auth()
-        if auth:
-            return auth
         return jsonify([la.model_dump(mode="json", by_alias=True) for la in LANGUAGES])
 
     @bp.route("/defaults", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_wiki_defaults():
         """Return wiki-specific defaults the picker should pre-select.
 
@@ -475,9 +689,6 @@ def _build_blueprint() -> Blueprint:
         ``wiki.default_model`` when not separately set so a single
         ``default_model`` still works for both phases.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         from mewbo_core.config import get_config_value  # noqa: PLC0415
 
         out: dict[str, str] = {}
@@ -498,10 +709,8 @@ def _build_blueprint() -> Blueprint:
         return jsonify(out)
 
     @bp.route("/index/<string:job_id>", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_job_snapshot(job_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         job = _store().get_job(job_id)
         if job is None:
             return wiki_error_response(
@@ -511,6 +720,7 @@ def _build_blueprint() -> Blueprint:
         return jsonify(job.model_dump(mode="json", by_alias=True, exclude_none=True))
 
     @bp.route("/jobs/active", methods=["GET"])
+    @guard.requires("wiki.read")
     def list_active_jobs():
         """Return all non-terminal jobs (queued/scanning/finalizing/interrupted).
 
@@ -519,9 +729,6 @@ def _build_blueprint() -> Blueprint:
         ``interrupted`` is an in-progress state (a restart-stranded job
         awaiting recovery), so it belongs here, not in the terminal set.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         ACTIVE = {"queued", "scanning", "finalizing", "interrupted"}
         out = []
         for job in _store().list_jobs():
@@ -532,6 +739,7 @@ def _build_blueprint() -> Blueprint:
         return jsonify(out)
 
     @bp.route("/jobs/recoverable", methods=["GET"])
+    @guard.requires("wiki.read")
     def list_recoverable_jobs():
         """Return non-complete jobs that carry checkpoint artifacts worth resuming.
 
@@ -544,9 +752,6 @@ def _build_blueprint() -> Blueprint:
         """
         from mewbo_graph.wiki.resume import ResumePlan  # noqa: PLC0415
 
-        auth = _require_auth()
-        if auth:
-            return auth
         RECOVERABLE_STATUS = {"failed", "interrupted", "cancelled"}
         out = []
         for job in _store().list_jobs():
@@ -578,11 +783,48 @@ def _build_blueprint() -> Blueprint:
             })
         return jsonify(out)
 
+    @bp.route("/sessions/<string:session_id>", methods=["GET"])
+    @guard.requires("wiki.read")
+    def get_session_link(session_id: str):
+        """Resolve a Mewbo session id to the wiki project it belongs to.
+
+        Reverse lookup over the two forward mappings the indexing/QA
+        session-end hooks already maintain (``attach_job_session`` /
+        ``attach_qa_session`` — see ``WikiIndexingSessionEndHook`` /
+        ``QaSessionEndHook``): pure passthrough, no new domain logic.
+        Indexing is checked first — a session backs at most one of the two.
+
+        Backs the console's session-header "Open wiki" jump: a wiki-origin
+        session's context only ever advertises the ``wiki`` capability
+        (``jobs.py``'s ``{"client_capabilities": ["wiki"]}``), never the
+        project slug, so the console has no other way to resolve one from a
+        bare session id.
+
+        Returns ``{"slug": <project slug>, "kind": "indexing" | "qa"}``, or a
+        404 ``not_found`` :class:`WikiError` when *session_id* isn't a wiki
+        session at all.
+        """
+        store = _store()
+        job_id = store.find_job_by_session(session_id)
+        if job_id:
+            job = store.get_job(job_id)
+            if job is not None:
+                return jsonify({"slug": job.slug, "kind": "indexing"})
+        answer_id = store.find_qa_by_session(session_id)
+        if answer_id:
+            answer = store.get_qa(answer_id)
+            if answer is not None:
+                return jsonify({"slug": answer.slug, "kind": "qa"})
+        return wiki_error_response(
+            WikiError(
+                code="not_found",
+                message=f"session {session_id} is not linked to a wiki project",
+            )
+        )
+
     @bp.route("/qa/<string:answer_id>", methods=["GET"])
+    @guard.requires("wiki.read")
     def get_qa_snapshot(answer_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         ans = _store().get_qa(answer_id)
         if ans is None:
             return wiki_error_response(
@@ -592,9 +834,9 @@ def _build_blueprint() -> Blueprint:
         # ``name (type)`` / ``file#Symbol``) for BOTH provenance panels: the
         # retrieval-details trail (accessedSources) and the cited panel
         # (summarySources — which now folds in the file/graph the answer grounded on,
-        # #172, so its graph refs need the same humanising). NON-destructive: the
+        # so its graph refs need the same humanising). NON-destructive: the
         # stored snapshot keeps raw ids (the memory depositor anchors off them) — only
-        # the wire is humanised (#70).
+        # the wire is humanised.
         from mewbo_graph.wiki.qa import AccessedSourceResolver  # noqa: PLC0415
 
         data = ans.model_dump(mode="json", by_alias=True)
@@ -607,10 +849,8 @@ def _build_blueprint() -> Blueprint:
         return jsonify(data)
 
     @bp.route("/index", methods=["POST"])
+    @guard.requires("wiki.write")
     def post_index():
-        auth = _require_auth()
-        if auth:
-            return auth
         # Per-IP rate-limit check.
         remote = request.remote_addr or "unknown"
         if not _check_rate_limit(remote):
@@ -654,18 +894,24 @@ def _build_blueprint() -> Blueprint:
         return resp
 
     @bp.route("/branches", methods=["POST"])
+    @guard.requires("wiki.write")
     def post_branches():
         """List a remote repo's branches so the wizard can pick a ref to onboard.
 
-        Resolves the credential the same way ``wiki_clone_repo`` does but WITHOUT a
-        job (no warm ``CloneTokenCache``): the body ``token`` wins; else the durable
-        per-slug ``CredentialStore`` (token → URL injection, ssh_key → key file).
-        Returns ``{branches, defaultBranch}``; a ``ls-remote`` failure maps to the
-        standard ``repo_access`` envelope.
+        An explicit body ``token`` is EXCLUSIVE: the wizard is testing a specific,
+        not-yet-saved credential, so ONLY that token is tried and an auth-class
+        rejection is surfaced (400 ``validation``) instead of being masked by a
+        stored/ambient/anonymous fallback that happens to work — masking here would
+        let the wizard "succeed" and then durably persist the untested-bad token at
+        onboarding. When NO explicit token is sent, resolution falls back to the
+        SAME canonical chain every other consumer uses (``resolve_chain``):
+        repo-scoped store → host-scoped store → the ambient (built-in) git
+        credential → anonymous, each tried in order with an auth-class failure
+        (``is_auth_failure``) advancing to the next so a revoked/wrong stored
+        credential doesn't shadow a valid fallback. A non-auth failure (network,
+        timeout, ...) propagates immediately as the standard ``repo_access``
+        envelope — those never succeed on retry. Returns ``{branches, defaultBranch}``.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         try:
             req = BranchListRequest.model_validate(request.get_json(silent=True) or {})
         except Exception as exc:
@@ -678,32 +924,75 @@ def _build_blueprint() -> Blueprint:
             BranchListError,
             RemoteBranchLister,
         )
-        from mewbo_graph.wiki.credentials import CredentialStore  # noqa: PLC0415
+        from mewbo_graph.wiki.credentials import (  # noqa: PLC0415
+            CredentialScope,
+            is_auth_failure,
+            resolve_chain,
+        )
 
-        token = req.token
-        ssh_key: str | None = None
-        if not token and req.slug:
-            cred = CredentialStore.load(_store(), req.slug)
-            if cred is not None and cred.kind == "token":
-                token = cred.value
-            elif cred is not None and cred.kind == "ssh_key":
-                ssh_key = cred.value
-        try:
+        def _list_heads(
+            token: str | None, ssh_key: str | None, username: str | None = None
+        ) -> dict[str, Any]:
+            """One branch-list attempt; returns the JSON reply body or raises.
+
+            *username* threads a stored credential's own username (GitLab oauth2 /
+            deploy-token style) into the injected URL exactly as clone/freshness/
+            validate do — else a username-bearing credential would auth everywhere
+            but here, 401-ing the branch-list step on those platforms.
+            """
             remote = RemoteBranchLister(
-                url=req.repo_url, token=token, ssh_key=ssh_key
+                url=req.repo_url, token=token, ssh_key=ssh_key, username=username
             ).list_heads()
-        except BranchListError as exc:
-            return wiki_error_response(WikiError(code="repo_access", message=str(exc)))
-        return jsonify({
-            "branches": remote.branches,
-            "defaultBranch": remote.default_branch,
-        })
+            return {"branches": remote.branches, "defaultBranch": remote.default_branch}
+
+        # An explicit body token is EXCLUSIVE — try ONLY it, never fall through to
+        # the store/ambient/anonymous chain. A stored/ambient success masking a
+        # rejected typed token would let the wizard "succeed" here and then durably
+        # persist the untested-bad token at onboarding; an auth-class rejection is
+        # a 400 (bad user input), not the generic repo_access envelope.
+        if req.token:
+            try:
+                return jsonify(_list_heads(req.token, None))
+            except BranchListError as exc:
+                if is_auth_failure(str(exc)):
+                    return wiki_error_response(WikiError(
+                        code="validation",
+                        message="the provided token was rejected by the remote",
+                        fields={"token": "rejected"},
+                    ))
+                return wiki_error_response(WikiError(code="repo_access", message=str(exc)))
+
+        # No explicit token — resolve via the canonical chain. No job/slug context
+        # yet at onboarding, so fall back to the URL's bare HOST scope so a
+        # host-scoped credential (and the host-keyed ambient lookup) still resolves
+        # even when the wizard hasn't chosen a slug yet. An unparseable slug/URL
+        # coerces to no scope at all — the chain then yields anonymous alone, which
+        # is exactly the public-repo path.
+        url_scope = CredentialScope.coerce(req.repo_url)
+        scope = CredentialScope.coerce(req.slug) or (
+            url_scope.host_scope() if url_scope else None
+        )
+        last_exc: BranchListError | None = None
+        for candidate in resolve_chain(_store(), scope):
+            try:
+                return jsonify(
+                    _list_heads(candidate.token, candidate.ssh_key, candidate.username)
+                )
+            except BranchListError as exc:
+                last_exc = exc
+                if is_auth_failure(str(exc)):
+                    continue
+                return wiki_error_response(WikiError(code="repo_access", message=str(exc)))
+        return wiki_error_response(
+            WikiError(
+                code="repo_access",
+                message=str(last_exc) if last_exc else "unable to list remote branches",
+            )
+        )
 
     @bp.route("/index/<string:job_id>", methods=["DELETE"])
+    @guard.requires("wiki.admin")
     def delete_index(job_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_job(job_id) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"job {job_id} not found")
@@ -720,24 +1009,31 @@ def _build_blueprint() -> Blueprint:
         )
 
     @bp.route("/index/<string:job_id>/resume", methods=["POST"])
+    @guard.requires("wiki.write")
     def resume_index(job_id: str):
         """Checkpoint-aware resume of an interrupted index (reuses the SAME job_id).
 
         Re-clones at the recorded commit + skips the expensive idempotent phases
         whose store artifacts already exist (graph / enrich / plan), writing only
         the remaining pages. User-initiated, so it resets the per-slug auto-recovery
-        cap. Returns ``{job_id, session_id, status}`` mirroring start/refresh.
+        cap. An optional ``{"restart": true}`` body forces the distinct REBUILD
+        intent (``ResumePlan.for_restart()``) instead of the default checkpoint
+        resume — every phase re-runs, still reusing the same job_id + recorded
+        commit. Returns ``{job_id, session_id, status}`` mirroring start/refresh.
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_job(job_id) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"job {job_id} not found")
             )
         try:
+            req = ResumeIndexRequest.model_validate(request.get_json(silent=True) or {})
+        except Exception as exc:
+            return wiki_error_response(
+                WikiError(code="validation", message=str(exc), fields=_pydantic_fields(exc) or None)
+            )
+        try:
             result = WikiResume.resume(
-                _store(), _runtime, job_id, hook_manager=_hook_manager
+                _store(), _runtime, job_id, hook_manager=_hook_manager, restart=req.restart
             )
         except KeyError:
             return wiki_error_response(
@@ -746,6 +1042,20 @@ def _build_blueprint() -> Blueprint:
         except ValueError as exc:
             return wiki_error_response(
                 WikiError(code="validation", message=str(exc))
+            )
+        except ResumeCountError as exc:
+            # A transient store-read failure the resume decision depends on —
+            # refuse rather than silently rebuild (ResumeCountError IS a
+            # RuntimeError, so this branch MUST precede the in-flight one below).
+            return wiki_error_response(
+                WikiError(code="network", message=str(exc)), status=503
+            )
+        except RuntimeError as exc:
+            # A resume already in flight for this job (double-submit / a stacked
+            # manual resume racing an automatic recovery) — a conflict, not a
+            # malformed request. Mirrors POST /qa's follow_up in-flight mapping.
+            return wiki_error_response(
+                WikiError(code="validation", message=str(exc)), status=409
             )
         except Exception as exc:
             return wiki_error_response(
@@ -760,10 +1070,8 @@ def _build_blueprint() -> Blueprint:
         return resp
 
     @bp.route("/index/<string:job_id>/stream", methods=["GET"])
+    @guard.requires("wiki.read")
     def stream_index(job_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_job(job_id) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"job {job_id} not found")
@@ -791,12 +1099,56 @@ def _build_blueprint() -> Blueprint:
         )
 
     @bp.route("/qa", methods=["POST"])
+    @guard.requires("wiki.read")
     def post_qa():
-        auth = _require_auth()
-        if auth:
-            return auth
         body = request.get_json(silent=True) or {}
         question = (body.get("question") or "").strip()
+        # Optional continuation: an existing answer's session is re-engaged
+        # with this question appended as a new turn instead of starting a
+        # fresh session. Absent ⇒ today's behaviour, unchanged.
+        # Continuation only needs ``question`` — ``project``/``fromPageId``/
+        # ``model`` ride the existing answer, so it validates independently
+        # of the new-session ``{question, project}`` combined check below.
+        answer_id = (body.get("answerId") or "").strip()
+        if answer_id:
+            if not question:
+                return wiki_error_response(WikiError(
+                    code="validation",
+                    message="question is required",
+                    fields={"question": "required"},
+                ))
+            prior = _store().get_qa(answer_id)
+            if prior is None:
+                return wiki_error_response(
+                    WikiError(code="not_found", message=f"answer {answer_id} not found")
+                )
+            try:
+                answer = WikiQaSession.follow_up(
+                    answer_id,
+                    question,
+                    runtime=_runtime,
+                    hook_manager=_hook_manager,
+                )
+            except LookupError as exc:
+                return wiki_error_response(WikiError(code="not_found", message=str(exc)))
+            except RuntimeError as exc:
+                # The session already has a run in flight (double-submit /
+                # client retry racing the still-streaming prior turn) — a
+                # conflict, not a malformed request.
+                return wiki_error_response(
+                    WikiError(code="validation", message=str(exc)), status=409
+                )
+            except Exception as exc:
+                return wiki_error_response(WikiError(code="internal", message=str(exc)))
+            gen = WikiQaSseGenerator(store=_store(), answer_id=answer.answer_id)
+            return Response(
+                stream_with_context(gen.generate()),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         from_page_id = (body.get("fromPageId") or "").strip()
         # ``model`` is optional — default it from config (qa → wiki → llm) so the
         # MCP ``ask_wiki`` tool can omit it entirely.
@@ -845,10 +1197,8 @@ def _build_blueprint() -> Blueprint:
         )
 
     @bp.route("/qa/<string:answer_id>", methods=["DELETE"])
+    @guard.requires("wiki.write")
     def delete_qa(answer_id: str):
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_qa(answer_id) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"answer {answer_id} not found")
@@ -862,11 +1212,9 @@ def _build_blueprint() -> Blueprint:
         return jsonify(snap.model_dump(mode="json", by_alias=True))
 
     @bp.route("/qa/<string:answer_id>/stream", methods=["POST"])
+    @guard.requires("wiki.read")
     def stream_qa(answer_id: str):
         """Replay-from-start SSE for shared QA URLs."""
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_qa(answer_id) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"answer {answer_id} not found")
@@ -889,6 +1237,7 @@ def _build_blueprint() -> Blueprint:
         )
 
     @bp.route("/projects/<path:slug>/insights", methods=["POST"])
+    @guard.requires("wiki.write")
     def post_insight(slug: str):
         """Ingest a suggested memory insight for *slug* (human/external agent).
 
@@ -901,9 +1250,6 @@ def _build_blueprint() -> Blueprint:
         request was processed but every claim was rejected (a normal advisory
         outcome, not a client error).
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         if _store().get_project(slug) is None:
             return wiki_error_response(
                 WikiError(code="not_found", message=f"project {slug} not found")
@@ -958,6 +1304,7 @@ def _build_blueprint() -> Blueprint:
         return resp
 
     @bp.route("/projects/<path:slug>/documents", methods=["POST"])
+    @guard.requires("wiki.write")
     def post_documents(slug: str):
         """Programmatically ingest catalog documents into a NON-git project.
 
@@ -968,9 +1315,6 @@ def _build_blueprint() -> Blueprint:
         Synchronous (a modest batch is a deterministic write — no agent loop).
         Returns the :class:`CatalogIngestReport` (201 when ≥1 doc ingested).
         """
-        auth = _require_auth()
-        if auth:
-            return auth
         body = request.get_json(silent=True) or {}
         raw_docs = body.get("documents")
         if not isinstance(raw_docs, list) or not raw_docs:
@@ -1000,11 +1344,9 @@ def _build_blueprint() -> Blueprint:
         return resp
 
     @bp.route("/projects/<path:slug>/refresh", methods=["POST"])
+    @guard.requires("wiki.write")
     def refresh_project(slug: str):
         """Re-trigger a full re-index for an existing project (on-demand only)."""
-        auth = _require_auth()
-        if auth:
-            return auth
         project = _store().get_project(slug)
         if project is None:
             return wiki_error_response(
@@ -1017,8 +1359,9 @@ def _build_blueprint() -> Blueprint:
         # is re-populated via ``POST .../documents``, not the refresh path. A git
         # project whose Project record simply lacks ``repo_url`` still has a
         # stored submission, so it is NOT treated as a catalog (that submission
-        # carries the real clone URL refresh restores).
-        if project.repo_url is None and not _has_git_submission(slug):
+        # carries the real clone URL refresh restores). ``is_catalog`` is the ONE
+        # definition of that test, shared with the settings façade.
+        if WikiProjectSettings(_store()).is_catalog(slug, project.repo_url):
             return wiki_error_response(
                 WikiError(
                     code="validation",
@@ -1032,6 +1375,10 @@ def _build_blueprint() -> Blueprint:
             WikiIndexingJob.refresh(slug, runtime=_runtime, hook_manager=None)
         except Exception as exc:
             return wiki_error_response(WikiError(code="internal", message=str(exc)))
+        # A refresh re-indexes at the latest HEAD, so any cached freshness for
+        # this slug is now stale — evict it so the next poll recomputes instead
+        # of showing "behind by N" against the commit we just started rebuilding.
+        _freshness_cache.pop(slug, None)
         return jsonify({"queued": True})
 
     return bp

@@ -17,7 +17,7 @@ const COLLAPSED_LINE_LIMIT = 8;
 
 export function HunkHeader({ header }: { header: string }) {
   return (
-    <div className="px-3 py-0.5 bg-blue-500/[0.06] text-blue-400/70 text-[11px] select-none">
+    <div className="px-3 py-0.5 bg-blue-500/[0.06] text-blue-400/70 text-2xs select-none">
       {header}
     </div>
   );
@@ -30,14 +30,14 @@ export function DiffLine({ line, gutterWidth }: { line: ParsedLine; gutterWidth:
     <div className={`flex ${bg} hover:brightness-110 transition-[filter]`}>
       {/* Old line number */}
       <span
-        className="shrink-0 text-right text-[11px] text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1"
+        className="shrink-0 text-right text-2xs text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1"
         style={{ width: padW }}
       >
         {line.oldNumber ?? ''}
       </span>
       {/* New line number */}
       <span
-        className="shrink-0 text-right text-[11px] text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1 mr-2"
+        className="shrink-0 text-right text-2xs text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-1 mr-2"
         style={{ width: padW }}
       >
         {line.newNumber ?? ''}
@@ -89,7 +89,7 @@ export function FileDiffSection({
         )
       )}
       {!expanded && hiddenLines > 0 && (
-        <div className="px-3 py-2 text-center text-[11px] text-[hsl(var(--code-fg-subtle))] select-none">
+        <div className="px-3 py-2 text-center font-sans text-2xs text-[hsl(var(--code-fg-subtle))] select-none">
           ⋯ {hiddenLines} more line{hiddenLines !== 1 ? 's' : ''} changed · Click to expand
         </div>
       )}
@@ -120,7 +120,7 @@ export function DiffCard({
     return (
       <div className={`rounded-md overflow-hidden font-mono border border-[hsl(var(--border))] border-l-[2.5px] border-l-agent-4 ${TITLE_BG}`}>
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <span className="text-[11px] text-[hsl(var(--code-fg-muted))] flex-1 truncate">{title || 'Edit'}</span>
+          <span className="text-2xs text-[hsl(var(--code-fg-muted))] flex-1 truncate">{title || 'Edit'}</span>
           {success ? (
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500/70 shrink-0" />
           ) : (
@@ -168,7 +168,7 @@ export function DiffCard({
             <span className={`${fileIconClass(file.path)} shrink-0`} style={{ fontSize: '16px' }} />
 
             {/* Filename (basename visible, full path on hover) */}
-            <span className="text-[11px] text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
+            <span className="text-2xs text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
               {basename(file.path)}
             </span>
 
@@ -210,7 +210,7 @@ export function DiffCard({
       {/* Collapse footer when expanded */}
       {expanded && hasExpandableContent && (
         <div className={`${BODY_BG} border-t border-[hsl(var(--code-border))] px-3 py-1.5 text-center`}>
-          <span className="text-[11px] text-[hsl(var(--code-fg-subtle))] select-none">Collapse ▲</span>
+          <span className="font-sans text-2xs text-[hsl(var(--code-fg-subtle))] select-none">Collapse ▲</span>
         </div>
       )}
     </div>

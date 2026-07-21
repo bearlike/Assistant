@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Controllable model → tool-variant map (Gitea #113, Phase A).
+"""Controllable model → tool-variant map.
 
 The sibling of the prompt registry: where the registry layers a per-model prompt
 DELTA, this module decides which *variant of a tool* a model gets. Today that is

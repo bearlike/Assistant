@@ -67,6 +67,7 @@ def _bootstrap_cli_logging_env(argv: list[str]) -> None:
 
 _bootstrap_cli_logging_env(sys.argv)
 
+from mewbo_core.ask_user import AskUserQuestionTool, QuestionDispatcher
 from mewbo_core.classes import ActionStep, Plan, PlanStep, TaskQueue
 from mewbo_core.common import MockSpeaker, format_tool_input, get_logger
 from mewbo_core.components import resolve_langfuse_status
@@ -83,8 +84,9 @@ from mewbo_core.config import (
 from mewbo_core.hooks import HookManager
 from mewbo_core.permissions import auto_approve
 from mewbo_core.session_event_bus import get_session_event_bus
-from mewbo_core.session_runtime import SessionRuntime
+from mewbo_core.session_runtime import SessionRuntime, SessionTerminatedError
 from mewbo_core.session_store import SessionStoreBase, create_session_store
+from mewbo_core.session_tools import SessionTool
 from mewbo_core.task_master import generate_action_plan
 from mewbo_core.tool_registry import ToolRegistry, load_registry
 from mewbo_tools.integration.mcp import (
@@ -126,6 +128,7 @@ from mewbo_cli.tui.permission_service import (
     PermissionRuleStore,
     install_permission_service,
 )
+from mewbo_cli.tui.question_dispatcher import TuiQuestionDispatcher
 from mewbo_cli.tui.seams import (
     InputGateway,
     MessageRendererRegistry,
@@ -220,7 +223,7 @@ def run_cli(args: argparse.Namespace) -> int:
     if args.config:
         set_app_config_path(args.config)
     config = get_config()
-    # CLI local-first remote seam (#171): the engine still runs locally; when a
+    # CLI local-first remote seam: the engine still runs locally; when a
     # remote base URL is opted into via ``cli.remote`` the CLI additionally
     # mirrors its transcript to the remote API AND auto-registers the Mewbo MCP
     # server so the product tools appear + execute remotely. Env-expand so the
@@ -273,7 +276,11 @@ def run_cli(args: argparse.Namespace) -> int:
         )
     store = create_session_store(root_dir=args.session_dir)
     runtime = SessionRuntime(session_store=store)
-    session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
+    try:
+        session_id = _resolve_session_id(runtime, args.session, args.tag, args.fork)
+    except SessionTerminatedError as exc:
+        console.print(f"Cannot start session: {exc}", style="red")
+        return 1
     if getattr(args, "no_fallback", False):
         fallback_models: tuple[str, ...] | None = ()
     elif args.fallback_models:
@@ -297,7 +304,7 @@ def run_cli(args: argparse.Namespace) -> int:
                 remote_base, remote_token, session_id_provider=lambda: state.session_id
             )
         )
-        # Provenance facet (#171): tag the synced session ``transcript_sink:synced``
+        # Provenance facet: tag the synced session ``transcript_sink:synced``
         # via the EXISTING TraceProvenance context seam so console/wiki/search can
         # filter it apart from a purely-local CLI session (which carries no facet).
         runtime.append_context_event(session_id, {"transcript_sink": sink_facet(enabled=True)})
@@ -425,7 +432,7 @@ def _redirect_app_logs_to_file(args: argparse.Namespace) -> str | None:
 
 
 class _TranscriptHubSink:
-    """RootSink (#161): drive the live ``TranscriptView`` from the hub.
+    """RootSink: drive the live ``TranscriptView`` from the hub.
 
     Resolves the mounted App lazily through ``app_ref`` (the App exists only
     post-mount, like the fleet hooks) and marshals every render onto the UI
@@ -496,7 +503,7 @@ def _run_app(
     The seams are created here and injected; ``TurnEngine`` (built via the
     factory once the App can supply its thread-safe emit callbacks) drives the
     runtime. The permission seam carries the ``/automatic`` + ``--auto-approve``
-    auto-approve predicate; the modal decision lands with #154.
+    auto-approve predicate; the modal decision lands with the App.
     """
     # The App owns the alt-screen — silence the console log sink (route detail
     # to a file) for the duration of the run so log lines can't bleed onto the
@@ -505,11 +512,11 @@ def _run_app(
     budget = int(get_config_value("agent", "session_step_budget", default=0))
     palette = DEFAULT_PALETTE
     messages = MessageRendererRegistry()
-    # Register the #152 transcript renderers BEFORE the App mounts so they win
+    # Register the transcript renderers BEFORE the App mounts so they win
     # the App's `has`-guarded foundation defaults (and the transcript widget's
     # own idempotent self-registration).
     register_transcript_renderers(messages, palette=palette)
-    # Orchestration cards (#161-C) wrap the "tool" renderer to draw dedicated
+    # Orchestration cards wrap the "tool" renderer to draw dedicated
     # spawn_agent/check_agents/tool_search cards; registered AFTER so they win.
     register_orchestration_cards(messages, palette=palette)
     sidebar_slots = SidebarSlotRegistry()
@@ -522,15 +529,15 @@ def _run_app(
     )
 
     # Shared holder for the mounted App, populated by the first installer. The
-    # engine's per-run fleet hooks (#161 sidebar refresh) and the sidebar queue
+    # engine's per-run fleet hooks (sidebar refresh) and the sidebar queue
     # pill both resolve the App lazily through it (the App exists post-mount).
     app_ref: dict[str, Any] = {}
 
-    # #161 — the AgentTranscriptHub is the single, order-preserving transcript
+    # the AgentTranscriptHub is the single, order-preserving transcript
     # source: it subscribes ONCE to the shared SessionEventBus (every agent's
     # events flow through it) and demuxes by agent_id, streaming the root
     # (depth 0) live into the TranscriptView via the sink. It is ALSO the source
-    # of the authoritative live todos (the ``todos`` event, #173) and per-agent
+    # of the authoritative live todos (the ``todos`` event) and per-agent
     # throughput. The per-run hook factory below feeds it the pre_tool_use ts.
     transcript_hub = AgentTranscriptHub(
         sink=_TranscriptHubSink(lambda: app_ref.get("app"))
@@ -571,6 +578,17 @@ def _run_app(
         except Exception:  # noqa: BLE001 — a modal failure must never break the turn
             return "refine"
 
+    def _ask_user_tools() -> list[SessionTool]:
+        """Bind the ``ask_user_question`` tool for this run (interactive TTY only).
+
+        A fresh :class:`AskUserQuestionTool` per run carrying the CURRENT
+        ``state.session_id`` (it binds the id at construction and the id changes
+        under ``/new``/``/resume``/fork). Only the ``MewboApp`` path builds this
+        engine and registers a dispatcher, so the tool exists only where a human
+        is present — the plain-REPL / ``--query`` / no-TTY paths bind nothing.
+        """
+        return [AskUserQuestionTool(state.session_id)]
+
     def _engine_factory(
         emit: Callable[[Any], None],
         emit_renderable: Callable[[Any], None],
@@ -587,6 +605,7 @@ def _run_app(
             emit=emit,
             emit_renderable=emit_renderable,
             plan_approval_resolver=_plan_approval_resolver,
+            extra_session_tools_factory=_ask_user_tools,
             max_iters=args.max_iters,
             session_step_budget=budget,
             no_color=bool(getattr(args, "no_color", False)),
@@ -625,7 +644,7 @@ def _run_app(
         installers=installers,
     )
 
-    # #154 — install the layered PermissionService (skip → allow/deny rules →
+    # install the layered PermissionService (skip → allow/deny rules →
     # session-grant → modal). The modal resolver bridges the worker thread the
     # approval_callback runs on to the App's main loop: ``push_screen_wait``
     # blocks the worker until the user resolves the modal (esc=deny default).
@@ -639,7 +658,22 @@ def _run_app(
         mode_getter=lambda: app.permission_mode,
         modal_resolver=_modal_resolver,
     )
-    return app.run() or 0
+
+    # Ask-user questions — register the concrete dispatcher into core's
+    # process-wide seam (interactive TTY only; the tool is bound per run via
+    # ``_ask_user_tools`` above). ``dispatch`` bridges to the App loop with the
+    # SAME ``call_from_thread(push_screen_wait, modal)`` blocking pattern as the
+    # permission/plan resolvers, opening ``AskUserModal`` and returning the
+    # answers synchronously.
+    QuestionDispatcher.register(
+        TuiQuestionDispatcher(app_provider=lambda: app, palette=palette)
+    )
+    try:
+        return app.run() or 0
+    finally:
+        # Down-only seam is process-wide; clear it so a later non-TTY run in the
+        # same process can never dispatch into a dead App.
+        QuestionDispatcher.reset()
 
 
 def _build_installers(
@@ -659,11 +693,11 @@ def _build_installers(
 ) -> list[Callable[[Any], None]]:
     """Assemble the post-mount App installers for the Wave-2 children.
 
-    Each Wave-2 feature (#155 input, #156 sidebar/status, #157 session) appends
+    Each Wave-2 feature (input, sidebar/status, session) appends
     its installer here. Kept in one place so ``app.py`` stays closed. The shared
     ``app_ref`` is populated by the first installer so the engine's fleet hooks
     and the sidebar queue pill can resolve the mounted App lazily. The plan dock's
-    todos come from the hub's authoritative ``todos`` event (``root_todos``, #173).
+    todos come from the hub's authoritative ``todos`` event (``root_todos``).
     """
     from mewbo_cli.tui.input.palette import make_input_installer
     from mewbo_cli.tui.session.install import (
@@ -690,7 +724,7 @@ def _build_installers(
         keybindings=cmd_keybindings,
     )
 
-    # The sidebar's queue pill reads #155's queued-message count off the mounted
+    # The sidebar's queue pill reads the queued-message count off the mounted
     # InputArea; bind it lazily (the App is only available post-mount).
     def _capture_app(app: Any) -> None:
         app_ref["app"] = app
@@ -706,13 +740,13 @@ def _build_installers(
 
     installers: list[Callable[[Any], None]] = [
         _capture_app,
-        # #155 — sigil dispatch, tiered @ completion, palette, custom commands.
+        # sigil dispatch, tiered @ completion, palette, custom commands.
         make_input_installer(command_registry=command_registry, skill_registry=skill_registry),
-        # #157 — session UX + global keymap (ctrl+o/ctrl+s/ctrl+l) + footer.
+        # session UX + global keymap (ctrl+o/ctrl+s/ctrl+l) + footer.
         make_session_installer(store=store, runtime=runtime, state=state),
-        # #161 — faceted sidebar (Fleet · Plan · Context) + in-place drill-in.
+        # faceted sidebar (Fleet · Plan · Context) + in-place drill-in.
         # The fleet rows + drill transcript come from the hub; the plan dock's
-        # tri-state checklist reads the hub's authoritative ``todos`` event (#173).
+        # tri-state checklist reads the hub's authoritative ``todos`` event.
         make_sidebar_installer(
             state=state,
             hub=transcript_hub,
@@ -754,7 +788,7 @@ def _register_tui_commands(command_registry: Any, **handlers: Any) -> None:
 def _build_completion_provider(
     command_registry: Any, skill_registry: Any
 ) -> Callable[[str], list[str]]:
-    """Foundation slash completion: command + user-invocable skill names (#155 extends)."""
+    """Foundation slash completion: command + user-invocable skill names (extends)."""
 
     def _complete(text: str) -> list[str]:
         if not text.startswith("/") or " " in text:
@@ -801,7 +835,7 @@ def _run_plain_repl(
     """Plain prompt_toolkit REPL used when the Textual App is unavailable.
 
     The historic interactive surface, minus the Rich ``Live`` agent display and
-    its ``KeyListener`` cbreak bridge (removed with #150): a non-``Live`` query
+    its ``KeyListener`` cbreak bridge (since removed): a non-``Live`` query
     path renders results after each run.
     """
     history_path = _ensure_history_path(args.history_file)
@@ -890,6 +924,29 @@ def _run_single_query(
     return 0
 
 
+# Title + border style for a non-``completed`` Response panel, keyed by the
+# session's derived ``status`` (``summarize_session``). A status this table
+# doesn't name (incl. the clean ``"completed"`` case) keeps the historical
+# green success chrome — see ``_response_panel_chrome``.
+_OUTCOME_PANEL_CHROME: dict[str, tuple[str, str]] = {
+    "blocked": (":warning: Blocked", "yellow"),
+    "unmet_goal": (":dart: Goal not met", "yellow"),
+    "incomplete": (":warning: Incomplete", "yellow"),
+    "canceled": (":no_entry_sign: Canceled", "yellow"),
+    "failed": (":x: Failed", "red"),
+}
+
+
+def _response_panel_chrome(outcome: str) -> tuple[str, str]:
+    """Title + border style for the plain-fallback Response panel.
+
+    A run that hit an unrecovered wall or ended without reaching its goal
+    must not render behind the same green ``bold green`` "Response" chrome as
+    a clean success — that was the false-success bug this closes.
+    """
+    return _OUTCOME_PANEL_CHROME.get(outcome, (":speech_balloon: Response", "bold green"))
+
+
 def _run_query(
     console: Console,
     store: SessionStoreBase,
@@ -901,6 +958,13 @@ def _run_query(
     prompt_func: Callable[[str], str] | None,
     skill_instructions: str | None = None,
 ) -> None:
+    # A terminated session must never start a new run — run_sync itself
+    # does not guard this, so the CLI's dispatch is the choke point. The App
+    # path guards the same way in TurnEngine._refuse_if_terminated; this is the
+    # plain-fallback's mirror (the two paths share no run seam to check once).
+    if runtime.is_terminated(state.session_id):
+        console.print(TurnEngine.terminated_notice_text(state.session_id), style="dim red")
+        return
     # Inline @<ref> expansion (files/dirs/@diff/URLs) against the CLI's cwd,
     # pre-LLM. The CLI runs the engine in-process, so it shares the same
     # reusable expander as the API rather than POSTing for expansion.
@@ -1010,11 +1074,26 @@ def _run_query(
         verbose=getattr(args, "verbose", 0) > 0,
     )
     if task_queue.task_result:
+        # Honest chrome: ``run_sync``'s return (``task_queue``) carries no
+        # done_reason/blocked_code — those live on the session's completion
+        # event, already appended by the time run_sync returns — so this
+        # reads the SAME derived status ``/status`` and every other client
+        # trust, rather than assuming a field this object doesn't have. A run
+        # that hit an unrecovered wall (``blocked_code``, which leaves
+        # ``done_reason`` at ``"completed"``) or halted short of its goal must
+        # not render behind the same green success panel as a clean completion.
+        try:
+            _outcome = str(
+                runtime.summarize_session(state.session_id).get("status") or "completed"
+            )
+        except Exception:  # noqa: BLE001 — a status read must never break the response
+            _outcome = "completed"
+        _title, _border = _response_panel_chrome(_outcome)
         console.print(
             Panel(
                 render_markdown(task_queue.task_result),
-                title=":speech_balloon: Response",
-                border_style="bold green",
+                title=_title,
+                border_style=_border,
             )
         )
         print_usage_footer(console, store, state.session_id, state.model_name)
@@ -1338,9 +1417,9 @@ def _build_cli_hook_manager(
 ) -> HookManager:
     """Build the plain-path hook manager: per-tool spinner + compaction notice.
 
-    The live agent tree / token streaming that used Rich ``Live`` is gone with
-    #150 — the interactive surface is now ``MewboApp`` (#152/#156 own live
-    feedback there).
+    The live agent tree / token streaming that used Rich ``Live`` is gone —
+    the interactive surface is now ``MewboApp`` (its own transcript and status
+    widgets own live feedback there).
     """
 
     def _on_compact(session_id: str, **kwargs: Any) -> None:

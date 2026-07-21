@@ -1,4 +1,4 @@
-"""Workspace-scoped routing over the GLOBAL SCG — :class:`ScgScope` + router (#75).
+"""Workspace-scoped routing over the GLOBAL SCG — :class:`ScgScope` + router.
 
 ``docs/features-search.md``: the SCG is shared (a tenant of the multiplex graph),
 NOT hard-partitioned per workspace. A workspace is a *scope* — a source-id
@@ -193,7 +193,7 @@ def test_scope_resets_even_on_exception() -> None:
     assert ScgScope.allowed() is None
 
 
-# ── workspace attribution (#76) ─────────────────────────────────────────────
+# ── workspace attribution ─────────────────────────────────────────────
 
 
 def test_workspace_binds_and_resets() -> None:
@@ -208,7 +208,7 @@ def test_workspace_binds_and_resets() -> None:
 def test_workspace_defaults_none_for_legacy_callers() -> None:
     """A scope bound WITHOUT a workspace leaves the attribution id unbound.
 
-    Existing ``use(source_ids)`` callers (#75) are unchanged — the workspace is
+    Existing ``use(source_ids)`` callers are unchanged — the workspace is
     additive and defaults to ``None``.
     """
     with ScgScope.use(["github"]):

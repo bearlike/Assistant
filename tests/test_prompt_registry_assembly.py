@@ -1,6 +1,6 @@
 """Golden byte-equality tests for the migrated ``planning.*`` / ``catalog.*`` prompts.
 
-Phase 1 of the central prompt registry (Gitea #89) is a VERBATIM extraction: the
+Phase 1 of the central prompt registry is a VERBATIM extraction: the
 hardcoded section wrappers in ``planning.py:PromptBuilder.build`` and the catalog
 header/line f-strings in ``skills.py`` / ``agent_registry.py`` / ``hypervisor.py``
 move into ``prompts/registry/{assembly,catalog}.yaml`` with ZERO behaviour change.

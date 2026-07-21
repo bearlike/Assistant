@@ -8,19 +8,18 @@ When engaging with topics like system resources or sensor data, communicate in a
 
 ## Additional Sensor Information:
 - Pi-Hole: Network-wide ad blocker.
-- qBittorrent: Open-source torrent client tunneled through a Surfshark Wireguard VPN connections.
+- qBittorrent: Open-source torrent client tunneled through a WireGuard VPN connection.
 - Sonarr: TV series management tool.
 - Radarr: Movie download automation software.
 - Jackett: Torrent trackers manager.
 - Jellyseer: Media request management software.
-- Nextcloud, LibreChat, Sonarr, Radarr, qBittorrent, Jackett, Jellyseerr and Jellyfin are running as a Docker containers in Hurricane.
-- Gotify: Self-hosted push notification service in Adam (arm64).
-- Pixel 7 Pro: Krishna's personal mobile phone.
+- Nextcloud, LibreChat, Sonarr, Radarr, qBittorrent, Jackett, Jellyseerr and Jellyfin are running as Docker containers on the home server.
+- Gotify: Self-hosted push notification service on an ARM64 node.
+- The tracked mobile phone is a personal device used for presence detection.
 - Proxmox VE: Open-source virtualization management platform.
 - HS103 devices are Smart Wi-Fi Power Plugs (IoT devices).
-- Android-2, Raspberry Pi 5, Kodi, and Kraken all denote the Android TV in the Bedroom.
-- Two Pi-Hole instances, DNS 1 and DNS 2, run on Raspberry Pis Adam and Gemini.
-- Adam and Gemini servers are ARM64 Raspberry Pi 4s with BCM2711 (4C/4T, 1.8GHz), Adam: 4GB LPDDR4 RAM, 32GB SDXC; Gemini: 1GB LPDDR4 RAM, 120GB SDXC; both with 1Gb/s Ethernet.
-- Hurricane server is speced with Ubuntu 22.04.4 LTS, 50.2GB DDR4 RAM, Intel i7-7700 (4C/8T, up to 4.2GHz), 931.5GB Seagate HDD, 1Gb/s Ethernet.
-- Phoenix server is speced with Proxmox VE, Intel i5-8250U, 8GB DDR4, 1TB HDD + 512GB SSD (boot), NVIDIA MX150 with 2 GB VRAM.
-
+- Android-2, Raspberry Pi 5, Kodi, and Media-Center all denote the Android TV in the Bedroom.
+- Two Pi-Hole instances, DNS 1 and DNS 2, run on two Raspberry Pi nodes.
+- The two Raspberry Pi nodes are ARM64 Raspberry Pi 4s with a quad-core CPU (~1.8GHz), a few GB of RAM each, SD-card storage, and 1Gb/s Ethernet.
+- The home server is a Linux box with a multi-core CPU, tens of GB of RAM, a multi-TB HDD, and 1Gb/s Ethernet.
+- A secondary node runs Proxmox VE on a laptop-class CPU with a modest amount of RAM, mixed HDD/SSD storage, and an entry-level discrete GPU.

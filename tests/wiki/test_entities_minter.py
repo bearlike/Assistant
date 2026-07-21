@@ -23,10 +23,10 @@ class FakeStore:
         self._edges: dict[str, dict[str, object]] = {}
         self._recs: dict[str, list[object]] = {}
 
-    def upsert_entities(self, slug, entities):
+    def upsert_entities(self, slug, entities, *, commit_sha=None, job_id=None):
         bucket = self._entities.setdefault(slug, {})
         for e in entities:
-            bucket[e.id] = e
+            bucket[e.id] = e.model_copy(update={"commit_sha": commit_sha, "job_id": job_id})
 
     def get_entity(self, slug, entity_id):
         return self._entities.get(slug, {}).get(entity_id)
@@ -35,7 +35,7 @@ class FakeStore:
         out = list(self._entities.get(slug, {}).values())
         return out if filt is None else [e for e in out if filt.matches(e)]
 
-    def upsert_entity_embeddings(self, slug, items):
+    def upsert_entity_embeddings(self, slug, items, *, commit_sha=None, job_id=None):
         bucket = self._embeddings.setdefault(slug, {})
         for it in items:
             bucket[it.entity_id] = it
@@ -48,7 +48,7 @@ class FakeStore:
         scored.sort(key=lambda t: t[1], reverse=True)
         return [emb for emb, _ in scored[:k]]
 
-    def upsert_entity_edges(self, slug, edges):
+    def upsert_entity_edges(self, slug, edges, *, commit_sha=None, job_id=None):
         bucket = self._edges.setdefault(slug, {})
         for e in edges:
             bucket[e.id] = e

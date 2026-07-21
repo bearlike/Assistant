@@ -6,7 +6,7 @@ import com.mewbo.aura.ui.orb.OrbState
 
 /**
  * Cross-cutting design tokens that don't fit [AuraColors] / [AuraShape] / [AuraType] /
- * [AuraSpacing]: orb palettes per state and the assist-overlay scrim. Provided once by [AuraTheme]
+ * [AuraSpacing]: orb palettes per state and the reduced-motion flag. Provided once by [AuraTheme]
  * — never construct these ad hoc at call sites.
  *
  * `glassSheet`/`GlassSheetStyle` (spec §2: "No glass/blur" — the reference design language uses
@@ -17,7 +17,6 @@ import com.mewbo.aura.ui.orb.OrbState
  */
 data class AssistantExtras(
     val orbPalette: (OrbState) -> List<Color>,
-    val scrimColor: Color,
     val reducedMotion: Boolean,
 )
 

@@ -2,9 +2,11 @@
  * PanelShell — the common chrome every inspector panel wears.
  *
  * A header row (kind dot + uppercase kind word + optional non-AST layer badge +
- * monospace title) over a scrollable body. Ports the header treatment from the
- * original 2D graph side panel so all kinds read identically; each typed panel
- * supplies only its own body sections.
+ * title) over a scrollable body. The title is a node's label or id shown as
+ * its NAME, not as code — it renders sans + weight like any other name,
+ * never mono, regardless of which panel supplies it. Ports the header
+ * treatment from the original 2D graph side panel so all kinds read
+ * identically; each typed panel supplies only its own body sections.
  */
 
 import { cn } from "@/lib/utils";
@@ -34,15 +36,15 @@ export function PanelShell({
           never overlaps the truncating title. */}
       <header className="pl-3 pr-8 py-2 border-b border-[hsl(var(--border))] flex items-center gap-2 shrink-0">
         <span className={cn("w-2.5 h-2.5 rounded-full", kindDot(nodeKind))} />
-        <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        <span className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
           {kindLabel}
         </span>
         {layer && layer !== "ast" && (
-          <span className="text-[9px] uppercase tracking-wide px-1.5 py-px rounded-full bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]">
+          <span className="text-2xs uppercase tracking-wide px-1.5 py-px rounded-full bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]">
             {LAYER_LABEL[layer]}
           </span>
         )}
-        <span className="text-xs font-mono truncate flex-1">{title}</span>
+        <span className="text-xs font-medium truncate flex-1">{title}</span>
       </header>
       <div className="px-3 py-3 space-y-3 overflow-y-auto text-xs flex-1">
         {children}

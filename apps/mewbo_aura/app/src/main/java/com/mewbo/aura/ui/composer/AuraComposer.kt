@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -79,20 +80,25 @@ import com.mewbo.aura.ui.theme.AuraType
  * @param onDictationStop tap the C3-only stop tile - ends dictation without sending.
  * @param onVoiceModeTap tap the C1 rounded-square tile - starts a full voice turn (this app's
  *   existing `AssistTurnMachine.startListening()` path, which tags the turn `InputModality.Voice`
- *   via `beginTurn`, Gitea #180 P1 - distinct from dictation-into-field).
- * @param micEnabled independent gate for JUST the C1 mic glyph (Gitea #180 P2's "Unavailable ->
+ *   via `beginTurn` - distinct from dictation-into-field).
+ * @param micEnabled independent gate for JUST the C1 mic glyph (the "Unavailable ->
  *   disabled mic" ruling - the device's on-device recognizer capability, distinct from [enabled]'s
  *   broader offline/session-ended gating). Defaults to [enabled] so every pre-existing caller
  *   (the assist overlay never passes this) keeps its old all-or-nothing behavior unchanged.
- * @param onAttachTap tap the leading "+" - opens the composer options sheet (Gitea #177 W2; the
+ * @param onAttachTap tap the leading "+" - opens the composer options sheet (the
  *   docked chat host wires this, the assist overlay never supplies it and keeps the pre-W2 no-op).
  * @param style [ComposerStyle.FloatingOverlay] is the assist-overlay's floating pill (Rev D-1);
  *   pass a non-null [trailingAccessory] there to host the orb + overlay's own trailing cluster.
  * @param stagedAttachments files picked in the options sheet but not yet sent - rendered as a chip
- *   row above the input (Gitea #177 W2), growing the pill's own shape from [AuraShape.radiusPill]
- *   to [AuraShape.radiusBubble] the same way a wrapped multi-line draft does (Gitea #178 W1-C -
- *   [ComposerTextField]'s own `onTextLayout` drives that second trigger). Chips are disabled (not
+ *   row above the input, growing the pill's own shape from [AuraShape.radiusPill]
+ *   to [AuraShape.radiusBubble] the same way a wrapped multi-line draft does
+ *   ([ComposerTextField]'s own `onTextLayout` drives that second trigger). Chips are disabled (not
  *   hidden) while [state] is [ComposerState.Streaming] - a steer can't carry them (RunRepository).
+ * @param showDragHandle [R4 2026-07-10] the assist overlay's ONLY caller advertises its existing
+ *   pill-pull-up-to-app gesture ([ui/overlay/CLAUDE.md] "Pill pull-up") with a small top-edge notch,
+ *   reusing the response card's own handle tokens verbatim - one handle vocabulary, not a second
+ *   size. Hidden while [expanded] (a grown pill has no stable top-center resting spot). Defaults
+ *   `false` so the docked composer (its own caller never passes this) stays byte-identical.
  */
 @Composable
 fun AuraComposer(
@@ -111,13 +117,14 @@ fun AuraComposer(
     style: ComposerStyle = ComposerStyle.Docked,
     trailingAccessory: (@Composable () -> Unit)? = null,
     stagedAttachments: List<StagedAttachment> = emptyList(),
+    showDragHandle: Boolean = false,
     onRemoveAttachment: (Uri) -> Unit = {},
 ) {
     val isDictating = state is ComposerState.Dictation
     val dictationRms = (state as? ComposerState.Dictation)?.rmsDb ?: 0f
     val dictationPartialText = (state as? ComposerState.Dictation)?.partialText
     val hasChips = stagedAttachments.isNotEmpty()
-    // Gitea #178 W1-C: a wrapped (2+ line) draft grows the pill the same way staged chips already
+    // a wrapped (2+ line) draft grows the pill the same way staged chips already
     // do - ComposerTextField's onTextLayout is the only source for this (BasicTextField's own
     // reported TextLayoutResult.lineCount), never derived from character count.
     var isMultiline by remember { mutableStateOf(false) }
@@ -126,76 +133,95 @@ fun AuraComposer(
     Surface(
         color = style.pillColor,
         shape = if (expanded) RoundedCornerShape(AuraShape.radiusBubble) else AuraShape.radiusPill,
-        modifier = modifier.then(if (expanded) Modifier else Modifier.height(AuraSpacing.Composer.height)),
+        modifier = modifier.then(if (expanded) Modifier else Modifier.height(style.pillHeight)),
     ) {
-        Column {
-            if (hasChips) {
-                AttachmentChipRow(
-                    attachments = stagedAttachments,
-                    enabled = enabled && state !is ComposerState.Streaming,
-                    onRemove = onRemoveAttachment,
-                    modifier = Modifier.padding(
-                        start = AuraSpacing.Composer.internalPadding,
-                        end = AuraSpacing.Composer.internalPadding,
-                        top = AuraSpacing.Composer.internalPadding,
-                    ),
-                )
-            }
+        Box {
+            Column {
+                if (hasChips) {
+                    AttachmentChipRow(
+                        attachments = stagedAttachments,
+                        enabled = enabled && state !is ComposerState.Streaming,
+                        onRemove = onRemoveAttachment,
+                        modifier = Modifier.padding(
+                            start = AuraSpacing.Composer.internalPadding,
+                            end = AuraSpacing.Composer.internalPadding,
+                            top = AuraSpacing.Composer.internalPadding,
+                        ),
+                    )
+                }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(ComposerTightGap),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (expanded) Modifier else Modifier.height(AuraSpacing.Composer.height))
-                    .padding(horizontal = AuraSpacing.Composer.internalPadding),
-            ) {
-                ComposerBareIconButton(
-                    icon = Icons.Filled.Add,
-                    description = "Attach",
-                    enabled = enabled,
-                    onClick = onAttachTap,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(ComposerTightGap),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (expanded) Modifier else Modifier.height(style.pillHeight))
+                        .padding(horizontal = AuraSpacing.Composer.internalPadding),
+                ) {
+                    ComposerBareIconButton(
+                        icon = Icons.Filled.Add,
+                        description = "Attach",
+                        enabled = enabled,
+                        onClick = onAttachTap,
+                    )
 
-                AnimatedContent(
-                    targetState = isDictating,
-                    transitionSpec = { ComposerMorphTransform },
-                    label = "composer-center-content",
-                    modifier = Modifier.weight(1f),
-                ) { dictating ->
-                    if (dictating) {
-                        DictationCenterContent(rmsDb = dictationRms, partialText = dictationPartialText)
+                    AnimatedContent(
+                        targetState = isDictating,
+                        transitionSpec = { ComposerMorphTransform },
+                        label = "composer-center-content",
+                        modifier = Modifier.weight(1f),
+                    ) { dictating ->
+                        if (dictating) {
+                            DictationCenterContent(rmsDb = dictationRms, partialText = dictationPartialText)
+                        } else {
+                            ComposerTextField(
+                                draft = draft,
+                                onDraftChange = onDraftChange,
+                                enabled = enabled,
+                                onLineCountChange = { lineCount -> isMultiline = lineCount > 1 },
+                                textStyle = style.fieldTextStyle,
+                            )
+                        }
+                    }
+
+                    if (trailingAccessory != null) {
+                        trailingAccessory()
                     } else {
-                        ComposerTextField(
-                            draft = draft,
-                            onDraftChange = onDraftChange,
+                        ComposerTrailingCluster(
+                            state = state,
+                            style = style,
                             enabled = enabled,
-                            onLineCountChange = { lineCount -> isMultiline = lineCount > 1 },
+                            micEnabled = micEnabled,
+                            onSend = onSend,
+                            onStop = onStop,
+                            onMicTap = onMicTap,
+                            onDictationStop = onDictationStop,
+                            onVoiceModeTap = onVoiceModeTap,
                         )
                     }
                 }
+            }
 
-                if (trailingAccessory != null) {
-                    trailingAccessory()
-                } else {
-                    ComposerTrailingCluster(
-                        state = state,
-                        style = style,
-                        enabled = enabled,
-                        micEnabled = micEnabled,
-                        onSend = onSend,
-                        onStop = onStop,
-                        onMicTap = onMicTap,
-                        onDictationStop = onDictationStop,
-                        onVoiceModeTap = onVoiceModeTap,
-                    )
-                }
+            // [R4 2026-07-10] expansion hint: advertises the overlay pill's existing swipe-up
+            // pull-to-app gesture (ui/overlay/CLAUDE.md "Pill pull-up"). Reuses the response
+            // card's handle vocabulary/tokens verbatim - one handle language, not a second size.
+            if (showDragHandle && !expanded) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = AuraSpacing.ResponseCard.dragHandleTopOffset)
+                        .size(
+                            width = AuraSpacing.ResponseCard.dragHandleWidth,
+                            height = AuraSpacing.ResponseCard.dragHandleHeight,
+                        )
+                        .background(color = AuraColors.textSecondary, shape = AuraShape.radiusPill),
+                )
             }
         }
     }
 }
 
-/** Horizontally-scrolling row of [AttachmentChip]s above the composer's input row (Gitea #177 W2). */
+/** Horizontally-scrolling row of [AttachmentChip]s above the composer's input row. */
 @Composable
 private fun AttachmentChipRow(
     attachments: List<StagedAttachment>,
@@ -254,11 +280,32 @@ private val ComposerStyle.pillColor: Color
         ComposerStyle.FloatingOverlay -> AuraColors.surfaceOverlayPill
     }
 
+/** [R4 2026-07-10] style-forked pill height — see AuraSpacing.Composer.overlayHeight's KDoc. */
+private val ComposerStyle.pillHeight: Dp
+    get() = when (this) {
+        ComposerStyle.Docked -> AuraSpacing.Composer.height
+        ComposerStyle.FloatingOverlay -> AuraSpacing.Composer.overlayHeight
+    }
+
+/** [R4 2026-07-10] style-forked trailing circle/tile size. */
+private val ComposerStyle.actionCircleSize: Dp
+    get() = when (this) {
+        ComposerStyle.Docked -> AuraSpacing.Composer.actionCircleSize
+        ComposerStyle.FloatingOverlay -> AuraSpacing.Composer.overlayActionCircleSize
+    }
+
+/** [R4 2026-07-10] style-forked field/invitation type scale. */
+private val ComposerStyle.fieldTextStyle: TextStyle
+    get() = when (this) {
+        ComposerStyle.Docked -> AuraType.bodyMessage
+        ComposerStyle.FloatingOverlay -> AuraType.composerOverlay
+    }
+
 /** Gap between adjacent composer elements (leading "+", center content, trailing cluster, and the
  * cluster's own two slots). */
 private val ComposerTightGap: Dp = AuraSpacing.Composer.gapTight
 
-/** Cap for [ComposerTextField]'s wrap (Gitea #178 W1-C task brief) - internal scroll takes over
+/** Cap for [ComposerTextField]'s wrap (task brief) - internal scroll takes over
  * beyond this, same as any capped multi-line field. */
 private const val ComposerMaxLines = 6
 
@@ -302,7 +349,12 @@ private fun ComposerBareIconButton(
  * second one - `trailingAccessory` replaces the WHOLE cluster there, so it can't reach
  * [ComposerTrailingCluster]'s own copy of this composable. */
 @Composable
-internal fun ComposerOverlayMicCircle(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun ComposerOverlayMicCircle(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = AuraSpacing.Composer.actionCircleSize,
+) {
     Surface(
         onClick = onClick,
         enabled = enabled,
@@ -310,7 +362,7 @@ internal fun ComposerOverlayMicCircle(enabled: Boolean, onClick: () -> Unit, mod
         color = AuraColors.accentOverlayMic,
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .size(AuraSpacing.Composer.actionCircleSize),
+            .size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -325,13 +377,14 @@ internal fun ComposerOverlayMicCircle(enabled: Boolean, onClick: () -> Unit, mod
 
 /** [onLineCountChange] fires on every layout pass ([androidx.compose.foundation.text.BasicTextField]'s
  * own `onTextLayout`) - [AuraComposer] uses it (not character count) to decide when a wrapped draft
- * should grow the pill (Gitea #178 W1-C). */
+ * should grow the pill. */
 @Composable
 private fun ComposerTextField(
     draft: TextFieldValue,
     onDraftChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
     onLineCountChange: (Int) -> Unit,
+    textStyle: TextStyle,
     modifier: Modifier = Modifier,
 ) {
     BasicTextField(
@@ -341,13 +394,13 @@ private fun ComposerTextField(
         singleLine = false,
         maxLines = ComposerMaxLines,
         onTextLayout = { layoutResult -> onLineCountChange(layoutResult.lineCount) },
-        textStyle = AuraType.bodyMessage.copy(color = AuraColors.textPrimary),
+        textStyle = textStyle.copy(color = AuraColors.textPrimary),
         cursorBrush = SolidColor(AuraColors.accentPrimary),
         modifier = modifier,
         decorationBox = { innerTextField ->
             Box(contentAlignment = Alignment.CenterStart) {
                 if (draft.text.isEmpty()) {
-                    Text(text = "Ask Mewbo", style = AuraType.bodyMessage.copy(color = AuraColors.textSecondary))
+                    Text(text = "Ask Mewbo", style = textStyle.copy(color = AuraColors.textSecondary))
                 }
                 innerTextField()
             }
@@ -411,9 +464,10 @@ private fun ComposerTrailingCluster(
                 TrailingLeftSlot.Mic -> when (style) {
                     ComposerStyle.Docked ->
                         ComposerBareIconButton(icon = ChatIcons.Mic, description = "Dictate", enabled = micEnabled, onClick = onMicTap)
-                    ComposerStyle.FloatingOverlay -> ComposerOverlayMicCircle(enabled = micEnabled, onClick = onMicTap)
+                    ComposerStyle.FloatingOverlay ->
+                        ComposerOverlayMicCircle(enabled = micEnabled, onClick = onMicTap, size = style.actionCircleSize)
                 }
-                TrailingLeftSlot.StopTile -> ComposerStopTile(enabled = enabled, onClick = onDictationStop)
+                TrailingLeftSlot.StopTile -> ComposerStopTile(enabled = enabled, onClick = onDictationStop, size = style.actionCircleSize)
                 // No size modifier - an empty, childless Box has zero intrinsic size on its own.
                 TrailingLeftSlot.None -> Box(Modifier)
             }
@@ -428,9 +482,16 @@ private fun ComposerTrailingCluster(
             label = "composer-trailing-primary-slot",
         ) { isIdle ->
             if (isIdle) {
-                ComposerVoiceModeTile(enabled = enabled, onClick = onVoiceModeTap)
+                ComposerVoiceModeTile(enabled = enabled, onClick = onVoiceModeTap, size = style.actionCircleSize)
             } else {
-                ComposerActionCircle(state = state, enabled = enabled, onSend = onSend, onStop = onStop, onVoiceModeTap = onVoiceModeTap)
+                ComposerActionCircle(
+                    state = state,
+                    enabled = enabled,
+                    onSend = onSend,
+                    onStop = onStop,
+                    onVoiceModeTap = onVoiceModeTap,
+                    size = style.actionCircleSize,
+                )
             }
         }
     }
@@ -454,6 +515,7 @@ private fun ComposerActionCircle(
     onStop: () -> Unit,
     onVoiceModeTap: () -> Unit,
     modifier: Modifier = Modifier,
+    size: Dp = AuraSpacing.Composer.actionCircleSize,
 ) {
     val spec = when (state) {
         // Defensive only - ComposerTrailingCluster renders ComposerVoiceModeTile instead during
@@ -484,7 +546,7 @@ private fun ComposerActionCircle(
         // target to the 48dp floor (ui/CLAUDE.md accessibility) without growing the painted pill.
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .size(AuraSpacing.Composer.actionCircleSize),
+            .size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
             AnimatedContent(
@@ -506,7 +568,12 @@ private fun ComposerActionCircle(
 /** C1's voice-mode entry (Rev E §E-3): a rounded-square tile, NOT a circle - distinct from
  * [ComposerActionCircle] so the C1<->C2 transition genuinely changes shape, not just color/glyph. */
 @Composable
-private fun ComposerVoiceModeTile(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ComposerVoiceModeTile(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = AuraSpacing.Composer.actionCircleSize,
+) {
     Surface(
         onClick = onClick,
         enabled = enabled,
@@ -514,7 +581,7 @@ private fun ComposerVoiceModeTile(enabled: Boolean, onClick: () -> Unit, modifie
         color = AuraColors.accentMuted,
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .size(AuraSpacing.Composer.actionCircleSize),
+            .size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -528,7 +595,12 @@ private fun ComposerVoiceModeTile(enabled: Boolean, onClick: () -> Unit, modifie
 }
 
 @Composable
-private fun ComposerStopTile(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ComposerStopTile(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = AuraSpacing.Composer.actionCircleSize,
+) {
     Surface(
         onClick = onClick,
         enabled = enabled,
@@ -538,7 +610,7 @@ private fun ComposerStopTile(enabled: Boolean, onClick: () -> Unit, modifier: Mo
         color = Color.Transparent,
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .size(AuraSpacing.Composer.actionCircleSize),
+            .size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(

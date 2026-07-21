@@ -1,13 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  Send,
-  Paperclip,
-  Check,
-  Plus,
-} from 'lucide-react';
+import { Ban, Lock, Trash2, Unlock } from 'lucide-react';
 import { CommandSpec, CreateWorktreeInput, QueryMode, SessionContext } from '../types';
 import { SkillSummary } from '../api/contracts';
+import { cn } from '../lib/utils';
+import { useSessionSpec } from '../hooks/useSessionSpec';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Button } from './ui/button';
 import { useMcpTools } from '../hooks/useMcpTools';
 import { useSkills } from '../hooks/useSkills';
 import { useProjectFiles } from '../hooks/useProjectFiles';
@@ -22,37 +21,141 @@ import { parseMentionInput, spliceMention } from '../lib/mentions';
 import { FILE_INPUT_ACCEPT, filterAttachments } from '../lib/attachments';
 import { toast } from 'sonner';
 import { ConfigMenu, McpOption, McpStatus } from './ConfigMenu';
+import { ModelSelector } from './ModelSelector';
 import { CommandPalette } from './CommandPalette';
 import { FileMentionPicker } from './FileMentionPicker';
 import { CommandDialog } from './CommandDialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from './ui/dropdown-menu';
+import { ConfirmDialog } from './ui/confirm-dialog';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { Button } from './ui/button';
 import { InputComposerBody } from './InputComposerBody';
 
-/** Container base — shared by home & detail mode outer wrapper. */
-const INPUT_CONTAINER_BASE =
-  'bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl p-1 shadow-lg ' +
-  'transition-all duration-200 ease-out';
-
-/** Container glow — applied via JS state so it stays stable during menu interactions. */
-const INPUT_CONTAINER_GLOW =
-  'ring-2 ring-[hsl(var(--ring))]/40 ' +
-  'shadow-[0_0_20px_hsl(var(--ring)/0.15)] ' +
-  'border-[hsl(var(--ring))]/30';
+/**
+ * Composer card — Tasks' thin layer over the shared `.composer-surface` chrome
+ * family (`index.css`). The family owns the border, the focus-within halo, and
+ * the running/command tints, driven by the `data-halo`/`data-running`/
+ * `data-command` attributes the call site sets on this div; `composerCard()`
+ * only adds Tasks' own flex body plus the base elevation, which lifts
+ * `--elev-1` → `--elev-2` when expanded (focus or an open menu). The
+ * border-colour ramp that used to live here is gone — border colour and all
+ * behavioural tints now come from the CSS family, so Tasks, Search, and the
+ * ComposerShell siblings read as one system.
+ */
+function composerCard(state: { expanded: boolean }): string {
+  const shadow = state.expanded ? '[box-shadow:var(--elev-2)]' : '[box-shadow:var(--elev-1)]';
+  return cn(
+    'composer-surface flex flex-col gap-1 rounded-[var(--composer-radius)] bg-[var(--composer-bg)] p-[var(--composer-padding)]',
+    shadow,
+  );
+}
 
 type McpToolOption = McpOption & {
   server?: string;
   disabled_reason?: string;
 };
+
+/**
+ * The composer's tool control while a purpose-bound session refuses tool
+ * overrides. It stands in for the editable Integrations picker and is strictly
+ * read-only: it renders the server-bound ceiling (`spec.allowed_tools` — `null`
+ * = open, `[]` = no tools, a list = exactly those) and offers ONE explicit
+ * unlock. Locked is the default; unlocking is a sanctioned per-run override that
+ * re-opens the editable picker and resumes sending `mcp_tools`. The lock /
+ * ceiling vocabulary mirrors `SessionBindingPanel`'s `ToolCeiling` so the
+ * composer and the binding inspector can never name one ceiling two ways.
+ *
+ * While locked the send omits `mcp_tools` entirely (never an empty array), so
+ * the server's binding stands unchallenged instead of being silently dropped.
+ */
+function LockedToolCeiling({
+  allowedTools,
+  onUnlock,
+  direction,
+  compact,
+  disabled,
+}: {
+  allowedTools: string[] | null;
+  onUnlock: () => void;
+  direction: 'up' | 'down';
+  compact: boolean;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const summary =
+    allowedTools === null
+      ? 'Open'
+      : allowedTools.length === 0
+        ? 'No tools'
+        : `${allowedTools.length} tool${allowedTools.length === 1 ? '' : 's'}`;
+  return (
+    <Popover open={disabled ? false : open} onOpenChange={(next) => !disabled && setOpen(next)}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={
+            disabled ? 'Tools bound to session (locked while running)' : 'Tools bound to session'
+          }
+          title={
+            disabled
+              ? 'Locked while the agent is running'
+              : "Tools are bound to this session's purpose"
+          }
+          className={cn(
+            'flex items-center gap-1.5 h-7 rounded-lg hover:bg-[hsl(var(--accent))] text-xs font-normal text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+            compact ? 'px-1.5' : 'px-2.5',
+          )}
+        >
+          <Lock className="w-3.5 h-3.5 text-[hsl(var(--primary-text))]" />
+          {!compact && <span className="truncate max-w-[120px]">{summary}</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side={direction === 'up' ? 'top' : 'bottom'}
+        align="start"
+        className="w-72 p-3 space-y-2"
+      >
+        <div className="flex items-center gap-1.5">
+          <Lock className="w-3.5 h-3.5 text-[hsl(var(--primary-text))]" aria-hidden />
+          <span className="text-xs font-medium text-[hsl(var(--foreground))]">
+            Tools bound to session
+          </span>
+        </div>
+        <p className="text-xs text-[hsl(var(--muted-foreground))] leading-snug">
+          {allowedTools === null
+            ? 'This session runs under an open tool ceiling — no MCP tools are withheld.'
+            : allowedTools.length === 0
+              ? 'This session grants no MCP tools; the server refuses tool overrides.'
+              : 'This session is limited to the tools below; the server refuses other overrides.'}
+        </p>
+        {allowedTools !== null && allowedTools.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {allowedTools.map((id) => (
+              <span
+                key={id}
+                className="inline-flex items-center rounded-md bg-[hsl(var(--muted))]/60 px-1.5 py-0.5 font-mono text-2xs text-[hsl(var(--foreground))]"
+              >
+                {id}
+              </span>
+            ))}
+          </div>
+        )}
+        <Button
+          variant="neutral"
+          size="sm"
+          className="w-full justify-center gap-1.5"
+          onClick={() => {
+            onUnlock();
+            setOpen(false);
+          }}
+        >
+          <Unlock className="w-3.5 h-3.5" />
+          Unlock tool selection
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /**
  * Snapshot of the live agent run that the composer surfaces in its
@@ -66,7 +169,7 @@ export interface RunStatus {
   agents?: number;
   /** Live root context-window fill in tokens (sessionUsage.root_last_input_tokens). */
   tokens?: number;
-  /** Live output throughput (estimated tokens/sec) while streaming (Gitea #174). */
+  /** Live output throughput (estimated tokens/sec) while streaming. */
   tokPerSec?: number;
   /** ISO timestamp of the last user event — used to compute elapsed wall-clock. */
   lastUserTs?: string;
@@ -89,6 +192,12 @@ interface InputBarProps {
   onFocusChange?: (focused: boolean, isEmpty: boolean) => void;
   /** Live run status fed into the composer's running-state strip. */
   runStatus?: RunStatus;
+  /**
+   * Session is permanently terminated. In detail mode the composer
+   * is replaced by a calm "this session is terminated" state — no input, no
+   * error residue.
+   */
+  terminated?: boolean;
 }
 export function InputBar({
   mode,
@@ -101,12 +210,13 @@ export function InputBar({
   error,
   onFocusChange,
   runStatus,
+  terminated = false,
 }: InputBarProps) {
-  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const [isModelOpen, setIsModelOpen] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
-  const isExpanded = isFocused || isConfigOpen || isPlusMenuOpen;
+  const isExpanded = isFocused || isConfigOpen || isModelOpen;
   const [activeSkill, setActiveSkill] = useState<string | null>(sessionContext?.skill ?? null);
   const [activeProject, setActiveProject] = useState<string | null>(sessionContext?.project ?? null);
   const [activeModel, setActiveModel] = useState<string | null>(sessionContext?.model ?? null);
@@ -190,6 +300,26 @@ export function InputBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const compact = useContainerCompact(containerRef);
+
+  // ── Purpose-bound tool lock ───────────────────────────────────────────────
+  // A purpose-bound session (indexer, search, …) refuses tool overrides — the
+  // server drops any `mcp_tools` it sends (`SessionSpec.merge_request_overrides`).
+  // Reflect that honestly: when the durable binding is purpose-bound AND the
+  // server reports `allowed_tools` non-editable, the composer shows the bound
+  // ceiling read-only and OMITS `mcp_tools` from the send, instead of silently
+  // sending an override that never lands. Unlocking is a deliberate, sanctioned
+  // per-run override; it re-locks on every session switch. An open chat and the
+  // home composer never enter this branch, so their send is unchanged.
+  const { spec: sessionSpec, editable: sessionEditable } = useSessionSpec(sessionId);
+  const [toolsUnlocked, setToolsUnlocked] = useState(false);
+  useEffect(() => {
+    setToolsUnlocked(false);
+  }, [sessionId]);
+  const toolBindingLocked =
+    mode === 'detail' &&
+    sessionSpec?.purpose_bound === true &&
+    sessionEditable.allowed_tools !== true;
+  const toolsLocked = toolBindingLocked && !toolsUnlocked;
 
   // ── Slash commands ──────────────────────────────────────────────────────
   const { commands } = useCommands();
@@ -402,7 +532,12 @@ export function InputBar({
           id: tool.tool_id,
           name: tool.name,
           active: prevMap.get(tool.tool_id)
-            ?? (sessionToolSet ? sessionToolSet.has(tool.tool_id) : tool.enabled),
+            ?? (sessionToolSet
+              ? sessionToolSet.has(tool.tool_id)
+              // A capability-gated tool is unusable until its capability is
+              // granted, so pre-checking it here would manufacture a false
+              // grant — leave it unchecked; the user opts in explicitly.
+              : tool.enabled && !tool.requires_capability),
           enabled: tool.enabled,
           server: tool.server,
           disabled_reason: tool.disabled_reason,
@@ -453,7 +588,6 @@ export function InputBar({
     });
   }, [mcps]);
   const handleAttach = () => {
-    setIsPlusMenuOpen(false);
     fileInputRef.current?.click();
   };
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -478,12 +612,10 @@ export function InputBar({
       );
     }
     setAttachedFiles(accepted);
-    setIsPlusMenuOpen(false);
     event.target.value = '';
   };
   const togglePlanMode = () => {
     setQueryMode((prev) => (prev === 'plan' ? 'act' : 'plan'));
-    setIsPlusMenuOpen(false);
   };
   const toggleMcp = (groupId: string) => {
     setMcps((prev) => {
@@ -520,12 +652,6 @@ export function InputBar({
 
   // Toggle a model in/out of the ordered fallback chain. Selecting appends
   // (preserving click order = priority); re-selecting removes it.
-  const handleToggleFallbackModel = useCallback((model: string) => {
-    setFallbackModels((prev) =>
-      prev.includes(model) ? prev.filter((m) => m !== model) : [...prev, model],
-    );
-  }, []);
-
   const handleSelectProject = useCallback((next: string | null) => {
     setActiveProject(next);
     // Switching projects must drop branch/worktree picks — they were
@@ -565,6 +691,14 @@ export function InputBar({
     [projectGit],
   );
 
+  // A dirty worktree's delete comes back as a 409 — route it through the
+  // shared <ConfirmDialog> (same primitive WorktreesPanel's own dirty-worktree
+  // force-delete uses) instead of window.confirm, so the destructive path is
+  // still explicit but reads like the rest of the app.
+  const [forceDeleteWorktree, setForceDeleteWorktree] = useState<
+    { id: string; message: string } | null
+  >(null);
+
   const handleDeleteWorktreeFromMenu = useCallback(
     async (worktreeId: string) => {
       try {
@@ -576,25 +710,8 @@ export function InputBar({
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Could not remove worktree';
-        // Dirty worktrees come back as a 409. Offer the destructive path
-        // explicitly rather than silently force-removing — losing local
-        // changes would be a much worse failure mode.
         if (/uncommitted|dirty|409/i.test(message)) {
-          if (
-            window.confirm(
-              `${message}\n\nForce-remove anyway? Uncommitted or unpushed changes will be lost.`,
-            )
-          ) {
-            try {
-              await projectGit.deleteWorktreeFor(worktreeId, true);
-              if (activeWorktree === worktreeId) {
-                setActiveWorktree(null);
-                setActiveBranch(projectGit.currentBranch);
-              }
-            } catch (err2) {
-              toast.error(err2 instanceof Error ? err2.message : 'Force remove failed');
-            }
-          }
+          setForceDeleteWorktree({ id: worktreeId, message });
         } else {
           toast.error(message);
         }
@@ -602,6 +719,22 @@ export function InputBar({
     },
     [projectGit, activeWorktree],
   );
+
+  const handleForceDeleteWorktreeConfirm = useCallback(async () => {
+    const target = forceDeleteWorktree;
+    if (!target) return;
+    try {
+      await projectGit.deleteWorktreeFor(target.id, true);
+      if (activeWorktree === target.id) {
+        setActiveWorktree(null);
+        setActiveBranch(projectGit.currentBranch);
+      }
+    } catch (err2) {
+      toast.error(err2 instanceof Error ? err2.message : 'Force remove failed');
+    } finally {
+      setForceDeleteWorktree(null);
+    }
+  }, [forceDeleteWorktree, projectGit, activeWorktree]);
   const handleSubmit = () => {
     if (!inputValue.trim()) {
       return;
@@ -662,7 +795,10 @@ export function InputBar({
         ? fallbackModels.filter((m) => m !== modelToSend)
         : [];
     const context: SessionContext = {
-      mcp_tools: mcps.filter((m) => m.active).map((m) => m.id),
+      // A purpose-bound session drops tool overrides server-side, so while the
+      // ceiling is locked we omit the key entirely (never an empty array — that
+      // is itself an override, "grant no tools") and let the binding stand.
+      ...(toolsLocked ? {} : { mcp_tools: mcps.filter((m) => m.active).map((m) => m.id) }),
       ...(activeSkill ? { skill: activeSkill } : {}),
       ...(projectForContext ? { project: projectForContext } : {}),
       ...(branchForContext ? { branch: branchForContext } : {}),
@@ -702,84 +838,53 @@ export function InputBar({
       requestAnimationFrame(syncCaret);
     }
   };
-  const renderPlusMenu = (direction: 'up' | 'down') => (
-    <DropdownMenu
-      open={isPlusMenuOpen}
-      onOpenChange={(open) => {
-        setIsPlusMenuOpen(open);
-        if (open) setIsConfigOpen(false);
+  const renderModelSelector = (direction: 'up' | 'down') => (
+    <ModelSelector
+      models={availableModels}
+      defaultModel={defaultModel}
+      activeModel={activeModel}
+      loading={modelsLoading}
+      error={modelsError}
+      onRefresh={refreshModels}
+      onSelectModel={setActiveModel}
+      fallbackEnabled={fallbackEnabled}
+      fallbackModels={fallbackModels}
+      onToggleFallbackEnabled={setFallbackEnabled}
+      onFallbackModelsChange={setFallbackModels}
+      open={isModelOpen}
+      onToggleOpen={() => {
+        setIsModelOpen(!isModelOpen);
+        setIsConfigOpen(false);
       }}
-    >
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          iconOnly
-          className={isPlusMenuOpen ? 'bg-[hsl(var(--accent))] text-[hsl(var(--foreground))]' : ''}
-          aria-label="Open menu"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side={direction === 'up' ? 'top' : 'bottom'} align="start" className="w-48">
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-[hsl(var(--muted-foreground))] font-medium">
-          Built-in
-        </DropdownMenuLabel>
-        {/* Plan mode is locked while a run is in progress — switching mode mid-run
-            would change the next turn's intent without affecting the running step. */}
-        <DropdownMenuItem
-          onSelect={togglePlanMode}
-          disabled={isRunning}
-          title={isRunning ? 'Plan mode is locked while the agent is running' : undefined}
-        >
-          <Send className="w-3.5 h-3.5 mr-2" />
-          <span className="flex-1">Plan mode</span>
-          {queryMode === 'plan' && (
-            <Check className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
-          )}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-[hsl(var(--muted-foreground))] font-medium">
-          External
-        </DropdownMenuLabel>
-        <DropdownMenuItem onSelect={handleAttach}>
-          <Paperclip className="w-3.5 h-3.5 mr-2" />
-          Upload attachment
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      direction={direction}
+      disabled={isRunning}
+      compact={compact}
+    />
   );
   const renderConfigMenu = (direction: 'up' | 'down') => (
     <ConfigMenu
-      mcpOptions={groupedOptions}
+      // While the tool ceiling is locked the editable Integrations picker would
+      // be a second surface for an override the send now drops — hand ConfigMenu
+      // an empty tool list so it presents none, and let the read-only
+      // `LockedToolCeiling` pill carry the bound ceiling instead.
+      mcpOptions={toolsLocked ? [] : groupedOptions}
       skills={availableSkills}
       projects={availableProjects}
-      models={availableModels}
-      defaultModel={defaultModel}
       activeProject={activeProject}
       activeSkill={activeSkill}
-      activeModel={activeModel}
       mcpLoading={mcpLoading}
       mcpError={mcpError}
       skillsLoading={skillsLoading}
       skillsError={skillsError}
       projectsLoading={projectsLoading}
       projectsError={projectsError}
-      modelsLoading={modelsLoading}
-      modelsError={modelsError}
       onRefreshMcp={refreshMcp}
       onRefreshSkills={refreshSkills}
       onRefreshProjects={refreshProjects}
-      onRefreshModels={refreshModels}
       onToggleMcp={toggleMcp}
       onSelectProject={handleSelectProject}
       onSelectSkill={setActiveSkill}
-      onSelectModel={setActiveModel}
       onResetAll={handleResetAll}
-      fallbackEnabled={fallbackEnabled}
-      fallbackModels={fallbackModels}
-      onToggleFallbackEnabled={setFallbackEnabled}
-      onToggleFallbackModel={handleToggleFallbackModel}
       gitRepo={projectGit.gitRepo}
       branches={projectGit.branches}
       currentBranch={projectGit.currentBranch}
@@ -799,10 +904,10 @@ export function InputBar({
       onCreateWorktree={(input) => void handleCreateWorktreeFromMenu(input)}
       onDeleteWorktree={(id) => void handleDeleteWorktreeFromMenu(id)}
       onRefreshGit={projectGit.refresh}
-      isOpen={isConfigOpen}
+      open={isConfigOpen}
       onToggleOpen={() => {
         setIsConfigOpen(!isConfigOpen);
-        setIsPlusMenuOpen(false);
+        setIsModelOpen(false);
       }}
       direction={direction}
       compact={compact}
@@ -815,9 +920,9 @@ export function InputBar({
       open={isFullScreen}
       onOpenChange={(open) => {
         setIsFullScreen(open);
-        // Toggling full-screen closes Plus/Config popovers (preserves prior rule).
+        // Toggling full-screen closes the model/config popovers (preserves prior rule).
         if (!open) {
-          setIsPlusMenuOpen(false);
+          setIsModelOpen(false);
           setIsConfigOpen(false);
         }
       }}
@@ -838,12 +943,14 @@ export function InputBar({
           onSubmit={handleSubmit}
           onKeyDown={handleKeyDown}
           isSubmitting={isSubmitting}
-          isExpanded={isExpanded}
+          expanded={isExpanded}
           queryMode={queryMode}
+          onTogglePlanMode={togglePlanMode}
+          onAttach={handleAttach}
           attachedFiles={attachedFiles}
           onClearAttachments={() => setAttachedFiles([])}
-          plusMenu={renderPlusMenu('up')}
           configMenu={renderConfigMenu('up')}
+          modelSelector={renderModelSelector('up')}
           textareaRef={fullScreenTextareaRef}
           placeholder="Write your prompt..."
           ariaLabel="Task description (expanded)"
@@ -858,11 +965,45 @@ export function InputBar({
   );
 
   // Mount inline menus ONLY when the fullscreen Dialog is closed. While the
-  // Dialog is open, it owns the single live instance of the plus/config menus
+  // Dialog is open, it owns the single live instance of the config/model menus
   // — this prevents duplicate portaled popovers fighting for clicks behind
-  // the modal overlay (both share isPlusMenuOpen/isConfigOpen state).
-  const inlinePlusMenu = isFullScreen ? null : renderPlusMenu(popupDirection);
+  // the modal overlay (both share isConfigOpen/isModelOpen state).
   const inlineConfigMenu = isFullScreen ? null : renderConfigMenu(popupDirection);
+  const inlineModelSelector = isFullScreen ? null : renderModelSelector(popupDirection);
+
+  // The read-only tool-ceiling pill sits in the footer's config cluster only
+  // while the ceiling is locked. Nulled when the fullscreen Dialog owns the
+  // single live menu instance (mirrors inlineConfigMenu) so no closed popover
+  // lingers behind the modal.
+  const lockedToolPill =
+    !isFullScreen && toolsLocked ? (
+      <LockedToolCeiling
+        allowedTools={sessionSpec?.allowed_tools ?? null}
+        onUnlock={() => setToolsUnlocked(true)}
+        direction={popupDirection}
+        compact={compact}
+        disabled={isRunning}
+      />
+    ) : null;
+
+  const forceDeleteWorktreeDialog = (
+    <ConfirmDialog
+      open={forceDeleteWorktree !== null}
+      title="Force-remove worktree?"
+      description={
+        <>
+          {forceDeleteWorktree?.message} Uncommitted or unpushed changes will be lost. This cannot
+          be undone.
+        </>
+      }
+      confirmLabel="Force remove"
+      pendingLabel="Removing…"
+      confirmIcon={<Trash2 className="w-4 h-4" />}
+      pending={projectGit.mutating}
+      onConfirm={() => void handleForceDeleteWorktreeConfirm()}
+      onCancel={() => setForceDeleteWorktree(null)}
+    />
+  );
 
   if (mode === 'home') {
     return (
@@ -891,7 +1032,13 @@ export function InputBar({
               onOpenChange={(v) => setMentionPickerOpen(v && mentionModeActive)}
               onSelect={insertMention}
               anchor={
-                <div ref={containerRef} className={`${INPUT_CONTAINER_BASE} ${isExpanded ? INPUT_CONTAINER_GLOW : ''}`}>
+                <div
+                  ref={containerRef}
+                  className={composerCard({ expanded: isExpanded })}
+                  data-halo="soft"
+                  data-running={false}
+                  data-command={false}
+                >
                   <InputComposerBody
                     variant="home"
                     inputValue={inputValue}
@@ -899,13 +1046,15 @@ export function InputBar({
                     onSubmit={handleSubmit}
                     onKeyDown={handleKeyDown}
                     isSubmitting={isSubmitting}
-                    isExpanded={isExpanded}
+                    expanded={isExpanded}
                     queryMode={queryMode}
+                    onTogglePlanMode={togglePlanMode}
+                    onAttach={handleAttach}
                     onToggleFullScreen={() => setIsFullScreen(true)}
                     attachedFiles={attachedFiles}
                     onClearAttachments={() => setAttachedFiles([])}
-                    plusMenu={inlinePlusMenu}
                     configMenu={inlineConfigMenu}
+                    modelSelector={inlineModelSelector}
                     textareaRef={textareaRef}
                     placeholder="Describe a task..."
                     ariaLabel="Task description"
@@ -927,7 +1076,32 @@ export function InputBar({
           </div>
         </div>
         {fullScreenOverlay}
+        {forceDeleteWorktreeDialog}
       </>
+    );
+  }
+
+  // A permanently terminated session can never run again — replace the whole
+  // composer with a calm, final state. No input, no Stop, no error residue.
+  if (terminated) {
+    return (
+      <div
+        className="bg-[hsl(var(--background))] px-4 pt-4 pb-4"
+        data-testid="inputbar-terminated"
+      >
+        <div className="max-w-4xl mx-auto">
+          <div
+            className="flex items-center gap-2.5 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]"
+            role="status"
+          >
+            <Ban className="w-4 h-4 shrink-0" aria-hidden />
+            <span className="font-medium text-[hsl(var(--foreground))]">
+              This session is permanently terminated.
+            </span>
+            <span className="hidden sm:inline">New messages can&apos;t be sent.</span>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -991,10 +1165,10 @@ export function InputBar({
                 onSelect={insertMention}
                 anchor={
                   <div
-                    className="composer-shell"
-                    data-running={isRunning ? 'true' : undefined}
-                    data-focused={isExpanded ? 'true' : undefined}
-                    data-command-mode={commandModeActive ? 'true' : undefined}
+                    className={composerCard({ expanded: isExpanded })}
+                    data-halo="soft"
+                    data-running={isRunning}
+                    data-command={commandModeActive}
                   >
                     <InputComposerBody
                       variant="detail"
@@ -1003,16 +1177,27 @@ export function InputBar({
                       onSubmit={handleSubmit}
                       onKeyDown={handleKeyDown}
                       isSubmitting={isSubmitting}
-                      isExpanded={isExpanded}
+                      expanded={isExpanded}
                       isRunning={isRunning}
                       runStatus={runStatus}
                       onStop={onStop}
                       queryMode={queryMode}
+                      onTogglePlanMode={togglePlanMode}
+                      onAttach={handleAttach}
                       onToggleFullScreen={() => setIsFullScreen(true)}
                       attachedFiles={attachedFiles}
                       onClearAttachments={() => setAttachedFiles([])}
-                      plusMenu={inlinePlusMenu}
-                      configMenu={inlineConfigMenu}
+                      configMenu={
+                        lockedToolPill ? (
+                          <>
+                            {lockedToolPill}
+                            {inlineConfigMenu}
+                          </>
+                        ) : (
+                          inlineConfigMenu
+                        )
+                      }
+                      modelSelector={inlineModelSelector}
                       textareaRef={textareaRef}
                       placeholder={detailPlaceholder}
                       ariaLabel="Session query"
@@ -1030,6 +1215,7 @@ export function InputBar({
         </div>
       </div>
       {fullScreenOverlay}
+      {forceDeleteWorktreeDialog}
       <CommandDialog
         open={commandDialog !== null}
         title={commandDialog?.title ?? ''}

@@ -12,6 +12,132 @@ function ev(
   return { ts, type, payload };
 }
 
+describe("buildTimeline — failure with an orchestrator closure (the common case)", () => {
+  // THE REAL SEQUENCE. The orchestrator ALWAYS appends a synthetic assistant
+  // closure — "(Run interrupted by error: …)" — immediately before the
+  // completion event, and `tests/test_orchestrator_closure.py` enforces
+  // exactly one assistant event per turn. So on every real failure the turn
+  // is ALREADY closed by the time the completion arrives. Verified against a
+  // live failed session: both `completion(done_reason="error")` events were
+  // immediately preceded by an `assistant` event.
+  //
+  // The no-closure shape in the describe block below is the RARE case. These
+  // tests cover the common one, which previously had no coverage at all —
+  // which is how the feature shipped green while never rendering.
+  const failedTurn: EventRecord[] = [
+    ev("2026-04-05T10:00:00Z", "user", { text: "do the thing" }),
+    ev("2026-04-05T10:00:05Z", "tool_result", { tool_id: "shell", result: "ok" }),
+    ev("2026-04-05T10:00:09Z", "assistant", {
+      text: "(Run interrupted by error: LLM call failed on all models)",
+    }),
+    ev("2026-04-05T10:00:10Z", "completion", {
+      done: true, done_reason: "error", error: "litellm.BadGateway: <html>502</html>",
+    }),
+  ];
+
+  test("the closure BECOMES the failure card — one entry, no leftover bubble", () => {
+    const entries = buildTimeline(failedTurn);
+    // Exactly two entries: the user turn and ONE closure. Emitting a second
+    // entry would break the one-assistant-per-turn invariant's UI counterpart.
+    expect(entries).toHaveLength(2);
+    expect(entries[0].role).toBe("user");
+    expect(entries[1]).toMatchObject({ role: "run_failed", turnId: "turn-1" });
+    expect(entries[1].runFailure).toMatchObject({
+      reason: "error",
+      text: "litellm.BadGateway: <html>502</html>",
+    });
+    // The synthetic closure text must not survive as a bubble beside the card.
+    expect(entries[1].content).toBe("");
+    expect(
+      entries.some((e) => e.content.includes("Run interrupted by error")),
+    ).toBe(false);
+  });
+
+  test("the upgraded entry keeps its turn metadata", () => {
+    // Trace / Open files / token meta hang off `turn`; losing it on exactly
+    // the turns most likely to need them would be a regression.
+    const turn = buildTimeline(failedTurn)[1].turn;
+    expect(turn).toBeDefined();
+    expect(turn?.id).toBe("turn-1");
+    expect(turn?.events.filter((e) => e.type === "tool_result")).toHaveLength(1);
+  });
+
+  test("max_steps_reached with a closure also upgrades", () => {
+    // The closure text is the orchestrator's literal output for this
+    // done_reason. Only a closure the backend can actually produce is
+    // replaced by the card; anything else is treated as a real answer and
+    // preserved, so an approximated fixture would not exercise this path.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", {
+        text: "(Run stopped: step limit reached before final answer)",
+      }),
+      ev("2026-04-05T10:00:10Z", "completion", {
+        done: true, done_reason: "max_steps_reached",
+      }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure?.reason).toBe("max_steps_reached");
+  });
+
+  test("a canceled completion after a closure stays an assistant bubble", () => {
+    // A cancel is not a failure — the closure text is the real answer here
+    // and must survive verbatim.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "(run canceled)" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "canceled" }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].role).toBe("assistant");
+    expect(entries[1].content).toBe("(run canceled)");
+    expect(entries[1].runFailure).toBeUndefined();
+  });
+
+  test("a successful completion after a closure leaves the answer intact", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "all done!" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+    ]);
+    expect(entries[1]).toMatchObject({ role: "assistant", content: "all done!" });
+  });
+
+  test("a later failure does not reach back and upgrade an earlier settled turn", () => {
+    // Turn 1 succeeded; turn 2 failed. Only turn 2 becomes a card.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "first" }),
+      ev("2026-04-05T10:00:05Z", "assistant", { text: "answer one" }),
+      ev("2026-04-05T10:00:06Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:01:00Z", "user", { text: "second" }),
+      ev("2026-04-05T10:01:05Z", "assistant", { text: "(Run interrupted by error: x)" }),
+      ev("2026-04-05T10:01:06Z", "completion", {
+        done: true, done_reason: "error", error: "kaboom",
+      }),
+    ]);
+    expect(entries).toHaveLength(4);
+    expect(entries[1]).toMatchObject({ role: "assistant", content: "answer one" });
+    expect(entries[3]).toMatchObject({ role: "run_failed", turnId: "turn-2" });
+    expect(entries[3].runFailure?.text).toBe("kaboom");
+  });
+
+  test("real-session shape: no error_detail, capped error string still renders", () => {
+    // Both failures on the live session predate `error_detail`, so this is
+    // the path a replayed transcript actually takes.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "(Run interrupted by error: y)" }),
+      ev("2026-04-05T10:00:10Z", "completion", {
+        done: true, done_reason: "error", error: "LLM call failed on all models",
+      }),
+    ]);
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure?.detail).toBeUndefined();
+    expect(entries[1].runFailure?.text).toBe("LLM call failed on all models");
+  });
+});
+
 describe("buildTimeline — completion fallback materialisation", () => {
   test("failed turn (no assistant event) is materialised via completion", () => {
     // Turn 1: user + tool_results + completion(error). No assistant event —
@@ -30,13 +156,20 @@ describe("buildTimeline — completion fallback materialisation", () => {
       }),
     ];
     const entries = buildTimeline(events);
-    // User entry + synthetic assistant closure entry.
+    // User entry + synthetic closure entry. A failed run closes the turn as
+    // `run_failed` (rendered by RunFailedCard), not an assistant bubble.
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ role: "user", turnId: "turn-1" });
     expect(entries[1]).toMatchObject({
-      role: "assistant",
+      role: "run_failed",
       turnId: "turn-1",
-      content: "(run interrupted — see logs)",
+      content: "",
+    });
+    // Legacy shape (no error_detail): the raw `error` string is the body.
+    expect(entries[1].runFailure).toEqual({
+      reason: "error",
+      text: "boom",
+      detail: undefined,
     });
     // TurnMeta attached with the failed turn's events intact:
     // user + 2 tool_results + completion (turnEvents seeds with user at line 15).
@@ -47,7 +180,7 @@ describe("buildTimeline — completion fallback materialisation", () => {
     expect(turn?.events.filter(e => e.type === "completion")).toHaveLength(1);
   });
 
-  test("max_steps_reached completion produces correct closure label", () => {
+  test("max_steps_reached closes the turn as a run_failed entry", () => {
     const entries = buildTimeline([
       ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
       ev("2026-04-05T10:00:05Z", "tool_result", { tool_id: "shell" }),
@@ -55,7 +188,103 @@ describe("buildTimeline — completion fallback materialisation", () => {
         done: true, done_reason: "max_steps_reached",
       }),
     ]);
-    expect(entries[1].content).toBe("(step limit reached)");
+    expect(entries[1].role).toBe("run_failed");
+    // No error text at all — the card renders header-only, no body.
+    expect(entries[1].runFailure).toMatchObject({
+      reason: "max_steps_reached",
+      text: "",
+    });
+  });
+
+  test("goal-not-met completion closes the turn as run_failed, not assistant", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "index it" }),
+      ev("2026-04-05T10:00:05Z", "tool_result", { tool_id: "wiki" }),
+      ev("2026-04-05T10:05:00Z", "completion", {
+        done: true, done_reason: "halted_no_progress",
+      }),
+    ]);
+    // Before the parser recognised it, this rendered as a plain assistant
+    // bubble with no failure indication and no recovery.
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure).toMatchObject({ reason: "unmet_goal" });
+  });
+
+  test("blocked completion is a failure even though done_reason stays completed", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "clone it" }),
+      ev("2026-04-05T10:00:05Z", "tool_result", { tool_id: "wiki" }),
+      ev("2026-04-05T10:05:00Z", "completion", {
+        done: true, done_reason: "completed", blocked_code: "repo_access",
+      }),
+    ]);
+    // The exact laundering the epic targets: a wall carried out as
+    // `blocked_code` while done_reason reads `completed` must not render green.
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure).toMatchObject({
+      reason: "blocked",
+      blockedCode: "repo_access",
+    });
+  });
+
+  test("classified error_detail is carried onto the run_failed entry", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:05:00Z", "completion", {
+        done: true,
+        done_reason: "error",
+        error: "capped 500-char summary",
+        error_detail: {
+          kind: "upstream_bad_gateway",
+          title: "Upstream bad gateway",
+          provider: "anthropic",
+          detail: "<html>502</html>",
+          detail_chars: 5887,
+          truncated: true,
+        },
+      }),
+    ]);
+    // error_detail.detail wins over the capped legacy `error` string.
+    expect(entries[1].runFailure).toEqual({
+      reason: "error",
+      text: "<html>502</html>",
+      detail: {
+        kind: "upstream_bad_gateway",
+        title: "Upstream bad gateway",
+        provider: "anthropic",
+        detail: "<html>502</html>",
+        detail_chars: 5887,
+        truncated: true,
+      },
+    });
+  });
+
+  test("unknown error_detail kind degrades to `unknown` rather than trusting it", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:05:00Z", "completion", {
+        done: true,
+        done_reason: "error",
+        error_detail: { kind: "moon_phase", detail: "odd", truncated: false },
+      }),
+    ]);
+    expect(entries[1].runFailure?.detail).toMatchObject({
+      kind: "unknown",
+      title: "",
+      // detail_chars absent on the wire → falls back to the real length, so
+      // a "showing N of M" footer can never claim a bogus original size.
+      detail_chars: 3,
+    });
+  });
+
+  test("last_error is the body when neither error nor error_detail is present", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:05:00Z", "completion", {
+        done: true, done_reason: "error", last_error: "connection reset",
+      }),
+    ]);
+    expect(entries[1].runFailure?.text).toBe("connection reset");
   });
 
   test("canceled completion produces correct closure label", () => {
@@ -66,6 +295,100 @@ describe("buildTimeline — completion fallback materialisation", () => {
       }),
     ]);
     expect(entries[1].content).toBe("(run canceled)");
+  });
+
+  test("a following outcome_assertion turns a clean completion into goal-not-met", () => {
+    // The wiki majority case: the loop had no exception, so `done_reason` stays
+    // `completed` and the orchestrator's synthetic closure reads as a success —
+    // but a session-end hook appends an `outcome_assertion` right after, saying
+    // the job never reached its terminal state. Without consuming that event
+    // the turn renders a green success card.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "index it" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "(Run completed)" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:00:11Z", "outcome_assertion", {
+        reason: "job_incomplete",
+        detail: "indexing job never reached its terminal tool",
+        source: "wiki-indexing-hook",
+      }),
+    ]);
+    // The synthetic closure is replaced in place — one entry, no leftover
+    // green bubble beside the card.
+    expect(entries).toHaveLength(2);
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure).toMatchObject({
+      reason: "unmet_goal",
+      text: "indexing job never reached its terminal tool",
+      failureReason: "job_incomplete",
+    });
+  });
+
+  test("a real answer that missed its goal is PRESERVED, verdict beside it", () => {
+    // The closure is a genuine answer, not the orchestrator's placeholder, so
+    // it must survive — the goal-not-met card renders as a separate entry.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "summarise" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "Here is the summary." }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:00:11Z", "outcome_assertion", {
+        reason: "coverage_incomplete",
+        detail: "half the files were skipped",
+      }),
+    ]);
+    expect(entries).toHaveLength(3);
+    expect(entries[1]).toMatchObject({ role: "assistant", content: "Here is the summary." });
+    expect(entries[2]).toMatchObject({ role: "run_failed" });
+    expect(entries[2].runFailure).toMatchObject({ reason: "unmet_goal" });
+  });
+
+  test("outcome_assertion replaces the (run ended) placeholder when no assistant closed the turn", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "index it" }),
+      ev("2026-04-05T10:00:05Z", "tool_result", { tool_id: "wiki" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:00:11Z", "outcome_assertion", { reason: "job_incomplete", detail: "" }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].role).toBe("run_failed");
+    expect(entries[1].runFailure).toMatchObject({ reason: "unmet_goal" });
+  });
+
+  test("a clean completion with NO assertion stays a normal assistant turn", () => {
+    // The control: nothing about the ordinary success path may change.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", { text: "all done" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({ role: "assistant", content: "all done" });
+    expect(entries[1].runFailure).toBeUndefined();
+  });
+
+  test("an assertion after a real failure does NOT override the more specific classification", () => {
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "hi" }),
+      ev("2026-04-05T10:00:09Z", "assistant", {
+        text: "(Run interrupted by error: boom)",
+      }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "error", error: "boom" }),
+      ev("2026-04-05T10:00:11Z", "outcome_assertion", { reason: "job_incomplete", detail: "x" }),
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].runFailure).toMatchObject({ reason: "error", text: "boom" });
+  });
+
+  test("the trace panel agrees — buildLogs marks the completion goal-not-met too", () => {
+    // The single-parse-seam law: the conversation card and the trace card must
+    // never disagree about what failed.
+    const logs = buildLogs([
+      ev("2026-04-05T10:00:00Z", "user", { text: "index it" }),
+      ev("2026-04-05T10:00:10Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:00:11Z", "outcome_assertion", { reason: "job_incomplete", detail: "d" }),
+    ]);
+    const completion = logs.find((l) => l.type === "completion");
+    expect(completion?.runFailure).toMatchObject({ reason: "unmet_goal", failureReason: "job_incomplete" });
   });
 
   test("real assistant event wins — completion does NOT double-materialise", () => {
@@ -104,16 +427,22 @@ describe("buildTimeline — completion fallback materialisation", () => {
         done: true, done_reason: "completed",
       }),
     ]);
-    // 2 users + 2 assistants (one synthetic, one real) = 4 entries.
-    expect(entries).toHaveLength(4);
+    // 2 users + 1 run_failed closure + the recovery marker + 1 real assistant
+    // = 5 entries. The `recovery` event between the turns is what the user
+    // clicked to resume, so it renders as its own marker rather than being
+    // dropped for arriving with no turn open.
+    expect(entries).toHaveLength(5);
     expect(entries[0]).toMatchObject({ role: "user", turnId: "turn-1" });
     expect(entries[1]).toMatchObject({
-      role: "assistant",
+      role: "run_failed",
       turnId: "turn-1",
-      content: "(run interrupted — see logs)",
+      content: "",
     });
-    expect(entries[2]).toMatchObject({ role: "user", turnId: "turn-2" });
-    expect(entries[3]).toMatchObject({
+    expect(entries[1].runFailure?.text).toBe("timeout");
+    expect(entries[2]).toMatchObject({ role: "recovery" });
+    expect(entries[2].recovery?.action).toBe("continue");
+    expect(entries[3]).toMatchObject({ role: "user", turnId: "turn-2" });
+    expect(entries[4]).toMatchObject({
       role: "assistant",
       turnId: "turn-2",
       content: "recovered!",
@@ -125,9 +454,9 @@ describe("buildTimeline — completion fallback materialisation", () => {
     ).toHaveLength(2);
     // Turn 2 carries user + tool_result + assistant = 3 events (assistant
     // IS pushed before materialisation, it's just the closer signal).
-    expect(entries[3].turn?.events).toHaveLength(3);
+    expect(entries[4].turn?.events).toHaveLength(3);
     expect(
-      entries[3].turn?.events.filter(e => e.type === "tool_result"),
+      entries[4].turn?.events.filter(e => e.type === "tool_result"),
     ).toHaveLength(1);
   });
 
@@ -142,6 +471,74 @@ describe("buildTimeline — completion fallback materialisation", () => {
     ]);
     expect(entries).toHaveLength(1);
     expect(entries[0].role).toBe("user");
+  });
+});
+
+describe("buildTimeline — context_compacted renders a horizon marker", () => {
+  test("arriving between turns (no turn open) produces a compaction entry", () => {
+    // Same shape as the auto/user-triggered compaction path: it lands after
+    // a turn's completion, before the next turn's user event — so, like
+    // `recovery`, it reaches the parser with no turn open. Must not be
+    // dropped by the open-turn gate.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "first" }),
+      ev("2026-04-05T10:00:05Z", "assistant", { text: "reply 1" }),
+      ev("2026-04-05T10:00:06Z", "completion", { done: true, done_reason: "completed" }),
+      ev("2026-04-05T10:01:00Z", "context_compacted", {
+        depth: 0, mode: "auto", tokens_saved: 12000,
+      }),
+      ev("2026-04-05T10:01:05Z", "user", { text: "second" }),
+      ev("2026-04-05T10:01:10Z", "assistant", { text: "reply 2" }),
+    ]);
+    // user, assistant, compaction marker, user, assistant.
+    expect(entries).toHaveLength(5);
+    expect(entries[2]).toMatchObject({ role: "compaction", turnId: "compaction" });
+    expect(entries[2].compaction).toEqual({ mode: "auto", tokensSaved: 12000 });
+    // Surrounding turns assemble untouched — the marker never leaked into
+    // either turn's event list.
+    expect(entries[3]).toMatchObject({ role: "user", turnId: "turn-2" });
+    expect(entries[4]).toMatchObject({ role: "assistant", turnId: "turn-2", content: "reply 2" });
+    expect(entries[4].turn?.events.some(e => e.type === "context_compacted")).toBe(false);
+  });
+
+  test("arriving mid-turn (turn still open) still renders, without disturbing the turn", () => {
+    // The reactive/mid_loop compaction path fires from inside the root loop,
+    // before the turn's assistant/completion event — the marker should land
+    // at that point in the flow, and the turn should still assemble once it
+    // closes.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "do a long thing" }),
+      ev("2026-04-05T10:00:02Z", "tool_result", { tool_id: "shell" }),
+      ev("2026-04-05T10:00:04Z", "context_compacted", {
+        depth: 0, mode: "mid_loop",
+      }),
+      ev("2026-04-05T10:00:06Z", "tool_result", { tool_id: "shell" }),
+      ev("2026-04-05T10:00:08Z", "assistant", { text: "done" }),
+    ]);
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toMatchObject({ role: "user", turnId: "turn-1" });
+    expect(entries[1]).toMatchObject({ role: "compaction", turnId: "turn-1" });
+    expect(entries[1].compaction).toEqual({ mode: "mid_loop", tokensSaved: undefined });
+    expect(entries[2]).toMatchObject({ role: "assistant", turnId: "turn-1", content: "done" });
+    // Both tool_results reached the turn; the compaction marker did not.
+    expect(entries[2].turn?.events.filter(e => e.type === "tool_result")).toHaveLength(2);
+    expect(entries[2].turn?.events.some(e => e.type === "context_compacted")).toBe(false);
+  });
+
+  test("a sub-agent's own compaction (depth > 0) is not rendered in the conversation pane", () => {
+    // A sub-agent compacting its own isolated context narrows nothing about
+    // what this conversation's model sees — that's already surfaced in the
+    // trace panel (labeled with its agent id). Rendering it here would
+    // misattribute a sub-context's narrowing to the main thread.
+    const entries = buildTimeline([
+      ev("2026-04-05T10:00:00Z", "user", { text: "spawn a sub-agent" }),
+      ev("2026-04-05T10:00:02Z", "context_compacted", {
+        depth: 1, agent_id: "sub-1", mode: "reactive", tokens_saved: 500,
+      }),
+      ev("2026-04-05T10:00:05Z", "assistant", { text: "done" }),
+    ]);
+    expect(entries.some(e => e.role === "compaction")).toBe(false);
+    expect(entries).toHaveLength(2);
   });
 });
 
@@ -491,7 +888,7 @@ describe("buildTimeline — widget_ready events render inline in the turn", () =
   });
 });
 
-describe("buildTimeline — todos events render as an in-turn checklist (#174)", () => {
+describe("buildTimeline — todos events render as an in-turn checklist", () => {
   test("todos event inside a turn produces one todos entry between user and assistant", () => {
     const entries = buildTimeline([
       ev("2026-07-01T08:00:00Z", "user", { text: "plan it" }),
@@ -543,6 +940,110 @@ describe("buildTimeline — todos events render as an in-turn checklist (#174)",
     ]);
     expect(entries.some((e) => e.role === "todos")).toBe(false);
     expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+  });
+});
+
+describe("buildTimeline — ask-user questions render as an in-turn card", () => {
+  const q = (
+    header: string,
+    question: string,
+    options: { label: string; description: string | null }[] = [],
+    multi_select = false,
+  ) => ({ header, question, options, multi_select });
+
+  test("user_question inside a turn produces a pending question entry", () => {
+    const entries = buildTimeline([
+      ev("2026-07-18T08:00:00Z", "user", { text: "help me choose" }),
+      ev("2026-07-18T08:00:05Z", "user_question", {
+        call_id: "c1",
+        call_token: "tok",
+        questions: [
+          q("Scope", "How far?", [
+            { label: "File", description: null },
+            { label: "Module", description: "wider" },
+          ]),
+        ],
+      }),
+    ]);
+    expect(entries.map((e) => e.role)).toEqual(["user", "question"]);
+    const question = entries.find((e) => e.role === "question")?.question;
+    expect(question?.callId).toBe("c1");
+    expect(question?.callToken).toBe("tok");
+    expect(question?.status).toBe("pending");
+    expect(question?.questions).toHaveLength(1);
+    expect(entries.find((e) => e.role === "question")?.turnId).toBe("turn-1");
+  });
+
+  test("user_question_answered settles the pending card in place (answered)", () => {
+    const entries = buildTimeline([
+      ev("2026-07-18T08:00:00Z", "user", { text: "help" }),
+      ev("2026-07-18T08:00:05Z", "user_question", {
+        call_id: "c1",
+        call_token: "tok",
+        questions: [q("Scope", "How far?")],
+      }),
+      ev("2026-07-18T08:00:09Z", "user_question_answered", {
+        call_id: "c1",
+        outcome: "answered",
+        answered_via: "console",
+        answers: [{ selected_indexes: null, text: "just this file" }],
+      }),
+      ev("2026-07-18T08:00:10Z", "assistant", { text: "done" }),
+    ]);
+    const question = entries.find((e) => e.role === "question")?.question;
+    expect(question?.status).toBe("answered");
+    expect(question?.answeredVia).toBe("console");
+    expect(question?.answers).toEqual([{ selected_indexes: null, text: "just this file" }]);
+    // Settled in place — still exactly ONE question entry, not stacked.
+    expect(entries.filter((e) => e.role === "question")).toHaveLength(1);
+  });
+
+  test("declined / interrupted / cancelled settle status with no answers", () => {
+    for (const outcome of ["declined", "interrupted", "cancelled"] as const) {
+      const entries = buildTimeline([
+        ev("2026-07-18T08:00:00Z", "user", { text: "help" }),
+        ev("2026-07-18T08:00:05Z", "user_question", {
+          call_id: "c1",
+          call_token: "t",
+          questions: [q("H", "Q?")],
+        }),
+        ev("2026-07-18T08:00:09Z", "user_question_answered", {
+          call_id: "c1",
+          outcome,
+          answered_via: null,
+          answers: null,
+        }),
+      ]);
+      const question = entries.find((e) => e.role === "question")?.question;
+      expect(question?.status).toBe(outcome);
+      expect(question?.answers).toBeUndefined();
+    }
+  });
+
+  test("user_question_answered with no matching pending question is a no-op", () => {
+    const entries = buildTimeline([
+      ev("2026-07-18T08:00:00Z", "user", { text: "hi" }),
+      ev("2026-07-18T08:00:05Z", "user_question_answered", {
+        call_id: "ghost",
+        outcome: "answered",
+        answered_via: "x",
+        answers: [],
+      }),
+      ev("2026-07-18T08:00:10Z", "assistant", { text: "ok" }),
+    ]);
+    expect(entries.some((e) => e.role === "question")).toBe(false);
+    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+  });
+
+  test("user_question outside an open turn is ignored (no orphan entry)", () => {
+    const entries = buildTimeline([
+      ev("2026-07-18T08:00:00Z", "user_question", {
+        call_id: "c1",
+        call_token: "t",
+        questions: [q("H", "Q?")],
+      }),
+    ]);
+    expect(entries).toEqual([]);
   });
 });
 
@@ -682,7 +1183,7 @@ describe("LLM resilience events — retry / fallback / halt in buildLogs", () =>
   });
 });
 
-describe("getActiveStreamText — live token deltas (#137)", () => {
+describe("getActiveStreamText — live token deltas", () => {
   test("coalesces root deltas into one growing message", () => {
     const events: EventRecord[] = [
       ev("2026-06-15T10:00:00Z", "user", { text: "hi" }),
@@ -805,7 +1306,7 @@ describe("getLastContext — most-recent context event wins, never merged", () =
     // the user cleared the project back to Temporary) that omits the key
     // entirely — InputBar's omission convention for a falsy field, never an
     // explicit null. The effective context must reflect B verbatim, not fold
-    // A's `project` forward (Gitea #185).
+    // A's `project` forward.
     const events: EventRecord[] = [
       ev("2026-07-01T10:00:00Z", "context", { project: "X", mcp_tools: ["shell"] }),
       ev("2026-07-01T10:00:05Z", "user", { text: "do the thing" }),

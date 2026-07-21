@@ -11,9 +11,16 @@ interface MessageBubbleProps {
   content?: string;
   actions?: React.ReactNode;
   children?: React.ReactNode;
+  /**
+   * Assistant/ai bubbles render a copy affordance beneath the text by default.
+   * Set false when an owning surface (the conversation timeline's turn footer)
+   * provides copy in its own action cluster, so one turn never renders copy
+   * twice. Does not affect the `actions` slot.
+   */
+  showCopy?: boolean;
 }
 const USER_COLLAPSE_THRESHOLD = 300;
-export function MessageBubble({ role, content, actions, children }: MessageBubbleProps) {
+export function MessageBubble({ role, content, actions, children, showCopy = true }: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   const markdown = content ? <MarkdownContent content={content} /> : null;
   if (role === 'user') {
@@ -26,14 +33,14 @@ export function MessageBubble({ role, content, actions, children }: MessageBubbl
     return (
       <div className="flex justify-end">
         <div className="flex flex-col items-end">
-          <div className="bg-user-msg hover:bg-user-msg-hover text-[hsl(var(--card-foreground))] px-4 py-3 bubble-notch text-sm border border-[hsl(var(--border))] hover:border-[hsl(var(--border-strong))] transition-colors break-words">
+          <div className="bg-user-msg hover:bg-user-msg-hover text-[hsl(var(--card-foreground))] px-4 py-3 bubble-notch text-base border border-[hsl(var(--border))] hover:border-[hsl(var(--border-strong))] transition-colors break-words">
             {displayContent ? <MarkdownContent content={displayContent} /> : null}
             {isLong &&
             <>
               <div className="border-t border-[hsl(var(--border))] mt-2 pt-1.5" />
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="flex items-center gap-1.5 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
+                className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
 
                   {expanded ?
                 <>
@@ -60,16 +67,18 @@ export function MessageBubble({ role, content, actions, children }: MessageBubbl
     return (
       <div className="flex flex-col w-full">
         {content &&
-        <div className="text-[hsl(var(--foreground))] text-sm">{markdown}</div>
+        <div className="text-[hsl(var(--foreground))] text-base">{markdown}</div>
         }
-        {content && (
+        {content && (showCopy || actions) && (
           <div className="mt-2 inline-flex items-center gap-3">
-            <CopyButton
-              text={content}
-              className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-            >
-              <span className="hidden text-[10px] group-hover:inline-block">Copy</span>
-            </CopyButton>
+            {showCopy && (
+              <CopyButton
+                text={content}
+                className="group inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+              >
+                <span className="hidden text-2xs group-hover:inline-block">Copy</span>
+              </CopyButton>
+            )}
             {actions}
           </div>
         )}
@@ -80,7 +89,7 @@ export function MessageBubble({ role, content, actions, children }: MessageBubbl
   return (
     <div className="flex flex-col w-full">
       {content &&
-      <div className="text-[hsl(var(--foreground))] text-sm">{markdown}</div>
+      <div className="text-[hsl(var(--foreground))] text-base">{markdown}</div>
       }
       {children}
     </div>);
@@ -92,7 +101,7 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
 
   a: ({ ...props }) =>
     <a
-      className="text-[hsl(var(--primary))] underline underline-offset-2 hover:opacity-80"
+      className="text-[hsl(var(--primary-text))] underline underline-offset-2 hover:opacity-80"
       {...props} />,
 
   ul: ({ ...props }) =>
@@ -106,7 +115,7 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
 
   blockquote: ({ ...props }) =>
     <blockquote
-      className="my-3.5 px-4 py-3 border-y border-[hsl(var(--border))] bg-[hsl(var(--muted))]/45 text-[hsl(var(--foreground))]/90 not-italic [&>p]:my-0 [&>p+p]:mt-1.5 [&>p>strong]:font-semibold [&>p>strong]:text-[hsl(var(--foreground))] [&>p>code]:bg-[hsl(var(--background))]/60"
+      className="my-3.5 px-4 py-3 border-y border-[hsl(var(--border))] bg-[hsl(var(--muted))]/45 text-[hsl(var(--foreground))]/90 not-italic [&>p]:my-0 [&>p+p]:mt-1.5 [&>p>strong]:font-medium [&>p>strong]:text-[hsl(var(--foreground))] [&>p>code]:bg-[hsl(var(--background))]/60"
       {...props} />,
 
   // Inline code only — block code inside <pre> is handled by rehype-highlight
@@ -126,9 +135,12 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
       className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 overflow-x-auto text-xs my-2 [&_code.hljs]:bg-transparent [&_code.hljs]:p-0"
       {...props} />,
 
-  // Headings
+  // Headings — step down through the type scale to h3, then h4-h6 hold at
+  // text-sm and differentiate by weight/colour only (adjacency rule: no more
+  // than 3 size steps on one surface, and a chat h1 must not read as loud as
+  // a landing headline).
   h1: ({ ...props }) =>
-    <h1 className="text-lg font-bold text-[hsl(var(--foreground))] mt-4 mb-2" {...props} />,
+    <h1 className="text-lg font-semibold text-[hsl(var(--foreground))] mt-4 mb-2" {...props} />,
 
   h2: ({ ...props }) =>
     <h2 className="text-base font-semibold text-[hsl(var(--foreground))] mt-3.5 mb-1.5" {...props} />,
@@ -140,10 +152,10 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
     <h4 className="text-sm font-medium text-[hsl(var(--foreground))] mt-2 mb-1" {...props} />,
 
   h5: ({ ...props }) =>
-    <h5 className="text-xs font-semibold text-[hsl(var(--foreground))] mt-2 mb-1" {...props} />,
+    <h5 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mt-2 mb-1" {...props} />,
 
   h6: ({ ...props }) =>
-    <h6 className="text-xs font-medium text-[hsl(var(--muted-foreground))] mt-2 mb-1" {...props} />,
+    <h6 className="text-sm font-normal text-[hsl(var(--muted-foreground))] mt-2 mb-1" {...props} />,
 
   hr: () =>
     <hr className="border-[hsl(var(--border))] my-4" />,
@@ -164,7 +176,7 @@ const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components
     <tr className="border-b border-[hsl(var(--border))] last:border-b-0 even:bg-[hsl(var(--muted))]/50" {...props} />,
 
   th: ({ ...props }) =>
-    <th className="text-left font-semibold px-3 py-2 text-[hsl(var(--foreground))]" {...props} />,
+    <th className="text-left font-medium px-3 py-2 text-[hsl(var(--foreground))]" {...props} />,
 
   td: ({ ...props }) =>
     <td className="px-3 py-2 text-[hsl(var(--foreground))]" {...props} />,

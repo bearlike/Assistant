@@ -8,10 +8,19 @@ export function AgentIdChip({ agentId, className }: { agentId?: string; classNam
   return <span className={cn(AGENT_ID_TAG_CLASS, className)}>{agentId.slice(0, 8)}</span>;
 }
 
+/**
+ * Badge — the shared text-only status/kind chip: a bare `<span>` colored from
+ * BADGE_COLOR_MAP. The contract is deliberately text-only. Chips that need an
+ * icon slot, a clickable/button variant, or a responsive short/long label swap
+ * stay bespoke (FreshnessBadge, SecretsSummary chips, GitCredentialChips) — the
+ * single-child span can't express those, and growing it to would widen the API
+ * for every caller to serve three outliers. Keep those local; extend Badge only
+ * if an icon or interactive chip ever becomes the common case.
+ */
 export function Badge({ children, color }: { children: ReactNode; color: string }) {
   return (
     <span className={cn(
-      'text-[10px] font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap',
+      'text-2xs font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap',
       BADGE_COLOR_MAP[color] || BADGE_COLOR_MAP.muted,
     )}>
       {children}
@@ -60,7 +69,7 @@ export function StatusPill({ status, label, count, className }: StatusPillProps)
   return (
     <span className={cn(
       'inline-flex items-center gap-1 rounded-full border',
-      'text-[10px] font-mono font-medium px-1.5 py-px whitespace-nowrap',
+      'text-2xs font-medium px-1.5 py-px whitespace-nowrap',
       s.bg, s.border, s.text,
       className,
     )}>

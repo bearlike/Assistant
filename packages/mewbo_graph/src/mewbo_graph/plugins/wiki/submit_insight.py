@@ -1,6 +1,6 @@
 """``wiki_submit_insight`` SessionTool — ingest one atomic memory note.
 
-The in-session write surface for the multiplex memory layer (Gitea #13 §8).
+The in-session write surface for the multiplex memory layer.
 Works for both the indexer and the Q&A agent: the source is derived from
 whichever wiki ctx the session resolves to. The tool is deterministic — it
 does NOT call an LLM (no condense, dedup tier-3 disabled); agents are

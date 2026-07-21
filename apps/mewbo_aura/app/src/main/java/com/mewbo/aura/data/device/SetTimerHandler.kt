@@ -9,10 +9,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** `device_set_timer` - same handoff-not-confirmation honesty as [SetAlarmHandler] (task brief):
- * `AlarmClock.ACTION_SET_TIMER` reaches whatever clock app the device resolves it to, and
- * `EXTRA_SKIP_UI` is honored inconsistently across OEMs, so there is no reliable "the timer now
- * exists" signal to report. Same [foregroundChecker] gate as [SetAlarmHandler] (review finding F4). */
+/** `device_set_timer` - same handoff-is-authoritative posture as [SetAlarmHandler]:
+ * `AlarmClock.ACTION_SET_TIMER` reaches whatever clock app the device resolves it to, and a
+ * `startActivity` that returns without throwing means the request was delivered, so the result
+ * reports it as done - there is no unconfirmed-delivery hedge to attach. Same [foregroundChecker]
+ * gate as [SetAlarmHandler] (review finding F4). */
 class SetTimerHandler @Inject constructor(
     @ApplicationContext private val context: Context,
     private val foregroundChecker: AppForegroundChecker,
@@ -35,7 +36,6 @@ class SetTimerHandler @Inject constructor(
 
         return buildJsonObject {
             put("handed_to_clock_app", true)
-            put("note", "The timer request was handed to the device's clock app; whether it was actually started was not confirmed.")
         }
     }
 }

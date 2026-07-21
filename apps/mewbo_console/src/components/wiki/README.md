@@ -2,10 +2,9 @@
 # /wiki section — design + integration notes
 
 Colocated reference for the `/wiki/*` namespace of the console. Read this
-before touching anything under `src/components/wiki/`. The Gitea handoff
-issue is `bearlike/Assistant#5` on the project's private Gitea instance — it
-documents the API contract verbatim and is the source of truth for the
-*backend* side of the swap. This file documents the *frontend* side.
+before touching anything under `src/components/wiki/`. This file documents the
+*frontend* side of the swap; the *backend* side is specified by the API
+contract in `api/types.ts` (see "Wire-shape source of truth" below).
 
 ## What it is
 
@@ -22,7 +21,7 @@ behind `/wiki/*`. Production wiring is a one-file swap in `api/client.ts`.
 | `/wiki/configure?url=…` | `ConfigureWizard` | 3-step onboarding (source / generation / scope) |
 | `/wiki/repo?slug=…` | `WelcomeScreen` | Email-gated "not indexed" page |
 | `/wiki/indexing?jobId=…&slug=…` | `IndexingScreen` | Live SSE-driven loader with cancel |
-| `/wiki/p/<pageId>?slug=…` | `WikiScreen` | 3-col sidebar / markdown / TOC + Q&A dock |
+| `/wiki/p/<pageId>?slug=…` | `WikiScreen` | 2-col: markdown body + right "Page details" aside (Featured / RefreshThisWiki / on-page ToC) + Q&A dock. The page tree lives in the NavRail, not a left column |
 | `/wiki/qa?q=…&page=…&model=…&slug=…` | `QAScreen` | 2-col streaming Q&A view |
 
 Routing helper is `router.ts` — use `buildHref({ kind, ... })` to build
@@ -42,40 +41,52 @@ src/components/wiki/
 ├── WikiScreen.tsx
 ├── QAScreen.tsx
 │
-├── WikiTopBar.tsx               # MewboWiki brand + Edit Wiki + Copy badge popovers + Copy link
+├── WikiTopBar.tsx               # in-pane contextual header: back nav, repo slug, Edit Wiki + Copy badge popovers, Copy link
 ├── ModelPicker.tsx              # reuses ModelBrandIcon + formatModelName
 ├── MarkdownBlock.tsx            # react-markdown + remark-gfm + rehype-slug
 ├── MermaidBlock.tsx             # lazy mermaid, memoised, cached
 ├── DiagramZoom.tsx              # fit-to-stage zoom modal
 ├── LiveBlocks.tsx               # paint blocks as a stream grows them
-├── TypewriterBlocks.tsx         # legacy char-by-char typewriter (Block model)
 ├── QADock.tsx                   # floating composer
-├── RefreshThisWiki.tsx          # right-rail two-step confirm + queue
+├── useQaConversation.ts         # QAScreen's stream/snapshot join, URL-fold, multi-turn stacking (unit-tested standalone)
+├── Graph3DView.tsx              # the ONE 3D graph engine (also used by Agentic Search)
+├── Graph3DToolbar.tsx           # Graph3DView's filter/node-type/layer toolbar strip
+├── RefreshThisWiki.tsx          # verdict-first index-status card + two-step confirm/queue re-index
+├── wikiStatus.ts                # pure deriveWikiStatus() + shared classifyFreshness kernel (unit-tested)
 ├── IndexedSnapshot.ts           # atomic class: indexedAt/branch/commit + URL composers
 ├── IndexedSnapshotCaption.tsx   # sidebar caption + landing-card footer renderer
 ├── BrandMark.tsx                # clay flower SVG
 ├── mermaid-renderer.ts          # shared lazy-load + (theme,source)→svg cache
 ├── router.ts                    # WikiRoute parser/buildHref
 ├── badge.ts                     # atomic class: WikiBadge (README "Copy badge" snippet)
+├── slug.ts                      # canonical host/owner/repo parsing + DEFAULT_WIKI_SLUG
 ├── useStoredModel.ts            # localStorage `wiki:qa-model`
+├── projectSettingsForm.ts       # ProjectSettingsDialog's pure form model (schema/seed/patch/splitLines)
 │
 ├── configure-wizard/
+│   ├── wizardState.ts           # useWizardMachine() — all of ConfigureWizard's non-JSX state/validation/submit
+│   ├── StepSource.tsx, StepGeneration.tsx, StepScope.tsx
 │   ├── Field.tsx, Stepper.tsx
 │   ├── PlatformTile.tsx
 │   └── PlatformIcon.tsx         # simple-icons + lobehub Azure
 │
+├── landing/                     # LandingScreen's extracted cards/rows + filter hook
+│   ├── ActiveJobCard.tsx, RecoverableJobRow.tsx, ProjectCard.tsx, DeleteWikiDialog.tsx
+│   └── useLandingProjects.ts
+│
 └── api/
     ├── types.ts                 # ★ wire-shape source of truth
     ├── client.ts                # real HTTP/SSE transport to /v1/wiki/*
-    ├── hooks.ts                 # TanStack Query + stream consumers
-    └── markdown.ts              # frontmatter splitter + TOC derivation
+    ├── hooks.ts                 # TanStack Query surface (queries + mutations only)
+    ├── streamHooks.ts           # the two SSE stream consumers: useIndexingStream, useQaStream
+    └── markdown.ts              # PageFrontmatter type + heading slugifier (frontmatter/TOC parsing now happens server-side)
 ```
 
 ## Wire-shape source of truth
 
 `api/types.ts` is the canonical schema for every shape that crosses
 `api/client.ts`. **Never** invent new shapes elsewhere — extend `types.ts`
-and let the change ripple. Backend implementers (issue #5) treat this
+and let the change ripple. Backend implementers treat this
 file as the spec to satisfy.
 
 Key unions:
@@ -112,7 +123,6 @@ Endpoint mapping:
 | `getAnswer(answerId)` | `/v1/wiki/qa/<answerId>` | GET |
 | `streamAnswer(input)` | `/v1/wiki/qa` | POST SSE |
 | `startAnswer(input)` | `/v1/wiki/qa` (awaits `meta` event) | POST SSE |
-| `askQuestion(q, ctx)` | via `startAnswer` → `getAnswer` | — |
 | `submitWizard(input)` | via `createIndexingJob` | — |
 | `requestWikiRefresh(slug)` | `/v1/wiki/projects/<slug>/refresh` | POST |
 | `getDefaultExclusions` | (local constant — no round-trip) | — |
@@ -123,22 +133,22 @@ SSE implementation uses `fetch` + `ReadableStream` reader (not
 work. Heartbeat frames are silently skipped inside the parser.
 `AbortSignal` cancels the underlying `fetch` on unmount.
 
-Backend contract and design:
-`docs/specs/2026-05-14-wiki-style-gen-design.md`
+Backend contract and design: see the API-side `CLAUDE.md` and the
+`api/types.ts` wire contract (the "Wire-shape source of truth" above).
 
 ## Markdown rendering pipeline
 
 Wiki pages are markdown + YAML frontmatter, NOT the old block DSL. The
-flow:
+server parses frontmatter and derives the TOC — `getPage()` (`api/client.ts`)
+returns an already-structured `WikiPage { frontmatter, body, toc, nav }`, no
+client-side frontmatter/TOC parsing. The flow from there:
 
 ```
-fetch raw .md  →  parsePageSource()    →  WikiPage { frontmatter, body, toc, nav }
-                  (api/markdown.ts)
-                                       →  <MarkdownBlock>           (renders to React)
-                                          via react-markdown
-                                          + remark-gfm
-                                          + rehype-slug              (heading IDs)
-                                          + custom component map     (code/a/h2/h3/...)
+WikiPage.body  →  <MarkdownBlock>           (renders to React)
+                   via react-markdown
+                   + remark-gfm
+                   + rehype-slug              (heading IDs)
+                   + custom component map     (code/a/h2/h3/...)
 ```
 
 Custom component handlers route:
@@ -165,7 +175,12 @@ for the full implementation. Invariants:
    every scroll tick → flicker + layout jump.
 2. **`mermaid.initialize()` runs once per theme.** Tracked in
    `mermaid-renderer.ts`. Calling it from each block's effect races on
-   shared state.
+   shared state. Its `themeVariables` are LIVE token reads (graphTheme's
+   `cssVarColor` over `--surface`/`--card`/`--foreground`/`--border-strong`)
+   captured at that once-per-theme init — never a hardcoded palette copy
+   (a static copy silently misses any future token repaint). Corollary:
+   the init must run AFTER the `<html>` class flip; `App.tsx` guarantees
+   this by mutating the class before dispatching `wiki:theme-change`.
 3. **SVG output is cached by `(theme, source)`.** Same diagram + same
    theme = same SVG handed back without calling mermaid again.
 4. **`React.memo` on MermaidBlock.** Parents re-render on scroll-spy;
@@ -186,11 +201,12 @@ for the full implementation. Invariants:
 
 The blocks array grows over time (`block_delta` appends to the matching
 index). `<LiveBlocks>` just paints whatever state it sees — the stream
-IS the typewriter. Do not stack `<TypewriterBlocks>` on top of it.
+IS the typewriter. Do not build a second, block-replaying renderer on
+top of it.
 
-The legacy non-streaming path (`useAskWiki()` → full `QaAnswer` snapshot)
-is kept because shareable QA URLs use it. `GET /v1/wiki/qa/<answerId>`
-serves the snapshot.
+Shareable QA URLs (`?answer=<id>`) don't stream — they render from
+`GET /v1/wiki/qa/<answerId>`, the persisted snapshot, via
+`useQaAnswerSnapshot()`. See "Idempotent Q&A URL" in `CLAUDE.md`.
 
 ## Indexing streaming
 

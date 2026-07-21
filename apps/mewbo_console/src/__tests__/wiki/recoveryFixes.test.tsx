@@ -1,5 +1,5 @@
 /**
- * Recovery-UI code-review fixes (Gitea #54).
+ * Recovery-UI code-review fixes.
  *
  * Three regressions, asserted at the hook seam so each test fails if the fix
  * is reverted:

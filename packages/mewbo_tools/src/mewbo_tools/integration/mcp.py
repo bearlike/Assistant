@@ -414,7 +414,7 @@ class MCPToolRunner:
 
         pool = get_mcp_pool()
 
-        # Gitea #130 Phase 4: a server that is already live must never trigger
+        # A server that is already live must never trigger
         # a full-config reload + reconnect mid-query — that re-dialed EVERY
         # server (incl. dead ones) on every tool call, re-incurring the stall.
         # Only when the target isn't connected do we sync config (so a config

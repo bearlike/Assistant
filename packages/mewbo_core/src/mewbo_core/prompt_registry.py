@@ -245,6 +245,10 @@ class PromptRegistry:
         self._env = Environment(
             undefined=StrictUndefined,
             keep_trailing_newline=True,
+            # autoescape off by design: every engine prompt this renders is LLM/plain text,
+            # never browser-facing HTML — entity-encoding would corrupt the prompt. See the
+            # SSTI-boundary note in the module CLAUDE.md for why operator text never reaches
+            # this non-sandboxed env.
             autoescape=False,
         )
         self._compiled: dict[str, Template] = {}

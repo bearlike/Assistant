@@ -28,7 +28,7 @@ cwd-confined existing files.
 
 Guardrails (KISS — never balloon the prompt):
 - Per-ref **and** aggregate character caps; on overflow we **truncate with a
-  marker, never reject** (mirrors the NL-context boundary fix in #83).
+  marker, never reject** (mirrors the NL-context boundary fix).
 - Identical refs are deduped — the first occurrence expands, later ones stay
   literal (the content is already above).
 - No recursive expansion (an expanded block is never re-scanned).
@@ -173,7 +173,7 @@ class ReferenceExpander:
                 text=True,
             )
         except OSError as exc:  # git missing on PATH
-            logging.warning("git diff for @diff failed: %s", exc)
+            logging.warning("git diff for @diff failed: {}", exc)
             return None
         if result.returncode != 0:
             return None
@@ -250,7 +250,7 @@ class ReferenceExpander:
                 # truncated without slurping a huge file into memory.
                 return fh.read(self._per_ref_chars + 1)
         except OSError as exc:
-            logging.warning("reading @%s failed: %s", path, exc)
+            logging.warning("reading @{} failed: {}", path, exc)
             return None
 
     # -- block assembly ------------------------------------------------
@@ -298,5 +298,5 @@ def expand_references(
     try:
         return ReferenceExpander(cwd, attachments=attachments).expand(text)
     except Exception as exc:  # noqa: BLE001 - never block a run on expansion
-        logging.warning("reference expansion failed, using raw query: %s", exc)
+        logging.warning("reference expansion failed, using raw query: {}", exc)
         return text

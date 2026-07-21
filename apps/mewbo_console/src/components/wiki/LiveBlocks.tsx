@@ -26,7 +26,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSlug from "rehype-slug";
 
 import { CitationRef } from "./citations";
-import { SrcChip, buildMarkdownComponents } from "./markdownComponents";
+import { SrcChip, buildMarkdownComponents, wikiUrlTransform } from "./markdownComponents";
 import type { Block, InlineNode } from "./api/types";
 
 interface LiveBlocksProps {
@@ -54,6 +54,7 @@ function Prose({ source, components }: { source: string; components: Components 
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[rehypeHighlight, rehypeSlug]}
+      urlTransform={wikiUrlTransform}
       components={components}
     >
       {source}
@@ -114,7 +115,7 @@ function ParagraphBlock({
     return <Prose source={node} components={components} />;
   }
   return (
-    <p className="text-[14.5px] leading-[1.7] text-[hsl(var(--foreground))] [text-wrap:pretty] my-4 first:mt-0">
+    <p className="text-base leading-[1.7] text-[hsl(var(--foreground))] [text-wrap:pretty] my-4 first:mt-0">
       {renderInlineAtoms(node, onNavigatePage)}
     </p>
   );
@@ -130,7 +131,7 @@ function ListBlock({
   onNavigatePage: (pageId: string) => void;
 }) {
   return (
-    <ul className="my-4 space-y-1.5 list-disc pl-5 marker:text-[hsl(var(--muted-foreground))] text-[14.5px] leading-[1.7]">
+    <ul className="my-4 space-y-1.5 list-disc pl-5 marker:text-[hsl(var(--muted-foreground))] text-base leading-[1.7]">
       {items.map((it, j) => (
         <li key={j} className="[text-wrap:pretty]">
           {typeof it === "string" ? (
@@ -163,7 +164,7 @@ function TableBlock({
             {head.map((h, i) => (
               <th
                 key={i}
-                className="text-left font-medium text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] px-3 py-2"
+                className="text-left text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] px-3 py-2"
               >
                 {h}
               </th>
@@ -217,7 +218,7 @@ function renderInlineAtoms(node: InlineNode, onNavigatePage: (p: string) => void
       <button
         type="button"
         onClick={() => onNavigatePage(node.link)}
-        className="inline text-[hsl(var(--primary))] hover:underline underline-offset-2 cursor-pointer bg-transparent border-0 p-0 font-inherit"
+        className="inline text-[hsl(var(--primary-text))] hover:underline underline-offset-2 cursor-pointer bg-transparent border-0 p-0 font-inherit"
       >
         {node.text}
       </button>

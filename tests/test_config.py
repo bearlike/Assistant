@@ -70,6 +70,36 @@ def test_scg_defaults_ship_disabled():
     assert config.scg.traversal.default_tier == "auto"
 
 
+def test_agent_session_step_budget_survives_config_load(tmp_path):
+    """An ``agent.session_step_budget`` in app.json must land on AppConfig
+    (regression: with no typed field on ``AgentConfig``, ``extra="ignore"``
+    silently dropped it, so every ``get_config_value("agent",
+    "session_step_budget", default=0)`` call site read 0 no matter what a
+    deployment configured)."""
+    target = tmp_path / "app.json"
+    target.write_text(json.dumps({"agent": {"session_step_budget": 5}}), encoding="utf-8")
+    set_app_config_path(target)
+
+    assert get_config().agent.session_step_budget == 5
+    assert get_config_value("agent", "session_step_budget") == 5
+
+
+def test_agent_stall_knobs_survive_config_load_and_default(tmp_path):
+    """Watchdog stall knobs are config-tunable, with the prior hardcoded
+    values (120s threshold / 30s check interval) as defaults."""
+    config = AppConfig()
+    assert config.agent.stall_threshold_s == 120.0
+    assert config.agent.stall_check_interval_s == 30.0
+
+    target = tmp_path / "app.json"
+    payload = {"agent": {"stall_threshold_s": 45.0, "stall_check_interval_s": 10.0}}
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    set_app_config_path(target)
+
+    assert get_config_value("agent", "stall_threshold_s") == 45.0
+    assert get_config_value("agent", "stall_check_interval_s") == 10.0
+
+
 def test_llm_validate_models_skips_when_no_api_base():
     """Skip model listing gracefully when api_base is empty."""
     llm = LLMConfig(api_base="", api_key="key")

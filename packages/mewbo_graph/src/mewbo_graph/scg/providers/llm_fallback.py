@@ -4,7 +4,7 @@ For a source with no machine-readable schema (a free-text connector blurb, a
 legacy API with only prose docs), there is nothing to parse deterministically.
 This provider asks an injected LLM for a single coarse *capability label* and
 emits one ``capability`` node so the source is at least reachable by the router
-— the RML pattern's escape hatch (#19: "LLM fallback for schemaless sources").
+— the RML pattern's escape hatch ("LLM fallback for schemaless sources").
 
 The LLM is **dependency-injected** (``llm`` constructor arg). The default is
 ``None`` so an accidental use raises loudly rather than silently no-opping — and

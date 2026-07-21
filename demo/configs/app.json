@@ -1,0 +1,142 @@
+{
+  "$schema": "https://thekrishna.in/Assistant/latest/app.schema.json",
+  "runtime": {
+    "envmode": "dev",
+    "log_level": "INFO",
+    "log_style": "",
+    "cli_log_style": "dark",
+    "preflight_enabled": false,
+    "cache_dir": "",
+    "session_dir": "",
+    "config_dir": ""
+  },
+  "storage": {
+    "driver": "mongodb",
+    "mongodb": {
+      "uri": "mongodb://mongo:27017",
+      "database": "mewbo_demo"
+    }
+  },
+  "llm": {
+    "api_base": "https://llm.example.com/v1",
+    "api_key": "demo-not-a-real-key",
+    "default_model": "anthropic/claude-sonnet-4-6",
+    "action_plan_model": "",
+    "tool_model": "",
+    "reasoning_effort": "",
+    "reasoning_effort_models": [],
+    "fallback": {
+      "enabled": false,
+      "models": []
+    }
+  },
+  "context": {
+    "recent_event_limit": 8,
+    "selection_threshold": 0.8,
+    "selection_enabled": true,
+    "context_selector_model": ""
+  },
+  "token_budget": {
+    "default_context_window": 128000,
+    "auto_compact_threshold": 0.8,
+    "model_context_windows": {}
+  },
+  "compaction": {
+    "caveman_mode": false
+  },
+  "reflection": {
+    "enabled": false,
+    "model": ""
+  },
+  "langfuse": {
+    "enabled": false,
+    "host": "",
+    "public_key": "pk-demo-not-a-real-key",
+    "secret_key": "sk-demo-not-a-real-key"
+  },
+  "home_assistant": {
+    "enabled": false,
+    "url": "",
+    "token": ""
+  },
+  "permissions": {
+    "policy_path": "",
+    "approval_mode": "ask"
+  },
+  "cli": {
+    "disable_textual": false,
+    "approval_style": "inline",
+    "remote": {
+      "base_url": "",
+      "token": ""
+    }
+  },
+  "chat": {
+    "port": 8501,
+    "address": "127.0.0.1"
+  },
+  "api": {
+    "master_token": "msk-strong-password",
+    "allow_external_cwd": false
+  },
+  "agent": {
+    "enabled": true,
+    "max_depth": 5,
+    "max_concurrent": 20,
+    "default_sub_model": "",
+    "allowed_models": [],
+    "sub_agent_max_steps": 10,
+    "default_denied_tools": [],
+    "edit_tool": "search_replace_block",
+    "llm_call_timeout": 120.0,
+    "llm_call_retries": 2,
+    "web_ide": {
+      "enabled": false,
+      "image": "codercom/code-server:latest",
+      "default_lifetime_hours": 1,
+      "max_lifetime_hours": 8,
+      "cpus": 1.0,
+      "memory": "1g",
+      "pids_limit": 512,
+      "network": "mewbo-ide",
+      "state_dir": "/tmp/mewbo-ide"
+    }
+  },
+  "hooks": {
+    "pre_tool_use": [],
+    "post_tool_use": [],
+    "on_session_start": [],
+    "on_session_end": []
+  },
+  "plugins": {
+    "enabled": true,
+    "enabled_plugins": [],
+    "marketplaces": [],
+    "install_path": ""
+  },
+  "channels": {},
+  "wiki": {
+    "default_model": "",
+    "default_qa_model": "",
+    "default_depth": "comprehensive",
+    "default_language": "en",
+    "embedding": {
+      "enabled": false,
+      "model": "openai/text-embedding-3-small",
+      "batch_size": 64
+    },
+    "memory": {
+      "enabled": false
+    },
+    "refresh": {
+      "default_mode": "auto"
+    }
+  },
+  "scg": {
+    "enabled": true,
+    "traversal": {
+      "default_tier": "auto"
+    }
+  },
+  "projects": {}
+}

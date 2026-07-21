@@ -539,7 +539,7 @@ class TestCacheMonitorEntityFiltering:
         # must be updated deliberately.
         entities = [
             {
-                "entity_id": "binary_sensor.blink_kk_bedroom_motion",
+                "entity_id": "binary_sensor.example_camera_motion_detected",
                 "attributes": {},
                 "state": "off",
             },
@@ -548,7 +548,7 @@ class TestCacheMonitorEntityFiltering:
         holder = self._make_holder(entities, allowed_domains=["scene"])
         holder.refresh()
         entity_ids = [e["entity_id"] for e in holder.cache["entities"]]
-        assert "binary_sensor.blink_kk_bedroom_motion" not in entity_ids
+        assert "binary_sensor.example_camera_motion_detected" not in entity_ids
 
     def test_scene_entity_state_removed(self):
         entities = [

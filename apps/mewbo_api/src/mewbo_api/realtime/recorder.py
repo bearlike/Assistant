@@ -1,9 +1,9 @@
-"""Write-behind session recorder for the no-loop synthesis / draft paths (#78).
+"""Write-behind session recorder for the no-loop synthesis / draft paths.
 
 The ``mode: "synthesis"`` lane of ``POST /v1/structured`` (the former
-``/v1/structured/fast`` sibling, folded in by #85) and ``POST /v1/draft/stream``
+``/v1/structured/fast`` sibling, folded in) and ``POST /v1/draft/stream``
 are single-round-trip, latency-critical paths that were sessionless by design —
-zero session record, transcript, or Langfuse trace. #78 reclassified that as a
+zero session record, transcript, or Langfuse trace. That was reclassified as a
 defect: those surfaces must be session-full like every other entry point, WITHOUT
 regressing the latency path (draft p95 TTFT < 1.5s).
 
@@ -106,7 +106,7 @@ class RealtimeSessionRecorder:
 
         Tags the session ``structured:fast:<id>`` so its Langfuse ``session_type``
         facet stays ``structured_fast`` (parity with the removed
-        ``/v1/structured/fast`` sibling, #85).
+        ``/v1/structured/fast`` sibling).
         """
         return cls(runtime=runtime, query=query, base_tag=FAST_STRUCTURED_TAG, **kwargs)
 

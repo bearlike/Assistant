@@ -52,7 +52,7 @@ def test_close_reconciles_blocks_curated_and_accessed(store):
     snap = store.get_qa("a1")
     assert [b.root.kind for b in snap.blocks] == ["p", "sources"]
     # Cited sources = the curated page FIRST, then the file/graph evidence folded off
-    # the accessed trail (#172) — the answer's real files/symbols, not just pages.
+    # the accessed trail — the answer's real files/symbols, not just pages.
     assert snap.summary_sources == ["wiki:landing-page", "graph:n7", "src/app.py#L1-20"]
     # Deterministic trail, de-duplicated, first-seen order preserved:
     assert snap.accessed_sources == ["graph:n7", "src/app.py#L1-20", "wiki:landing-page"]
@@ -60,7 +60,7 @@ def test_close_reconciles_blocks_curated_and_accessed(store):
 
 
 def test_tag_page_citations_reschemes_only_real_pages(store):
-    """A bare wiki-page path in a sources block is re-schemed ``wiki:<id>`` (#70).
+    """A bare wiki-page path in a sources block is re-schemed ``wiki:<id>``.
 
     Without this the console's ``fileCitations`` treats the page as a source FILE
     and the ``SourceCard`` 404s against ``/source`` (pages aren't in the clone).
@@ -92,7 +92,7 @@ def test_tag_page_citations_reschemes_only_real_pages(store):
 
 
 def test_tag_page_citations_matches_title_form_refs(store):
-    """A page cited by its human TITLE re-schemes to ``wiki:<id>`` (#167/#169).
+    """A page cited by its human TITLE re-schemes to ``wiki:<id>``.
 
     The QA model frequently cites a page by its title ("Agent X Search
     Subsystem") rather than its slug id ("agent-x-search-subsystem"); the bare
@@ -127,7 +127,7 @@ def test_tag_page_citations_matches_title_form_refs(store):
 def test_accessed_trail_is_bounded_and_score_ordered():
     """The fold caps the trail to top-N, scores-first, so graph-nav bulk can't flood.
 
-    Regression for #168: probes record ~dozens of unranked graph-navigation seeds
+    Regression: probes record ~dozens of unranked graph-navigation seeds
     plus a few ranked search hits. The folded ``accessed_sources`` trail must be a
     tight, score-ordered top-N — the high-signal scored hits FIRST (descending),
     the unscored navigation seeds AFTER, and the bulk capped out — not the full
@@ -188,7 +188,7 @@ def test_from_ranked_hits_drops_below_score_floor():
 
 
 def test_accessed_source_resolver_humanises_graph_hashes(store):
-    """``graph:<node_id>`` provenance refs resolve to readable labels (#70).
+    """``graph:<node_id>`` provenance refs resolve to readable labels.
 
     An AST node → its ``file#Symbol`` key; an abstract entity → ``name (type)``;
     an unresolved id (stale graph) → ``unknown (<hash[:8]>)``. File / page refs
@@ -231,6 +231,72 @@ def test_close_is_idempotent(store):
     assert len(store.load_qa_events("a1")) == n
 
 
+# ── Turn-scoped reconciliation (a continued session's 2nd+ turn) ──
+
+
+def test_current_turn_events_scopes_to_last_meta():
+    """Only events AFTER the most recent ``meta`` belong to the current turn."""
+    events = [
+        {"type": "meta", "answerId": "a1"},
+        {"type": "block_open", "index": 0, "block": {"kind": "p", "text": "turn1"}},
+        {"type": "complete", "totalBlocks": 1},
+        {"type": "meta", "answerId": "a1"},  # turn 2 starts here
+        {"type": "block_open", "index": 0, "block": {"kind": "p", "text": "turn2"}},
+    ]
+    turn_events = QaFinalizer.current_turn_events(events)
+    assert turn_events == events[4:]  # strictly AFTER the last meta (index 3)
+
+
+def test_current_turn_events_no_meta_returns_all():
+    """No ``meta`` event at all (malformed/legacy log) ⇒ scope to everything (safe fallback)."""
+    events = [{"type": "block_open", "index": 0, "block": {"kind": "p", "text": "x"}}]
+    assert QaFinalizer.current_turn_events(events) == events
+
+
+def test_close_does_not_collide_blocks_across_turns(store):
+    """A 2nd turn's close must not merge-by-index with the 1st turn's blocks.
+
+    Both turns' ``wiki_emit_answer`` calls restart block indices at 0 — without
+    scoping to the current turn, ``_blocks_from_events`` (a dict keyed by index
+    over the WHOLE cumulative log) would let turn 2's index-0 block silently
+    overwrite turn 1's, and a turn 2 with FEWER blocks would leave turn 1's
+    leftover higher-index blocks bleeding through.
+    """
+    # store fixture already seeded turn 1: meta + access + block_open(0)="The answer."
+    # + block_open(1)=sources. Close it first (mirrors QaSessionEndHook's real order).
+    assert QaFinalizer.close(store, "a1") is True
+    turn1_blocks = store.get_qa("a1").blocks
+    assert [b.root.kind for b in turn1_blocks] == ["p", "sources"]
+
+    # Turn 2: a NEW meta (turn boundary) + a single, DIFFERENT block at index 0.
+    store.append_qa_event("a1", {"type": "meta", "answerId": "a1"})
+    store.append_qa_event("a1", {"type": "block_open", "index": 0,
+                                 "block": {"kind": "p", "text": "Turn 2's answer."}})
+    assert QaFinalizer.close(store, "a1") is True
+
+    snap = store.get_qa("a1")
+    # Turn 2's snapshot is EXACTLY turn 2's one block — no turn-1 "sources" bleed-through.
+    assert len(snap.blocks) == 1
+    assert snap.blocks[0].root.text.root == "Turn 2's answer."
+    assert snap.status == "complete"
+
+
+def test_close_idempotency_is_per_turn(store):
+    """Turn 1 being terminal must not block turn 2's OWN close."""
+    assert QaFinalizer.close(store, "a1") is True  # turn 1 closes normally
+
+    store.append_qa_event("a1", {"type": "meta", "answerId": "a1"})
+    store.append_qa_event("a1", {"type": "block_open", "index": 0,
+                                 "block": {"kind": "p", "text": "Turn 2."}})
+    # Must NOT short-circuit as "already terminal" just because turn 1 has a
+    # complete event earlier in the cumulative log.
+    assert QaFinalizer.close(store, "a1") is True
+    assert store.get_qa("a1").blocks[0].root.text.root == "Turn 2."
+
+    # A genuine re-close of the SAME (now-terminal) turn 2 is still idempotent.
+    assert QaFinalizer.close(store, "a1") is False
+
+
 def test_close_error_emits_error_not_complete(store):
     """A halted run gets a terminal error event but still reconciles partial blocks."""
     QaFinalizer.close(store, "a1", error="halted_no_progress")
@@ -252,14 +318,14 @@ def test_summary_sources_prefers_explicit_summary_ready(store):
     store.append_qa_event("a1", {"type": "summary_ready",
                                   "sources": ["wiki:overview", "wiki:auth"]})
     QaFinalizer.close(store, "a1")
-    # summary_ready pages lead; the file/graph trail (#172) still folds in after them.
+    # summary_ready pages lead; the file/graph trail still folds in after them.
     assert store.get_qa("a1").summary_sources == [
         "wiki:overview", "wiki:auth", "graph:n7", "src/app.py#L1-20",
     ]
 
 
 def test_summary_sources_fold_file_graph_from_accessed_trail(store):
-    """Cited sources represent file/graph evidence, not just pages (#172).
+    """Cited sources represent file/graph evidence, not just pages.
 
     Files are the most-read source but the LLM's curated block is ~100% page-slugs,
     so provenance used to collapse to pages. The finalizer now folds the non-page
@@ -277,7 +343,7 @@ def test_summary_sources_fold_file_graph_from_accessed_trail(store):
 
 
 def test_summary_sources_reschemes_bare_page_ids_and_titles(store):
-    """``summary_sources`` re-schemes bare page refs (slug id OR title) (#169).
+    """``summary_sources`` re-schemes bare page refs (slug id OR title).
 
     The first ``wiki_search_pages`` call records a ``summary_ready`` event whose
     ``sources`` are BARE page ids (``h.id``), not ``wiki:``-schemed; surfaced raw
@@ -294,7 +360,7 @@ def test_summary_sources_reschemes_bare_page_ids_and_titles(store):
     store.append_qa_event("a1", {"type": "summary_ready",
                                   "sources": ["overview", "Auth Flow"]})
     QaFinalizer.close(store, "a1")
-    # Re-schemed pages lead; the file/graph trail (#172) folds in after them.
+    # Re-schemed pages lead; the file/graph trail folds in after them.
     assert store.get_qa("a1").summary_sources == [
         "wiki:overview", "wiki:auth-flow", "graph:n7", "src/app.py#L1-20",
     ]
@@ -401,7 +467,7 @@ def test_close_preserves_session_and_idx_on_both_backends(make_store, tmp_path):
     assert snap.accessed_sources == ["graph:n1", "src/a.py#L1-9", "wiki:lp"]
 
 
-# ── QaMemoryDepositor — the post-QA memory flywheel (Gitea #13) ─────────────────
+# ── QaMemoryDepositor — the post-QA memory flywheel ─────────────────
 
 
 SLUG = "org/repo"

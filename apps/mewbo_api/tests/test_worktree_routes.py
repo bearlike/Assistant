@@ -304,7 +304,7 @@ def test_auto_cleanup_removes_clean_worktree(parent_project) -> None:
 def test_auto_cleanup_reaps_orphan_auto_promoted_parent(tmp_path: Path) -> None:
     """Session-end hook reaps the auto-promoted parent when it has no remaining children.
 
-    Scenario (Gitea #53): a config project is auto-promoted to a managed
+    Scenario: a config project is auto-promoted to a managed
     VirtualProject (path_source='provided') when the user first creates a
     worktree.  After the worktree is reaped by the on_session_end hook the
     parent is a ``managed`` row with no worktree children — an orphan.  The
@@ -344,7 +344,7 @@ def test_auto_cleanup_reaps_orphan_auto_promoted_parent(tmp_path: Path) -> None:
         "worktree child was not reaped"
     )
     assert backend.project_store.get_project(promoted.project_id) is None, (
-        "auto-promoted parent was left as an orphan (Gitea #53)"
+        "auto-promoted parent was left as an orphan"
     )
 
 

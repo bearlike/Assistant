@@ -1,20 +1,10 @@
 # Agents Guide — Mewbo
 
-## Handling handed-off issues (Gitea) — read first
-
-When you own a Gitea ticket end-to-end, work it in this order:
-
-1. **Read, then act.** Read the issue AND its latest comments (scope usually lives in the newest comment, not the body), identify the components it touches, make the necessary changes, and follow the instructions faithfully. Drive parallel sub-agents (the `Agent` tool) to explore/implement/review/test concurrently — reserve your own context for synthesis and verification (see DRY/KISS below).
-2. **Wire the PR to auto-close the issue.** In the PR body, reference the ticket with a closing keyword (`Closes #N` / `Fixes #N`) so merging the PR closes it automatically. For an umbrella with deliberately-open children (e.g. ops-only), name which ones stay open.
-3. **Reconcile with the target branch.** After opening the PR, confirm it is mergeable against the *current* remote target (`main` moves under you) — fetch, check for conflicts, and rebase/merge + resolve them if any, then re-run the suite before requesting merge.
-4. **Uphold DRY & KISS.** Smallest diff that solves it; search for an existing utility/component before writing anything custom; one atomic class per feature; no speculative abstractions. Spawn sub-agents per the parallel-delegation principle in (1).
-5. **Reply on the ticket.** Post a completion comment cross-referencing the PR # + commit SHA, the corrected root cause, and an honest validation caveat; keep the phased checklist in the body in lockstep.
-
 ## MANDATORY: Hydrate before touching files
 
 At the start of every conversation and every non-trivial task, ask a configured code-wiki MCP tool a question about `bearlike/Assistant` — try the primary configured one first, falling back to a secondary if one is configured. Use `read_wiki_structure` → `read_wiki_contents` for deeper exploration. Only read local files after hydration. Include this directive in subagent prompts.
 
-> Wikis lag the repo (miss `mewbo_graph`/#25, cite removed `mewbo_chat`). Use them for intuition; verify structure against local source.
+> Wikis lag the repo (miss `mewbo_graph`, cite removed `mewbo_chat`). Use them for intuition; verify structure against local source.
 
 ## What Mewbo is
 
@@ -25,12 +15,13 @@ An AI assistant modelled as a conversation state machine with a hierarchical age
 Dependencies flow **strictly down** this DAG; never up, not even a lazy `try/except ImportError`:
 
 ```
-mewbo_core (lean SDK) → mewbo_tools · mewbo_graph → apps
+mewbo_core (lean SDK) → mewbo_tools · mewbo_graph · mewbo_iam → apps
 ```
 
 - **`mewbo_core`** — lean orchestration SDK: generic, dependency-light primitives only. No product/graph code; heavy optional deps go behind a `mewbo-core[...]` extra.
 - **`mewbo_tools`** — subprocess/remote integrations (MCP, LSP, file edit). Deps core only.
 - **`mewbo_graph`** — optional capability library (graph, memory, embedding, SCG). Heavy deps behind extras + import-guards. Deps core only; never an app.
+- **`mewbo_iam`** — optional identity kernel (principals, authenticators, roles, teams, grants, audit). Base deps are core + pydantic and NOTHING else; the network/crypto provider legs sit behind the `oidc`/`ldap`/`saml` extras. Deps core only; never an app.
 - **apps** — thin product surfaces: HTTP routes, wire contracts, transport, glue. Compose libraries; never host a reusable engine.
 
 **Placement rule.** Reusable engine → a library. Orchestration primitive → core. Subprocess/integration → tools. HTTP route/transport → an app. **(1) A reusable engine must never live inside an app. (2) Two apps must never import each other — extract the shared part into a library.**
@@ -43,18 +34,24 @@ mewbo_core (lean SDK) → mewbo_tools · mewbo_graph → apps
 
 Proven libraries: LiteLLM (LLM+embeddings), Pydantic (validation), Flask-RESTX (API), Rich/Textual (terminal), Langfuse (tracing), Jinja2 (prompts), Tiktoken (tokens), Loguru (logging), langchain-mcp-adapters (MCP), PyMongo (Mongo).
 
-- Validate at definition: Pydantic `field_validator`, `ConfigDict(extra="forbid")`.
-- One atomic class per feature: state attrs + class/static methods + DI.
+- **Strict Pydantic contracts at every trust boundary.** Anything crossing one — LLM tool arguments, HTTP request/response bodies, config files, persisted documents — is a Pydantic model with `ConfigDict(extra="forbid")`, validated AT DEFINITION (`field_validator` / `model_validator`). `extra="forbid"` is load-bearing, not hygiene: it is what turns a client smuggling a `token`, a `slug` rename, or a server-owned field into a clean 400 instead of a silent no-op (`wiki/settings.py:ProjectSettingsPatch`, `git_credentials_routes.py:CredentialUpsert`).
+- **Behavior intrinsic to the data lives ON the model.** A family of variants is a **discriminated union** whose members own their own validators + strategy methods — NEVER a service-side `if kind ==` switch, which drifts out of sync the moment a variant gains a field. `mewbo_core/triggers/spec.py` is canonical: five `TriggerSpec` kinds each owning its `next_fire_at`/`matches`/`verify`, one `Field(discriminator="kind")` parse seam, zero dispatch anywhere. **Models never import I/O** — the clock, a webhook's headers/body, a normalized CI/PR payload arrive as method ARGS (also why a test injects a fixed `NOW` instead of patching a clock).
+- **One atomic class per feature: state + behavior together, collaborators by DI.** Clients, stores, policies, clocks and auth guards are injected as FIELDS (injecting the clock is what makes a watcher testable without sleeps). **No root-level module logic functions** — a helper belongs on the class that owns the state it reads. Module-level CONSTANTS and thin factory aliases (`create_*_store`, `parse_trigger = TriggerSpec.parse`) are fine: data and ecosystem convention, not logic.
+- **The Pydantic rule stops at the process boundary.** Hot in-process runtime state (`RunHandle`, `AgentHandle`, live loop bookkeeping) stays a plain dataclass/atomic class — it crosses no trust boundary, so validating every mutation buys nothing but hot-path cost.
+- **Import-cycle cure = an EXISTING atomic home, never a new bare-function module.** When two modules need a shared constant/helper and either import direction cycles, add it as a member of the atomic class both already import. The terminated-session 410 envelope lives on `ApiResponseKit` (`apps/mewbo_api/responses.py`) as `TERMINATED_ERROR_BODY` + `terminated_response()` for exactly this reason — an `errors.py` of loose functions would have re-opened the `backend.py` ↔ `triggers/routes.py` cycle it was meant to break.
 - Smallest diff that solves the problem. No speculative abstractions.
 - Tool contracts stable: `AbstractTool`, `ActionStep`, `TaskQueue`, `tool_id`/`operation`/`tool_input`.
 - Tests prefer real code paths; stub only I/O boundaries.
 - Cross-model tool-calling differences are **normalization concerns** — fix at the LiteLLM/adapter seam, never by detecting text format in the orchestration loop. See `packages/mewbo_core/CLAUDE.md` → "LLM client".
+- **Every git subprocess goes through the hardened executor** (`mewbo_graph.plugins.wiki.clone` — `run_git_with_chain` + the shared argv/env builders), and every credential resolves through the ONE chain in `mewbo_graph.wiki.credentials`. A hand-rolled `git` call re-opens the credential-helper trap that masks real auth errors. See `packages/mewbo_graph/CLAUDE.md` → "Git auth".
 - Gitmoji + Conventional Commits (`✨ feat: ...`). See `.github/git-commit-instructions.md`.
 - Never push unless explicitly asked. Treat LLMs as non-deterministic black-box APIs.
 
 ## Project instructions loading
 
 `discover_all_instructions()` loads four levels (low→high): user `~/.claude/CLAUDE.md`, project `CLAUDE.md` / `.claude/CLAUDE.md` walking up to git root, rules `.claude/rules/*.md`, local `CLAUDE.local.md`. Subtree discovery walks DOWN from CWD (max depth 5) and indexes nested files for on-demand reading. Add `<!-- mewbo:noload -->` on line 1 to skip auto-loading a heavy file.
+
+**`CLAUDE.local.md` (untracked, gitignored).** Holds machine- and environment-specific instructions that are not part of this repository. **If it exists at the repo root, read it before starting work** — it is the highest-precedence layer and overrides this file. Being gitignored it never arrives via clone or a new worktree, so a fresh checkout simply won't have one; nothing in it is required to build, test, or run Mewbo. `.grove/config.json` seeds it into new Grove workspaces for the same reason.
 
 ## CLAUDE.md tree
 
@@ -66,17 +63,22 @@ Read the deepest file that applies before editing. Every child carries `> ↑ pa
 | Integrations: MCP pool, file edit, LSP, Aider | `packages/mewbo_tools/CLAUDE.md` |
 | Graph/memory/embedding/SCG substrate | `packages/mewbo_graph/CLAUDE.md` |
 | SCG plugin tools (map + search) | `packages/mewbo_graph/src/mewbo_graph/plugins/scg/CLAUDE.md` |
+| Identity kernel: principals, authenticators, roles, teams, grants, audit | `packages/mewbo_iam/CLAUDE.md` |
 | HTTP API server (routes, channels, Web IDE) | `apps/mewbo_api/CLAUDE.md` |
 | MewboWiki — API side | `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` |
 | Agentic Search — API side | `apps/mewbo_api/src/mewbo_api/agentic_search/CLAUDE.md` |
 | Agentic Search — SCG lifecycle glue | `apps/mewbo_api/src/mewbo_api/agentic_search/scg/CLAUDE.md` |
+| Mewbo Apps — API side (stores, lifecycle, routes, SDK injection) | `apps/mewbo_api/src/mewbo_api/apps/CLAUDE.md` |
 | Web console (React, shadcn, TanStack Query) | `apps/mewbo_console/CLAUDE.md` *(noload — heavy)* |
+| Console NavRail — the single navigation surface | `apps/mewbo_console/src/components/nav-rail/CLAUDE.md` |
 | MewboWiki — Console side | `apps/mewbo_console/src/components/wiki/CLAUDE.md` |
 | Agentic Search — Console side | `apps/mewbo_console/src/components/agentic_search/CLAUDE.md` |
+| Mewbo Apps — Console side (gallery/detail, stlite app panel) | `apps/mewbo_console/src/components/apps/CLAUDE.md` |
 | MCP server: tools exposing Mewbo to agents | `apps/mewbo_mcp/CLAUDE.md` |
 | CLI (Rich/Textual display, agent panel) | `apps/mewbo_cli/CLAUDE.md` |
 | Aura Android client (Compose, orb overlay, redroid dev loop) | `apps/mewbo_aura/CLAUDE.md` |
 | Home Assistant conversation agent | `apps/mewbo_ha_conversation/CLAUDE.md` |
+| Demo-as-code: seeded demo stack + artifact rendering | `demo/CLAUDE.md` |
 | Test patterns + fixtures | `tests/CLAUDE.md` |
 | Docs site: code-ref badges, Scalar, authoring | `docs/CLAUDE.md` |
 
@@ -102,4 +104,3 @@ See `apps/mewbo_api/CLAUDE.md` → "Debugging session errors" for the full trace
 - Config chain: `CWD/configs/` → `$MEWBO_HOME/` → `~/.mewbo/`. Override with `--config`. Run `/init` to scaffold.
 - Lint: `ruff check .` (auto-fix: `ruff check --fix .`). Types: `mypy`. Helpers: `make lint`, `make lint-fix`, `make typecheck`, `make precommit-install`.
 - **Never blind `ruff --fix`** — always re-run `ruff check .` after any autofix (strips intentional `noqa`).
-- **Browser automation / Playwright**: if a remote Selenium/Chrome grid is configured for this environment, connect to its warm Chrome via Playwright `connectOverCDP` instead of launching a local browser — check your local ops docs (outside this repo) for the grid's connection details before falling back to a locally-launched browser.

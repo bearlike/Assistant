@@ -1,23 +1,28 @@
 /**
  * IndexedSnapshotCaption — render an ``IndexedSnapshot`` as either the
- * uppercase sidebar caption or the landing-card footer line.
+ * sidebar caption or the landing-card footer line.
  *
  * Both surfaces share the same atomic-class shape; this component picks
- * the variant and lays out the pills (date · branch · commit-SHA), with
- * external SHA / branch links opening in a new tab when the snapshot's
- * platform supports a canonical URL shape.
+ * the variant and lays out the pills, with external SHA / branch links
+ * opening in a new tab when the snapshot's platform supports a canonical
+ * URL shape. The sidebar variant is a SINGLE visual line by contract:
+ * ``formatSidebar()`` folds branch+commit into one ``branch@shortsha``
+ * pill and this component pins ``flex-nowrap`` + truncation, so a long
+ * branch name ellipsizes instead of wrapping the 260px rail.
  */
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, GitBranch } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 import type { IndexedSnapshot, SnapshotPill, SnapshotRender } from "./indexedSnapshot";
-import { RelativeTime } from "./relativeTime";
+import { RelativeTime } from "../../utils/relativeTime";
 
 interface CaptionProps {
   snapshot: IndexedSnapshot | null;
-  /** Sidebar (uppercase, absolute date) or landing (relative). */
+  /** Sidebar (one line, truncating) or landing (wrapping). Font family no
+   *  longer varies by variant — only `PillContent` (branch/commit, real
+   *  ids) is mono; the date label is prose and stays sans in both. */
   variant?: "sidebar" | "landing";
   className?: string;
 }
@@ -32,33 +37,32 @@ export function IndexedSnapshotCaption({
     return (
       <div
         className={cn(
-          "text-[10px] font-mono uppercase tracking-wider text-[hsl(var(--muted-foreground))]",
-          variant === "landing" && "normal-case tracking-normal text-[11px]",
+          "text-2xs text-[hsl(var(--muted-foreground))]",
           className
         )}
       >
-        {variant === "sidebar" ? "INDEXED" : "Indexed"}
+        Indexed
       </div>
     );
   }
 
-  const render: SnapshotRender =
-    variant === "sidebar" ? snapshot.formatSidebar() : snapshot.formatLandingCard();
+  const render: SnapshotRender = snapshot.formatLandingCard();
 
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1.5 flex-wrap text-[10px] font-mono uppercase tracking-wider text-[hsl(var(--muted-foreground))]",
-        variant === "landing" && "normal-case tracking-normal text-[11px] font-sans",
+        "inline-flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]",
+        variant === "sidebar" && "flex-nowrap max-w-full overflow-hidden whitespace-nowrap",
+        variant === "landing" && "flex-wrap",
         className
       )}
     >
-      <span title={render.date.title ?? RelativeTime.tooltip(snapshot.indexedAt)}>
+      <span className="shrink-0" title={render.date.title ?? RelativeTime.tooltip(snapshot.indexedAt)}>
         {render.date.label}
       </span>
       {render.extras.map((pill, i) => (
-        <span key={i} className="inline-flex items-center gap-1">
-          <span aria-hidden className="opacity-50">·</span>
+        <span key={i} className="inline-flex items-center gap-1 min-w-0">
+          <span aria-hidden className="opacity-50 shrink-0">·</span>
           <PillContent pill={pill} />
         </span>
       ))}
@@ -67,6 +71,10 @@ export function IndexedSnapshotCaption({
 }
 
 function PillContent({ pill }: { pill: SnapshotPill }) {
+  const glyph =
+    pill.icon === "branch" ? (
+      <GitBranch aria-hidden className="size-3 shrink-0 opacity-70" />
+    ) : null;
   if (pill.href) {
     return (
       <a
@@ -74,12 +82,18 @@ function PillContent({ pill }: { pill: SnapshotPill }) {
         target="_blank"
         rel="noreferrer"
         title={pill.title}
-        className="inline-flex items-center gap-0.5 hover:text-[hsl(var(--foreground))] transition-colors"
+        className="inline-flex items-center gap-0.5 min-w-0 font-mono hover:text-[hsl(var(--foreground))] transition-colors"
       >
-        {pill.label}
-        <ExternalLink className="h-2.5 w-2.5 opacity-70" />
+        {glyph}
+        <span className="min-w-0 truncate">{pill.label}</span>
+        <ExternalLink className="size-3 shrink-0 opacity-70" />
       </a>
     );
   }
-  return <span title={pill.title}>{pill.label}</span>;
+  return (
+    <span title={pill.title} className="inline-flex items-center gap-0.5 min-w-0 font-mono">
+      {glyph}
+      <span className="min-w-0 truncate">{pill.label}</span>
+    </span>
+  );
 }

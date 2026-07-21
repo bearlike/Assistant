@@ -29,6 +29,7 @@ class NextcloudTalkAdapter:
     """Adapter bridging Nextcloud Talk webhooks to Mewbo sessions."""
 
     platform: str = "nextcloud-talk"
+    supports_webhook: bool = True
 
     def __init__(
         self,
@@ -208,18 +209,18 @@ class NextcloudTalkAdapter:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 if resp.status == 201:
-                    logger.info("Sent response to NC Talk room %s", channel_id)
+                    logger.info("Sent response to NC Talk room {}", channel_id)
                     # OCS API returns XML by default; don't bother
                     # parsing — 201 confirms delivery.
                     return "sent"
                 logger.warning(
-                    "Unexpected status %d from NC Talk room %s",
+                    "Unexpected status {} from NC Talk room {}",
                     resp.status,
                     channel_id,
                 )
         except Exception:
             logger.warning(
-                "Failed to send response to NC Talk room %s",
+                "Failed to send response to NC Talk room {}",
                 channel_id,
                 exc_info=True,
             )

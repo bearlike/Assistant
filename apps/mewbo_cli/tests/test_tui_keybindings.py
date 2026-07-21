@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the declarative keymap + user-override loader (#157)."""
+"""Tests for the declarative keymap + user-override loader."""
 
 from __future__ import annotations
 

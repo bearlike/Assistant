@@ -1,10 +1,10 @@
 """ScgMemoryBridge — the learned-layer flywheel over the SCG.
 
 The SCG *structure* (schemas + pathways) is search-owned; the *learned* layer is
-**shared with #13's memory substrate** — there is ZERO re-implementation of the
+**shared with the wiki layer's memory substrate** — there is ZERO re-implementation of the
 atomic-note / anchor / dedup machinery here. This module is a thin seam that:
 
-* lets the #13 :class:`~mewbo_graph.wiki.memory.InsightIngestor` resolve connector
+* lets the wiki layer's :class:`~mewbo_graph.wiki.memory.InsightIngestor` resolve connector
   anchors against the SCG instead of the code graph
   (:class:`ScgAnchorResolver`), and
 * deposits / retrieves connector insights under ``corpus="connector"``
@@ -47,7 +47,7 @@ CONNECTOR_SLUG = "__connector__"
 # The corpus tag isolating connector insights from the code/docs corpora.
 CONNECTOR_CORPUS = "connector"
 
-# ── Insight polarity (the memory-bias signal, #76) ──────────────────────────
+# ── Insight polarity (the memory-bias signal) ──────────────────────────
 #
 # A connector insight is either *positive* evidence ("this pathway produced
 # results") or a *dead end* ("this pathway returned nothing for that question").
@@ -94,7 +94,7 @@ _ANCHORABLE_KINDS: tuple[NodeKind, ...] = ("capability", "entity_type")
 class ScgAnchorResolver:
     """``StructureProvider`` backed by the SCG store (``source_key`` → node).
 
-    Implements the #13 ``StructureProvider`` Protocol (``resolve`` /
+    Implements the wiki layer's ``StructureProvider`` Protocol (``resolve`` /
     ``resolve_many`` / ``entity_key_of``) so the shared ``InsightIngestor`` can
     resolve connector ``source_key`` anchors instead of dropping them.
     Stateless beyond the injected store — a re-map mutates the
@@ -163,7 +163,7 @@ class ScgAnchorResolver:
 
 
 class ScgMemoryBridge:
-    """Deposit / retrieve connector insights over #13's memory substrate.
+    """Deposit / retrieve connector insights over the wiki layer's memory substrate.
 
     The learned-layer flywheel for Agentic Search: data-location wins, failure
     constraints, resolved bindings and learned edge weights are written as
@@ -222,7 +222,7 @@ class ScgMemoryBridge:
 
         ``polarity`` records whether the fact is positive evidence or a dead end;
         it rides a reserved ``scg:<polarity>`` label so memory-aware routing can
-        boost / damp the anchored capability (#76). ``workspace`` (if given —
+        boost / damp the anchored capability. ``workspace`` (if given —
         ambient from :class:`ScgScope` at the call site) rides a reserved
         ``ws:<id>`` label for **attribution only**, NEVER a partition: the shared
         graph cross-pollinates, so a cross-workspace read still surfaces the note.
@@ -270,7 +270,7 @@ class ScgMemoryBridge:
     ) -> list[tuple[MemoryNode, float, list[SourceKey]]]:
         """Top-``k`` connector insights, each with its cosine score + live anchors.
 
-        The retrieval surface memory-aware routing consumes (#76): a note is
+        The retrieval surface memory-aware routing consumes: a note is
         useless to routing without knowing WHICH capability ``source_key`` it
         hangs off, so this returns ``(note, score, anchored_source_keys)`` in one
         pass — the live ``ANCHORS`` edge targets per note are read off the store's

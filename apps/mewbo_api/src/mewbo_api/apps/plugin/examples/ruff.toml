@@ -1,0 +1,49 @@
+# Ruff configuration for app-builder examples.
+#
+# Files in this tree are TEMPLATES for stlite (Streamlit-in-WASM) app frontends.
+# They ship as data inside the mewbo-api wheel, are never imported by the main
+# Python runtime, and are copy-pasted by the app-builder sub-agent into an app's
+# frontend files submitted through `submit_app`.
+#
+# Ruff here lints them the way an app will be linted at submit time — the
+# authority for the import allowlist is `plugin/linter.py::ALLOWED_MODULES`
+# (the widget allowlist PLUS `mewbo_app`). Unlike widgets, apps are full pages:
+# `st.header`/`st.sidebar`/`st.tabs` are fine. Unlike widgets, apps DO reach the
+# network — but ONLY through the injected `mewbo_app` SDK, never a raw HTTP client.
+#
+# If a legitimate need arises to use a module not in the allowlist, extend
+# `plugin/linter.py::ALLOWED_MODULES` and the app-builder AgentDef together.
+
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "B", "SIM", "UP", "TID"]
+
+[lint.flake8-tidy-imports.banned-api]
+# ---- Raw network (the SDK is the ONLY sanctioned path) -----------------
+"requests".msg = "Reach the network through the injected `mewbo_app` SDK, never `requests`."
+"httpx".msg = "Reach the network through the injected `mewbo_app` SDK, never `httpx`."
+"aiohttp".msg = "Reach the network through the injected `mewbo_app` SDK, never `aiohttp`."
+"urllib.request".msg = "Reach the network through the injected `mewbo_app` SDK, not urllib."
+"socket".msg = "No raw sockets in a browser sandbox."
+
+# ---- Shell / process ---------------------------------------------------
+"subprocess".msg = "No processes in a browser sandbox — app code must be pure Python."
+"os.system".msg = "No shell in a browser sandbox."
+"os.popen".msg = "No shell in a browser sandbox."
+
+# ---- Concurrency -------------------------------------------------------
+"threading".msg = "Pyodide is single-threaded — use asyncio if you genuinely need concurrency."
+"multiprocessing".msg = "Pyodide cannot spawn processes."
+"concurrent.futures".msg = "Pyodide cannot spawn threads or processes."
+
+# ---- Filesystem / serialization ---------------------------------------
+"tempfile".msg = "Browser FS is volatile."
+"pickle".msg = "Unsafe and unnecessary — app data is JSON via the SDK."
+"shelve".msg = "Depends on pickle — not suitable for apps."
+
+[lint.per-file-ignores]
+# Component files inline a `__main__` usage demo that calls the live SDK; that's
+# illustrative, not executed in the wheel.
+"components/*.py" = ["S311"]

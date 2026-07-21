@@ -30,7 +30,7 @@ Mongo collections: ``agentic_search_scg_nodes``, ``agentic_search_scg_edges``,
 Per-source mappings are GLOBAL and content-addressed (``node_id =
 sha1(source_key|kind)[:16]``) — the SCG is "a tenant of the same three-layer
 multiplex graph that powers the Agentic Wiki" and the layers cross-pollinate
-without explicit wiring (``docs/features-search.md``). #75 therefore does NOT
+without explicit wiring (``docs/features-search.md``). That scope therefore does NOT
 hard-partition this store by workspace; a workspace is a **scoped VIEW** over the
 shared graph — see :mod:`mewbo_graph.scg.scope` (the source-id allowlist
 :class:`ScgRouter` honours at query time) — so a re-map in one workspace stays a
@@ -307,7 +307,7 @@ class JsonScgStore(ScgStore):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            logging.warning("Skipping malformed SCG collection at %s", path)
+            logging.warning("Skipping malformed SCG collection at {}", path)
             return {}
         return data if isinstance(data, dict) else {}
 

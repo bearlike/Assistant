@@ -108,9 +108,10 @@ The stream replays the stored backlog once, then pushes each new event the momen
 
 | Page | What it covers |
 |---|---|
-| [Building a Client](building-a-client.md) | The full session lifecycle: sessions, queries, streaming, follow-ups, and steering. Start here to write your own client. |
+| [Building a Client](building-a-client.md) | The full session lifecycle: sessions, queries, streaming, follow-ups, steering, and permanent termination. Start here to write your own client. |
 | [Structured Outputs](structured-outputs.md) | Constrain a run to a JSON Schema and get a validated object back. Includes the fast synthesis mode and token streaming. |
 | [Automation](automation.md) | Drive Mewbo from CI. Assign a bot to an issue or pull request and it picks the work up. |
+| [Triggers](triggers.md) | Let a session arm a durable wake instead of polling: time, cron, CI, pull request, or webhook. |
 | [Device Tool Bridge](device-tools.md) | Let a connected client register on-device tools that the agent can call. |
 
 ## The full reference

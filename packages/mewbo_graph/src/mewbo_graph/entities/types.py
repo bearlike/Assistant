@@ -78,6 +78,15 @@ class Entity(BaseModel):
     mentions: list[EntityMention] = Field(default_factory=list)
     status: EntityStatus = "active"
     labels: list[str] = Field(default_factory=list)
+    # Per-job/commit attribution (artifact isolation). The enrich phase stamps
+    # both from the owning index; a completed re-index supersedes prior-commit
+    # entities. ``None`` marks an entity NOT owned by a single index — a
+    # QA-minted entity (the mint tool also runs in a Q&A session, which carries
+    # no job) or one written before isolation — and supersede DELIBERATELY
+    # preserves those: they are accretive memory, not a per-commit snapshot. Not
+    # part of the id derivation and not part of any wire shape.
+    commit_sha: str | None = None
+    job_id: str | None = None
 
     @staticmethod
     def compute_id(normalized_name: str, type: str) -> str:
@@ -108,6 +117,10 @@ class EntityRelation(BaseModel):
     type: str
     description: str = ""
     mentions: list[EntityMention] = Field(default_factory=list)
+    # Per-job/commit attribution — see ``Entity``. Superseded with the entities
+    # it relates; ``None`` (QA-minted / pre-isolation) is preserved.
+    commit_sha: str | None = None
+    job_id: str | None = None
 
     @staticmethod
     def compute_id(source_id: str, type: str, target_id: str) -> str:
@@ -149,6 +162,10 @@ class EntityEmbedding(BaseModel):
     vector: list[float]
     model: str
     dim: int
+    # Per-job/commit attribution — see ``Entity``. Reaped with the entity it
+    # vectorises; ``None`` (QA-minted / pre-isolation) is preserved.
+    commit_sha: str | None = None
+    job_id: str | None = None
 
 
 class EntityFilter(BaseModel):

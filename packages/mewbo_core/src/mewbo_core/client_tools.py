@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client-declared, client-fulfilled session tools (Gitea #179, Phase 1).
+"""Client-declared, client-fulfilled session tools.
 
 A client (e.g. the Aura Android app) puts raw JSON-Schema tool declarations on
 ``context.device_tools`` when it starts a run. The api validates each entry

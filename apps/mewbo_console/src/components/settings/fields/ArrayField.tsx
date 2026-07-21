@@ -129,7 +129,7 @@ export function ArrayFieldTemplate(props: ArrayFieldTemplateProps) {
                   <p
                     id={errorId}
                     role="alert"
-                    className="text-[hsl(var(--destructive))] text-xs"
+                    className="text-[hsl(var(--destructive-text))] text-xs"
                   >
                     {error}
                   </p>

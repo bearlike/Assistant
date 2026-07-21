@@ -2,7 +2,7 @@
 
 Exercises the atomic class end-to-end against a seeded JSON store (no MongoDB)
 with an injected FAKE embedder (never a real embedding API). The contract the
-spec (Gitea #19) fixes:
+spec fixes:
 
 * ``parse_source`` dispatches by ``source_type``, persists nodes/edges/recipes,
   and embeds every node into an ``ScgEmbedding`` keyed on ``node_id``;
@@ -270,7 +270,7 @@ def test_reparse_same_source_replaces_no_duplicates(store: JsonScgStore) -> None
 
 
 def test_parse_source_stamps_manifest_hash_on_descriptor(store: JsonScgStore) -> None:
-    """parse_source stamps the tool-list ManifestHash onto schema_version (#81-C)."""
+    """parse_source stamps the tool-list ManifestHash onto schema_version."""
     from mewbo_graph.scg.manifest import ManifestHash
 
     desc = _producer_consumer_descriptor()

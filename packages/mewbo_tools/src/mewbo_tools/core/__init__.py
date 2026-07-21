@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mewbo_core.config import get_config_value
 from mewbo_core.exit_plan_mode import PLAN_DIR_ROOT
+from mewbo_core.workspace import WorkspaceContainment, get_active_containment
 
 
 def _get_allowed_roots() -> list[Path]:
@@ -42,7 +43,13 @@ def _get_allowed_roots() -> list[Path]:
     return roots
 
 
-def resolve_safe_path(path: str, root: str | None = None) -> Path:
+def resolve_safe_path(
+    path: str,
+    root: str | None = None,
+    *,
+    containment: WorkspaceContainment | None = None,
+    write: bool = False,
+) -> Path:
     """Resolve *path* and verify it falls under an allowed project root.
 
     Checks (in order): *root* if given, then every ``projects[*].path``
@@ -60,6 +67,18 @@ def resolve_safe_path(path: str, root: str | None = None) -> Path:
     The path is accepted if *either* view lands under an allowed root.
     ``../`` escape attempts still fail both checks and are rejected.
 
+    **Workspace containment.** When an ACTIVE
+    :class:`~mewbo_core.workspace.WorkspaceContainment` applies — passed
+    explicitly, or (fallback) the one the loop set for the current execution
+    context via :func:`~mewbo_core.workspace.get_active_containment` — the broad
+    tenant union above is COLLAPSED to the containment's own allowed roots
+    (workspace root + Mewbo scratch), and a ``write=True`` call is additionally
+    checked against the tier's write rule (``read_only`` permits none). Denials
+    still name what IS allowed. ``containment=None`` with no active context
+    containment ⇒ byte-identical historical behaviour; enforcement is separately
+    staged behind ``agent.workspace_enforcement`` at the loop, so nothing here
+    activates until that flag flips.
+
     Raises ``ValueError`` when the path is outside all roots.
     """
     candidate = Path(path)
@@ -70,6 +89,14 @@ def resolve_safe_path(path: str, root: str | None = None) -> Path:
         candidate = base / candidate
     resolved = candidate.resolve()
     logical = Path(os.path.abspath(candidate))
+
+    # Containment firebreak: an explicit arg wins; else fall back to the
+    # loop-established active containment for this execution context. Only an
+    # ACTIVE (non-full_access) containment diverts to the strict path — an
+    # inactive/absent one leaves the tenant-union behaviour below untouched.
+    effective = containment if containment is not None else get_active_containment()
+    if effective is not None and effective.active:
+        return _resolve_within_containment(path, resolved, effective, write=write)
 
     # Build a single check list: explicit root first, then config roots.
     roots = _get_allowed_roots()
@@ -97,7 +124,46 @@ def resolve_safe_path(path: str, root: str | None = None) -> Path:
         except ValueError:
             continue
 
-    raise ValueError(f"Path '{path}' resolves outside all allowed project roots.")
+    # Name what IS allowed: a denial the model can act on converges in one
+    # turn; a mute one sends it hunting for shell workarounds instead.
+    allowed = ", ".join(sorted(str(r) for r in roots))
+    raise ValueError(
+        f"Path '{path}' resolves outside all allowed project roots. "
+        f"Allowed roots: {allowed}."
+    )
+
+
+def _resolve_within_containment(
+    path: str,
+    resolved: Path,
+    containment: WorkspaceContainment,
+    *,
+    write: bool,
+) -> Path:
+    """Enforce an active :class:`WorkspaceContainment` on an already-resolved path.
+
+    The union of tenant roots is collapsed to ``containment.allowed_roots()`` and
+    the tier semantics are delegated to the containment model (behaviour on the
+    data): a ``write=True`` call must satisfy ``permits_write`` (``read_only``
+    permits none anywhere), a read ``permits_read``. Only the PHYSICAL ``resolved``
+    view is honoured — the tenant-union's logical/symlink-preserving second view is
+    deliberately NOT extended here, because accepting a symlink whose target
+    escapes the workspace is exactly the firebreak breach containment exists to
+    prevent (realpath-prefix semantics; see ``WorkspaceContainment._under_allowed``).
+    Denials name what IS allowed, keeping the one-turn-restage error contract.
+    """
+    target = str(resolved)
+    permitted = (
+        containment.permits_write(target) if write else containment.permits_read(target)
+    )
+    if permitted:
+        return resolved
+    allowed = ", ".join(sorted(containment.allowed_roots()))
+    verb = "write" if write else "read"
+    raise ValueError(
+        f"Path '{path}' is outside this agent's workspace (mode "
+        f"'{containment.mode}', operation '{verb}'). Allowed roots: {allowed}."
+    )
 
 
 __all__ = ["resolve_safe_path"]

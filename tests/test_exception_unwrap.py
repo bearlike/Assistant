@@ -1,4 +1,4 @@
-"""Tests for the anyio/ExceptionGroup unwrap + classify helpers (Gitea #132)."""
+"""Tests for the anyio/ExceptionGroup unwrap + classify helpers."""
 
 from __future__ import annotations
 

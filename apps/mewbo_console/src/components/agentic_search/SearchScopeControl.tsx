@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ChevronDown, Cpu, Gauge, SlidersHorizontal } from "lucide-react"
+import { ChevronDown, Cpu, Gauge, Layers, SlidersHorizontal } from "lucide-react"
 
 import {
   DropdownMenu,
@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { ModelBrandIcon } from "../ModelBrandIcon"
+import { ModelFallbackChain } from "../ModelFallbackChain"
+import { useModels } from "../../hooks/useModels"
 import { ModelMenu } from "../wiki/ModelPicker"
 import { formatModelName } from "../../utils/model"
 import type {
@@ -27,15 +29,29 @@ import type {
 import { SrcAvatar } from "./SrcAvatar"
 import { TIERS } from "./tiers"
 
-interface SearchScopeControlProps {
+/**
+ * The run-config trio — budget tier + model override, plus their setters — as
+ * ONE prop threaded `AgenticSearchView` → `ResultsPanel`/`LandingPanel` →
+ * `SearchBar` → here, instead of four individually-drilled props at every
+ * layer. A new run-config knob is one field here, not a new prop at each hop.
+ */
+export interface SearchScope {
   tier: SearchTier
   onTierChange: (tier: SearchTier) => void
-  /** Per-tier model presets from `GET /tiers`; rows omit the model line
-   *  until it resolves (never a fabricated placeholder). */
-  models?: SearchTiersInfo["tiers"]
   /** Per-run model override ("" = the tier's preset). */
   model: string
   onModelChange: (model: string) => void
+  /** Ordered cross-model fallback ladder for this run. Empty = no ladder;
+   *  there is no separate "enabled" wire field. */
+  fallbackModels: string[]
+  onFallbackModelsChange: (next: string[]) => void
+}
+
+interface SearchScopeControlProps {
+  scope: SearchScope
+  /** Per-tier model presets from `GET /tiers`; rows omit the model line
+   *  until it resolves (never a fabricated placeholder). */
+  models?: SearchTiersInfo["tiers"]
   /** Workspace + catalog feed the sources row; the row renders only when an
    *  `onOpenConfig` handler is provided. */
   workspace: Workspace
@@ -46,7 +62,7 @@ interface SearchScopeControlProps {
 }
 
 /**
- * THE one run-configuration pill (#101). Collapses the former TierPill +
+ * THE one run-configuration pill. Collapses the former TierPill +
  * model-override pill + Configure chip into a single progressive-disclosure
  * control so the composer keeps exactly two pills: workspace (identity) and
  * scope (everything about HOW the run executes).
@@ -58,19 +74,23 @@ interface SearchScopeControlProps {
  * fight Radix outside-dismiss, a sub-menu doesn't.
  */
 export function SearchScopeControl({
-  tier,
-  onTierChange,
+  scope,
   models,
-  model,
-  onModelChange,
   workspace,
   sources = [],
   onOpenConfig,
   inline,
 }: SearchScopeControlProps) {
+  const { tier, onTierChange, model, onModelChange, fallbackModels, onFallbackModelsChange } =
+    scope
+  const { models: allModels } = useModels()
   // Controlled so a model pick inside the cmdk sub-menu (not a DropdownMenuItem,
   // so Radix doesn't auto-close on select) can close the whole menu.
   const [open, setOpen] = useState(false)
+  // The switch is UI-only: an armed-but-empty ladder is inert, and turning it
+  // off clears the list so the wire keeps its one meaning (a non-empty list IS
+  // the ladder).
+  const [fallbackOn, setFallbackOn] = useState(fallbackModels.length > 0)
   const current = TIERS.find((t) => t.id === tier) ?? TIERS[1]
   // The resolution the backend applies: `run.model or the tier's preset`.
   const resolved = model || models?.[tier] || ""
@@ -91,12 +111,17 @@ export function SearchScopeControl({
           className={cn(
             "inline-flex items-center gap-1.5 transition-colors flex-none min-w-0 rounded-md font-medium",
             inline
-              ? "h-[30px] px-2.5 text-[12.5px] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
+              ? "h-[30px] px-2.5 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
               : "h-8 px-2.5 text-sm hover:bg-[hsl(var(--accent))]"
           )}
         >
           <Gauge className="h-3 w-3 flex-none opacity-70" />
           <span className="truncate max-w-[78px] sm:max-w-[180px]">{label}</span>
+          {fallbackOn && fallbackModels.length > 0 && (
+            <span className="flex-none text-2xs text-[hsl(var(--muted-foreground))]">
+              +{fallbackModels.length}
+            </span>
+          )}
           <ChevronDown className="h-3 w-3 flex-none opacity-60" />
         </button>
       </DropdownMenuTrigger>
@@ -106,9 +131,9 @@ export function SearchScopeControl({
       <DropdownMenuContent
         align="start"
         collisionPadding={16}
-        className="w-[min(18rem,calc(100vw-8rem))] shadow-[var(--elev-3)]"
+        className="w-[min(18rem,calc(100vw-8rem))] [box-shadow:var(--elev-3)]"
       >
-        <DropdownMenuLabel className="text-[11px] font-normal text-[hsl(var(--muted-foreground))]">
+        <DropdownMenuLabel className="text-2xs font-normal text-[hsl(var(--muted-foreground))]">
           Search budget — depth · fan-out · model
         </DropdownMenuLabel>
         <DropdownMenuRadioGroup
@@ -116,10 +141,11 @@ export function SearchScopeControl({
           onValueChange={(v) => onTierChange(v as SearchTier)}
         >
           {/* Two-line rows: line 1 = name + the budget it buys (prose hint as
-              a consistent right column — NOT mono, it's prose); line 2 = the
-              tier's model preset (mono — it's data) so "the tier picks the
-              brain" is visible before committing. The radio indicator owns
-              the reserved left slot (pl-8 from the primitive). */}
+              a consistent right column); line 2 = the tier's model preset,
+              muted rather than mono — a model name is a name, not machine
+              text — so "the tier picks the brain" is visible before
+              committing. The radio indicator owns the reserved left slot
+              (pl-8 from the primitive). */}
           {TIERS.map((t) => {
             const preset = models?.[t.id]
             return (
@@ -132,9 +158,9 @@ export function SearchScopeControl({
                     </span>
                   </span>
                   {preset && (
-                    <span className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
+                    <span className="flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
                       <ModelBrandIcon modelId={preset} size={10} />
-                      <span className="font-mono truncate">{formatModelName(preset)}</span>
+                      <span className="truncate">{formatModelName(preset)}</span>
                     </span>
                   )}
                 </span>
@@ -154,7 +180,7 @@ export function SearchScopeControl({
               <Cpu className="h-3 w-3 text-[hsl(var(--muted-foreground))]" />
             )}
             <span className="flex-1 text-sm">Model</span>
-            <span className="font-mono text-[11px] text-[hsl(var(--muted-foreground))] truncate max-w-[120px]">
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] truncate max-w-[120px]">
               {model ? formatModelName(model) : "tier preset"}
             </span>
           </DropdownMenuSubTrigger>
@@ -171,13 +197,46 @@ export function SearchScopeControl({
           >
             <ModelMenu
               value={model}
-              onPick={(id) => {
+              onSelect={(id) => {
                 onModelChange(id)
                 setOpen(false)
               }}
               defaultLabel={`${current.name} preset${
                 models?.[tier] ? ` · ${formatModelName(models[tier])}` : ""
               }`}
+            />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        {/* Cross-model fallback for this run. Same width clamp + `min-w-0` as
+            the model flyout — the primitive's own `min-w-[8rem]` would
+            otherwise floor the width and re-overflow on a phone. */}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger
+            className="gap-2"
+            title="Models to try if the one driving this run keeps failing"
+          >
+            <Layers className="h-3 w-3 text-[hsl(var(--muted-foreground))]" />
+            <span className="flex-1 text-sm">Fallback</span>
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] truncate max-w-[120px]">
+              {fallbackOn && fallbackModels.length > 0
+                ? `${fallbackModels.length} model${fallbackModels.length > 1 ? "s" : ""}`
+                : "off"}
+            </span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent
+            collisionPadding={16}
+            className="w-[min(340px,var(--radix-dropdown-menu-content-available-width))] min-w-0 p-0 overflow-hidden"
+          >
+            <ModelFallbackChain
+              models={allModels}
+              value={fallbackModels}
+              onChange={onFallbackModelsChange}
+              enabled={fallbackOn}
+              onEnabledChange={(on) => {
+                setFallbackOn(on)
+                if (!on) onFallbackModelsChange([])
+              }}
+              className=""
             />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -198,7 +257,7 @@ export function SearchScopeControl({
                   ))}
                 </span>
               ) : (
-                <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                   {workspace.sources.length || "none"}
                 </span>
               )}

@@ -53,16 +53,34 @@ class QaFinalizer:
 
     _TERMINAL: frozenset[str] = frozenset({"complete", "cancelled", "error"})
 
+    @staticmethod
+    def current_turn_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Events belonging to the MOST RECENT turn — after the last ``meta`` event.
+
+        A continued answer (:meth:`WikiQaSession.follow_up`) re-emits
+        ``meta`` at the start of every turn, so it is already a reliable turn
+        boundary on the append-only log — no new event type needed. Reconciliation
+        (block/accessed-source folding, terminal idempotency checks) MUST scope to
+        this slice: without it, a later turn's ``block_open`` events collide BY
+        INDEX with an earlier turn's in the cumulative log, corrupting both.
+        """
+        last_meta_idx = -1
+        for i, ev in enumerate(events):
+            if ev.get("type") == "meta":
+                last_meta_idx = i
+        return events[last_meta_idx + 1 :] if last_meta_idx >= 0 else events
+
     @classmethod
     def close(cls, store: WikiStoreBase, answer_id: str, error: str | None = None) -> bool:
         """Reconcile the snapshot and append the terminal event. False if already closed.
 
-        Folds three things off the append-only log into the persisted snapshot:
-        the emitted ``blocks`` (so reload/share works), the curated
+        Folds three things off the CURRENT TURN's slice of the append-only log
+        (see :meth:`current_turn_events`) into the persisted snapshot: the
+        emitted ``blocks`` (so reload/share works), the curated
         ``summary_sources`` (the LLM's sources block), and ``accessed_sources``
         (the deterministic probe trail). Then appends ``complete`` (or ``error``).
         """
-        events = store.load_qa_events(answer_id)
+        events = cls.current_turn_events(store.load_qa_events(answer_id))
         if any(ev.get("type") in cls._TERMINAL for ev in events):
             return False  # already terminal — idempotent
 
@@ -145,7 +163,7 @@ class QaFinalizer:
 
         * **Curated pages** — the LLM's page picks (:meth:`_curated_page_sources`),
           re-schemed slug/title → ``wiki:<id>``.
-        * **File + graph evidence (#172)** — the non-page refs off the deterministic
+        * **File + graph evidence** — the non-page refs off the deterministic
           accessed trail (``qa_access`` — already bounded + score-ranked). The curated
           block is ~100% page-slugs even though source files are the most-read
           evidence, so the real files/symbols the answer rests on never reached the
@@ -288,7 +306,7 @@ class QaFinalizer:
 class QaMemoryDepositor:
     """Distill a finalized Q&A answer into memory note(s) and graft them onto the multiplex.
 
-    The post-QA half of the memory flywheel (Gitea #13 "Flywheel"): the indexer
+    The post-QA half of the memory flywheel: the indexer
     deposits a few atomic insights *while indexing*, and every finalized answer
     deposits one more — so the memory layer is useful from day one and graph
     connections strengthen with each question. This runs in the API's

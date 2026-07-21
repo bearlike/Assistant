@@ -5,9 +5,8 @@
  */
 
 import { useRef, useState } from "react";
-import { ArrowUp } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { composerInputCls, ComposerSendButton, ComposerShell } from "@/components/ui/composer-shell";
 import { cn } from "@/lib/utils";
 
 import { ModelPicker } from "./ModelPicker";
@@ -33,13 +32,18 @@ export function QADock({ placeholder, model, onModelChange, onAsk }: QADockProps
   };
 
   return (
-    <div
-      className={cn(
-        "fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[min(720px,calc(100vw-2rem))]",
-        "rounded-xl border border-[hsl(var(--border-strong))] bg-[hsl(var(--card))]/95 backdrop-blur-md shadow-[0_8px_32px_rgba(0,0,0,0.25)]"
-      )}
-    >
-      <div className="p-2.5">
+    <ComposerShell
+      // Centered on the CONTENT PANE, not the full viewport: the left nav
+      // rail (`--rail-w` on the AppLayout root, 0/48/272px mobile/collapsed/
+      // expanded — see TurnScroller.tsx for the same offset applied to a
+      // left-anchored satellite) shifts the pane's optical center right by
+      // half the rail's width. `left: (100vw + rail-w) / 2` is that shifted
+      // center; the width cap subtracts rail-w too so the dock never bleeds
+      // under the rail on a narrow viewport with the rail expanded.
+      className="fixed bottom-4 left-[calc((100vw+var(--rail-w,0px))/2)] -translate-x-1/2 z-40 w-[min(720px,calc(100vw-var(--rail-w,0px)-2rem))]"
+      surface={{ elevation: "elev-2", halo: "strong" }}
+      bodyClassName={cn("p-2.5", "bg-[hsl(var(--card))]/95 backdrop-blur-md [box-shadow:var(--elev-3)]")}
+      top={
         <textarea
           ref={taRef}
           rows={1}
@@ -57,23 +61,21 @@ export function QADock({ placeholder, model, onModelChange, onAsk }: QADockProps
               submit();
             }
           }}
-          className="w-full resize-none bg-transparent text-sm leading-6 px-2 py-1 outline-none placeholder:text-[hsl(var(--muted-foreground))] text-[hsl(var(--foreground))]"
+          className={cn(
+            composerInputCls(),
+            "w-full resize-none bg-transparent leading-6 px-2 py-1 mb-1.5 outline-none placeholder:text-[hsl(var(--muted-foreground))] text-[hsl(var(--foreground))]"
+          )}
         />
-        <div className="flex items-center justify-between mt-1.5">
-          <ModelPicker variant="compact" value={model} onChange={onModelChange} />
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            iconOnly
-            onClick={submit}
-            disabled={!value.trim()}
-            aria-label="Ask question"
-          >
-            <ArrowUp className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-    </div>
+      }
+      toolbarLeft={<ModelPicker variant="compact" value={model} onChange={onModelChange} />}
+      toolbarRight={
+        <ComposerSendButton
+          onClick={submit}
+          active={Boolean(value.trim())}
+          shape="square"
+          aria-label="Ask question"
+        />
+      }
+    />
   );
 }

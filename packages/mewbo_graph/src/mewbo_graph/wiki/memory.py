@@ -1,7 +1,7 @@
 """Insight ingestion — the DRY write core behind all memory surfaces.
 
 One ``InsightIngestor`` backs the SessionTool, the REST endpoint, and the MCP
-tool (Gitea #13 §8). Given a claim (or raw text to condense) plus optional
+tool. Given a claim (or raw text to condense) plus optional
 anchors, it: condenses → embeds → resolves/auto-resolves anchors → runs the
 3-tier dedup/merge ladder → upserts node + embedding + edges. Every
 collaborator (store, embedder, structure provider, deduper, condenser, clock)

@@ -7,7 +7,7 @@ from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import emit_log
+from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase_once
 from mewbo_graph.plugins.wiki.clone import _resolve_runtime  # noqa: F401 — per-module test seam
 
 if TYPE_CHECKING:
@@ -61,6 +61,14 @@ class WikiSubmitPageTool(WikiSessionTool):
 
         page_id = args.pageId
 
+        # The ``pages`` phase is a page-writer FAN-OUT with no boundary tool, so
+        # writing a page IS the phase starting: the first writer to arrive moves
+        # the job, the rest are no-ops. Its predecessor (wiki_commit_plan) used to
+        # stamp it on the way out, which reported the phase as underway for a
+        # fan-out that had not spawned — a run that died in that gap read as
+        # writing pages it never began.
+        emit_phase_once(ctx, "pages")
+
         # 3. Determine if this is a new submission or a re-submit (idempotent).
         existing = ctx.store.get_page(ctx.slug, page_id)
         is_new = existing is None
@@ -68,8 +76,12 @@ class WikiSubmitPageTool(WikiSessionTool):
         # 4. Build the WikiPage (toc + nav deferred — front-end derives from headings).
         page = _build_wiki_page(page_id, args)
 
-        # 5. Persist the page (overwrites if same page_id).
-        ctx.store.save_page(ctx.slug, page)
+        # 5. Persist the page (overwrites if same page_id), attributed to the
+        # commit this job indexed — provenance only; pages supersede by the
+        # finalize plan-prune, not by commit.
+        ctx.store.save_page(
+            ctx.slug, page, commit_sha=ctx.commit_sha, job_id=ctx.job_id
+        )
 
         # 6. Increment counter only for genuinely new pages.
         if is_new:

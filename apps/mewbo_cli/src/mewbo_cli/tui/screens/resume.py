@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``/resume`` session switcher modal (#157).
+"""``/resume`` session switcher modal.
 
 A ``ModalScreen`` over the sessions in the shared ``SessionRuntime``: each row
 shows busy state, title and last-activity so the user can pick one to resume.

@@ -13,16 +13,27 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * Sessions list (§8.2): refreshes on start and on pull-to-refresh. [SessionRepository] already
- * caches the last-fetched list, so a failed refresh with a non-empty cache degrades to
- * [SessionsUiState.Loaded] with `offline = true` rather than [SessionsUiState.Error].
+ * Recents rail view-state (§8.2). The `@Singleton` [SessionRepository] holds the last-loaded list
+ * across this ViewModel's recreation (it is recreated per chat back-stack entry — open-session and
+ * new-chat replace the CHAT entry), so BOTH the initial state and every [refresh] render that cache
+ * IMMEDIATELY and re-fetch in the background (stale-while-revalidate). The skeleton
+ * ([SessionsUiState.Loading]) shows only when the cache is genuinely empty (first launch); a failed
+ * background refresh keeps the cached list ([SessionsUiState.Loaded] with `offline = true`), never
+ * blanks to [SessionsUiState.Error].
  */
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<SessionsUiState>(SessionsUiState.Loading)
+    // Seed from the shared cache so a freshly-recreated drawer VM renders instantly instead of
+    // flashing the skeleton; init's refresh() reconciles against server truth right after.
+    private val _uiState = MutableStateFlow<SessionsUiState>(
+        sessionRepository.sessions.value
+            .takeIf { it.isNotEmpty() }
+            ?.let { SessionsUiState.Loaded(it, offline = false) }
+            ?: SessionsUiState.Loading,
+    )
     val uiState: StateFlow<SessionsUiState> = _uiState.asStateFlow()
 
     /**
@@ -47,10 +58,18 @@ class SessionsViewModel @Inject constructor(
     fun refresh() {
         val cached = sessionRepository.sessions.value
         _uiState.update { current ->
-            if (current is SessionsUiState.Loaded) current.copy(isRefreshing = true) else SessionsUiState.Loading
+            when {
+                // Already rendering a list — keep it on screen, just flag the background refresh.
+                current is SessionsUiState.Loaded -> current.copy(isRefreshing = true)
+                // Fresh VM but the shared cache still holds the last list: render it immediately
+                // (stale-while-revalidate) rather than blanking while the GET round-trips.
+                cached.isNotEmpty() -> SessionsUiState.Loaded(cached, offline = false, isRefreshing = true)
+                // Genuinely nothing to show yet (first launch) — the skeleton is correct here.
+                else -> SessionsUiState.Loading
+            }
         }
         viewModelScope.launch {
-            // Gitea #181 fix wave, finding 2: runCatching catches CancellationException too - this
+            // runCatching catches CancellationException too - this
             // ViewModel is created fresh per screen (drawer/search host) and can be torn down
             // mid-fetch, so a cancelled coroutine here must actually stop instead of writing a
             // "couldn't load" state past its own cancellation point.

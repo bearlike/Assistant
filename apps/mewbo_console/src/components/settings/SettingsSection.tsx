@@ -15,6 +15,7 @@ import type { RJSFSchema, UiSchema } from "@rjsf/utils";
 import { Loader2, RotateCcw, Save } from "lucide-react";
 import type { SettingsModel } from "./SettingsModel";
 import { rjsfFields, rjsfTemplates, rjsfWidgets } from "./RjsfTheme";
+import { SettingsCard } from "./SettingsCard";
 import { Button } from "../ui/button";
 
 export interface SettingsSectionProps {
@@ -65,24 +66,59 @@ export function SettingsSection({
   };
 
   return (
-    <section
-      aria-labelledby={headingId}
-      className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
-    >
-      <div className="mb-4">
-        <h2
-          id={headingId}
-          className="text-sm font-semibold text-[hsl(var(--foreground))]"
-        >
-          {section?.title ?? sectionId}
-        </h2>
-        {section?.description && (
-          <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-            {section.description}
-          </p>
-        )}
-      </div>
+    <SettingsCard
+      id={headingId}
+      title={section?.title ?? sectionId}
+      description={section?.description}
+      footer={
+        <>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            disabled={!dirty || saving}
+            onClick={handleSave}
+            leadingIcon={
+              saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )
+            }
+          >
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            disabled={!dirty || saving}
+            onClick={() => onChange(original)}
+            leadingIcon={<RotateCcw className="w-4 h-4" />}
+          >
+            Reset
+          </Button>
 
+          {/* `sr-only` is `position: absolute`. Without a positioned
+              ancestor its containing block is the document itself, which
+              inflates `document.documentElement.scrollHeight` to this
+              span's own static offset and makes the WHOLE PAGE scroll past
+              the shell's `h-screen overflow-hidden` (a wheel gesture then
+              chains straight through the inner scroll container). `relative`
+              here gives it a local containing block instead. */}
+          <span className="relative">
+            <span aria-live="polite" className="sr-only">
+              {savedAt ? "Saved" : ""}
+            </span>
+          </span>
+          {savedAt > 0 && !dirty && !saving && (
+            <span key={savedAt} className="text-xs text-[hsl(var(--success))]">
+              Saved
+            </span>
+          )}
+        </>
+      }
+    >
       <Form
         schema={model.sliceSchema(sectionId) as RJSFSchema}
         uiSchema={uiSchema}
@@ -109,47 +145,6 @@ export function SettingsSection({
         {/* Suppress RJSF's built-in submit button — the footer owns Save. */}
         <></>
       </Form>
-
-      <div className="mt-4 flex items-center gap-2 border-t border-[hsl(var(--border))] pt-4">
-        <Button
-          type="button"
-          variant="primary"
-          size="md"
-          disabled={!dirty || saving}
-          onClick={handleSave}
-          leadingIcon={
-            saving ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )
-          }
-        >
-          {saving ? "Saving…" : "Save"}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="md"
-          disabled={!dirty || saving}
-          onClick={() => onChange(original)}
-          leadingIcon={<RotateCcw className="w-4 h-4" />}
-        >
-          Reset
-        </Button>
-
-        <span aria-live="polite" className="sr-only">
-          {savedAt ? "Saved" : ""}
-        </span>
-        {savedAt > 0 && !dirty && !saving && (
-          <span
-            key={savedAt}
-            className="text-xs text-[hsl(var(--success))]"
-          >
-            Saved
-          </span>
-        )}
-      </div>
-    </section>
+    </SettingsCard>
   );
 }

@@ -1,4 +1,4 @@
-"""Schema v2 ``CodeGraph`` validation tests (Gitea #188).
+"""Schema v2 ``CodeGraph`` validation tests.
 
 Drives the discriminated-union node models + whole-graph ``CodeGraph`` validator
 from the CALLER site: legacy-shape rehydration (no ``subkind``/``attributes``),

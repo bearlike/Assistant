@@ -22,6 +22,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,7 +49,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -52,6 +61,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mewbo.aura.data.device.DeviceToolToggles
+import com.mewbo.aura.ui.chat.ChatIcons
+import com.mewbo.aura.ui.chat.ModelPickerSheet
 import com.mewbo.aura.ui.common.ErrorCard
 import com.mewbo.aura.ui.common.LocalNoticeController
 import com.mewbo.aura.ui.navigation.IS_DEBUG_BUILD
@@ -67,6 +79,12 @@ import com.mewbo.aura.ui.theme.AuraType
  * the compaction pass. Connection fields (base URL, API key) are the one exception to
  * immediate-apply: they hold local draft state and only reach [com.mewbo.aura.data.settings.SettingsStore] via the explicit
  * "Validate & save" pill, which probes them live first ([SettingsViewModel.validateAndSave]).
+ *
+ * Rows are grouped into named sections (Connection · Identity · Defaults · Voice & Motion ·
+ * Device capabilities · Widgets · Debug), each opened by a [SettingsSectionHeader] — a leading
+ * Material glyph plus label, marked as an a11y heading so TalkBack's heading-navigation gesture
+ * can jump section to section. Purely presentational: no row's persistence key, callback, or
+ * gating logic changed by this grouping.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,9 +99,16 @@ fun SettingsScreen(
     val context = LocalContext.current
     val noticeController = LocalNoticeController.current
     var projectPickerOpen by remember { mutableStateOf(false) }
+    // two independent model-default pickers (app vs assist overlay), each reusing
+    // the chat ModelPickerSheet + lazy catalog load, mirroring the project picker's shape above.
+    var appModelPickerOpen by remember { mutableStateOf(false) }
+    var overlayModelPickerOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(projectPickerOpen) {
         if (projectPickerOpen) viewModel.loadProjectsIfNeeded { noticeController.show(it) }
+    }
+    LaunchedEffect(appModelPickerOpen, overlayModelPickerOpen) {
+        if (appModelPickerOpen || overlayModelPickerOpen) viewModel.loadModelsIfNeeded { noticeController.show(it) }
     }
     // Live OS read, not a persisted preference (task brief) - re-checked on first composition and
     // again once the request dialog below returns a result.
@@ -113,10 +138,7 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            NameField(displayName = uiState.displayName, onCommit = viewModel::setDisplayName)
-
-            HorizontalDivider(color = AuraColors.outlineHairline)
-
+            SettingsSectionHeader("Connection", icon = Icons.Filled.Lock)
             ConnectionFields(
                 uiState = uiState,
                 onValidateAndSave = { baseUrl, apiKey ->
@@ -131,6 +153,12 @@ fun SettingsScreen(
 
             HorizontalDivider(color = AuraColors.outlineHairline)
 
+            SettingsSectionHeader("Identity", icon = Icons.Filled.Person)
+            NameField(displayName = uiState.displayName, onCommit = viewModel::setDisplayName)
+
+            HorizontalDivider(color = AuraColors.outlineHairline)
+
+            SettingsSectionHeader("Defaults", icon = Icons.Filled.Star)
             CompactRow(
                 label = "Default project",
                 modifier = Modifier.clickable { projectPickerOpen = true },
@@ -141,9 +169,30 @@ fun SettingsScreen(
                     )
                 },
             )
+            CompactRow(
+                label = "Default model — app",
+                modifier = Modifier.clickable { appModelPickerOpen = true },
+                trailing = {
+                    Text(
+                        text = resolveModelDisplayName(uiState.appDefaultModel, uiState.models),
+                        style = AuraType.caption,
+                    )
+                },
+            )
+            CompactRow(
+                label = "Default model — assistant overlay",
+                modifier = Modifier.clickable { overlayModelPickerOpen = true },
+                trailing = {
+                    Text(
+                        text = resolveModelDisplayName(uiState.overlayDefaultModel, uiState.models),
+                        style = AuraType.caption,
+                    )
+                },
+            )
 
             HorizontalDivider(color = AuraColors.outlineHairline)
 
+            SettingsSectionHeader("Voice & Motion", icon = ChatIcons.Mic)
             CompactRow(
                 label = "Speak responses",
                 trailing = { Switch(checked = uiState.speakResponses, onCheckedChange = viewModel::setSpeakResponses) },
@@ -155,16 +204,14 @@ fun SettingsScreen(
 
             HorizontalDivider(color = AuraColors.outlineHairline)
 
+            SettingsSectionHeader("Device capabilities", icon = Icons.Filled.Phone)
             CompactRow(
                 label = "Set as default assistant",
                 modifier = Modifier.clickable {
                     runCatching { context.startActivity(Intent(SystemSettings.ACTION_VOICE_INPUT_SETTINGS)) }
                 },
             )
-
-            HorizontalDivider(color = AuraColors.outlineHairline)
-
-            // Gitea #179 Phase 4: the ONLY gate for device_read_latest_sms/device_send_sms is the
+            // the ONLY gate for device_read_latest_sms/device_send_sms is the
             // OS runtime grant itself - no consent toggle, no explanation screen, no per-session
             // prompt (task brief, user law). Tapping while already granted is a no-op; the system
             // dialog handles "don't ask again" on its own.
@@ -180,23 +227,48 @@ fun SettingsScreen(
                     )
                 },
             )
+            // per-tool device-capability toggles, default ON (a tool is checked iff
+            // its id is NOT in the disabled set). Toggling off removes the tool from BOTH advertisement
+            // (DeviceToolCatalog) and execution (DeviceToolExecutor refuses it). Grouping/labels are
+            // the canonical DeviceToolToggles.GROUPS (data/), never re-listed here.
+            DeviceToolToggles.GROUPS.forEach { group ->
+                DeviceToolGroupLabel(group.title)
+                group.toggles.forEach { toggle ->
+                    CompactRow(
+                        label = toggle.label,
+                        trailing = {
+                            Switch(
+                                checked = toggle.toolId !in uiState.disabledDeviceToolIds,
+                                onCheckedChange = { enabled -> viewModel.setDeviceToolEnabled(toggle.toolId, enabled) },
+                            )
+                        },
+                    )
+                }
+            }
+
+            HorizontalDivider(color = AuraColors.outlineHairline)
+
+            // the experimental Streamlit-widgets flag. This toggle only persists the
+            // preference; the widget renderer consumes it at the advertise+render seam.
+            SettingsSectionHeader("Widgets", icon = Icons.Filled.AddCircle)
+            CompactRow(
+                label = "Streamlit widgets",
+                trailing = {
+                    Switch(
+                        checked = uiState.streamlitWidgetsEnabled,
+                        onCheckedChange = viewModel::setStreamlitWidgetsEnabled,
+                    )
+                },
+            )
 
             if (IS_DEBUG_BUILD) {
                 HorizontalDivider(color = AuraColors.outlineHairline)
-                Text(
-                    text = "Debug",
-                    style = AuraType.sectionHeader,
-                    modifier = Modifier.padding(
-                        top = AuraSpacing.DrawerRow.sectionHeaderTopPad,
-                        start = AuraSpacing.screenGutter,
-                        end = AuraSpacing.screenGutter,
-                    ),
-                )
+                SettingsSectionHeader("Debug", icon = Icons.Filled.Build)
                 CompactRow(
                     label = "Use fake voice pipeline",
                     trailing = { Switch(checked = uiState.voiceUseFakes, onCheckedChange = viewModel::setVoiceUseFakes) },
                 )
-                // Zero-cost device testing (Gitea #181 follow-up): scripted sessions instead of the
+                // Zero-cost device testing: scripted sessions instead of the
                 // real backend - every session/query/stream/models/projects/tools call gets a canned
                 // response, no LLM spend. Same `-e mockBackend true` seed-extra pattern as
                 // `seedBaseUrl`/`seedApiKey` lets automation flip this per-install (MainActivity).
@@ -228,6 +300,80 @@ fun SettingsScreen(
             onDismiss = { projectPickerOpen = false },
         )
     }
+
+    // Both reuse the chat ModelPickerSheet verbatim (its own `models == null` degrade covers offline).
+    if (appModelPickerOpen) {
+        ModelPickerSheet(
+            models = uiState.models,
+            selectedModel = uiState.appDefaultModel.ifBlank { null },
+            onSelect = { id ->
+                viewModel.setAppDefaultModel(id)
+                appModelPickerOpen = false
+            },
+            onDismiss = { appModelPickerOpen = false },
+        )
+    }
+    if (overlayModelPickerOpen) {
+        ModelPickerSheet(
+            models = uiState.models,
+            selectedModel = uiState.overlayDefaultModel.ifBlank { null },
+            onSelect = { id ->
+                viewModel.setOverlayDefaultModel(id)
+                overlayModelPickerOpen = false
+            },
+            onDismiss = { overlayModelPickerOpen = false },
+        )
+    }
+}
+
+/**
+ * Top-level settings section header (Connection/Identity/Defaults/Voice & Motion/Device
+ * capabilities/Widgets/Debug) - a leading glyph plus the label, one row per section for
+ * scan-ability (task brief). [icon] reuses [AuraSpacing.DrawerRow]'s existing icon geometry
+ * (24dp / 12dp gap to label) rather than inventing a new size token, and is tinted
+ * [AuraColors.textSecondary] to match [AuraType.sectionHeader]'s own color - the glyph reads as
+ * one hierarchy step below body content, same tier as the label beside it, never louder. The
+ * glyph is purely decorative (`contentDescription = null`); [text] alone is the accessible name,
+ * and `.semantics { heading() }` marks the row as an a11y heading so TalkBack's heading-navigation
+ * gesture can jump between sections.
+ */
+@Composable
+private fun SettingsSectionHeader(text: String, icon: ImageVector) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(
+                top = AuraSpacing.DrawerRow.sectionHeaderTopPad,
+                start = AuraSpacing.screenGutter,
+                end = AuraSpacing.screenGutter,
+            )
+            .semantics { heading() },
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = AuraColors.textSecondary,
+            modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
+        )
+        Spacer(Modifier.width(AuraSpacing.DrawerRow.iconToLabelGap))
+        Text(text = text, style = AuraType.sectionHeader)
+    }
+}
+
+/** A lighter sub-label above one device-tool cluster - `textSecondary` caption so
+ * it reads one hierarchy step below [SettingsSectionHeader]'s "Device capabilities", never as a peer. */
+@Composable
+private fun DeviceToolGroupLabel(text: String) {
+    Text(
+        text = text,
+        style = AuraType.caption,
+        color = AuraColors.textSecondary,
+        modifier = Modifier.padding(
+            top = AuraSpacing.Composer.gapTight,
+            start = AuraSpacing.screenGutter,
+            end = AuraSpacing.screenGutter,
+        ),
+    )
 }
 
 /** "Your name" keeps the pre-existing immediate-apply-on-Done behavior (spec: only the connection

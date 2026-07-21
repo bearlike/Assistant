@@ -7,13 +7,16 @@ import hmac
 import json
 import time
 
+from mewbo_api.channels import routes as channels_routes
 from mewbo_api.channels.base import (
     ChannelAdapter,
     ChannelRegistry,
     DeduplicationGuard,
 )
 from mewbo_api.channels.nextcloud_talk import NextcloudTalkAdapter
-from mewbo_api.channels.routes import _COMMAND_RE
+from mewbo_api.channels.routes import _COMMAND_RE, extract_final_answer
+from mewbo_core.session_runtime import SessionRuntime
+from mewbo_core.session_store import SessionStore
 
 # ------------------------------------------------------------------
 # DeduplicationGuard
@@ -348,3 +351,195 @@ class TestProtocolCompliance:
             nextcloud_url="https://nc.example.com",
         )
         assert isinstance(adapter, ChannelAdapter)
+
+
+# ------------------------------------------------------------------
+# extract_final_answer — honest framing for blocked/unmet_goal outcomes
+# ------------------------------------------------------------------
+
+
+class TestExtractFinalAnswerHonesty:
+    """A blocked/unmet_goal outcome must never read as a clean success."""
+
+    @staticmethod
+    def _events(task_result: str | None) -> list[dict]:
+        events: list[dict] = [{"type": "user", "payload": {"text": "do the thing"}}]
+        if task_result is not None:
+            events.append({"type": "completion", "payload": {"task_result": task_result}})
+        return events
+
+    def test_error_branch_is_unchanged(self) -> None:
+        text = extract_final_answer(
+            self._events("all done"), "boom", outcome={"status": "completed"}
+        )
+        assert text == "Session ended with an error: boom"
+
+    def test_omitted_outcome_matches_legacy_behavior(self) -> None:
+        assert extract_final_answer(self._events("all done"), None) == "all done"
+
+    def test_completed_outcome_passes_through_unchanged(self) -> None:
+        text = extract_final_answer(self._events("all done"), None, outcome={"status": "completed"})
+        assert text == "all done"
+
+    def test_blocked_outcome_names_the_wall(self) -> None:
+        outcome = {"status": "blocked", "blocked_code": "repo_access"}
+        text = extract_final_answer(
+            self._events("partial progress before the wall"), None, outcome=outcome
+        )
+        assert "blocked" in text.lower()
+        assert "repository access" in text
+        assert "partial progress before the wall" in text
+        assert not text.startswith("partial progress")  # not a bare success string
+
+    def test_blocked_outcome_with_no_partial_text_still_replies(self) -> None:
+        outcome = {"status": "blocked", "blocked_code": "network"}
+        text = extract_final_answer(self._events(None), None, outcome=outcome)
+        assert text
+        assert "network" in text.lower()
+
+    def test_unmet_goal_outcome_states_the_shortfall(self) -> None:
+        outcome = {"status": "unmet_goal", "unmet_goal_reason": "verification failed twice"}
+        text = extract_final_answer(self._events("looked done"), None, outcome=outcome)
+        assert "goal" in text.lower()
+        assert "verification failed twice" in text
+        assert "looked done" in text
+        assert not text.startswith("looked done")
+
+    def test_unmet_goal_falls_back_to_done_reason(self) -> None:
+        outcome = {"status": "unmet_goal", "done_reason": "halted_no_progress"}
+        text = extract_final_answer(self._events(None), None, outcome=outcome)
+        assert "halted_no_progress" in text
+
+
+# ------------------------------------------------------------------
+# _channel_completion_hook — contract test from the hook's own seam
+# ------------------------------------------------------------------
+
+
+class _RecordingAdapter:
+    """Minimal ``ChannelAdapter`` that records what it was asked to send."""
+
+    platform = "nextcloud-talk"
+    supports_webhook = True
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    def verify_request(self, headers: dict[str, str], body: bytes) -> bool:
+        return True
+
+    def parse_inbound(self, headers: dict[str, str], body: bytes) -> None:
+        return None
+
+    def send_response(
+        self,
+        channel_id: str,
+        text: str,
+        thread_id: str | None = None,
+        reply_to: str | None = None,
+    ) -> str | None:
+        self.sent.append(
+            {"channel_id": channel_id, "text": text, "thread_id": thread_id, "reply_to": reply_to}
+        )
+        return "sent-1"
+
+    @property
+    def system_context(self) -> str:
+        return "test adapter"
+
+
+class TestChannelCompletionHookHonesty:
+    """The completion hook must consult the session's derived outcome, not
+    just the ``error`` argument, before posting a reply."""
+
+    def _wire(self, tmp_path, monkeypatch) -> tuple[SessionRuntime, _RecordingAdapter]:
+        store = SessionStore(root_dir=str(tmp_path))
+        runtime = SessionRuntime(session_store=store)
+        registry = ChannelRegistry()
+        adapter = _RecordingAdapter()
+        registry.register(adapter)
+        monkeypatch.setattr(channels_routes, "_runtime", runtime)
+        monkeypatch.setattr(channels_routes, "_registry", registry)
+        return runtime, adapter
+
+    @staticmethod
+    def _seed_session(runtime: SessionRuntime) -> str:
+        session_id = runtime.resolve_session()
+        runtime.session_store.append_event(
+            session_id, {"type": "user", "payload": {"text": "please fix the bug"}}
+        )
+        runtime.session_store.append_event(
+            session_id,
+            {
+                "type": "context",
+                "payload": {
+                    "source_platform": "nextcloud-talk",
+                    "channel_id": "room-1",
+                    "thread_id": None,
+                    "reply_to_message_id": "msg-100",
+                },
+            },
+        )
+        return session_id
+
+    def test_blocked_session_reply_is_not_framed_as_success(self, tmp_path, monkeypatch) -> None:
+        runtime, adapter = self._wire(tmp_path, monkeypatch)
+        session_id = self._seed_session(runtime)
+        runtime.session_store.append_event(
+            session_id,
+            {
+                "type": "completion",
+                "payload": {
+                    "done": True,
+                    "done_reason": "completed",
+                    "task_result": "Pushed a partial fix",
+                    "blocked_code": "network",
+                },
+            },
+        )
+        channels_routes._channel_completion_hook(session_id)
+        assert len(adapter.sent) == 1
+        text = str(adapter.sent[0]["text"])
+        assert "blocked" in text.lower()
+        assert "network" in text.lower()
+        assert "Pushed a partial fix" in text
+        assert not text.startswith("Pushed a partial fix")
+
+    def test_unmet_goal_session_reply_states_the_shortfall(self, tmp_path, monkeypatch) -> None:
+        runtime, adapter = self._wire(tmp_path, monkeypatch)
+        session_id = self._seed_session(runtime)
+        runtime.session_store.append_event(
+            session_id,
+            {
+                "type": "completion",
+                "payload": {
+                    "done": True,
+                    "done_reason": "verification_failed",
+                    "task_result": "Looks correct to me",
+                },
+            },
+        )
+        channels_routes._channel_completion_hook(session_id)
+        assert len(adapter.sent) == 1
+        text = str(adapter.sent[0]["text"])
+        assert "goal" in text.lower()
+        assert "Looks correct to me" in text
+        assert not text.startswith("Looks correct to me")
+
+    def test_genuinely_successful_session_reply_is_unchanged(self, tmp_path, monkeypatch) -> None:
+        runtime, adapter = self._wire(tmp_path, monkeypatch)
+        session_id = self._seed_session(runtime)
+        runtime.session_store.append_event(
+            session_id,
+            {
+                "type": "completion",
+                "payload": {
+                    "done": True,
+                    "done_reason": "completed",
+                    "task_result": "All done, fix merged.",
+                },
+            },
+        )
+        channels_routes._channel_completion_hook(session_id)
+        assert len(adapter.sent) == 1
+        assert adapter.sent[0]["text"] == "All done, fix merged."

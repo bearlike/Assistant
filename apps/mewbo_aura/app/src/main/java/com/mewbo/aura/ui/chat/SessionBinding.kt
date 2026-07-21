@@ -42,14 +42,36 @@ internal class SessionBinding {
         currentId = id
         return true
     }
+
+    /**
+     * `true` when [id] is STILL the bound session — i.e. an async load that STARTED for [id] is
+     * allowed to write into [ChatViewModel]'s shared per-session state (the reducer, `items`,
+     * `title`, `sessionEnded`, the model/scope hydration, the live subscription).
+     *
+     * **The guard every suspension point in an async session load needs.** One [ChatViewModel]
+     * instance is shared across every session (see this class's own doc), so its reducer/state are
+     * shared mutable state that a coroutine started for session A can still be holding a reference
+     * to after the user has opened session B. `ChatViewModel.bind` cancels the in-flight load, which
+     * closes most of the window — but cancellation is COOPERATIVE (it only takes effect at the next
+     * suspension point), so this re-check after each `await` is what actually makes the write safe
+     * rather than merely usually-safe. Without it, a retry's `POST` + history fetch resuming after a
+     * session switch would fold session A's transcript, title and scope straight into session B's
+     * binding, and re-point the live stream at A's run.
+     *
+     * Deliberately a plain identity check rather than a generation counter: an A → B → A round trip
+     * genuinely IS back on A, the rebind reset the reducer, and re-folding A's history is idempotent
+     * ([com.mewbo.aura.data.model.TranscriptReducer]), so the stale load converges on the same state
+     * the fresh one would.
+     */
+    fun isCurrent(id: String?): Boolean = isBound && id == currentId
 }
 
 /**
- * [ChatViewModel.bind]'s composer-scope reseed decision (Gitea #178 W1-A): a new/fresh chat
+ * [ChatViewModel.bind]'s composer-scope reseed decision: a new/fresh chat
  * (`id == null`) reseeds [ComposerScope.selectedProjectKey] from the app-wide default project; an
  * existing session's scope is left untouched, so a revisited session keeps the project/tools it was
  * actually created with (commit 3add535) rather than being silently re-scoped to the app default. As
- * of Gitea #185 P5 the user CAN re-pick scope on an idle existing session for the next turn - so this
+ * of the user CAN re-pick scope on an idle existing session for the next turn - so this
  * reseed must preserve, never overwrite, that restored scope. Extracted for the same reason
  * [SessionBinding] is its own class - directly unit-testable without a full [ChatViewModel].
  */

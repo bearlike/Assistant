@@ -1,4 +1,4 @@
-"""Per-model prompt variant tests (Gitea #113, Phase A).
+"""Per-model prompt variant tests (Phase A).
 
 Drives the real ``get_prompt_registry()`` to prove the first model-prefix
 overrides converge rather than fork: a gemma-class model and a structured-patch

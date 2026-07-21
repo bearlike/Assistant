@@ -1,4 +1,4 @@
-# Tool-use-loop prompts (Gitea #89, phase 1 — VERBATIM extraction).
+# Tool-use-loop prompts (VERBATIM extraction).
 #
 # Migrated from tool_use_loop.py: the _build_messages system-prompt SECTION
 # wrappers (`loop.section.*`), the _build_depth_guidance delegation role prompts
@@ -35,6 +35,21 @@ loop.section.project_instructions:
   template: |-
     Project instructions:
     {{ project_instructions }}
+
+# Operator-authored custom instructions. The text arrives ALREADY RENDERED (the
+# operator's own Jinja template is evaluated ONCE per run in a SANDBOXED env —
+# see mewbo_core/system_instructions/) and is substituted here as a plain
+# VARIABLE. That is the SSTI boundary and it is load-bearing: Jinja substitutes
+# the value, it never re-renders it, so operator text containing `{{ ... }}`
+# cannot execute against this (non-sandboxed) registry environment.
+loop.section.user_instructions:
+  purpose: >-
+    Custom-instructions wrapper — the rendered output of the operator's
+    system-instructions template, appended to every session's system prompt.
+  variables: [user_instructions]
+  template: |-
+    Custom instructions:
+    {{ user_instructions }}
 
 loop.section.agent_tree:
   purpose: Live agent-tree wrapper — root agent's global eye over sub-agents.
@@ -170,7 +185,7 @@ loop.depth.root:
     - If the same operation fails twice, do not retry it a third time.
     - If a sub-agent fails, do not spawn another sub-agent for the same task.
     - Report what failed, why, and what you tried — then let the user decide.
-  # First real model-prefix override (Gitea #113, Phase A — convergence demo).
+  # First real model-prefix override (convergence demo).
   # BEHAVIOURAL-ONLY delta per the core CLAUDE.md guardrail: small open-weight
   # (gemma-class) models genuinely diverge by OVER-DELEGATING trivial work and
   # FAILING TO TERMINATE (spinning instead of returning a final text answer).
@@ -258,6 +273,35 @@ loop.budget_warning:
   template: |-
     BUDGET WARNING: Session step budget nearly exhausted. Summarize your current findings and return results immediately.
 
+# WriteProgressSignal's optional reminder. Criterion-blind by design: it
+# restates the task objective only, never the signal or the criteria that
+# triggered it, so it can't teach an agent the tell it is being measured
+# against.
+loop.task_objective_reminder:
+  purpose: >-
+    Optional objective re-anchor injected when the write-progress signal
+    crosses its threshold — restates the task goal, nothing else.
+  token_budget: Injected once the non-progress streak crosses the threshold, then every event_interval steps, only when reminder_enabled.
+  variables: [goal]
+  template: |-
+    Reminder — your task: {{ goal }}
+
+# Verifier-gated completion. Injected when a claimed completion fails the
+# ground-truth check and retries remain. A THIN factual frame around the
+# grounded verifier output only — no behavioural commentary, no mention of the
+# gate's mechanics; the model just sees the failure and is asked to fix it.
+loop.verification_failed:
+  purpose: >-
+    Feedback injected when a natural-completion claim fails its ground-truth
+    verifier and a retry remains — frames the grounded command output and asks
+    the agent to address the failures.
+  token_budget: Injected once per failed verifier check, up to verification_max_retries.
+  variables: [output]
+  template: |-
+    The completion check did not pass. Output:
+    {{ output }}
+    Address the failures above, then complete the task.
+
 loop.agent_results_header:
   purpose: >-
     Header for the completed-sub-agent results block injected at synthesis
@@ -283,11 +327,44 @@ loop.final_answer_synthesis:
   template: |-
     You MUST now provide your final answer based on all the information gathered so far. Do NOT call any more tools. Respond with text only.
 
+# Graduated exhaustion. Injected on the ONE unbound wrap-up turn
+# forced at session-budget (and, in a later wave, per-agent contract)
+# exhaustion, in place of a bare halt.
+loop.budget_exhausted_wrapup:
+  purpose: >-
+    Forced wrap-up directive for the ONE unbound turn run at budget
+    exhaustion — asks for a closing summary instead of a bare halt.
+  token_budget: Injected once, on the forced budget-exhaustion wrap-up turn.
+  template: |-
+    BUDGET EXHAUSTED: No further tool calls are available. Produce your final summary now — what you accomplished, what remains, and any hand-off notes for whoever continues this work.
+
 loop.stall_warning:
   purpose: Watchdog stall warning sent to a stalled agent (zero-token code-level monitor).
   token_budget: Sent by the background watchdog after 2+ minutes of no progress.
   template: |-
     STALL WARNING: No progress for 2+ minutes. Wrap up or report status.
+
+# DelegationContract per-agent step budget. Distinct from the
+# SESSION-wide loop.budget_warning: this fires only when a spawned agent's
+# OWN contract nears its declared step ceiling.
+loop.agent_budget_warning:
+  purpose: >-
+    Warning injected once a spawned agent's own DelegationContract step
+    budget enters its warn headroom, before the per-agent hard stop.
+  token_budget: Injected once per run, when the agent's own contract step budget nears exhaustion.
+  template: |-
+    AGENT BUDGET WARNING: Your own step budget is nearly exhausted. Wrap up and return your result soon.
+
+# DelegationContract wall-clock deadline. The one warning that
+# always precedes a contract-driven watchdog cancellation (two-strike: 80%
+# warn, 100% cancel).
+loop.wall_deadline_warning:
+  purpose: >-
+    Watchdog warning sent to an agent whose DelegationContract wall-clock
+    deadline has crossed 80%.
+  token_budget: Sent by the background watchdog once per agent, at 80% of its wall-clock deadline.
+  template: |-
+    WALL DEADLINE WARNING: You are approaching your wall-clock time limit. Wrap up and report status soon.
 
 loop.compaction_drive:
   purpose: HumanMessage that drives the mid-loop compaction summarizer over the transcript.

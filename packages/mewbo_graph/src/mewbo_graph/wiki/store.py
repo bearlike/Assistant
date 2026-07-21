@@ -4,7 +4,8 @@
 JSON-file backed implementation (default) + abstract base for the
 MongoDB impl that lands in Task 1.4. Layout under ``$MEWBO_HOME/wiki/``:
 
-    projects/<slug>.json                    (Project model)
+    projects/<slug>.json                    (Project model — DISPLAY snapshot)
+    settings/<slug>.json                    (ProjectSettings — the editable record)
     pages/<slug>/_index.json                (page-id→title index for fast listing)
     pages/<slug>/<page_id>.json             (full WikiPage including body)
     jobs/<job_id>/job.json                  (IndexingJob model)
@@ -54,6 +55,7 @@ from .types import (
     GraphNodeAdapter,
     IndexingJob,
     Project,
+    ProjectSettings,
     QaAnswer,
     WikiPage,
 )
@@ -107,11 +109,90 @@ class WikiStoreBase(abc.ABC):
     def delete_project(self, slug: str) -> bool:
         """Delete project *slug*; return True if deleted, False if absent."""
 
+    # The ONLY ``Project`` fields a partial :meth:`update_project` may write.
+    # Deliberately tiny, and not an oversight: every other field is SYSTEM-owned
+    # — rebuilt wholesale by the next index run (``pages``/``indexed_at``/
+    # ``landing_page_id``/``commit_sha``/``branch``/``maintainer_edited``/
+    # ``graph_only``) or part of identity (``slug``/``source``/``host``/
+    # ``repo_url``). Writing one here would either be silently clobbered at the
+    # next finalize or make the record lie about what was actually indexed.
+    # Settings that take effect on the NEXT index belong on ``ProjectSettings``.
+    PROJECT_UPDATABLE: frozenset[str] = frozenset({"desc"})
+
+    def update_project(self, slug: str, fields: dict[str, Any]) -> Project | None:
+        """Apply a partial update to *slug*'s Project; return the new state.
+
+        Returns ``None`` when the project is absent. Only keys in
+        :data:`PROJECT_UPDATABLE` are honoured — an unknown or ``None`` value is
+        ignored, so a caller can hand over a whole PATCH body without pre-filtering
+        (mirrors ``agentic_search.store.update_workspace``).
+
+        Concrete on the base rather than per-backend: ``create_project`` is an
+        UPSERT in both drivers, so read → ``model_copy`` → upsert needs no
+        duplicated JSON/Mongo pair that could drift. It is a read-modify-write with
+        the same (non-)atomicity as every other Project write in this store.
+        """
+        project = self.get_project(slug)
+        if project is None:
+            return None
+        updates = {
+            key: value
+            for key, value in fields.items()
+            if key in self.PROJECT_UPDATABLE and value is not None
+        }
+        if not updates:
+            return project
+        updated = project.model_copy(update=updates)
+        self.create_project(updated)
+        return updated
+
+    # Project settings (slug-keyed edit target — see ``ProjectSettings``)
+    #
+    # Its own surface, NOT the job-keyed submission sidecar: the sidecar records
+    # what ONE job ran with (immutable history), while this records what the
+    # project is CONFIGURED with (mutable, the PATCH target). Same separation the
+    # recovery counter makes for the same reason.
+
+    @abc.abstractmethod
+    def save_project_settings(self, slug: str, settings: ProjectSettings) -> None:
+        """Persist (upsert) the editable settings record for *slug*."""
+
+    @abc.abstractmethod
+    def get_project_settings(self, slug: str) -> ProjectSettings | None:
+        """Return *slug*'s settings record, or None when it has never been written.
+
+        ``None`` is the NORMAL state for a project onboarded before this record
+        existed — the caller falls back to the legacy per-job submission scan.
+        """
+
+    @abc.abstractmethod
+    def delete_project_settings(self, slug: str) -> bool:
+        """Delete *slug*'s settings record; return True if one existed.
+
+        Called on project delete so a re-created slug can't inherit the dead
+        project's settings (the rule the freshness cache eviction already follows).
+        """
+
     # Pages
 
     @abc.abstractmethod
-    def save_page(self, slug: str, page: WikiPage) -> None:
-        """Persist *page* for the project *slug*; overwrites if same page_id."""
+    def save_page(
+        self,
+        slug: str,
+        page: WikiPage,
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """Persist *page* for the project *slug*; overwrites if same page_id.
+
+        ``commit_sha``/``job_id`` attribute the page to its owning index. Unlike
+        the graph families, page attribution is a store-internal column, never a
+        ``WikiPage`` field — the page IS a console wire type serialized whole, so
+        keeping attribution off the model preserves that wire byte-for-byte. Page
+        supersession is unaffected: ``wiki_finalize`` already prunes pages to the
+        committed plan, so this is provenance, not the supersede mechanism.
+        """
 
     def get_page(self, slug: str, page_id: str) -> WikiPage | None:
         """Return a single wiki page, or None if absent.
@@ -231,7 +312,7 @@ class WikiStoreBase(abc.ABC):
     def get_job_plan(self, job_id: str) -> list[dict[str, Any]] | None:
         """Return the page-plan list, or None if no plan has been committed yet."""
 
-    # Resume sidecar (checkpoint-aware recovery, Gitea #54). A tiny dict computed
+    # Resume sidecar (checkpoint-aware recovery). A tiny dict computed
     # ONCE by ``ResumePlan.build`` at resume time; rebuilt cheaply per tool call
     # via ``ResumePlan.from_persisted`` so the phase skip-guards never re-query
     # the graph. Concrete defaults (no-op / None) so a backend that never persists
@@ -274,6 +355,15 @@ class WikiStoreBase(abc.ABC):
     @abc.abstractmethod
     def delete_credentials(self, slug: str) -> bool:
         """Delete *slug*'s credential; return True if one was removed, else False."""
+
+    @abc.abstractmethod
+    def list_credentials(self) -> dict[str, dict[str, Any]]:
+        """Return every stored credential blob keyed by scope (slug or bare host).
+
+        The management surface (``CredentialStore.list`` → the ``/v1/git/credentials``
+        route) reads this. Values are the raw encoded blobs; the caller decodes +
+        redacts. The scope key is a full slug (``host/owner/repo``) or a bare host.
+        """
 
     # Restart-recovery counter (slug-keyed, isolated from the submission sidecar)
 
@@ -347,16 +437,57 @@ class WikiStoreBase(abc.ABC):
         """Return QA events with idx > *after_idx* (-1 returns all)."""
 
     # Graph + embeddings (Phase 3 — raise NotImplementedError in v1)
+    #
+    # ``commit_sha``/``job_id`` are the per-job/commit attribution the store
+    # stamps onto every artifact (see ``GraphNodeBase``). A caller that owns a
+    # job passes them so the write is attributed to the commit it indexed; a
+    # commit-less path (catalog ingest) omits them and the row is stamped
+    # ``None``. Keyword-only + defaulted so no legacy caller breaks.
 
-    def upsert_nodes(self, slug: str, nodes: Iterable[GraphNode]) -> None:
+    @staticmethod
+    def _stamp_attribution(item: _M, commit_sha: str | None, job_id: str | None) -> _M:
+        """Return *item* carrying the write's ``commit_sha``/``job_id``.
+
+        A no-op (identity) when neither is supplied — a commit-less catalog or
+        Q&A write leaves the row ``None``-stamped, which is what supersede treats
+        as "not a per-commit snapshot" and preserves. Otherwise a frozen-safe
+        ``model_copy`` overwrites both, so the persisted attribution is the
+        writer's, never whatever a constructed model happened to carry.
+        """
+        if commit_sha is None and job_id is None:
+            return item
+        return item.model_copy(update={"commit_sha": commit_sha, "job_id": job_id})
+
+    def upsert_nodes(
+        self,
+        slug: str,
+        nodes: Iterable[GraphNode],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert code-graph nodes (Phase 3)."""
         raise NotImplementedError("Graph backend lands in Phase 3")
 
-    def upsert_edges(self, slug: str, edges: Iterable[GraphEdge]) -> None:
+    def upsert_edges(
+        self,
+        slug: str,
+        edges: Iterable[GraphEdge],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert code-graph edges (Phase 3)."""
         raise NotImplementedError("Graph backend lands in Phase 3")
 
-    def upsert_embeddings(self, slug: str, items: Iterable[Embedding]) -> None:
+    def upsert_embeddings(
+        self,
+        slug: str,
+        items: Iterable[Embedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert dense embedding vectors (Phase 3)."""
         raise NotImplementedError("Embeddings lands in Phase 3")
 
@@ -369,6 +500,31 @@ class WikiStoreBase(abc.ABC):
         neighbors_of: str | None = None,
     ) -> list[GraphNode]:
         """Query the code graph (Phase 3)."""
+        raise NotImplementedError("Graph backend lands in Phase 3")
+
+    def count_graph_nodes(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count nodes for *slug* built by exactly *commit_sha* (``None`` matches None).
+
+        The commit-scoped count the resume skip predicate keys on: "the graph
+        for THIS commit is built" is ``count_graph_nodes(slug, commit_sha=X) >
+        0``. Distinct from ``len(query_graph(slug))``, which counts the UNION of
+        every commit and so can never answer that question.
+        """
+        raise NotImplementedError("Graph backend lands in Phase 3")
+
+    def supersede_graph_artifacts(
+        self, slug: str, *, keep_commit_sha: str
+    ) -> dict[str, int]:
+        """Reap prior-commit graph + entity artifacts once *keep_commit_sha* completes.
+
+        Deletes every node/edge/embedding/entity/entity-edge/entity-embedding for
+        *slug* whose ``commit_sha`` is a REAL value other than *keep_commit_sha*.
+        Rows stamped ``None`` are PRESERVED — for entities that is a QA-minted or
+        pre-isolation record (accretive memory, not a per-commit snapshot); for
+        code nodes there are none on a git slug (every index stamps its commit).
+        Returns per-collection delete counts. Idempotent: a second call for the
+        same *keep_commit_sha* finds nothing to reap.
+        """
         raise NotImplementedError("Graph backend lands in Phase 3")
 
     def list_edges(self, slug: str) -> list[GraphEdge]:
@@ -569,7 +725,14 @@ class WikiStoreBase(abc.ABC):
     # default-raise (not @abstractmethod) so existing partial test doubles keep
     # instantiating, exactly like the memory layer above.
 
-    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
+    def upsert_entities(
+        self,
+        slug: str,
+        entities: Iterable[Entity],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert entities; dedup by ``id`` (= sha1(normalized_name|type))."""
         raise NotImplementedError
 
@@ -583,8 +746,22 @@ class WikiStoreBase(abc.ABC):
         """Return entities matching *filt*'s facets (no filter ⇒ all)."""
         raise NotImplementedError
 
+    def count_entities(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count entities for *slug* minted by exactly *commit_sha* (``None`` matches None).
+
+        The enrich-phase analogue of :meth:`count_graph_nodes`: "entities for
+        THIS commit are minted" is ``count_entities(slug, commit_sha=X) > 0``,
+        which the resume skip predicate needs instead of the union count.
+        """
+        raise NotImplementedError
+
     def upsert_entity_embeddings(
-        self, slug: str, items: Iterable[EntityEmbedding]
+        self,
+        slug: str,
+        items: Iterable[EntityEmbedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity embedding vectors; dedup by ``entity_id``."""
         raise NotImplementedError
@@ -596,7 +773,12 @@ class WikiStoreBase(abc.ABC):
         raise NotImplementedError
 
     def upsert_entity_edges(
-        self, slug: str, edges: Iterable[EntityRelation]
+        self,
+        slug: str,
+        edges: Iterable[EntityRelation],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity relations; dedup by ``id`` (= source|type|target)."""
         raise NotImplementedError
@@ -653,7 +835,7 @@ class JsonWikiStore(WikiStoreBase):
         try:
             return model_cls.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
-            logging.warning("Skipping malformed JSON at %s", path)
+            logging.warning("Skipping malformed JSON at {}", path)
             return None
 
     def _event_path(self, scope: str, owner_id: str) -> Path:
@@ -691,7 +873,7 @@ class JsonWikiStore(WikiStoreBase):
             try:
                 rec: dict[str, Any] = json.loads(line)
             except json.JSONDecodeError:
-                logging.warning("Skipping malformed event line in %s", path)
+                logging.warning("Skipping malformed event line in {}", path)
                 continue
             if rec.get("idx", -1) > after_idx:
                 results.append(rec)
@@ -728,6 +910,30 @@ class JsonWikiStore(WikiStoreBase):
         path.unlink()
         return True
 
+    # -- Project settings (slug-keyed sidecar) -------------------------------
+
+    def _settings_path(self, slug: str) -> Path:
+        """Filesystem path for a slug's editable settings record."""
+        d = self.root_dir / "settings"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{_slug_to_path(slug)}.json"
+
+    def save_project_settings(self, slug: str, settings: ProjectSettings) -> None:
+        """Persist (upsert) the editable settings record for *slug*."""
+        self._save_json(self._settings_path(slug), settings)
+
+    def get_project_settings(self, slug: str) -> ProjectSettings | None:
+        """Return *slug*'s settings record, or None when never written."""
+        return self._load_json(self._settings_path(slug), ProjectSettings)
+
+    def delete_project_settings(self, slug: str) -> bool:
+        """Delete *slug*'s settings file; return True if one existed."""
+        path = self._settings_path(slug)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     # -- Pages ---------------------------------------------------------------
 
     def _pages_dir(self, slug: str) -> Path:
@@ -742,6 +948,15 @@ class JsonWikiStore(WikiStoreBase):
         """Filesystem path for the page-id→title index."""
         return self._pages_dir(slug) / "_index.json"
 
+    def _attribution_path(self, slug: str) -> Path:
+        """Filesystem path for the page-id→{commit_sha,job_id} attribution sidecar.
+
+        Page attribution rides a sidecar rather than the page JSON so the
+        persisted ``WikiPage`` (an ``extra="forbid"`` console wire type) stays
+        byte-identical — the same reason the Mongo driver keeps it a store column.
+        """
+        return self._pages_dir(slug) / "_attribution.json"
+
     def _load_index(self, slug: str) -> dict[str, str]:
         """Load the page-id→title index; returns {} if absent."""
         idx_path = self._index_path(slug)
@@ -752,7 +967,24 @@ class JsonWikiStore(WikiStoreBase):
         except Exception:
             return {}
 
-    def save_page(self, slug: str, page: WikiPage) -> None:
+    def _load_attribution(self, slug: str) -> dict[str, dict[str, Any]]:
+        """Load the page attribution sidecar; returns {} if absent/unreadable."""
+        path = self._attribution_path(slug)
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def save_page(
+        self,
+        slug: str,
+        page: WikiPage,
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Persist *page* for the project *slug*; overwrites if same page_id."""
         pages_dir = self._pages_dir(slug)
         pages_dir.mkdir(parents=True, exist_ok=True)
@@ -760,6 +992,11 @@ class JsonWikiStore(WikiStoreBase):
         index = self._load_index(slug)
         index[page.id] = page.title
         self._index_path(slug).write_text(json.dumps(index, indent=2), encoding="utf-8")
+        attribution = self._load_attribution(slug)
+        attribution[page.id] = {"commit_sha": commit_sha, "job_id": job_id}
+        self._attribution_path(slug).write_text(
+            json.dumps(attribution, indent=2), encoding="utf-8"
+        )
 
     def _get_page_raw(self, slug: str, page_id: str) -> WikiPage | None:
         """Return a single wiki page, or None if absent (no doc-guard)."""
@@ -772,7 +1009,7 @@ class JsonWikiStore(WikiStoreBase):
             return []
         pages: list[WikiPage] = []
         for p in pages_dir.glob("*.json"):
-            if p.name == "_index.json":
+            if p.name in ("_index.json", "_attribution.json"):
                 continue
             page = self._load_json(p, WikiPage)
             if page is not None:
@@ -1035,6 +1272,32 @@ class JsonWikiStore(WikiStoreBase):
         path.unlink()
         return True
 
+    def list_credentials(self) -> dict[str, dict[str, Any]]:
+        """Return every stored credential blob keyed by scope.
+
+        The scope is read from the blob's ``scope`` field (stamped by
+        ``CredentialStore.save``) — authoritative and lossless. Only a legacy
+        blob written before that field existed falls back to inverting
+        :func:`_slug_to_path` (``__`` → ``/``), which corrupts a scope containing
+        a literal ``__``; malformed files are skipped. Read-only: never creates
+        the dir.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        cred_dir = self.root_dir / "credentials"
+        if not cred_dir.exists():
+            return out
+        for path in cred_dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                logging.warning("Skipping malformed credential file {}", path)
+                continue
+            if isinstance(data, dict):
+                blob_scope = data.get("scope")
+                scope = blob_scope if isinstance(blob_scope, str) else path.stem.replace("__", "/")
+                out[scope] = data
+        return out
+
     # -- Restart-recovery counter (slug-keyed sidecar) -----------------------
 
     def _recovery_path(self, slug: str) -> Path:
@@ -1164,7 +1427,7 @@ class JsonWikiStore(WikiStoreBase):
             try:
                 out.append(model_cls.model_validate_json(line))
             except Exception:
-                logging.warning("Skipping malformed line in %s", path)
+                logging.warning("Skipping malformed line in {}", path)
         return out
 
     def _load_graph_nodes(self, path: Path) -> list[GraphNode]:
@@ -1186,7 +1449,7 @@ class JsonWikiStore(WikiStoreBase):
             try:
                 out.append(GraphNodeAdapter.validate_json(line))
             except Exception:
-                logging.warning("Skipping malformed line in %s", path)
+                logging.warning("Skipping malformed line in {}", path)
         return out
 
     def _write_jsonl(self, path: Path, items: list[Any]) -> None:
@@ -1199,15 +1462,29 @@ class JsonWikiStore(WikiStoreBase):
         )
         tmp.replace(path)
 
-    def upsert_nodes(self, slug: str, nodes: Iterable[GraphNode]) -> None:
-        """Upsert graph nodes for *slug*; dedup by node_id."""
+    def upsert_nodes(
+        self,
+        slug: str,
+        nodes: Iterable[GraphNode],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """Upsert graph nodes for *slug*; dedup by node_id, stamp attribution."""
         with self._lock:
             existing = {n.node_id: n for n in self._load_graph_nodes(self._nodes_path(slug))}
             for node in nodes:
-                existing[node.node_id] = node
+                existing[node.node_id] = self._stamp_attribution(node, commit_sha, job_id)
             self._write_jsonl(self._nodes_path(slug), list(existing.values()))
 
-    def upsert_edges(self, slug: str, edges: Iterable[GraphEdge]) -> None:
+    def upsert_edges(
+        self,
+        slug: str,
+        edges: Iterable[GraphEdge],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert graph edges for *slug*; dedup by (source, target, type)."""
         with self._lock:
             existing = {
@@ -1215,10 +1492,19 @@ class JsonWikiStore(WikiStoreBase):
                 for e in self._load_jsonl(self._edges_path(slug), GraphEdge)
             }
             for edge in edges:
-                existing[(edge.source, edge.target, edge.type)] = edge
+                existing[(edge.source, edge.target, edge.type)] = self._stamp_attribution(
+                    edge, commit_sha, job_id
+                )
             self._write_jsonl(self._edges_path(slug), list(existing.values()))
 
-    def upsert_embeddings(self, slug: str, items: Iterable[Embedding]) -> None:
+    def upsert_embeddings(
+        self,
+        slug: str,
+        items: Iterable[Embedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert embedding vectors for *slug*; dedup by node_id."""
         with self._lock:
             existing = {
@@ -1226,7 +1512,7 @@ class JsonWikiStore(WikiStoreBase):
                 for e in self._load_jsonl(self._embeddings_path(slug), Embedding)
             }
             for item in items:
-                existing[item.node_id] = item
+                existing[item.node_id] = self._stamp_attribution(item, commit_sha, job_id)
             self._write_jsonl(self._embeddings_path(slug), list(existing.values()))
 
     def query_graph(
@@ -1259,6 +1545,69 @@ class JsonWikiStore(WikiStoreBase):
     def list_edges(self, slug: str) -> list[GraphEdge]:
         """Return every edge for *slug* (graph-viewer endpoint)."""
         return self._load_jsonl(self._edges_path(slug), GraphEdge)
+
+    def count_graph_nodes(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count *slug* nodes stamped exactly *commit_sha* (``None`` matches None)."""
+        return sum(
+            1
+            for n in self._load_graph_nodes(self._nodes_path(slug))
+            if n.commit_sha == commit_sha
+        )
+
+    def supersede_graph_artifacts(
+        self, slug: str, *, keep_commit_sha: str
+    ) -> dict[str, int]:
+        """Drop prior-commit graph + entity artifacts, preserving ``None``-stamped rows.
+
+        A row survives iff its ``commit_sha`` is ``None`` (a QA-minted or
+        pre-isolation record) OR equals *keep_commit_sha*. Everything else — the
+        artifacts of a superseded commit — is dropped.
+        """
+        counts: dict[str, int] = {}
+        with self._lock:
+            counts["nodes"] = self._retain_jsonl(
+                self._nodes_path(slug), self._load_graph_nodes, keep_commit_sha
+            )
+            counts["edges"] = self._retain_jsonl(
+                self._edges_path(slug),
+                lambda p: self._load_jsonl(p, GraphEdge),
+                keep_commit_sha,
+            )
+            counts["embeddings"] = self._retain_jsonl(
+                self._embeddings_path(slug),
+                lambda p: self._load_jsonl(p, Embedding),
+                keep_commit_sha,
+            )
+            counts["entities"] = self._retain_jsonl(
+                self._entities_path(slug),
+                lambda p: self._load_jsonl(p, Entity),
+                keep_commit_sha,
+            )
+            counts["entity_edges"] = self._retain_jsonl(
+                self._entity_edges_path(slug),
+                lambda p: self._load_jsonl(p, EntityRelation),
+                keep_commit_sha,
+            )
+            counts["entity_embeddings"] = self._retain_jsonl(
+                self._entity_embeddings_path(slug),
+                lambda p: self._load_jsonl(p, EntityEmbedding),
+                keep_commit_sha,
+            )
+        return counts
+
+    def _retain_jsonl(
+        self, path: Path, loader: Any, keep_commit_sha: str
+    ) -> int:
+        """Rewrite *path* keeping only ``None``/``keep_commit_sha`` rows; return #dropped."""
+        items = loader(path)
+        kept = [
+            it for it in items
+            if it.commit_sha is None or it.commit_sha == keep_commit_sha
+        ]
+        dropped = len(items) - len(kept)
+        if dropped:
+            self._write_jsonl(path, kept)
+        return dropped
 
     def vector_search(self, slug: str, qvec: list[float], k: int = 10) -> list[Embedding]:
         """Return top-k embeddings for *slug* by cosine similarity."""
@@ -1538,14 +1887,21 @@ class JsonWikiStore(WikiStoreBase):
     def _entity_recs_path(self, slug: str) -> Path:
         return self._memory_dir(slug) / "entity_recommendations.jsonl"
 
-    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
-        """Upsert entities for *slug*; dedup by id."""
+    def upsert_entities(
+        self,
+        slug: str,
+        entities: Iterable[Entity],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """Upsert entities for *slug*; dedup by id, stamp attribution."""
         with self._lock:
             existing = {
                 e.id: e for e in self._load_jsonl(self._entities_path(slug), Entity)
             }
             for entity in entities:
-                existing[entity.id] = entity
+                existing[entity.id] = self._stamp_attribution(entity, commit_sha, job_id)
             self._write_jsonl(self._entities_path(slug), list(existing.values()))
 
     def get_entity(self, slug: str, entity_id: str) -> Entity | None:
@@ -1564,8 +1920,21 @@ class JsonWikiStore(WikiStoreBase):
             return entities
         return [e for e in entities if filt.matches(e)]
 
+    def count_entities(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count *slug* entities stamped exactly *commit_sha* (``None`` matches None)."""
+        return sum(
+            1
+            for e in self._load_jsonl(self._entities_path(slug), Entity)
+            if e.commit_sha == commit_sha
+        )
+
     def upsert_entity_embeddings(
-        self, slug: str, items: Iterable[EntityEmbedding]
+        self,
+        slug: str,
+        items: Iterable[EntityEmbedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity embedding vectors for *slug*; dedup by entity_id."""
         with self._lock:
@@ -1576,7 +1945,9 @@ class JsonWikiStore(WikiStoreBase):
                 )
             }
             for item in items:
-                existing[item.entity_id] = item
+                existing[item.entity_id] = self._stamp_attribution(
+                    item, commit_sha, job_id
+                )
             self._write_jsonl(
                 self._entity_embeddings_path(slug), list(existing.values())
             )
@@ -1589,7 +1960,12 @@ class JsonWikiStore(WikiStoreBase):
         return self._rank_embeddings(pool, qvec, k)
 
     def upsert_entity_edges(
-        self, slug: str, edges: Iterable[EntityRelation]
+        self,
+        slug: str,
+        edges: Iterable[EntityRelation],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity relations for *slug*; dedup by id."""
         with self._lock:
@@ -1598,7 +1974,7 @@ class JsonWikiStore(WikiStoreBase):
                 for e in self._load_jsonl(self._entity_edges_path(slug), EntityRelation)
             }
             for edge in edges:
-                existing[edge.id] = edge
+                existing[edge.id] = self._stamp_attribution(edge, commit_sha, job_id)
             self._write_jsonl(self._entity_edges_path(slug), list(existing.values()))
 
     def list_entity_edges(
@@ -1726,6 +2102,7 @@ class MongoWikiStore(WikiStoreBase):
         )
         _idx("wiki_credentials", [("slug", ASCENDING)], "ix_credentials_slug")
         _idx("wiki_recovery", [("slug", ASCENDING)], "ix_recovery_slug")
+        _idx("wiki_settings", [("slug", ASCENDING)], "ix_settings_slug")
 
     def _atomic_next_idx(self, col: str, owner_field: str, owner_id: str) -> int:
         """Atomically increment event_count on the owner document and return the next idx (0-based).
@@ -1770,11 +2147,54 @@ class MongoWikiStore(WikiStoreBase):
         result = self._col("wiki_projects").delete_one({"slug": slug})
         return result.deleted_count > 0
 
+    # -- Project settings (slug-keyed collection) ----------------------------
+
+    def save_project_settings(self, slug: str, settings: ProjectSettings) -> None:
+        """Persist (upsert) the editable settings record for *slug*."""
+        doc = settings.model_dump(by_alias=False)
+        doc["slug"] = slug
+        self._col("wiki_settings").replace_one({"slug": slug}, doc, upsert=True)
+
+    def get_project_settings(self, slug: str) -> ProjectSettings | None:
+        """Return *slug*'s settings record, or None when never written."""
+        doc = self._col("wiki_settings").find_one({"slug": slug})
+        if doc is None:
+            return None
+        try:
+            return ProjectSettings.model_validate(_strip_mongo_meta(doc))
+        except Exception:
+            # A hand-edited / pre-schema document must not break the read path —
+            # the caller then falls back to the legacy per-job submission scan,
+            # exactly as it does for a project that has no record at all.
+            logging.warning("Skipping malformed wiki_settings document for {}", slug)
+            return None
+
+    def delete_project_settings(self, slug: str) -> bool:
+        """Delete *slug*'s settings document; return True if one existed."""
+        return self._col("wiki_settings").delete_one({"slug": slug}).deleted_count > 0
+
     # -- Pages ---------------------------------------------------------------
 
-    def save_page(self, slug: str, page: WikiPage) -> None:
+    # Page attribution rides two store columns, never ``WikiPage`` fields, so the
+    # console wire type stays byte-identical; both are stripped before validation.
+    _PAGE_STORE_COLS = ("slug", "page_id", "commit_sha", "job_id")
+
+    def save_page(
+        self,
+        slug: str,
+        page: WikiPage,
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Persist *page* for the project *slug*; overwrites if same page_id."""
-        doc = {"slug": slug, "page_id": page.id, **page.model_dump(by_alias=False)}
+        doc = {
+            "slug": slug,
+            "page_id": page.id,
+            "commit_sha": commit_sha,
+            "job_id": job_id,
+            **page.model_dump(by_alias=False),
+        }
         self._col("wiki_pages").replace_one(
             {"slug": slug, "page_id": page.id}, doc, upsert=True
         )
@@ -1785,9 +2205,8 @@ class MongoWikiStore(WikiStoreBase):
         if doc is None:
             return None
         clean = _strip_mongo_meta(doc)
-        # Remove store-internal keys before Pydantic validation
-        clean.pop("slug", None)
-        clean.pop("page_id", None)
+        for col in self._PAGE_STORE_COLS:
+            clean.pop(col, None)
         return WikiPage.model_validate(clean)
 
     def list_pages(self, slug: str) -> list[WikiPage]:
@@ -1795,8 +2214,8 @@ class MongoWikiStore(WikiStoreBase):
         pages: list[WikiPage] = []
         for doc in self._col("wiki_pages").find({"slug": slug}):
             clean = _strip_mongo_meta(doc)
-            clean.pop("slug", None)
-            clean.pop("page_id", None)
+            for col in self._PAGE_STORE_COLS:
+                clean.pop(col, None)
             page = WikiPage.model_validate(clean)
             pages.append(page)
         return pages
@@ -1999,6 +2418,24 @@ class MongoWikiStore(WikiStoreBase):
         result = self._col("wiki_credentials").delete_one({"slug": slug})
         return result.deleted_count > 0
 
+    def list_credentials(self) -> dict[str, dict[str, Any]]:
+        """Return every stored credential blob keyed by scope (full scan).
+
+        Prefers the blob's own ``scope`` field (stamped by
+        ``CredentialStore.save``, matching the JSON driver's precedence); falls
+        back to the document's ``slug`` key for a legacy blob written before that
+        field existed.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for doc in self._col("wiki_credentials").find({}, {"slug": 1, "blob": 1}):
+            slug = doc.get("slug")
+            blob = doc.get("blob")
+            if isinstance(blob, dict):
+                scope = blob["scope"] if isinstance(blob.get("scope"), str) else slug
+                if isinstance(scope, str):
+                    out[scope] = blob
+        return out
+
     # -- Restart-recovery counter (slug-keyed collection) --------------------
 
     def get_recovery_attempts(self, slug: str) -> int:
@@ -2125,34 +2562,66 @@ class MongoWikiStore(WikiStoreBase):
             unique=True,
             background=True,
         )
+        # Non-unique (slug, commit_sha) indexes back the commit-scoped count the
+        # resume predicate keys on AND the per-commit supersede sweep. The unique
+        # keys above are unchanged — a node_id still identifies ONE row per slug,
+        # so a re-index overwrites the shared symbol and supersede reaps only the
+        # commit-only stragglers (deleted files).
+        for coll in ("wiki_graph_nodes", "wiki_graph_edges", "wiki_embeddings"):
+            self._col(coll).create_index(
+                [("slug", ASCENDING), ("commit_sha", ASCENDING)],
+                name="ix_" + coll + "_slug_commit",
+                background=True,
+            )
         self._graph_idx_done = True
 
-    def upsert_nodes(self, slug: str, nodes: Iterable[GraphNode]) -> None:
-        """Upsert graph nodes for *slug*; dedup by (slug, node_id)."""
+    def upsert_nodes(
+        self,
+        slug: str,
+        nodes: Iterable[GraphNode],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """Upsert graph nodes for *slug*; dedup by (slug, node_id), stamp attribution."""
         self._ensure_graph_indexes()
         col = self._col("wiki_graph_nodes")
         for node in nodes:
-            doc = node.model_dump(by_alias=False)
+            doc = self._stamp_attribution(node, commit_sha, job_id).model_dump(by_alias=False)
             col.update_one({"slug": slug, "node_id": node.node_id}, {"$set": doc}, upsert=True)
 
-    def upsert_edges(self, slug: str, edges: Iterable[GraphEdge]) -> None:
+    def upsert_edges(
+        self,
+        slug: str,
+        edges: Iterable[GraphEdge],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert graph edges for *slug*; dedup by (slug, source, target, type)."""
         self._ensure_graph_indexes()
         col = self._col("wiki_graph_edges")
         for edge in edges:
-            doc = edge.model_dump(by_alias=False)
+            doc = self._stamp_attribution(edge, commit_sha, job_id).model_dump(by_alias=False)
             col.update_one(
                 {"slug": slug, "source": edge.source, "target": edge.target, "type": edge.type},
                 {"$set": doc},
                 upsert=True,
             )
 
-    def upsert_embeddings(self, slug: str, items: Iterable[Embedding]) -> None:
+    def upsert_embeddings(
+        self,
+        slug: str,
+        items: Iterable[Embedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
         """Upsert embedding vectors for *slug*; dedup by (slug, node_id)."""
         self._ensure_graph_indexes()
         col = self._col("wiki_embeddings")
         for item in items:
-            doc = item.model_dump(by_alias=False)
+            doc = self._stamp_attribution(item, commit_sha, job_id).model_dump(by_alias=False)
             col.update_one({"slug": slug, "node_id": item.node_id}, {"$set": doc}, upsert=True)
 
     def query_graph(
@@ -2194,6 +2663,39 @@ class MongoWikiStore(WikiStoreBase):
         """Return every edge for *slug* (graph-viewer endpoint)."""
         cursor = self._col("wiki_graph_edges").find({"slug": slug})
         return [GraphEdge.model_validate(_strip_mongo_meta(d)) for d in cursor]
+
+    def count_graph_nodes(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count *slug* nodes stamped exactly *commit_sha* (``None`` matches None)."""
+        self._ensure_graph_indexes()
+        return int(
+            self._col("wiki_graph_nodes").count_documents(
+                {"slug": slug, "commit_sha": commit_sha}
+            )
+        )
+
+    def supersede_graph_artifacts(
+        self, slug: str, *, keep_commit_sha: str
+    ) -> dict[str, int]:
+        """Drop prior-commit graph + entity artifacts, preserving ``None``-stamped rows.
+
+        ``{"$nin": [None, keep]}`` matches a REAL commit other than *keep* while
+        leaving both ``None``-valued and field-absent rows untouched — the
+        QA-minted / pre-isolation records supersede must not reap.
+        """
+        self._ensure_graph_indexes()
+        self._ensure_memory_indexes()
+        stale = {"slug": slug, "commit_sha": {"$nin": [None, keep_commit_sha]}}
+        counts: dict[str, int] = {}
+        for key, coll in (
+            ("nodes", "wiki_graph_nodes"),
+            ("edges", "wiki_graph_edges"),
+            ("embeddings", "wiki_embeddings"),
+            ("entities", "wiki_entities"),
+            ("entity_edges", "wiki_entity_edges"),
+            ("entity_embeddings", "wiki_entity_embeddings"),
+        ):
+            counts[key] = int(self._col(coll).delete_many(stale).deleted_count)
+        return counts
 
     def vector_search(self, slug: str, qvec: list[float], k: int = 10) -> list[Embedding]:
         """Return top-k embeddings for *slug* by cosine similarity (in-memory scoring)."""
@@ -2281,6 +2783,18 @@ class MongoWikiStore(WikiStoreBase):
             [("slug", ASCENDING)],
             name="ix_entity_recs_slug", background=True,
         )
+        # Non-unique (slug, commit_sha) indexes back the commit-scoped count the
+        # resume predicate keys on AND the per-commit supersede sweep, mirroring
+        # the graph collections in _ensure_graph_indexes. The unique keys above
+        # are unchanged — an entity id still identifies ONE row per slug, so a
+        # re-index overwrites the shared entity and supersede reaps only the
+        # commit-only stragglers.
+        for coll in ("wiki_entities", "wiki_entity_edges", "wiki_entity_embeddings"):
+            self._col(coll).create_index(
+                [("slug", ASCENDING), ("commit_sha", ASCENDING)],
+                name="ix_" + coll + "_slug_commit",
+                background=True,
+            )
         self._mem_idx_done = True
 
     def upsert_memory_nodes(self, slug: str, nodes: Iterable[MemoryNode]) -> None:
@@ -2487,14 +3001,22 @@ class MongoWikiStore(WikiStoreBase):
     # Mirrors the memory-node Mongo block exactly: per-(slug, key) upsert,
     # ``slug`` carried as a store-internal field and stripped on read.
 
-    def upsert_entities(self, slug: str, entities: Iterable[Entity]) -> None:
-        """Upsert entities for *slug*; dedup by (slug, id)."""
+    def upsert_entities(
+        self,
+        slug: str,
+        entities: Iterable[Entity],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
+    ) -> None:
+        """Upsert entities for *slug*; dedup by (slug, id), stamp attribution."""
         self._ensure_memory_indexes()
         col = self._col("wiki_entities")
         for entity in entities:
+            stamped = self._stamp_attribution(entity, commit_sha, job_id)
             col.update_one(
                 {"slug": slug, "id": entity.id},
-                {"$set": {"slug": slug, **entity.model_dump(by_alias=False)}},
+                {"$set": {"slug": slug, **stamped.model_dump(by_alias=False)}},
                 upsert=True,
             )
 
@@ -2520,16 +3042,31 @@ class MongoWikiStore(WikiStoreBase):
             return out
         return [e for e in out if filt.matches(e)]
 
+    def count_entities(self, slug: str, *, commit_sha: str | None) -> int:
+        """Count *slug* entities stamped exactly *commit_sha* (``None`` matches None)."""
+        self._ensure_memory_indexes()
+        return int(
+            self._col("wiki_entities").count_documents(
+                {"slug": slug, "commit_sha": commit_sha}
+            )
+        )
+
     def upsert_entity_embeddings(
-        self, slug: str, items: Iterable[EntityEmbedding]
+        self,
+        slug: str,
+        items: Iterable[EntityEmbedding],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity embedding vectors for *slug*; dedup by (slug, entity_id)."""
         self._ensure_memory_indexes()
         col = self._col("wiki_entity_embeddings")
         for item in items:
+            stamped = self._stamp_attribution(item, commit_sha, job_id)
             col.update_one(
                 {"slug": slug, "entity_id": item.entity_id},
-                {"$set": item.model_dump(by_alias=False)},
+                {"$set": stamped.model_dump(by_alias=False)},
                 upsert=True,
             )
 
@@ -2544,15 +3081,21 @@ class MongoWikiStore(WikiStoreBase):
         return self._rank_embeddings(pool, qvec, k)
 
     def upsert_entity_edges(
-        self, slug: str, edges: Iterable[EntityRelation]
+        self,
+        slug: str,
+        edges: Iterable[EntityRelation],
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
         """Upsert entity relations for *slug*; dedup by (slug, id)."""
         self._ensure_memory_indexes()
         col = self._col("wiki_entity_edges")
         for edge in edges:
+            stamped = self._stamp_attribution(edge, commit_sha, job_id)
             col.update_one(
                 {"slug": slug, "id": edge.id},
-                {"$set": {"slug": slug, **edge.model_dump(by_alias=False)}},
+                {"$set": {"slug": slug, **stamped.model_dump(by_alias=False)}},
                 upsert=True,
             )
 

@@ -13,7 +13,7 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 
 /**
- * Gitea #181 fix wave, finding 5: [AttachmentRepository.upload] must fail loud (throw) rather than
+ * [AttachmentRepository.upload] must fail loud (throw) rather than
  * silently sending fewer attachments than the user picked when a staged [Uri]'s stream can't be
  * opened (a revoked/stale SAF grant). `Context`/`ContentResolver` mock the same way this module's
  * `Uri` idiom does (`app/src/test/.../CLAUDE.md`) - Mockito's default mock maker bypasses the real

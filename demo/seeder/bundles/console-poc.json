@@ -1,0 +1,947 @@
+{
+  "sessions": [
+    {
+      "id": "demo-trending-agent-harness-widget",
+      "title": "Trending LLM agent harness repositories",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -600,
+      "summary": "Ranked the trending LLM agent-harness repositories by stars gained over the latest complete 30-day window and rendered them as an interactive card widget.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0,
+          "capabilities": [
+            "stlite"
+          ]
+        },
+        {
+          "kind": "user",
+          "at_seconds": 4,
+          "text": "Can you show the latest trending repositories in the LLM Agent Harness space? I'd like to see them visualized as a widget. Rank repositories by stars gained in the last 30 days."
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 9,
+          "text": "I'll pull the latest stargazer-history snapshots for the prominent agent-harness repositories, rank them by stars gained over the last complete 30-day window, then render the result as an interactive card widget."
+        },
+        {
+          "kind": "widget_ready",
+          "at_seconds": 33,
+          "widget_id": "widget_1760000000",
+          "app_py": "import streamlit as st\nimport json\n\nwith open(\"data.json\") as f:\n    data = json.load(f)\n\nrepositories = sorted(data[\"repositories\"], key=lambda item: item[\"rank\"])\nmax_gain = max((item[\"stars_gained_30d\"] for item in repositories), default=1) or 1\n\n\ndef compact(n):\n    return f\"{n / 1000:.1f}k\".replace(\".0k\", \"k\") if n >= 1000 else str(n)\n\n\ndef clip(text, limit=48):\n    text = text or \"No description provided.\"\n    if len(text) <= limit:\n        return text\n    return text[: limit - 1].rsplit(\" \", 1)[0].rstrip(\",;:\") + \"\u2026\"\n\n\ndef title(repo):\n    slug = repo[\"repository\"]\n    # A slug past ~20 chars wraps the bold title line in a 3-column card;\n    # show the bare repo name for those - rank + name still identify it.\n    return slug if len(slug) <= 20 else slug.split(\"/\", 1)[1]\n\n\nst.subheader(data[\"title\"])\nst.caption(\n    f\"Top {len(repositories)} by 30-day star growth \u00b7 \"\n    f\"{repositories[0]['gain_start']} \u2192 {repositories[0]['gain_end']}\"\n)\nfor start in range(0, len(repositories), 3):\n    columns = st.columns(3, gap=\"small\")\n    for column, repo in zip(columns, repositories[start : start + 3]):\n        with column.container(border=True):\n            st.markdown(f\"**#{repo['rank']} \u00b7 {title(repo)}**\")\n            st.caption(clip(repo[\"description\"]))\n            st.markdown(\n                f\"`{repo['language']}` &nbsp; \u2b50 {compact(repo['stars_total'])} \"\n                f\"&nbsp; :green[**+{repo['stars_gained_30d']:,}**]\"\n            )\n            st.progress(min(1.0, repo[\"stars_gained_30d\"] / max_gain))\n",
+          "data_json": "{\"title\": \"Trending LLM Agent Harness Repositories\", \"repositories\": [{\"rank\": 1, \"repository\": \"ogulcancelik/herdr\", \"url\": \"https://github.com/ogulcancelik/herdr\", \"description\": \"agent multiplexer that lives in your terminal.\", \"language\": \"Rust\", \"stars_total\": 17603, \"stars_gained_30d\": 119, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}, {\"rank\": 2, \"repository\": \"stablyai/orca\", \"url\": \"https://github.com/stablyai/orca\", \"description\": \"Orca is the ADE for working with a fleet of parallel agents. Run any coding agent with your own subscription. Available on desktop and mobile.\", \"language\": \"TypeScript\", \"stars_total\": 21099, \"stars_gained_30d\": 97, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}, {\"rank\": 3, \"repository\": \"anomalyco/opencode\", \"url\": \"https://github.com/anomalyco/opencode\", \"description\": \"The open source AI coding agent, built for the terminal.\", \"language\": \"TypeScript\", \"stars_total\": 186918, \"stars_gained_30d\": 77, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}, {\"rank\": 4, \"repository\": \"openai/codex\", \"url\": \"https://github.com/openai/codex\", \"description\": \"Lightweight coding agent that runs in your terminal\", \"language\": \"Rust\", \"stars_total\": 99144, \"stars_gained_30d\": 40, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}, {\"rank\": 5, \"repository\": \"anthropics/claude-code\", \"url\": \"https://github.com/anthropics/claude-code\", \"description\": \"Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows - all through natural language commands.\", \"language\": \"Python\", \"stars_total\": 138112, \"stars_gained_30d\": 36, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}, {\"rank\": 6, \"repository\": \"Kilo-Org/kilocode\", \"url\": \"https://github.com/Kilo-Org/kilocode\", \"description\": \"Kilo is the all-in-one agentic engineering platform. Build, ship, and iterate faster with the most popular open source coding agent.\", \"language\": \"TypeScript\", \"stars_total\": 26333, \"stars_gained_30d\": 19, \"gain_start\": \"2026-06-01\", \"gain_end\": \"2026-07-01\"}]}",
+          "requirements": [],
+          "summary": "Ranked card grid of the top 6 trending LLM agent-harness repositories by 30-day star growth."
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 41,
+          "text": "Here are the trending LLM agent-harness repositories, ranked by stars gained over the latest complete 30-day window (June 1 to July 1, 2026). herdr, orca, and opencode led the month, each shown with its language, total stars, and a bar for its 30-day growth."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 44,
+          "task_result": "Rendered an interactive widget ranking the top 6 trending LLM agent-harness repositories by stars gained in the latest complete 30-day window."
+        }
+      ]
+    },
+    {
+      "id": "demo-refactor-auth-middleware",
+      "title": "Refactor the auth middleware",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -2700,
+      "summary": "Refactored the Express auth middleware to accept API-key and JWT credentials together; all tests green.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Refactor our Express auth middleware to support API-key and JWT auth together."
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 8,
+          "text": "I'll add an API-key branch alongside the existing JWT check, preferring the JWT when both credentials are present, then run the tests to confirm both paths work. Let me read the current middleware first."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 20,
+          "path": "src/middleware/auth.ts",
+          "total_lines": 19,
+          "text": "1\timport { Request, Response, NextFunction } from \"express\";\n2\timport jwt from \"jsonwebtoken\";\n3\t\n4\tconst JWT_SECRET = process.env.JWT_SECRET ?? \"\";\n5\t\n6\texport function authenticate(req: Request, res: Response, next: NextFunction) {\n7\t  const header = req.header(\"authorization\") ?? \"\";\n8\t\n9\t  if (header.startsWith(\"Bearer \")) {\n10\t    try {\n11\t      req.user = jwt.verify(header.slice(7), JWT_SECRET);\n12\t      return next();\n13\t    } catch {\n14\t      return res.status(401).json({ error: \"invalid token\" });\n15\t    }\n16\t  }\n17\t\n18\t  return res.status(401).json({ error: \"authentication required\" });\n19\t}"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 34,
+          "path": "src/middleware/auth.ts",
+          "diff": "--- src/middleware/auth.ts\n+++ src/middleware/auth.ts\n@@ -2,9 +2,20 @@\n import jwt from \"jsonwebtoken\";\n \n const JWT_SECRET = process.env.JWT_SECRET ?? \"\";\n+const API_KEYS = new Set(\n+  (process.env.API_KEYS ?? \"\").split(\",\").map((k) => k.trim()).filter(Boolean),\n+);\n+\n+function apiKeyUser(apiKey: string): { kind: string; key: string } | null {\n+  if (apiKey && API_KEYS.has(apiKey)) {\n+    return { kind: \"service\", key: apiKey };\n+  }\n+  return null;\n+}\n \n export function authenticate(req: Request, res: Response, next: NextFunction) {\n   const header = req.header(\"authorization\") ?? \"\";\n+  const apiKey = req.header(\"x-api-key\") ?? \"\";\n \n   if (header.startsWith(\"Bearer \")) {\n     try {\n@@ -15,5 +26,11 @@\n     }\n   }\n \n+  const service = apiKeyUser(apiKey);\n+  if (service) {\n+    req.user = service;\n+    return next();\n+  }\n+\n   return res.status(401).json({ error: \"authentication required\" });\n }\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 48,
+          "command": "npm test",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "> api@1.0.0 test\n> jest\n\n PASS  test/auth.test.js\n  auth middleware\n    \u2713 accepts a valid JWT (12 ms)\n    \u2713 accepts a valid API key (5 ms)\n    \u2713 rejects a request with neither credential (4 ms)\n    \u2713 prefers the JWT when both are present (6 ms)\n\nTest Suites: 1 passed, 1 total\nTests:       4 passed, 4 total\nSnapshots:   0 total\nTime:        1.83 s\nRan all test suites.",
+          "stderr": "",
+          "duration_ms": 1974
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 62,
+          "text": "Done. The `authenticate` middleware now accepts either a Bearer JWT or an `x-api-key`, preferring the JWT when both are present, and all four test cases pass.\n\nKey points:\n- The JWT path verifies the token and attaches the decoded claims to `req.user`.\n- The new API-key path checks the key against the `API_KEYS` allowlist and tags the request as a service caller.\n- A request with neither credential still gets a `401`.\n\nThe routes needed no changes; they already call `authenticate` on the protected paths."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 64,
+          "task_result": "Refactored the Express auth middleware to accept both a Bearer JWT and an API key, with the JWT taking precedence. All four existing tests pass."
+        }
+      ]
+    },
+    {
+      "id": "demo-weekly-infra-health-report",
+      "title": "Weekly infra health report",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -10800,
+      "summary": "Compiled this week's infrastructure health report: capacity, error budgets, and follow-ups.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 4,
+          "text": "Put together this week's infrastructure health report."
+        },
+        {
+          "kind": "todos",
+          "at_seconds": 12,
+          "source": "agent",
+          "items": [
+            {
+              "label": "Gather CPU and memory utilization for the week",
+              "status": "completed"
+            },
+            {
+              "label": "Check disk headroom across the database hosts",
+              "status": "completed"
+            },
+            {
+              "label": "Review error budgets for the public API",
+              "status": "completed"
+            },
+            {
+              "label": "Draft the summary and recommended follow-ups",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 45,
+          "text": "Here's this week's infrastructure health report.\n\n**Capacity**\n- API tier CPU averaged 41% (peak 68% on Wednesday's traffic spike). Comfortable headroom.\n- Database hosts are at 62% disk usage; `db-2` crossed 75% and should be watched.\n\n**Reliability**\n- Public API availability: 99.97% (error budget 71% remaining for the month).\n- Two brief elevated-latency windows, both correlated with a nightly backup job.\n\n**Recommended follow-ups**\n1. Schedule the backup job outside peak hours to remove the latency blips.\n2. Plan a disk expansion for `db-2` before it reaches 80%.\n3. No capacity action needed on the API tier this week.\n\nOverall the fleet is healthy with no incidents."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 47,
+          "task_result": "Compiled the weekly infrastructure health report covering capacity, reliability, and three recommended follow-ups. No incidents this week."
+        }
+      ]
+    },
+    {
+      "id": "demo-birthday-dinner-menu",
+      "title": "Plan a birthday dinner menu",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -86400,
+      "summary": "Planned a three-course birthday dinner for six, one vegetarian, with a chocolate dessert.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 2,
+          "text": "Help me plan a birthday dinner menu for six people. One guest is vegetarian."
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 16,
+          "text": "Happy to help! Here's a three-course menu for six that keeps one plate fully vegetarian without cooking two separate dinners:\n\n**Starter** - Roasted tomato and red pepper soup with crusty bread (vegetarian for everyone).\n\n**Main** - Herb-roasted chicken with lemon and garlic, plus a stuffed portobello with wild rice and feta as the vegetarian main. Shared sides: roasted potatoes and a green salad.\n\n**Dessert** - Vanilla panna cotta with berry compote.\n\nWant me to adjust anything, like the dessert or the sides?"
+        },
+        {
+          "kind": "context",
+          "at_seconds": 40
+        },
+        {
+          "kind": "user",
+          "at_seconds": 42,
+          "text": "Can you make the dessert something chocolate?"
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 56,
+          "text": "Absolutely. Swap the panna cotta for a **flourless chocolate torte** with a dollop of whipped cream and a few fresh raspberries. It's rich, naturally gluten-free, and easy to make ahead, so you're not stuck in the kitchen during the party. The rest of the menu stays exactly the same."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 58,
+          "task_result": "Planned a three-course birthday dinner for six with a vegetarian main option and a flourless chocolate torte for dessert."
+        }
+      ]
+    },
+    {
+      "id": "demo-fix-flaky-pagination-test",
+      "title": "Fix flaky pagination test",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -900,
+      "summary": "Fixed a flaky pagination test caused by a non-deterministic sort order; added a stable tiebreaker.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Our pagination test in test/api/pagination.test.js has been flaky in CI \u2014 can you find out why and fix it?"
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 9,
+          "text": "Let me look at the failing test and the pagination endpoint it exercises to find the source of the non-determinism."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 22,
+          "path": "src/api/pagination.ts",
+          "total_lines": 9,
+          "text": "1\timport { Item } from \"./types\";\n2\t\n3\texport function paginate(items: Item[], cursor: string | null, limit: number) {\n4\t  const sorted = [...items].sort((a, b) => b.updatedAt - a.updatedAt);\n5\t  const start = cursor ? sorted.findIndex((i) => i.id === cursor) + 1 : 0;\n6\t  const page = sorted.slice(start, start + limit);\n7\t  const nextCursor = page.length === limit ? page[page.length - 1].id : null;\n8\t  return { items: page, nextCursor };\n9\t}"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 38,
+          "path": "src/api/pagination.ts",
+          "diff": "--- src/api/pagination.ts\n+++ src/api/pagination.ts\n@@ -1,7 +1,9 @@\n import { Item } from \"./types\";\n \n export function paginate(items: Item[], cursor: string | null, limit: number) {\n-  const sorted = [...items].sort((a, b) => b.updatedAt - a.updatedAt);\n+  const sorted = [...items].sort(\n+    (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),\n+  );\n   const start = cursor ? sorted.findIndex((i) => i.id === cursor) + 1 : 0;\n   const page = sorted.slice(start, start + limit);\n   const nextCursor = page.length === limit ? page[page.length - 1].id : null;\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 54,
+          "command": "npm test -- pagination",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "> api@1.0.0 test\n> jest pagination --runInBand --testPathPattern=pagination\n\n PASS  test/api/pagination.test.js\n  pagination\n    \u2713 returns a stable page order across repeated calls (8 ms)\n    \u2713 paginates items with tied updatedAt timestamps deterministically (6 ms)\n    \u2713 returns the correct nextCursor (4 ms)\n\nTest Suites: 1 passed, 1 total\nTests:       3 passed, 3 total\nSnapshots:   0 total\nTime:        1.42 s\nRan all test suites.",
+          "stderr": "",
+          "duration_ms": 2210
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 70,
+          "text": "Found it \u2014 items with an identical `updatedAt` had no tiebreaker, so `Array.prototype.sort` gave a different order on each run depending on the input array's original ordering. I added `id` as a secondary sort key, which makes the order deterministic even when timestamps tie. All three pagination tests now pass consistently."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 72,
+          "task_result": "Fixed the flaky pagination test by adding a deterministic secondary sort key (id) for items with tied updatedAt timestamps."
+        }
+      ]
+    },
+    {
+      "id": "demo-draft-changelog",
+      "title": "Draft the changelog",
+      "model": "claude-haiku-4-5",
+      "offset_seconds": -1500,
+      "summary": "Drafted this week's changelog entry covering the auth middleware refactor, pagination fix, and Playwright bump.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Draft the changelog entry for this week's release \u2014 it should cover the auth middleware refactor, the pagination test fix, and the Playwright bump."
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 20,
+          "text": "## v0.0.14\n\n**Fixed**\n- Auth middleware now accepts either a Bearer JWT or an `x-api-key`, preferring the JWT when both are present.\n- Resolved a flaky pagination test caused by a non-deterministic sort order on tied timestamps.\n\n**Chore**\n- Bumped Playwright to 1.60 across the console package and CI image."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 22,
+          "task_result": "Drafted the v0.0.14 changelog entry covering the auth middleware refactor, the pagination fix, and the Playwright bump."
+        }
+      ]
+    },
+    {
+      "id": "demo-migrate-config-loader-pydantic-v2",
+      "title": "Migrate config loader to Pydantic v2",
+      "model": "claude-opus-4-8",
+      "offset_seconds": -5400,
+      "summary": "Migrated the config loader from Pydantic v1's class-based Config to v2's model_config.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 4,
+          "text": "Migrate our config loader off Pydantic v1's class Config syntax onto v2's model_config."
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 11,
+          "text": "I'll swap the nested Config class for model_config = ConfigDict(...) and confirm the config tests still pass."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 26,
+          "path": "src/config/loader.py",
+          "total_lines": 11,
+          "text": "1\tfrom pydantic import BaseSettings\n2\t\n3\t\n4\tclass AppConfig(BaseSettings):\n5\t    mongo_uri: str\n6\t    llm_api_base: str\n7\t    debug: bool = False\n8\t\n9\t    class Config:\n10\t        env_prefix = \"MEWBO_\"\n11\t        case_sensitive = False"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 44,
+          "path": "src/config/loader.py",
+          "diff": "--- src/config/loader.py\n+++ src/config/loader.py\n@@ -1,11 +1,10 @@\n-from pydantic import BaseSettings\n+from pydantic import ConfigDict\n+from pydantic_settings import BaseSettings\n \n \n class AppConfig(BaseSettings):\n+    model_config = ConfigDict(env_prefix=\"MEWBO_\", case_sensitive=False)\n+\n     mongo_uri: str\n     llm_api_base: str\n     debug: bool = False\n-\n-    class Config:\n-        env_prefix = \"MEWBO_\"\n-        case_sensitive = False\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 60,
+          "command": "pytest tests/config -q",
+          "cwd": "/workspace",
+          "exit_code": 0,
+          "stdout": "5 passed in 0.41s",
+          "stderr": "",
+          "duration_ms": 640
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 76,
+          "text": "Migrated `AppConfig` to Pydantic v2: the nested `Config` class is gone in favor of `model_config = ConfigDict(...)`, and the settings base now comes from `pydantic_settings` as v2 requires. All five config tests still pass."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 78,
+          "task_result": "Migrated the config loader from Pydantic v1's class-based Config to v2's model_config; all config tests pass."
+        }
+      ]
+    },
+    {
+      "id": "demo-add-rate-limit-middleware",
+      "title": "Add rate-limit middleware",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -14400,
+      "summary": "Added a per-API-key rate-limit middleware (100 requests/minute) to the public API.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Add a rate-limit middleware to the public API \u2014 100 requests per minute per API key."
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 10,
+          "text": "I'll add a small token-bucket middleware keyed on the API key and wire it in ahead of the route handlers."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 24,
+          "path": "src/app.ts",
+          "total_lines": 10,
+          "text": "1\timport express from \"express\";\n2\timport { authenticate } from \"./middleware/auth\";\n3\timport router from \"./routes\";\n4\t\n5\tconst app = express();\n6\tapp.use(express.json());\n7\tapp.use(authenticate);\n8\tapp.use(router);\n9\t\n10\texport default app;"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 40,
+          "path": "src/middleware/rateLimit.ts",
+          "title": "Add rate-limit middleware",
+          "diff": "--- /dev/null\n+++ src/middleware/rateLimit.ts\n@@ -0,0 +1,24 @@\n+import { Request, Response, NextFunction } from \"express\";\n+\n+const WINDOW_MS = 60_000;\n+const MAX_REQUESTS = 100;\n+const buckets = new Map<string, { count: number; resetAt: number }>();\n+\n+export function rateLimit(req: Request, res: Response, next: NextFunction) {\n+  const key = (req.user as { key?: string } | undefined)?.key ?? req.ip ?? \"anonymous\";\n+  const now = Date.now();\n+  const bucket = buckets.get(key);\n+\n+  if (!bucket || bucket.resetAt <= now) {\n+    buckets.set(key, { count: 1, resetAt: now + WINDOW_MS });\n+    return next();\n+  }\n+\n+  if (bucket.count >= MAX_REQUESTS) {\n+    return res.status(429).json({ error: \"rate limit exceeded\" });\n+  }\n+\n+  bucket.count += 1;\n+  return next();\n+}\n"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 55,
+          "path": "src/app.ts",
+          "title": "Wire in rate-limit middleware",
+          "diff": "--- src/app.ts\n+++ src/app.ts\n@@ -1,10 +1,12 @@\n import express from \"express\";\n import { authenticate } from \"./middleware/auth\";\n+import { rateLimit } from \"./middleware/rateLimit\";\n import router from \"./routes\";\n \n const app = express();\n app.use(express.json());\n app.use(authenticate);\n+app.use(rateLimit);\n app.use(router);\n \n export default app;\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 70,
+          "command": "npm test -- rateLimit",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "> api@1.0.0 test\n> jest rateLimit\n\n PASS  test/middleware/rateLimit.test.js\n  rateLimit\n    \u2713 allows requests under the limit (5 ms)\n    \u2713 rejects the 101st request in a window with 429 (4 ms)\n    \u2713 resets the bucket after the window elapses (3 ms)\n\nTest Suites: 1 passed, 1 total\nTests:       3 passed, 3 total\nTime:        1.1 s",
+          "stderr": "",
+          "duration_ms": 1120
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 84,
+          "text": "Added `rateLimit.ts`, a per-key token-bucket middleware capped at 100 requests/minute, and wired it in right after `authenticate` so the key is already resolved. Requests over the limit get a `429`."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 86,
+          "task_result": "Added a per-API-key rate-limit middleware (100 requests/minute) and wired it into the middleware stack."
+        }
+      ]
+    },
+    {
+      "id": "demo-bump-playwright-160",
+      "title": "Bump Playwright to 1.60",
+      "model": "claude-haiku-4-5",
+      "offset_seconds": -21600,
+      "summary": "Bumped Playwright to 1.60 across the console package and CI image.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Bump Playwright to 1.60 across the console package and the CI image."
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 14,
+          "command": "npm install -D @playwright/test@1.60.0",
+          "cwd": "/workspace/apps/mewbo_console",
+          "exit_code": 0,
+          "stdout": "added 1 package, removed 1 package, changed 2 packages in 3s",
+          "stderr": "",
+          "duration_ms": 3120
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 30,
+          "path": "apps/mewbo_console/package.json",
+          "title": "Bump Playwright to 1.60",
+          "diff": "--- apps/mewbo_console/package.json\n+++ apps/mewbo_console/package.json\n@@ -18,7 +18,7 @@\n   \"devDependencies\": {\n-    \"@playwright/test\": \"1.58.1\",\n+    \"@playwright/test\": \"1.60.0\",\n     \"typescript\": \"^5.6.0\",\n"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 42,
+          "path": "demo/docker/shots.Dockerfile",
+          "title": "Match the Playwright browser image pin",
+          "diff": "--- demo/docker/shots.Dockerfile\n+++ demo/docker/shots.Dockerfile\n@@ -1,4 +1,4 @@\n-FROM mcr.microsoft.com/playwright:v1.58.1-jammy\n+FROM mcr.microsoft.com/playwright:v1.60.0-jammy\n \n WORKDIR /work\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 56,
+          "command": "npx playwright test --list",
+          "cwd": "/workspace/apps/mewbo_console",
+          "exit_code": 0,
+          "stdout": "Listing tests...\n42 tests in 9 files",
+          "stderr": "",
+          "duration_ms": 1890
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 68,
+          "text": "Bumped `@playwright/test` to 1.60.0 in the console package and matched the browser image pin in `shots.Dockerfile` so the capture stack and the resolved package version stay in lockstep. `--list` still resolves all 42 tests."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 70,
+          "task_result": "Bumped Playwright to 1.60.0 in the console package and matched the shots image pin; all tests still resolve."
+        }
+      ]
+    },
+    {
+      "id": "demo-q3-roadmap-triage",
+      "title": "Q3 roadmap triage",
+      "model": "claude-opus-4-8",
+      "offset_seconds": -28800,
+      "summary": "Triaged the Q3 roadmap proposals into now/next/later buckets.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 4,
+          "text": "Help me triage the Q3 roadmap \u2014 sort the open proposals into now/next/later."
+        },
+        {
+          "kind": "todos",
+          "at_seconds": 16,
+          "source": "agent",
+          "items": [
+            {
+              "label": "Review the SCG multi-repo proposal",
+              "status": "completed"
+            },
+            {
+              "label": "Review the mobile widgets follow-up proposal",
+              "status": "completed"
+            },
+            {
+              "label": "Review the trigger admission-policy hardening proposal",
+              "status": "completed"
+            },
+            {
+              "label": "Sort proposals into now/next/later and share a summary",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 52,
+          "text": "Here's the Q3 triage:\n\n**Now**\n- Trigger admission-policy hardening \u2014 closes a real gap, small surface.\n\n**Next**\n- SCG multi-repo support \u2014 high value, needs a design pass first.\n\n**Later**\n- Mobile widgets follow-up \u2014 worth doing, but no urgent driver this quarter.\n\nHappy to turn any of these into tracked issues."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 54,
+          "task_result": "Triaged the Q3 roadmap proposals into now/next/later buckets and summarized the reasoning."
+        }
+      ]
+    },
+    {
+      "id": "demo-explain-hypervisor-concurrency-budget",
+      "title": "Explain the hypervisor concurrency budget",
+      "model": "claude-opus-4-8",
+      "offset_seconds": -36000,
+      "summary": "Explained how the agent hypervisor's concurrency budget limits concurrent sub-agents.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Explain how the agent hypervisor's concurrency budget works."
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 24,
+          "text": "The `AgentHypervisor` caps how many sub-agents can run concurrently under a parent session. Each `spawn_agent` call is admitted against a budget rather than a hard count: when the budget is exhausted, new spawns queue instead of failing outright, and admitted agents are tracked through to one of four terminal states \u2014 `completed`, `failed`, `cancelled`, or `rejected`. This keeps a single runaway fan-out (e.g. a probe loop spawning too many search leaves) from starving the rest of the session's tool budget, while still letting well-behaved parallel work (like concurrent explore/implement/review agents) run at full width up to the cap."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 26,
+          "task_result": "Explained the hypervisor's concurrency budget: admission-gated spawn_agent, queuing over hard failure, and the four terminal states."
+        }
+      ]
+    },
+    {
+      "id": "demo-release-checklist-v0014",
+      "title": "Release checklist for v0.0.14",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -43200,
+      "summary": "Put together the release checklist for v0.0.14.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 4,
+          "text": "Put together the release checklist for v0.0.14."
+        },
+        {
+          "kind": "todos",
+          "at_seconds": 15,
+          "source": "agent",
+          "items": [
+            {
+              "label": "Confirm the changelog is drafted and reviewed",
+              "status": "completed"
+            },
+            {
+              "label": "Bump the version and versionCode where applicable",
+              "status": "completed"
+            },
+            {
+              "label": "Run the full test suite and lint",
+              "status": "completed"
+            },
+            {
+              "label": "Tag the release and verify the mirror push",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 50,
+          "text": "Release checklist for v0.0.14:\n\n1. Changelog drafted and reviewed.\n2. Version bumped in `pyproject.toml` / `package.json`.\n3. Full suite + lint green.\n4. Tag pushed and the GitHub mirror confirmed in sync.\n\nAll four items check out \u2014 this build is ready to tag."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 52,
+          "task_result": "Compiled and confirmed the v0.0.14 release checklist; all four items check out as ready."
+        }
+      ]
+    },
+    {
+      "id": "demo-summarize-oncall-week",
+      "title": "Summarize the on-call week",
+      "model": "claude-haiku-4-5",
+      "offset_seconds": -57600,
+      "summary": "Summarized this week's on-call activity and open follow-ups.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Summarize this week's on-call \u2014 what fired and what needs follow-up?"
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 20,
+          "text": "This week: two pages, both on the nightly backup window overlapping peak traffic (already flagged in the infra report, follow-up scheduled to move the backup job off-peak). No customer-visible incidents. One follow-up remains open: `db-2` disk headroom, currently at 75% and climbing \u2014 worth scheduling the expansion before next week's on-call rotation."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 22,
+          "task_result": "Summarized the on-call week: two backup-window pages, no incidents, one open follow-up on db-2 disk headroom."
+        }
+      ]
+    },
+    {
+      "id": "demo-investigate-webhook-signature-mismatch",
+      "title": "Investigate webhook signature mismatch",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -172800,
+      "summary": "Investigated intermittent webhook signature verification failures; inconclusive, blocked on provider-side logs.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Webhook deliveries are intermittently failing signature verification \u2014 can you dig in?"
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 11,
+          "text": "Let me check the verification code and try to reproduce the failure locally before touching anything."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 26,
+          "path": "src/webhooks/verify.ts",
+          "total_lines": 11,
+          "text": "1\timport { createHmac, timingSafeEqual } from \"crypto\";\n2\t\n3\texport function verifySignature(secret: string, body: string, header: string | null) {\n4\t  if (!header) return false;\n5\t  const expected = createHmac(\"sha256\", secret).update(body).digest(\"hex\");\n6\t  const provided = header.startsWith(\"sha256=\") ? header.slice(7) : header;\n7\t  const a = Buffer.from(expected, \"hex\");\n8\t  const b = Buffer.from(provided, \"hex\");\n9\t  if (a.length !== b.length) return false;\n10\t  return timingSafeEqual(a, b);\n11\t}"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 44,
+          "command": "npm test -- verify",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "PASS test/webhooks/verify.test.js \u2014 6 passed",
+          "stderr": "",
+          "duration_ms": 980
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 58,
+          "command": "grep -c 'signature mismatch' logs/webhooks.log",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "0",
+          "stderr": "",
+          "duration_ms": 120
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 76,
+          "text": "The verification logic itself looks correct and its unit tests all pass, and I can't find any local repro \u2014 the app-side log doesn't even show a mismatch count worth investigating from here. I suspect this is a payload-encoding difference on the provider's retry path (e.g. re-serialized JSON changing byte order), but confirming that needs the provider's raw outbound request logs, which I don't have access to. Flagging this as blocked rather than guessing at a fix that might just paper over the real cause."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 78,
+          "done_reason": "halted_no_progress",
+          "task_result": "Could not reproduce the intermittent webhook signature mismatch locally; verification code and its tests are clean. Blocked on provider-side raw request logs to compare payload bytes."
+        }
+      ]
+    },
+    {
+      "id": "demo-tighten-cors-api-gateway",
+      "title": "Tighten CORS policy on the API gateway",
+      "model": "claude-opus-4-8",
+      "offset_seconds": -432000,
+      "summary": "Tightened the API gateway's CORS policy to an explicit origin allowlist.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Tighten the CORS policy on the API gateway \u2014 restrict it to our known origins instead of *."
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 10,
+          "text": "I'll replace the wildcard origin with an explicit allowlist and confirm the console and docs site still work against it."
+        },
+        {
+          "kind": "file_read",
+          "at_seconds": 24,
+          "path": "src/gateway/cors.ts",
+          "total_lines": 6,
+          "text": "1\timport cors from \"cors\";\n2\t\n3\texport const corsMiddleware = cors({\n4\t  origin: \"*\",\n5\t  credentials: true,\n6\t});"
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 40,
+          "path": "src/gateway/cors.ts",
+          "diff": "--- src/gateway/cors.ts\n+++ src/gateway/cors.ts\n@@ -1,6 +1,11 @@\n import cors from \"cors\";\n \n+const ALLOWED_ORIGINS = [\n+  \"https://console.mewbo.example\",\n+  \"https://docs.mewbo.example\",\n+];\n+\n export const corsMiddleware = cors({\n-  origin: \"*\",\n+  origin: ALLOWED_ORIGINS,\n   credentials: true,\n });\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 56,
+          "command": "npm test -- cors",
+          "cwd": "/workspace/api",
+          "exit_code": 0,
+          "stdout": "PASS test/gateway/cors.test.js \u2014 3 passed",
+          "stderr": "",
+          "duration_ms": 780
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 70,
+          "text": "Replaced the wildcard `origin: \"*\"` with an explicit allowlist covering the console and docs site. `credentials: true` combined with a wildcard origin was already a spec violation in most browsers, so this also fixes a latent CORS failure mode, not just tightens the policy."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 72,
+          "task_result": "Tightened the API gateway's CORS policy to an explicit origin allowlist; all CORS tests pass."
+        }
+      ]
+    },
+    {
+      "id": "demo-audit-slow-queries-events-collection",
+      "title": "Audit slow queries in the events collection",
+      "model": "claude-sonnet-5",
+      "offset_seconds": -864000,
+      "summary": "Audited the events collection for slow queries and added a supporting index.",
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 3,
+          "text": "Audit the events collection for slow queries and suggest indexes."
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 15,
+          "command": "mongosh --quiet --eval 'db.events.getIndexes()'",
+          "cwd": "/workspace",
+          "exit_code": 0,
+          "stdout": "[ { v: 2, key: { _id: 1 }, name: '_id_' }, { v: 2, key: { session_id: 1 }, name: 'session_id_1' } ]",
+          "stderr": "",
+          "duration_ms": 340
+        },
+        {
+          "kind": "agent_message",
+          "at_seconds": 32,
+          "text": "The events collection only has an index on session_id; queries that also filter or sort by ts are falling back to an in-memory sort. I'll add a compound index."
+        },
+        {
+          "kind": "file_edit",
+          "at_seconds": 48,
+          "path": "src/store/migrations/0007_events_ts_index.py",
+          "title": "Add compound index on (session_id, ts)",
+          "diff": "--- /dev/null\n+++ src/store/migrations/0007_events_ts_index.py\n@@ -0,0 +1,9 @@\n+from pymongo import ASCENDING\n+\n+\n+def upgrade(db):\n+    db.events.create_index([(\"session_id\", ASCENDING), (\"ts\", ASCENDING)])\n+\n+\n+def downgrade(db):\n+    db.events.drop_index(\"session_id_1_ts_1\")\n"
+        },
+        {
+          "kind": "shell",
+          "at_seconds": 62,
+          "command": "python -m src.store.migrations run 0007_events_ts_index",
+          "cwd": "/workspace",
+          "exit_code": 0,
+          "stdout": "Applied 0007_events_ts_index",
+          "stderr": "",
+          "duration_ms": 410
+        },
+        {
+          "kind": "assistant",
+          "at_seconds": 76,
+          "text": "Added a compound index on `(session_id, ts)` \u2014 the query pattern the timeline endpoint actually uses (filter by session, sort by timestamp) was falling back to an in-memory sort without it. Applied the migration against the demo database; the same script runs against production during the next deploy."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 78,
+          "task_result": "Audited the events collection, found a missing compound index for the session_id+ts query pattern, and added a migration for it."
+        }
+      ]
+    },
+    {
+      "id": "demo-scoped-api-keys-plan",
+      "title": "Scope API keys to one workspace",
+      "model": "anthropic/claude-sonnet-4-6",
+      "offset_seconds": -7200,
+      "events": [
+        {
+          "kind": "context",
+          "at_seconds": 0
+        },
+        {
+          "kind": "user",
+          "at_seconds": 1,
+          "text": "Issued API keys currently unlock every project, which is too broad for the CI token we hand to the docs build. Draft a plan for scoping a key so it can only reach one project, and cover the data model, enforcement, and console."
+        },
+        {
+          "kind": "plan_proposed",
+          "at_seconds": 2,
+          "revision": 1,
+          "content": "## Scoped API keys \u2014 implementation plan\n\n### 1. Overview\nToday an issued key authorizes every project. This plan adds an optional\nproject scope so a key handed to a CI job can only reach the one project that\njob builds.\n\n### 2. Data model\n- Add `scope: {kind: \"all\"} | {kind: \"project\", project_id: str}` to `KeyRecord`.\n- Default every existing record to `{kind: \"all\"}` on read, so no migration runs.\n\n### 3. Enforcement\n- Resolve the scope once in the auth guard and attach it to the request.\n- Reject a cross-project read with 403 at the route boundary, never deeper.\n\n### 4. Console\n- Add a project picker beside the key label in the create-key card.\n- Chip the scope on each issued-key row.\n",
+          "summary": "Scope issued keys to a single project id."
+        },
+        {
+          "kind": "plan_decision",
+          "at_seconds": 3,
+          "revision": 1,
+          "decision": "rejected"
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 4,
+          "done_reason": "awaiting_approval",
+          "task_result": "Plan revision 1 was rejected."
+        },
+        {
+          "kind": "user",
+          "at_seconds": 5,
+          "text": "Scoping to a raw project id breaks the moment a project is renamed. Rework the plan so the scope hangs off a named workspace instead."
+        },
+        {
+          "kind": "plan_proposed",
+          "at_seconds": 6,
+          "revision": 2,
+          "content": "## Scoped API keys \u2014 implementation plan (revision 2)\n\n### 1. Overview\nSame goal as revision 1, with the scope resolved from a named workspace rather\nthan a raw project id so a key survives a project being renamed.\n\n### 2. Data model\n- Add `scope: {kind: \"all\"} | {kind: \"workspace\", workspace: str}` to `KeyRecord`.\n- Existing records read as `{kind: \"all\"}`; no migration, no backfill.\n\n### 3. Enforcement\n- The auth guard resolves workspace -> project ids once per request and caches\n  it for the request lifetime.\n- A cross-workspace read is rejected with 403 at the route boundary.\n\n### 4. Console\n- The create-key card gains a workspace picker; issued-key rows chip the\n  workspace name.\n- Revoking is unchanged.\n",
+          "summary": "Scope issued keys to a named workspace."
+        },
+        {
+          "kind": "completion",
+          "at_seconds": 7,
+          "done_reason": "awaiting_approval",
+          "task_result": "Plan revision 2 is awaiting approval."
+        }
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "id": "demo-trigger-nightly-digest",
+      "session": "demo-refactor-auth-middleware",
+      "kind": "time.cron",
+      "wake_prompt": "Nightly repo digest",
+      "created_by": "agent",
+      "created_at_offset": -3600,
+      "fields": {
+        "cron": "0 6 * * *"
+      }
+    },
+    {
+      "id": "demo-trigger-ci-failure-watcher",
+      "session": "demo-weekly-infra-health-report",
+      "kind": "webhook",
+      "wake_prompt": "CI failure watcher",
+      "created_by": "agent",
+      "created_at_offset": -7200,
+      "fields": {
+        "secret": "demo-ci-failure-watcher-secret",
+        "hmac_header": "X-Hub-Signature-256"
+      }
+    },
+    {
+      "id": "demo-trigger-weekly-roadmap-sync",
+      "session": "demo-q3-roadmap-triage",
+      "kind": "time.cron",
+      "wake_prompt": "Weekly roadmap sync",
+      "created_by": "user",
+      "created_at_offset": -604800,
+      "fields": {
+        "cron": "0 9 * * 1"
+      }
+    },
+    {
+      "id": "demo-trigger-release-checklist-reminder",
+      "session": "demo-release-checklist-v0014",
+      "kind": "time.cron",
+      "wake_prompt": "Release checklist reminder",
+      "created_by": "agent",
+      "created_at_offset": -86400,
+      "fields": {
+        "cron": "0 8 * * 5"
+      }
+    },
+    {
+      "id": "demo-trigger-pagination-flake-watcher",
+      "session": "demo-fix-flaky-pagination-test",
+      "kind": "webhook",
+      "wake_prompt": "Pagination flake watcher",
+      "created_by": "agent",
+      "created_at_offset": -3600,
+      "fields": {
+        "secret": "demo-pagination-flake-watcher-secret",
+        "hmac_header": "X-Hub-Signature-256"
+      }
+    },
+    {
+      "id": "demo-trigger-cors-policy-audit",
+      "session": "demo-tighten-cors-api-gateway",
+      "kind": "time.cron",
+      "wake_prompt": "Monthly CORS policy audit",
+      "created_by": "user",
+      "created_at_offset": -1209600,
+      "fields": {
+        "cron": "0 7 1 * *"
+      }
+    },
+    {
+      "id": "demo-trigger-config-migration-followup",
+      "session": "demo-migrate-config-loader-pydantic-v2",
+      "kind": "webhook",
+      "wake_prompt": "Config migration CI watcher",
+      "created_by": "agent",
+      "created_at_offset": -7200,
+      "fields": {
+        "secret": "demo-config-migration-ci-watcher-secret",
+        "hmac_header": "X-Hub-Signature-256"
+      }
+    }
+  ],
+  "api_keys": [
+    {
+      "id": "8c41d2f6a95b47e0b3d18f2a6c705e94",
+      "label": "laptop-cli",
+      "created_at_offset": -3369600
+    },
+    {
+      "id": "b07e5a3c1d8f42a69e40cb27f5163d8a",
+      "label": "ci-pipeline (nightly docs build)",
+      "created_at_offset": -1036800
+    }
+  ]
+}

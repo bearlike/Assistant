@@ -1,6 +1,6 @@
 """WorkspaceGraphBinding — the ONE seam that turns a workspace into graph access.
 
-#77 widens the gate the ``OrchestratedSearchRunner`` used to own alone: *any*
+This widens the gate the ``OrchestratedSearchRunner`` used to own alone: *any*
 run type that binds a workspace gets the ``scg`` capability + the graph
 traversal tools (``scg_route`` / ``scg_memory`` / fan-out verbs) + the workspace
 source scope. Before this seam each of those three facts was assembled inline in
@@ -20,9 +20,9 @@ Three resolved facts, one place:
   workspace's UNTRUSTED ``instructions`` as an explicitly-labelled context event
   (NEVER the system prompt — the security invariant the runner already upheld);
 * **allowed_tools** — the run's scoped connector grant (sources ∩ ``filter_specs``,
-  already resolved upstream by ``SourceCatalog.tools_for`` via the #75 virtual
+  already resolved upstream by ``SourceCatalog.tools_for`` via the virtual
   config) UNIONed with the fixed SCG traversal verbs, de-duplicated;
-* **scope** — the workspace source allowlist bound on ``ScgScope`` (#75) so the
+* **scope** — the workspace source allowlist bound on ``ScgScope`` so the
   un-owned ``scg_route`` plugin tool only ranks pathways through the workspace's
   own sources. Import-guarded: an absent ``mewbo-graph`` SCG engine degrades to an
   unscoped (no-op) bind rather than crashing the drive.
@@ -40,7 +40,7 @@ from ..schemas import Workspace
 # connector tools a run's sources unlock. Unioned with the run's scoped grant.
 # ``scg_observe`` (Search-on-Graph navigation) is granted here so it is available
 # once it lands; ``filter_specs`` silently drops it until then (graceful).
-# ``scg_results`` is the root agent's terminal result-emit step (#95) — the api
+# ``scg_results`` is the root agent's terminal result-emit step — the api
 # projects its ``tool_result`` transcript event into the run's ``result`` events.
 TRAVERSAL_TOOLS: tuple[str, ...] = (
     "scg_route",
@@ -145,11 +145,11 @@ class WorkspaceGraphBinding:
 
     @contextmanager
     def scope(self) -> Iterator[None]:
-        """Bind the workspace SCG source scope (#75) for the wrapped block.
+        """Bind the workspace SCG source scope for the wrapped block.
 
         Delegates to :class:`mewbo_graph.scg.scope.ScgScope` so the un-owned
         ``scg_route`` plugin tool transparently routes only within the
-        workspace's sources. ``workspace=`` carries the workspace id for #76
+        workspace's sources. ``workspace=`` carries the workspace id for
         deposit ATTRIBUTION (which workspace LEARNED a fact — never a partition);
         without it a connector insight is deposited ``workspace=None`` (graceful
         but dormant). Import-guarded: a core-only install (the ``mewbo-graph`` SCG

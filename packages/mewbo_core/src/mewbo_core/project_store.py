@@ -56,6 +56,9 @@ def worktree_project_id(parent_project_id: str, branch: str) -> str:
 
 def _render_claude_md(name: str, description: str) -> str:
     template_path = Path(__file__).parent / "templates" / "project_claude_md.j2"
+    # autoescape off by design: the output is a CLAUDE.md instructions file written to disk
+    # and consumed as an LLM prompt, never browser-facing HTML — HTML-entity-encoding the
+    # project name/description would corrupt the instructions the model reads.
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(template_path.parent)), autoescape=False
     )

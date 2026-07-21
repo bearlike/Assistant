@@ -19,7 +19,9 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.mewbo.aura.MainActivity
+import com.mewbo.aura.data.device.AssistOverlayPresence
 import com.mewbo.aura.data.device.DevicePermissionChecker
+import com.mewbo.aura.data.settings.SettingsStore
 import com.mewbo.aura.ui.overlay.AssistOverlayCallbacks
 import com.mewbo.aura.ui.overlay.AssistOverlayScreen
 import com.mewbo.aura.ui.theme.AuraTheme
@@ -38,7 +40,7 @@ import kotlinx.coroutines.flow.first
  * singletons are reached via [AssistEntryPoint], the Hilt escape hatch for non-`@AndroidEntryPoint`
  * hosts), then driven entirely by [AssistOverlayScreen].
  *
- * v5 (Gitea #181): voice-first - [onShow] auto-starts [AssistTurnMachine.startListening] right
+ * v5: voice-first - [onShow] auto-starts [AssistTurnMachine.startListening] right
  * after [AssistTurnMachine.show] when `RECORD_AUDIO` is granted (see [AssistTurnMachine]'s KDoc for
  * the full turn-count/streaming contract), and [handleHandoff] is this window's own end of the
  * machine's `onHandoff` callback (fired from the SECOND turn onward, plus `continueLastSession`/
@@ -62,6 +64,12 @@ class AuraSession(context: Context) :
     private lateinit var machine: AssistTurnMachine
     private lateinit var haptics: AuraHaptics
     private lateinit var permissionChecker: DevicePermissionChecker
+    private lateinit var settingsStore: SettingsStore
+
+    /** This window's own visibility, published to the `device_*` activity-launch guard - see
+     * [AssistOverlayPresence]. Set in [onShow], cleared in BOTH [onHide] and [onDestroy] (a session
+     * destroyed without a preceding hide must not leave the flag stuck true). */
+    private lateinit var overlayPresence: AssistOverlayPresence
 
     override fun onCreate() {
         super.onCreate()
@@ -74,13 +82,21 @@ class AuraSession(context: Context) :
         )
         haptics = entryPoint.haptics()
         permissionChecker = entryPoint.devicePermissionChecker()
+        settingsStore = entryPoint.settingsStore()
+        overlayPresence = entryPoint.assistOverlayPresence()
         machine = AssistTurnMachine(
             transcriber = entryPoint.transcriber(),
             synthesizer = entryPoint.synthesizer(),
             sessions = entryPoint.sessionRepository().sessions,
+            // the overlay resolves its OWN default model here (its
+            // session-creation seam), independent of the app's SettingsStore.selectedModel. Empty =
+            // server default, the pre-F3 behavior. Both turn-one createSession and any turn-two
+            // sendQuery read the SAME overlayDefaultModel so the session's context.model is
+            // consistent; on handoff MainActivity's bind() then hydrates that model from the
+            // session's persisted context, so the overlay's choice carries into the app for free.
             createSession = {
                 entryPoint.sessionRepository().createSession(
-                    model = entryPoint.settingsStore().selectedModel.first().ifBlank { null },
+                    model = entryPoint.settingsStore().overlayDefaultModel.first().ifBlank { null },
                     project = entryPoint.settingsStore().selectedProject.first().ifBlank { null },
                 )
             },
@@ -88,7 +104,7 @@ class AuraSession(context: Context) :
                 entryPoint.runRepository().sendQuery(
                     sessionId = id,
                     text = text,
-                    model = entryPoint.settingsStore().selectedModel.first().ifBlank { null },
+                    model = entryPoint.settingsStore().overlayDefaultModel.first().ifBlank { null },
                     project = entryPoint.settingsStore().selectedProject.first().ifBlank { null },
                     mcpTools = null,
                     attachments = emptyList(),
@@ -115,17 +131,24 @@ class AuraSession(context: Context) :
         // isNavigationBarContrastEnforced of its own. Dialog itself wraps a real Window reachable via
         // its OWN getWindow(), so the fix is one property-access deeper than the Activity case.
         window?.window?.isNavigationBarContrastEnforced = false
-        // Gitea #181 item 4/6: decorFitsSystemWindows(false) keeps the decor from consuming insets
-        // so Compose's imePadding()/systemBarsPadding() see the real values (P3, the Compose-side
-        // half). The soft-input mode itself is ADJUST_NOTHING, set in onCreate BEFORE the window
-        // attaches - see that call site for the measured double-shift postmortem.
+        // decorFitsSystemWindows(false) keeps the decor from consuming insets
+        // so Compose's systemBarsPadding() sees the real values (P3, the Compose-side half). The
+        // soft-input mode is left at the platform DEFAULT - there is NO setSoftInputMode call
+        // anywhere: the WM force-pans TYPE_VOICE_INTERACTION windows regardless (measured), so the
+        // overlay tree deliberately carries NO imePadding - see AssistOverlayScreen's bottom Column
+        // (and ui/overlay/CLAUDE.md's IME section) for the measured double-shift postmortem.
         window?.window?.setDecorFitsSystemWindows(false)
         return ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setViewTreeLifecycleOwner(this@AuraSession)
             setViewTreeSavedStateRegistryOwner(this@AuraSession)
             setContent {
-                AuraTheme {
+                // Reduced-motion BUG FIX [R4 2026-07-10]: this host called AuraTheme() bare, so
+                // the stored setting silently defaulted to false for every overlay invocation
+                // while MainActivity honored it — the overlay always animated. initial=false
+                // keeps the pre-load frame identical to the old behavior (never blocks show).
+                val reducedMotion by settingsStore.reducedMotion.collectAsState(initial = false)
+                AuraTheme(reducedMotion = reducedMotion) {
                     val uiState by machine.state.collectAsState()
                     AssistOverlayScreen(
                         state = uiState,
@@ -151,7 +174,25 @@ class AuraSession(context: Context) :
         // work - "one crisp tick" acknowledging the gesture landed, not gated on the window
         // actually being drawn yet.
         haptics.invocation()
+        // From here until onHide/onDestroy the app HAS a visible, user-initiated window, so the
+        // `device_*` clock tools (set alarm/timer, dismiss alarm) ARE allowed to launch the clock app
+        // - Android grants a BAL exemption for any visible system window, TYPE_VOICE_INTERACTION
+        // included. Their process-importance-only guard refused it anyway: showing this session makes
+        // the process IMPORTANCE_FOREGROUND_SERVICE (125), not IMPORTANCE_FOREGROUND (100), so the
+        // `<= 100` test read "backgrounded" (AOSP-confirmed - full chain in `canStartActivityNow`).
+        // Set BEFORE machine.startListening() below: this turn's own device tool calls can land while
+        // this window is still the only thing on screen.
+        overlayPresence.visible = true
         super.onShow(args, showFlags)
+        // A response can take a while to stream; without this the screen sleeps mid-response and
+        // kills the overlay experience. FLAG_KEEP_SCREEN_ON needs no permission (unlike a WAKE_LOCK)
+        // - it only keeps the screen on while THIS window is showing, cleared in onHide/onDestroy
+        // below so the overlay never holds the screen awake after it's gone. window?.window is the
+        // same Dialog-wrapped real Window the nav-bar-contrast/decorFitsSystemWindows fixes above
+        // reach (VoiceInteractionSession.getWindow() returns Dialog, not Window) - already valid here
+        // since onCreateContentView() runs before the first onShow, and the session (and its window)
+        // survives every later hide->show cycle (voice/CLAUDE.md's session-reuse lifecycle law).
+        window?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Keyboard/IME on this window: the WM force-pans TYPE_VOICE_INTERACTION windows regardless
         // of app-side softInputMode (measured: ADJUST_NOTHING set both pre-attach and via live
         // attributes reassignment here never changed dumpsys' adjust=pan). Pan is therefore the
@@ -161,10 +202,10 @@ class AuraSession(context: Context) :
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         machine.show()
-        // Gitea #181 "auto-listen on trigger": nothing in-app ever calls VoiceInteractionService
-        // .showSession() (confirmed in the #181 investigation), so on a real device onShow() is
-        // always externally triggered - RECORD_AUDIO's OS-runtime grant (the standing sole gate,
-        // #179) is what decides whether to go straight into LISTENING, same as the explicit mic-tap
+        // "auto-listen on trigger": nothing in-app ever calls VoiceInteractionService
+        // .showSession() (device-confirmed), so on a real device onShow() is
+        // always externally triggered - RECORD_AUDIO's OS-runtime grant (the standing sole
+        // gate) is what decides whether to go straight into LISTENING, same as the explicit mic-tap
         // gate below. `showFlags` (SHOW_SOURCE_ASSIST_GESTURE et al., per AOSP
         // VoiceInteractionSession) was investigated as a finer-grained trigger-source discriminator,
         // but every source wants this same auto-listen behavior here, so it stays unread - a denied
@@ -176,6 +217,10 @@ class AuraSession(context: Context) :
     }
 
     override fun onHide() {
+        overlayPresence.visible = false
+        // Pairs with the addFlags in onShow - the screen must go back to normal sleep behavior the
+        // moment the overlay is gone, not stay pinned awake by a window nobody can see.
+        window?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         machine.dismiss()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -191,7 +236,7 @@ class AuraSession(context: Context) :
         hide()
     }
 
-    /** The overlay's mic tap (Gitea #180 P5). `RECORD_AUDIO` OS-runtime grant is the SOLE gate
+    /** The overlay's mic tap. `RECORD_AUDIO` OS-runtime grant is the SOLE gate
      * (standing rule, no extra in-app consent layer) - but a `VoiceInteractionSession` has no
      * Activity to run the normal first-tap `requestPermissions` flow through, so if the grant is
      * already missing this can't prompt for it here; it surfaces the same quiet notice a failed
@@ -212,7 +257,7 @@ class AuraSession(context: Context) :
      * [MainActivity] on that session and tear this window down like any other dismissal.
      * `FLAG_ACTIVITY_NEW_TASK` is required launching from a session (non-`Activity`) context;
      * `FLAG_ACTIVITY_CLEAR_TOP` reuses `MainActivity`'s existing task/instance (`singleTask` launch
-     * mode, see the manifest) instead of stacking a duplicate. [modality] (Gitea #180 P1) rides
+     * mode, see the manifest) instead of stacking a duplicate. [modality] rides
      * alongside `EXTRA_HANDOFF_SESSION_ID` as its own plain-string extra (`InputModality.name`) - a
      * client-only hint, never a wire concern - so the chat picking up this handoff's already-live
      * run knows whether it was voice-initiated. */
@@ -251,6 +296,17 @@ class AuraSession(context: Context) :
     }
 
     override fun onDestroy() {
+        // Cleared here as well as in onHide (the app's only two teardown paths - every dismissal
+        // funnels through dismissSession() -> hide() -> onHide, and finish() is never called): a
+        // session torn down without a preceding hide would otherwise leave the flag stuck true
+        // forever, and the launch guard would then wave through a genuinely backgrounded
+        // startActivity - which Android does NOT reject, it DISCARDS it and still reports
+        // START_SUCCESS, so a handler would report `handed_to_clock_app: true` for an alarm that
+        // never reached the screen. Always err toward false (AssistOverlayPresence's own KDoc).
+        overlayPresence.visible = false
+        // Same "destroyed without a preceding hide" belt-and-suspenders as overlayPresence.visible
+        // above - clearFlags is a no-op if onHide already cleared it.
+        window?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         sessionScope.cancel()
         super.onDestroy()

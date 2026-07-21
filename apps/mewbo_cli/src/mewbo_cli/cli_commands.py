@@ -179,6 +179,8 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
     resolved query synchronously through ``run_sync`` — the same path
     used by ``/compact``.
     """
+    if context.refuse_if_terminated(action):
+        return True
     try:
         query = context.runtime.resolve_recovery_query(context.state.session_id, action)
     except (ValueError, RuntimeError) as exc:
@@ -186,8 +188,8 @@ def _run_recovery(context: CommandContext, action: str) -> bool:
         return True
     # Re-inject capability-gating context (client_capabilities /
     # structured_workspace) so a recovered wiki/QA/structured session keeps its
-    # capability — the orchestrator reads the most-recent context event (Gitea
-    # #54, F1). Shared with the API recover endpoint via this one runtime method.
+    # capability — the orchestrator reads the most-recent context event.
+    # Shared with the API recover endpoint via this one runtime method.
     context.runtime.reinject_recovery_context(context.state.session_id)
     label = "Retrying last query" if action == "retry" else "Continuing"
     context.console.print(f"{label}...", style="cyan")
@@ -264,8 +266,8 @@ def _approve_pending_plan(context: CommandContext) -> bool:
 def _cmd_continue(context: CommandContext, args: list[str]) -> bool:
     del args
     # In the no-TTY / --query plain fallback a pending plan proposal means
-    # "continue" should APPROVE + execute it (plan→act), not re-enter recovery
-    # (#159). The interactive App approves via the plan-approval modal instead.
+    # "continue" should APPROVE + execute it (plan→act), not re-enter recovery.
+    # The interactive App approves via the plan-approval modal instead.
     pending, _revision, _plan_path = context.runtime._has_pending_plan_proposal(
         context.state.session_id
     )
@@ -304,6 +306,8 @@ def _cmd_tag(context: CommandContext, args: list[str]) -> bool:
     "Fork current session: /fork [TAG] [--at TS] [--compact]",
 )
 def _cmd_fork(context: CommandContext, args: list[str]) -> bool:
+    if context.refuse_if_terminated("fork"):
+        return True
     at_ts: str | None = None
     compact = False
     positional: list[str] = []
@@ -352,6 +356,8 @@ def _cmd_fork(context: CommandContext, args: list[str]) -> bool:
 
 @REGISTRY.command("/edit", "Edit the last user message and re-run: /edit [TEXT]")
 def _cmd_edit(context: CommandContext, args: list[str]) -> bool:
+    if context.refuse_if_terminated("edit"):
+        return True
     replacement = " ".join(args) if args else None
     if not replacement and context.prompt_func is not None:
         dialogs = DialogFactory(console=context.console, prompt_func=context.prompt_func)
@@ -667,7 +673,7 @@ def _refresh_mcp_registry(context: CommandContext) -> None:
     target = get_mcp_config_path()
     if not os.path.exists(target):
         _cmd_mcp_init(context, [])
-    # Force a live re-probe (Gitea #130): drop the cached manifest so the
+    # Force a live re-probe: drop the cached manifest so the
     # config-hash gate can't short-circuit discovery, and reset the pool so a
     # server that has since recovered isn't held in its backoff/quarantine
     # state. This is the explicit "I edited/fixed my server, reconnect now" path.
@@ -913,7 +919,7 @@ def _render_mcp(
     all_specs: list[ToolSpec] | None = None,
 ) -> None:
     config_path = get_mcp_config_path()
-    # Tool-scope classification (Gitea #185 Phase 2): mirrors the API's
+    # Tool-scope classification (Phase 2): mirrors the API's
     # `/api/tools` computation so `/mcp` shows the same builtin/project/
     # system/plugin taxonomy Console/Aura display, via the shared
     # `classify_tool_scope` classifier — never re-derived locally.
@@ -935,7 +941,7 @@ def _render_mcp(
             servers = config.get("servers", {})
             global_servers = set(servers.keys())
             if servers:
-                # Live pool status (Gitea #130): a server may be connecting
+                # Live pool status: a server may be connecting
                 # lazily, backing off after a transient failure, or quarantined
                 # (auth/config). Surface it so a dead server is visibly distinct
                 # from a healthy one rather than silently stalling.

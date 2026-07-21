@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { DiffFile } from '../types';
+import { FOCUS_RING } from './ui/focus-ring';
 
 interface FileListProps {
   files: DiffFile[];
@@ -25,15 +26,15 @@ export function FileList({ files, onFileClick }: FileListProps) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="group/cap inline-flex items-center gap-2 h-6 -ml-1 px-1.5 rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/45 transition-colors"
+        className={`group/cap inline-flex items-center gap-2 h-6 -ml-1 px-1.5 rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))]/50 ${FOCUS_RING} transition-colors`}
       >
         <ChevronDown
           className={`w-3 h-3 transition-transform duration-200 ${open ? '' : '-rotate-90'}`}
           aria-hidden
         />
-        <span className="inline-flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.04em]">
+        <span className="inline-flex items-center gap-2 text-2xs font-medium uppercase tracking-[0.04em]">
           Files written
-          <span className="inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-[4px] bg-[hsl(var(--muted))] text-[10px] text-[hsl(var(--muted-foreground))] normal-case tracking-normal">
+          <span className="inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-[4px] bg-[hsl(var(--muted))] text-2xs text-[hsl(var(--muted-foreground))] normal-case tracking-normal">
             {files.length}
           </span>
         </span>
@@ -47,20 +48,20 @@ export function FileList({ files, onFileClick }: FileListProps) {
                 type="button"
                 onClick={() => onFileClick?.(file)}
                 title={file.path}
-                className="grid grid-cols-[auto_1fr_auto] items-center gap-3 w-full h-9 pl-2 pr-2.5 rounded-md text-left hover:bg-[hsl(var(--accent))]/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/45 transition-colors"
+                className={`grid grid-cols-[auto_1fr_auto] items-center gap-3 w-full h-9 pl-2 pr-2.5 rounded-md text-left hover:bg-[hsl(var(--accent))]/55 ${FOCUS_RING} transition-colors`}
               >
-                <span className="font-mono text-[12.5px] font-medium text-[hsl(var(--foreground))]">
+                <span className="font-mono text-sm font-medium text-[hsl(var(--foreground))]">
                   {file.name}
                 </span>
                 <span
-                  className="font-mono text-[11px] text-[hsl(var(--muted-foreground))] overflow-hidden text-ellipsis whitespace-nowrap min-w-0"
+                  className="font-mono text-2xs text-[hsl(var(--muted-foreground))] overflow-hidden text-ellipsis whitespace-nowrap min-w-0"
                   aria-hidden
                 >
                   {truncMid(file.path)}
                 </span>
                 {typeof file.additions === 'number' && file.additions > 0 && (
                   <span
-                    className="font-mono text-[11px] font-medium text-[hsl(var(--diff-add-text))]"
+                    className="font-mono text-2xs font-medium text-[hsl(var(--diff-add-text))]"
                     aria-label={`${file.additions} additions`}
                   >
                     <span className="opacity-85 mr-px">+</span>

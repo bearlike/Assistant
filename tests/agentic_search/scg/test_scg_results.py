@@ -1,4 +1,4 @@
-"""Tests for the #95 coordinator lane + ``scg_results`` result-emit mechanism.
+"""Tests for the coordinator lane + ``scg_results`` result-emit mechanism.
 
 Four workstreams, four concerns:
 
@@ -220,7 +220,7 @@ def _root_inline_transcript():
 def test_root_inline_streams_coordinator_lane_and_results(store, monkeypatch):
     """A root-inline run gets a coordinator lane + result events + payload.results.
 
-    The #95 root cause: the streamer only handled ``sub_agent``, so a run that
+    The root cause: the streamer only handled ``sub_agent``, so a run that
     inlined all work produced trace:[], results:[], total_ms:0 next to a real
     ~3-minute elapsed. Now the root's ``tool_result`` activity becomes ONE
     coordinator lane and the ``scg_results`` emit becomes the run's results.
@@ -328,7 +328,7 @@ def test_probe_only_transcript_unchanged_no_coordinator(store, monkeypatch):
 
     The coordinator lane opens only on a root ``tool_result``; a transcript with
     only ``sub_agent`` events has none, so the probe slots and the data-bearing
-    metrics are exactly what #86 shipped — deterministic, byte-stable.
+    metrics are exactly what shipped — deterministic, byte-stable.
     """
     _enable_scg(monkeypatch)
     OrchestratedSearchRunner().start(
@@ -343,7 +343,7 @@ def test_probe_only_transcript_unchanged_no_coordinator(store, monkeypatch):
     # No scg_results emit → no result events.
     assert _events(store, kind="result") == []
 
-    # Metrics unchanged from #86: 1 of 2 probes data-bearing.
+    # Metrics unchanged from: 1 of 2 probes data-bearing.
     answer = store.get_run("run-1").payload.answer
     assert answer.confidence == 0.5
     assert answer.sources_count == 1  # one data-bearing probe lane
@@ -706,11 +706,11 @@ def test_results_projection_drops_malformed_entries():
 
 
 # ---------------------------------------------------------------------------
-# 5. Probe-emitted result cards (#102) — agent-aware projection.
+# 5. Probe-emitted result cards — agent-aware projection.
 #
 # A child loop INHERITS the parent's event_logger (core AgentContext.child), so
 # probe tool_results ride THIS session's transcript/bus stamped with the probe's
-# agent_id (the #95 "probes run in their own sessions" premise was wrong —
+# agent_id (the "probes run in their own sessions" premise was wrong —
 # verified live). These tests lock the corrected classification: a probe's
 # scg_results emit becomes attributed result cards; its other tool calls never
 # pollute the coordinator lane; live and settle mint identical probe-salted ids.
@@ -724,7 +724,7 @@ def test_probe_emit_streams_attributed_results_live(store):
     precedes the child loop), so the streamer classifies the tool_result by
     ``agent_id`` ∈ probe lanes: the emit projects with ``r-<run8>-<agent8>-<n>``
     ids, the coordinator lane never opens, and a non-results probe tool call
-    emits nothing (the lane stays lifecycle-only — #86).
+    emits nothing (the lane stays lifecycle-only).
     """
     _run_streamer_record(store)
     bus = SessionEventBus()
@@ -786,7 +786,7 @@ def test_probe_emit_streams_attributed_results_live(store):
 
 
 def test_probe_tool_results_never_pollute_coordinator(store, monkeypatch):
-    """Settle classifies tool_results by probe lane — the #95 mislabel is fixed.
+    """Settle classifies tool_results by probe lane — the mislabel is fixed.
 
     A mixed transcript (root scg_route + a probe's connector calls): the
     coordinator lane digests ONLY the root's tool call; the probe's calls are
@@ -826,7 +826,7 @@ def test_probe_tool_results_never_pollute_coordinator(store, monkeypatch):
 def test_mixed_root_and_probe_emits_no_id_collision(store, monkeypatch):
     """Root + probe emits coexist: probe-salted ids keep both sets of cards.
 
-    Before #102 a probe emit minted the SAME ``r-<run8>-<n>`` ids as the root's
+    Before a probe emit minted the SAME ``r-<run8>-<n>`` ids as the root's
     → the dedup silently dropped one set. Now the probe's cards carry the agent
     suffix, both survive, and the metrics' source union sees both sources.
     """

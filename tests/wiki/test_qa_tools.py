@@ -134,7 +134,7 @@ def _access_events(store, answer_id="a1"):
 
 
 def test_code_search_records_scored_hits_with_rank(qa_setup):
-    """code_search records ranked hits carrying real score + 1-based rank (#168).
+    """code_search records ranked hits carrying real score + 1-based rank.
 
     The trail must capture the retriever's ranking signal — not an unscored bulk
     dump — so the finalizer can score-order + cap it. Each record uses the new
@@ -257,7 +257,7 @@ def test_emit_answer_requires_trailing_sources_block(qa_setup):
 
 
 # ---------------------------------------------------------------------------
-# Terminal status on the snapshot (#41) — the MCP poll's done-signal
+# Terminal status on the snapshot — the MCP poll's done-signal
 # ---------------------------------------------------------------------------
 
 
@@ -295,14 +295,14 @@ def test_terminal_call_sets_complete_on_snapshot(qa_setup):
 
 
 # ---------------------------------------------------------------------------
-# Terminal-tool loop contract (#61) — should_terminate_run → terminal_reason
+# Terminal-tool loop contract — should_terminate_run → terminal_reason
 # ---------------------------------------------------------------------------
 
 
 def test_emit_answer_terminal_reason_is_completed():
     """``WikiEmitAnswerTool`` inherits ``terminal_reason() == "completed"``.
 
-    Regression guard for #61: a tool overriding ``should_terminate_run`` but
+    Regression guard: a tool overriding ``should_terminate_run`` but
     declaring no ``terminal_reason`` makes ``tool_use_loop`` raise AttributeError
     when it selects the terminating tool. The reason lives on the shared
     ``WikiSessionTool`` base — this test fails if that base method is removed,

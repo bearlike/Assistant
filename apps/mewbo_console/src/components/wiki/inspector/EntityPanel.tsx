@@ -40,7 +40,9 @@ export function EntityPanel({
   return (
     <PanelShell kindLabel="Entity" nodeKind="Entity" layer="entity" title={label || id}>
       <Section title="Type" hidden={!entityType}>
-        <code className="font-mono">{entityType}</code>
+        <span className="px-1.5 py-px rounded-full text-2xs bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]">
+          {entityType}
+        </span>
       </Section>
 
       <Section title="Labels" hidden={!labels || labels.length === 0}>

@@ -230,12 +230,7 @@ class Planner:
         model = build_chat_model(model_name=model_name)
         parser = PydanticOutputParser(pydantic_object=Plan)
         component_status = self._resolve_component_status()
-        if tool_specs is not None:
-            specs = tool_specs
-        elif mode == "plan":
-            specs = self._tool_registry.list_specs()
-        else:
-            specs = self._tool_registry.list_specs_for_mode(mode)
+        specs = tool_specs if tool_specs is not None else self._tool_registry.list_specs()
         if mode == "act" and tool_specs is None:
             specs = self._filter_specs_by_intent(specs, user_query)
         available_tool_ids = [spec.tool_id for spec in specs]

@@ -1,7 +1,7 @@
-"""Run-grant resolution honours the workspace virtual MCP config (#75).
+"""Run-grant resolution honours the workspace virtual MCP config.
 
 ``SearchRun.start`` computes a run's ``allowed_tools`` from the workspace's source
-selection. #75 makes the PERSISTED virtual MCP config the source of truth: when a
+selection. makes the PERSISTED virtual MCP config the source of truth: when a
 config is attached, the grant resolves from its server names; otherwise it falls
 back to the workspace's raw ``sources`` (the current global behavior).
 

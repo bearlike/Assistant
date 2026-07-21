@@ -3,29 +3,32 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useState } from
 'react';
-import { Route, Switch, useLocation, useRoute } from 'wouter';
+import { toast } from 'sonner';
+import { Redirect, Route, Switch, useLocation, useRoute, useSearchParams } from 'wouter';
+import type { AppendMessage } from '@assistant-ui/react';
 import { AppLayout } from './components/AppLayout';
+import type { ActiveProduct } from './components/nav-rail/products';
 import { HomeView } from './components/HomeView';
-import { SessionDetailView, SessionTokenTotals } from './components/SessionDetailView';
+import { SessionDetailView } from './components/SessionDetailView';
 const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
-const ApiKeysView = lazy(() => import('./components/ApiKeysView').then(m => ({ default: m.ApiKeysView })));
-const PluginsView = lazy(() => import('./components/PluginsView'));
-const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
-const IdeLoader = lazy(() => import('./components/IdeLoader'));
-const AgenticSearchView = lazy(() => import('./components/agentic_search/AgenticSearchView'));
-const WikiApp = lazy(() => import('./components/wiki/WikiApp'));
-const DraftPanel = lazy(() => import('./components/DraftPanel').then(m => ({ default: m.DraftPanel })));
+const IdeLoader = lazy(() => import('./components/IdeLoader').then(m => ({ default: m.IdeLoader })));
+const AgenticSearchView = lazy(() => import('./components/agentic_search/AgenticSearchView').then(m => ({ default: m.AgenticSearchView })));
+const WikiApp = lazy(() => import('./components/wiki/WikiApp').then(m => ({ default: m.WikiApp })));
+const AppsView = lazy(() => import('./components/apps/AppsView').then(m => ({ default: m.AppsView })));
 import {
   createShare,
   exportSession,
-  getConfig,
   postQuery,
+  sendMessage,
   uploadAttachments
 } from './api/client';
+import { useConfig } from './hooks/useConfig';
 import { useSessions } from './hooks/useSessions';
 import { AttachmentPayload, QueryMode, SessionContext, SessionSummary } from './types';
+import { copyText } from './utils/clipboard';
 import { logApiError } from './utils/errors';
 import { useNotifications } from './hooks/useNotifications';
 import { NotificationBalloon } from './components/NotificationBalloon';
@@ -41,6 +44,21 @@ function SuspenseFallback({ fullScreen = false }: { fullScreen?: boolean }) {
   );
 }
 
+/**
+ * `/triggers` retired into the Settings automation facet. Unlike the other three
+ * redirects this one can't be a static `<Redirect to>`: `SessionTriggersSection`
+ * deep-links `/triggers?session=<id>` and the automation pane still reads that
+ * param, so the query has to survive the hop.
+ */
+function TriggersRedirect() {
+  const [params] = useSearchParams();
+  const session = params.get('session');
+  const to = session
+    ? `/settings?facet=automation&session=${encodeURIComponent(session)}`
+    : '/settings?facet=automation';
+  return <Redirect to={to} replace />;
+}
+
 interface SessionDetailRouteProps {
   id: string;
   sessions: SessionSummary[];
@@ -51,8 +69,15 @@ interface SessionDetailRouteProps {
   refresh: () => Promise<void>;
   applyTitle: (sessionId: string, title: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onTokenTotalsChange: (totals: SessionTokenTotals) => void;
   onBack: () => void;
+  // Session-header obligations, re-homed from the old detail NavBar.
+  onRenameTitle: (sessionId: string, title: string) => Promise<void>;
+  onRegenerateTitle: (sessionId: string) => Promise<string>;
+  onArchive: (sessionId: string) => void;
+  onUnarchive: (sessionId: string) => void;
+  onShare: (sessionId: string) => void;
+  onExport: (sessionId: string) => void;
+  langfuseBaseUrl: string | null;
 }
 
 // Resolves a session by id from active + archived lists, lazily fetching the
@@ -68,8 +93,14 @@ function SessionDetailRoute({
   refresh,
   applyTitle,
   onSelectSession,
-  onTokenTotalsChange,
   onBack,
+  onRenameTitle,
+  onRegenerateTitle,
+  onArchive,
+  onUnarchive,
+  onShare,
+  onExport,
+  langfuseBaseUrl,
 }: SessionDetailRouteProps) {
   const session =
     sessions.find((s) => s.session_id === id) ||
@@ -88,7 +119,14 @@ function SessionDetailRoute({
         onTitleUpdate={applyTitle}
         onSessionChange={refresh}
         onSelectSession={onSelectSession}
-        onTokenTotalsChange={onTokenTotalsChange}
+        onBack={onBack}
+        onRenameTitle={onRenameTitle}
+        onRegenerateTitle={onRegenerateTitle}
+        onArchive={onArchive}
+        onUnarchive={onUnarchive}
+        onShare={onShare}
+        onExport={onExport}
+        langfuseUrl={langfuseBaseUrl ? `${langfuseBaseUrl}/${session.session_id}` : null}
       />
     );
   }
@@ -96,14 +134,14 @@ function SessionDetailRoute({
   return (
     <div className="flex-1 overflow-y-auto p-6">
       {loading ?
-        <div className="text-sm text-zinc-500">Loading session…</div> :
+        <div className="text-sm text-[hsl(var(--muted-foreground))]">Loading session…</div> :
         <div className="space-y-2">
-          <div className="text-sm text-zinc-500">
+          <div className="text-sm text-[hsl(var(--muted-foreground))]">
             Session not found.
           </div>
           <button
             onClick={onBack}
-            className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+            className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
             Back to sessions
           </button>
         </div>
@@ -115,14 +153,13 @@ function SessionDetailRoute({
 export function App() {
   const [location, setLocation] = useLocation();
   const [isSettings] = useRoute('/settings');
-  const [isApiKeys] = useRoute('/keys');
-  const [isPlugins] = useRoute('/plugins');
-  const [isProjects] = useRoute('/projects');
   const [isSearch] = useRoute('/search');
-  const [isDraft] = useRoute('/draft');
   const [isWikiRoot] = useRoute('/wiki');
   const [isWikiSub] = useRoute('/wiki/*');
   const isWiki = isWikiRoot || isWikiSub;
+  const [isAppsRoot] = useRoute('/apps');
+  const [isAppsSub] = useRoute('/apps/*');
+  const isApps = isAppsRoot || isAppsSub;
   const [isSessionRoute, sessionParams] = useRoute<{ id: string }>('/s/:id');
   const [isIdeLoader, ideLoaderParams] = useRoute<{ sessionId: string }>('/ide-loader/:sessionId');
 
@@ -132,30 +169,38 @@ export function App() {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [sessionTokenTotals, setSessionTokenTotals] = useState<SessionTokenTotals>(null);
-  const [langfuseBaseUrl, setLangfuseBaseUrl] = useState<string | null>(null);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      return window.localStorage.getItem('mewbo:theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
   const {
     notifications,
     dismiss: dismissNotification,
     clearAll: clearNotifications
   } = useNotifications();
-  // Ensure dark mode is applied on initial mount
+  // Keep the <html> class in sync with theme (initial value may be persisted).
+  // toggleTheme also mutates the class synchronously before dispatching
+  // wiki:theme-change; this effect is an idempotent re-assert, not the primary sync.
   useEffect(() => {
-    document.documentElement.classList.remove('light');
-  }, []);
-  // Fetch Langfuse config once to construct session dashboard URLs
-  useEffect(() => {
-    getConfig()
-      .then((cfg) => {
-        const lf = cfg?.config?.langfuse as Record<string, unknown> | undefined;
-        if (lf?.enabled && lf?.host && lf?.project_id) {
-          const host = String(lf.host).replace(/\/+$/, '');
-          setLangfuseBaseUrl(`${host}/project/${lf.project_id}/sessions`);
-        }
-      })
-      .catch(() => { /* Langfuse link is optional */ });
-  }, []);
+    if (theme === 'light') {
+      document.documentElement.classList.add('light');
+    } else {
+      document.documentElement.classList.remove('light');
+    }
+  }, [theme]);
+  // Langfuse config, to construct session dashboard URLs — reads the SAME
+  // ['config'] TanStack query every other config consumer shares, instead of
+  // a one-off fetch-in-useEffect that bypassed the cache.
+  const { config } = useConfig();
+  const langfuseBaseUrl = useMemo(() => {
+    const lf = config?.langfuse as Record<string, unknown> | undefined;
+    if (!lf?.enabled || !lf?.host || !lf?.project_id) return null;
+    const host = String(lf.host).replace(/\/+$/, '');
+    return `${host}/project/${lf.project_id}/sessions`;
+  }, [config]);
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
       const next = prev === 'dark' ? 'light' : 'dark';
@@ -166,6 +211,11 @@ export function App() {
       }
       // Notify wiki Mermaid blocks (and any other theme-aware paint) to re-render.
       window.dispatchEvent(new CustomEvent('wiki:theme-change', { detail: next }));
+      try {
+        window.localStorage.setItem('mewbo:theme', next);
+      } catch {
+        // No-op: persistence is best-effort (private browsing, quota, etc.)
+      }
       return next;
     });
   }, []);
@@ -226,56 +276,45 @@ export function App() {
       setCreating(false);
     }
   };
+  // assistant-ui composer submit seam (`onNew` on the external-store runtime).
+  // The bespoke InputBar still owns the live composer, so this only fires once
+  // the assistant-ui composer WP is wired in. It routes create-and-run (landing)
+  // vs steer (open session); that WP refines context/mode/attachment handling.
+  const handleComposerNew = async (message: AppendMessage) => {
+    const text = message.content
+      .map((part) => (part.type === 'text' ? part.text : ''))
+      .join('')
+      .trim();
+    if (!text) return;
+    if (activeSessionId) {
+      // Mirror useSessionQuery.send: a mid-run turn must STEER via /message,
+      // not start a second run via /query (double-fire otherwise).
+      if (activeSession?.running) {
+        await sendMessage(activeSessionId, text);
+      } else {
+        await postQuery(activeSessionId, text);
+      }
+      await refresh();
+    } else {
+      await handleCreateAndRun(text);
+    }
+  };
   const handleBack = useCallback(() => {
     setActionError(null);
-    setSessionTokenTotals(null);
     goHome();
     void refresh();
   }, [goHome, refresh]);
-  const handleSettingsClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/settings');
-  }, [setLocation]);
-  const handleApiKeysClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/keys');
-  }, [setLocation]);
-  const handlePluginsClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/plugins');
-  }, [setLocation]);
-  const handleProjectsClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/projects');
-  }, [setLocation]);
-  const handleSearchClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/search');
-  }, [setLocation]);
-  const handleTasksClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/');
-  }, [setLocation]);
-  const handleWikiClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/wiki');
-  }, [setLocation]);
-  const handleDraftClick = useCallback(() => {
-    setActionError(null);
-    setLocation('/draft');
-  }, [setLocation]);
   const handleShareSession = useCallback(async (sessionId: string) => {
     try {
       const record = await createShare(sessionId);
       const shareUrl = `${window.location.origin}/api/share/${record.token}`;
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-      } else {
-        window.prompt('Copy share link', shareUrl);
-      }
+      // `copyText` already owns the Clipboard-API-vs-execCommand fallback —
+      // no need to hand-roll that split here too.
+      await copyText(shareUrl);
+      toast.success('Share link copied to clipboard.', { description: shareUrl });
     } catch (err) {
       const message = logApiError('shareSession', err);
-      window.alert(message);
+      toast.error(message);
     }
   }, []);
   const handleExportSession = useCallback(async (sessionId: string) => {
@@ -294,33 +333,27 @@ export function App() {
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       const message = logApiError('exportSession', err);
-      window.alert(message);
+      toast.error(message);
     }
   }, []);
   useEffect(() => {
     if (isSettings) {
       document.title = 'Settings | Mewbo';
-    } else if (isApiKeys) {
-      document.title = 'API Keys | Mewbo';
-    } else if (isPlugins) {
-      document.title = 'Plugins | Mewbo';
-    } else if (isProjects) {
-      document.title = 'Projects | Mewbo';
     } else if (isSearch) {
       document.title = 'Agentic Search | Mewbo';
-    } else if (isDraft) {
-      document.title = 'Draft stream | Mewbo';
     } else if (isWiki) {
       // WikiApp manages its own title; leave the default here.
+    } else if (isApps) {
+      // AppsView manages its own title; leave the default here.
     } else if (isIdeLoader) {
       document.title = 'Opening Web IDE | Mewbo';
     } else if (isSessionRoute) {
       const title = activeSession?.title?.trim();
       document.title = title ? `${title} | Mewbo` : 'Session | Mewbo';
     } else {
-      document.title = 'Home | Mewbo';
+      document.title = 'Agentic Tasks | Mewbo';
     }
-  }, [isSettings, isApiKeys, isPlugins, isProjects, isSearch, isDraft, isWiki, isIdeLoader, isSessionRoute, activeSession]);
+  }, [isSettings, isSearch, isWiki, isApps, isIdeLoader, isSessionRoute, activeSession]);
 
   // The IDE loader is a standalone full-screen page with no chrome — render
   // it outside the AppLayout so it can't be mistaken for a session view.
@@ -333,93 +366,78 @@ export function App() {
     );
   }
 
-  const layoutMode: 'home' | 'detail' = isSessionRoute ? 'detail' : 'home';
-  // The persistent task sidebar lives on session detail, where switching
-  // between past tasks is the core need the ticket describes ("accessible …
-  // instead of only via the task landing page"). The landing page itself is
-  // already the full task list, so a sidebar there would just duplicate it.
-  const showSidebar = isSessionRoute;
-  // Section nav (Tasks/Wiki/Search) renders only on the default landing pages.
-  // `/`, `/wiki`, and `/search` exactly — sub-pages (`/wiki/p/...`, `/settings`,
-  // etc.) and session pages keep the lean header to avoid crowding.
-  const landingNav: 'tasks' | 'wiki' | 'search' | null = isSessionRoute
-    ? null
-    : isWikiRoot
-      ? 'wiki'
-      : isSearch
-        ? 'search'
-        : location === '/'
-          ? 'tasks'
-          : null;
+  // What the rail is scoped to — computed at the same altitude the old
+  // `landingNav` was. `wiki > search > apps > tasks`; a session page and the
+  // task landing are both Tasks. `/settings` scopes the rail's section to the
+  // settings facets while marking NO product row current (it has no switcher
+  // row), which is how that route gets primary navigation without a fifth
+  // product. Any other route is `null`: no row current, section falls back to
+  // Tasks, and the rail still renders.
+  const activeProduct: ActiveProduct = isWiki
+    ? 'wiki'
+    : isSearch
+      ? 'search'
+      : isApps
+        ? 'apps'
+        : isSettings
+          ? 'settings'
+          : (isSessionRoute || location === '/')
+            ? 'tasks'
+            : null;
 
   return (
     <>
     <NotificationBalloon notifications={notifications} />
     <AppLayout
-      mode={layoutMode}
-      showSidebar={showSidebar}
-      session={activeSession}
-      onBack={handleBack}
+      activeProduct={activeProduct}
       theme={theme}
       onToggleTheme={toggleTheme}
       notifications={notifications}
       onDismissNotification={dismissNotification}
       onClearNotifications={clearNotifications}
-      onArchiveSession={archive}
-      onUnarchiveSession={unarchive}
-      onUpdateSessionTitle={updateTitle}
-      onRegenerateTitle={regenerateTitle}
-      onShareSession={handleShareSession}
-      onExportSession={handleExportSession}
-      onSettingsClick={handleSettingsClick}
-      onApiKeysClick={handleApiKeysClick}
-      onPluginsClick={handlePluginsClick}
-      onProjectsClick={handleProjectsClick}
-      onSearchClick={handleSearchClick}
-      onDraftClick={handleDraftClick}
-      landingNav={landingNav}
-      onTasksClick={handleTasksClick}
-      onWikiClick={handleWikiClick}
-      langfuseUrl={langfuseBaseUrl && activeSessionId ? `${langfuseBaseUrl}/${activeSessionId}` : null}
-      sessionTokenTotals={sessionTokenTotals}>
+      sessions={sessions}
+      archivedSessions={archivedSessions}
+      activeSessionId={activeSessionId}
+      isRunning={activeSession?.running ?? false}
+      onComposerNew={handleComposerNew}
+      onSwitchToThread={handleSessionSelect}
+      onSwitchToNewThread={goHome}
+      onRenameThread={updateTitle}
+      onArchiveThread={archive}>
       <Switch>
         <Route path="/settings">
           <Suspense fallback={<SuspenseFallback />}>
             <SettingsView />
           </Suspense>
         </Route>
-        <Route path="/keys">
-          <Suspense fallback={<SuspenseFallback />}>
-            <div className="flex-1 overflow-y-auto">
-              <div className="max-w-3xl mx-auto px-6 py-8 space-y-4">
-                <ApiKeysView />
-              </div>
-            </div>
-          </Suspense>
+        {/* Retired pages — Projects / Plugins / API Keys / Triggers are now
+            Settings facets. Redirects (not deletions) so bookmarks and existing
+            in-app deep links keep resolving. */}
+        <Route path="/projects">
+          <Redirect to="/settings?facet=workspace" replace />
         </Route>
         <Route path="/plugins">
-          <Suspense fallback={<SuspenseFallback />}>
-            <PluginsView />
-          </Suspense>
+          <Redirect to="/settings?facet=plugins" replace />
         </Route>
-        <Route path="/projects">
-          <Suspense fallback={<SuspenseFallback />}>
-            <ProjectsView />
-          </Suspense>
+        <Route path="/keys">
+          <Redirect to="/settings?facet=security" replace />
+        </Route>
+        <Route path="/triggers">
+          <TriggersRedirect />
         </Route>
         <Route path="/search">
           <Suspense fallback={<SuspenseFallback />}>
             <AgenticSearchView />
           </Suspense>
         </Route>
-        <Route path="/draft">
-          <Suspense fallback={<SuspenseFallback />}>
-            <DraftPanel />
-          </Suspense>
-        </Route>
         <Route path="/wiki/*?">
           <Suspense fallback={<SuspenseFallback />}>
             <WikiApp />
+          </Suspense>
+        </Route>
+        <Route path="/apps/*?">
+          <Suspense fallback={<SuspenseFallback />}>
+            <AppsView />
           </Suspense>
         </Route>
         <Route path="/s/:id">
@@ -434,8 +452,14 @@ export function App() {
               refresh={refresh}
               applyTitle={applyTitle}
               onSelectSession={handleSessionSelect}
-              onTokenTotalsChange={setSessionTokenTotals}
               onBack={handleBack}
+              onRenameTitle={updateTitle}
+              onRegenerateTitle={regenerateTitle}
+              onArchive={archive}
+              onUnarchive={unarchive}
+              onShare={handleShareSession}
+              onExport={handleExportSession}
+              langfuseBaseUrl={langfuseBaseUrl}
             />
           )}
         </Route>
@@ -449,7 +473,7 @@ export function App() {
               error={error}
               archivedError={archivedError}
               actionError={actionError}
-              onSessionSelect={handleSessionSelect}
+              onSelectSession={handleSessionSelect}
               onCreateAndRun={handleCreateAndRun}
               onLoadArchived={refreshArchived}
               onArchive={archive}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the StatusBar context/cost gauge sidebar widget (issue #156).
+"""Tests for the StatusBar context/cost gauge sidebar widget.
 
 The bar is now a focused context-window + cost gauge — model, branch and raw
 token totals moved to the footer status line, so nothing is duplicated between

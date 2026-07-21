@@ -24,7 +24,7 @@ import org.junit.Test
  * background collector starts, mirroring the real [Synthesizer.speak] contract's own "true
  * QUEUE_ADD ordering" comment.
  *
- * Covers Gitea #180 P3 (speak-along wiring: modality/mute gating, reconciliation, the flicker guard
+ * Covers (speak-along wiring: modality/mute gating, reconciliation, the flicker guard
  * and its out-of-order mirror-image race, barge-in) and P4 (read-aloud markdown fidelity via the
  * shared [com.mewbo.aura.voice.SentenceChunker] pipeline).
  */
@@ -51,7 +51,7 @@ class SpeechControllerTest {
     private fun message(key: String, text: String, isStreaming: Boolean) =
         ChatItem.AssistantMessage(text = text, isStreaming = isStreaming, ts = "t", key = key)
 
-    // ---- onAssistantMessage: modality/mute gating (Gitea #180 P3: "text turns stay completely silent") ----
+    // ---- onAssistantMessage: modality/mute gating ("text turns stay completely silent") ----
 
     @Test
     fun `a Text-modality turn never enqueues an utterance`() = runTest {
@@ -200,7 +200,7 @@ class SpeechControllerTest {
         assertNull(controller.speakingKey.value)
     }
 
-    // ---- primeAlreadySpoken (Gitea #181 fix wave, finding 1: cross-instance handoff replay) ----
+    // ---- primeAlreadySpoken (cross-instance handoff replay) ----
 
     @Test
     fun `priming a completed message closes its key - a later fold for the SAME key never re-speaks it`() = runTest {

@@ -45,6 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from mewbo_core.project_store import ProjectStoreBase, VirtualProject
     from mewbo_core.session_runtime import SessionRuntime
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.responses import ApiResponseKit
 
 logging = get_logger(name="api.vcs_pickup")
@@ -137,8 +138,6 @@ _pickup_model = vcs_ns.model(
     },
 )
 
-AuthResult = tuple[dict, int] | None
-AuthGuard = Callable[[], AuthResult]
 # Matches backend._resolve_repo_or_404(project_key, promote=...).
 RepoResolver = Callable[..., tuple[Any, tuple[dict, int] | None]]
 
@@ -460,7 +459,8 @@ class VcsPickupService:
                 break
         if not ctx or not ctx.get("api_url"):
             return  # Not a pickup session, or workflow predates the reply leg.
-        text = extract_final_answer(events, error)
+        outcome = self.runtime.summarize_session(session_id, events=events)
+        text = extract_final_answer(events, error, outcome=outcome)
         if not text:
             return
         self.post_comment(str(ctx["api_url"]), str(ctx["repository"]), int(ctx["number"]), text)
@@ -551,7 +551,7 @@ class VcsPickupService:
 
         # PR pickups bind to a worktree on the (required) head branch; issue
         # pickups get an isolated worktree cut from HEAD so the agent never
-        # works in the shared main checkout (#72 expanded intent). Both need a
+        # works in the shared main checkout (expanded intent). Both need a
         # managed parent → promote on resolution.
         needs_pr_worktree = body.kind == "pull_request" and bool(body.head_ref)
         needs_worktree = needs_pr_worktree or body.kind == "issue"
@@ -596,6 +596,15 @@ class VcsPickupService:
         tag = self.session_tag_for(body.repository, body.kind, body.number)
         existing = self.runtime.session_store.resolve_tag(tag)
         session_id = self.runtime.resolve_session(session_tag=tag)
+        if existing is not None and self.runtime.is_terminated(session_id):
+            # The deterministic tag pointed at a permanently terminated session.
+            # A terminated session rejects every invocation, but a CI/issue event
+            # must NOT dead-end — mint a fresh session and re-point the tag to it
+            # so this event (and later ones for the same issue/PR) resume on a
+            # live session instead of bouncing forever.
+            session_id = self.runtime.resolve_session()
+            self.runtime.tag_session(session_id, tag)
+            existing = None
         prompt = self.build_prompt(body, worktree_branch=agent_branch)
 
         # A run already in flight for this item → steer it instead of 409ing.
@@ -669,25 +678,23 @@ class VcsPickupService:
         }, 200
 
 
-def _no_auth() -> AuthResult:
-    return None
-
-
 # Populated by ``init_vcs_pickup`` at app startup.
 _service: VcsPickupService | None = None
-_require_api_key: AuthGuard = _no_auth
 
 
 def init_vcs_pickup(
     runtime: SessionRuntime,
-    require_api_key: AuthGuard,
     resolve_repo: RepoResolver,
     project_store: ProjectStoreBase,
     hook_manager: HookManager,
 ) -> None:
-    """Wire the namespace to its collaborators (called once at app startup)."""
-    global _service, _require_api_key
-    _require_api_key = require_api_key
+    """Wire the namespace to its collaborators (called once at app startup).
+
+    Authentication and authorization are NOT wired here: the view declares its
+    own requirement with ``@guard.requires``, which resolves the live
+    ``AuthKit`` through ``guard_registry`` at request time.
+    """
+    global _service
     _service = VcsPickupService(runtime, resolve_repo, project_store, hook_manager)
     # Reply leg: post the final answer back to the issue/PR when a run ends
     # (same mechanism as the chat channels' completion hook).
@@ -728,6 +735,7 @@ class VcsPickup(Resource):
     @kit.errors(404, 409, 422, shape="message")
     @kit.errors(400, shape="message")
     @kit.auth_error()
+    @guard.requires("automation.pickup")
     def post(self) -> tuple[dict, int]:
         """Trigger an agent pickup.
 
@@ -741,9 +749,6 @@ class VcsPickup(Resource):
         answer is posted back to the issue or pull request as a comment.
         """
         assert _service is not None
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         try:
             body = VcsPickupBody.model_validate(request.get_json(silent=True) or {})
         except ValidationError as exc:

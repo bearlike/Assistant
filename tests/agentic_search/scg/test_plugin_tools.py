@@ -412,7 +412,7 @@ def test_route_empty_graph_returns_no_recipes(patched_core: JsonScgStore) -> Non
 def test_route_recipes_carry_memory_hints(
     monkeypatch: pytest.MonkeyPatch, patched_core: JsonScgStore, tmp_path: Path
 ) -> None:
-    """A routed recipe surfaces its anchored connector insights as compact hints (#76).
+    """A routed recipe surfaces its anchored connector insights as compact hints.
 
     Drives the REAL memory-aware router (a real bridge over a real wiki JSON
     store) through ``ScgCore.router`` so the ``scg_route`` projection carries
@@ -503,7 +503,7 @@ def test_memory_write_unscoped_falls_back_to_session_attribution(
 ) -> None:
     """An UNSCOPED deposit (no workspace bound) attributes to ``session:<id>``.
 
-    #83-B: ordinary sessions (CLI/console/channel) deposit insights with no
+    Ordinary sessions (CLI/console/channel) deposit insights with no
     ``ScgScope`` workspace bound, so attribution falls back to the session id —
     reusing the same ``labels`` mechanism as ``ws:<id>`` (no new field). The
     workspace kwarg is ``None`` (no partition) and a ``session:s1`` label rides
@@ -581,7 +581,7 @@ def test_memory_write_succeeds_without_wiki_api_runtime(
 ) -> None:
     """A ``scg_memory`` write works when the wiki API runtime is NOT initialised.
 
-    Regression (fix #4): the bridge used to read the wiki store off
+    Regression (fix): the bridge used to read the wiki store off
     ``wiki.routes._runtime``, which is ``None`` for any deployment that never
     started the wiki API — silently breaking every connector-memory write. The
     bridge now builds the store via the wiki STORE FACTORY directly, so the real
@@ -697,13 +697,13 @@ def test_plugin_manifest_registers_tools_and_agents() -> None:
         "scg_route",
         "scg_observe",
         "scg_memory",
-        # The search root's terminal result-emit step (#95) — transcript-as-
+        # The search root's terminal result-emit step — transcript-as-
         # transport; the api projects its tool_result into the run's results.
         "scg_results",
         # The self-facing async search verb: start a real scg-search run from a
         # task agent, fetch the cited answer by run_id (idempotent by query).
         "agentic_search",
-        # Shared abstract-entity tools (#35) registered under scg too so search
+        # Shared abstract-entity tools registered under scg too so search
         # can read/mint the same holistic entity graph as the wiki.
         "mint_entity",
         "relate_entities",

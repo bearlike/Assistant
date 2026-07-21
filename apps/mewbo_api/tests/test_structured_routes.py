@@ -77,7 +77,7 @@ def test_structured_post_fast_completion(client, auth_headers):
     assert kwargs["workspace"] == "wiki"
     assert kwargs["allowed_tools"] == ["wiki_search_pages"]
     # Surface from X-Mewbo-Surface is forwarded so the run is tagged + traced
-    # as ``surface:mcp`` (covers the MCP ``structured_query`` tool path, #78).
+    # as ``surface:mcp`` (covers the MCP ``structured_query`` tool path).
     assert kwargs["source_platform"] == "mcp"
     responder.start_async.assert_called_once_with("Who?")
 
@@ -192,6 +192,42 @@ def test_structured_post_model_override_applied_to_graph_first_responder(client,
     assert built.model_name == "builder-default"
 
 
+def test_structured_post_empty_grant_intersection_refuses_not_widens(client, auth_headers):
+    """A caller-narrowed grant that resolves to nothing is a 422, never a run.
+
+    Before the fix, `_graph_first_responder` swallowed a `StructuredResponseError`
+    the same as any other failure and fell back to the default (unscoped)
+    responder, which -- for the SAME non-overlapping `tools` list a real caller
+    would send -- still started a run. The route must instead surface the
+    refusal directly and never reach `StructuredResponder`/`start_async` at all.
+    """
+    with (
+        patch(
+            "mewbo_api.structured.routes.StructuredResource._graph_first_responder",
+            side_effect=StructuredResponseError(
+                "requested tools do not overlap with this workspace's connector grant"
+            ),
+        ),
+        patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls,
+    ):
+        r = client.post(
+            "/v1/structured",
+            json={
+                "query": "Who?",
+                "schema": _SCHEMA,
+                "workspace": "search-ws",
+                "tools": ["totally_unrelated_tool_id"],
+            },
+            headers=auth_headers,
+        )
+    assert r.status_code == 422
+    body = r.get_json()
+    assert "do not overlap" in body["error"]["reason"]
+    # The default (unscoped) responder must never have been constructed/started —
+    # that IS the widen-to-everything path this refusal exists to prevent.
+    mock_cls.assert_not_called()
+
+
 def test_structured_post_running_when_no_output_yet(client, auth_headers):
     """No structured_output within the bounded await → status running, no output."""
     with patch("mewbo_api.structured.routes.StructuredResponder") as mock_cls:
@@ -245,7 +281,7 @@ def test_structured_post_refused_start_returns_error(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
-# POST /v1/structured  (mode: "synthesis") — the no-loop fast lane (#85)
+# POST /v1/structured  (mode: "synthesis") — the no-loop fast lane
 #
 # Folds in the former POST /v1/structured/fast: a synchronous single round-trip
 # via SynthesisRunner instead of the agentic StructuredResponder loop. Returns
@@ -505,7 +541,7 @@ def test_structured_get_completed_returns_output(client, auth_headers):
 
 
 def test_structured_get_completed_carries_graph_provenance(client, auth_headers):
-    """A graph-first run's GET surfaces additive pathway/probe provenance (#77)."""
+    """A graph-first run's GET surfaces additive pathway/probe provenance."""
     rt = MagicMock()
     rt.session_store.list_sessions.return_value = ["sess-gf"]
     rt.session_store.load_transcript.return_value = [
@@ -585,6 +621,29 @@ def test_structured_get_terminal_without_output_yields_422_envelope(client, auth
     assert "emit_result" not in str(body).lower()
 
 
+def test_structured_get_terminated_backing_session_yields_410(client, auth_headers):
+    """A hard-terminated backing session stops the poll with 410 Gone.
+
+    Regression: ``terminated`` was absent from ``_TERMINAL_STATUSES`` so the GET
+    fell through to the still-running 200 branch and polled FOREVER. It is now
+    terminal AND gets the canonical terminated envelope (410), not the generic
+    422 — a deliberate kill is not an unprocessable request.
+    """
+    from mewbo_api.responses import ApiResponseKit
+
+    rt = MagicMock()
+    rt.session_store.list_sessions.return_value = ["sess-abc"]
+    rt.session_store.load_transcript.return_value = []
+    rt.summarize_session.return_value = {"status": "terminated"}
+    with patch("mewbo_api.structured.routes._runtime", rt):
+        r = client.get("/v1/structured/sess-abc:r1", headers=auth_headers)
+    assert r.status_code == 410
+    body = r.get_json()
+    assert body["error"] == ApiResponseKit.TERMINATED_ERROR_BODY
+    assert body["error"]["code"] == "session_terminated"
+    assert body["run_id"] == "sess-abc:r1"
+
+
 def test_structured_get_validation_failure_payload_is_error(client, auth_headers):
     """A structured_output carrying the emit tool's _error marker → error envelope."""
     rt = MagicMock()
@@ -602,7 +661,7 @@ def test_structured_get_validation_failure_payload_is_error(client, auth_headers
 
 
 def test_structured_get_unknown_session_is_error_envelope(client, auth_headers):
-    """#40/#64: an unknown run id 404s on the existence check, BEFORE the route
+    """an unknown run id 404s on the existence check, BEFORE the route
     ever reads the transcript or summarizes — no phantom idle/422 fall-through."""
     rt = MagicMock()
     rt.session_store.list_sessions.return_value = []

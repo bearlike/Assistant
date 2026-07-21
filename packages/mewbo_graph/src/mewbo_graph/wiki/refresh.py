@@ -1,6 +1,6 @@
 """On-demand incremental refresh — change detection + scoped graph delta.
 
-The refresh control plane (Gitea #13 §10) recomputes *only* the scope a diff
+The refresh control plane recomputes *only* the scope a diff
 touches, across graph → memory → docs. This module hosts the first two atomic
 stages; memory reconciliation, doc staleness, and the plan-then-act
 orchestrator land alongside them.
@@ -167,8 +167,12 @@ class GraphDeltaIndexer:
         for f in set(modified) | set(added):
             result = self._parser.parse_file(slug, repo_root / f, repo_root=repo_root)
             self._validate(slug, f, result)
-            self._store.upsert_nodes(slug, result.nodes)
-            self._store.upsert_edges(slug, result.edges)
+            # Stamp the re-parsed scope with the commit being refreshed so the
+            # incremental path attributes its nodes the same way the full index
+            # does. A scoped refresh does not carry a job_id (no indexing job runs
+            # it), so only the commit is threaded.
+            self._store.upsert_nodes(slug, result.nodes, commit_sha=commit)
+            self._store.upsert_edges(slug, result.edges, commit_sha=commit)
             post_keys[f] = {entity_key_for_node(n) for n in result.nodes}
             post_sig[f] = frozenset(
                 (e.source, e.target, e.type) for e in result.edges
@@ -212,8 +216,8 @@ class GraphDeltaIndexer:
     def _validate(slug: str, file: str, result: GraphParseResult) -> None:
         """Validate one file's parse result via ``CodeGraph`` before it's upserted.
 
-        Mirrors ``build_graph_core``'s ingest-time gate (schema v2, Gitea
-        #188) — the FIRST full index was validated there, but a steady-state
+        Mirrors ``build_graph_core``'s ingest-time gate (schema v2) — the FIRST
+        full index was validated there, but a steady-state
         refresh went straight from ``parse_file`` to ``upsert_nodes``/
         ``upsert_edges`` with no gate at all (this review finding). A
         PER-FILE result validates standalone exactly like the full-repo case

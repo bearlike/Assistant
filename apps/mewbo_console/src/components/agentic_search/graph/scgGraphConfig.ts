@@ -1,4 +1,4 @@
-// Search-domain visual vocabulary for the workspace SCG graph (#79) — the
+// Search-domain visual vocabulary for the workspace SCG graph — the
 // palette / labels / layer grouping injected into the shared 3D ``Graph3DView``
 // engine (the SAME renderer the wiki Knowledge Graph uses; no fork, no
 // per-domain canvas).

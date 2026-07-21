@@ -79,10 +79,10 @@ export function CommandPalette({
                   >
                     <Slash className="opacity-60" />
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-mono text-xs font-semibold">
+                      <span className="text-xs font-medium">
                         {cmd.usage}
                       </span>
-                      <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                      <span className="text-xs text-[hsl(var(--muted-foreground))]">
                         {cmd.description}
                       </span>
                     </div>
@@ -100,10 +100,10 @@ export function CommandPalette({
                   >
                     <Sparkles className="opacity-60 text-[hsl(var(--primary))]" />
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-mono text-xs font-semibold">
+                      <span className="text-xs font-medium">
                         /{skill.name}
                       </span>
-                      <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                      <span className="text-xs text-[hsl(var(--muted-foreground))]">
                         {skill.description}
                       </span>
                     </div>

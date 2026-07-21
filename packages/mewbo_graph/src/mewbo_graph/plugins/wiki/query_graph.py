@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
 
-from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
+from mewbo_graph.plugins.wiki._base import WikiSessionTool
 from mewbo_graph.plugins.wiki._ctx import resolve_runtime
 from mewbo_graph.wiki.qa_access import QaAccessRecord
 
@@ -63,7 +63,7 @@ class WikiQueryGraphTool(WikiSessionTool):
         ctx = self._job_ctx() or self._qa_ctx()
         slug = ctx.slug if ctx is not None else None
         if ctx is None or not slug:
-            return _err_result("internal", "wiki ctx not found for this session")
+            return self._ungrounded_result()
 
         args = self._parse_args(WikiQueryGraphArgs, action_step)
         if isinstance(args, MockSpeaker):

@@ -1,7 +1,7 @@
-// Wire types for the workspace SCG multiplex graph (#79).
+// Wire types for the workspace SCG multiplex graph.
 //
 // Mirrors the API ``GET /api/agentic_search/workspaces/<id>/graph`` payload,
-// which wraps ``mewbo_graph.scg.graph_view.ScgGraphView.to_wire()`` (#76) and
+// which wraps ``mewbo_graph.scg.graph_view.ScgGraphView.to_wire()`` and
 // normalizes schema-edge endpoints to node ids + appends unmapped ghost nodes.
 // The shape parallels the wiki ``KnowledgeGraph`` so it feeds the SAME shared
 // 3D ``Graph3DView`` engine — only the kind/edge/layer vocabulary differs (the
@@ -89,6 +89,6 @@ export interface WorkspaceGraph {
 /**
  * `GET /workspaces/<id>/graph/summary` — the graph's `scope` + `stats` only
  * (no node/edge arrays). The landing health band reads four numbers off
- * `stats`, so it fetches this instead of the full graph (#139).
+ * `stats`, so it fetches this instead of the full graph.
  */
 export type WorkspaceGraphSummary = Pick<WorkspaceGraph, "scope" | "stats">;

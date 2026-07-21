@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CustomCommandLoader — markdown custom commands for the CLI (#155).
+"""CustomCommandLoader — markdown custom commands for the CLI.
 
 A small atomic loader for the common custom-command contract (frontmatter +
 ``$ARGUMENTS``) and is a sibling to (never a fork of) the engine prompt

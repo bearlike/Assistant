@@ -1,4 +1,4 @@
-"""Flask-RESTX namespace for the workspace SCG graph view (#79).
+"""Flask-RESTX namespace for the workspace SCG graph view.
 
 Endpoint under ``/api/agentic_search``:
 
@@ -8,9 +8,9 @@ Endpoint under ``/api/agentic_search``:
   console reuses the same ``KnowledgeGraphRenderer`` mechanism.
 - ``GET /workspaces/<id>/graph/summary`` — the same assembly projected to
   ``{scope, stats}`` only (no node/edge arrays), the cheap read the landing
-  health band uses so it never downloads the full graph (#139).
+  health band uses so it never downloads the full graph.
 
-The view assembler is :class:`~mewbo_graph.scg.graph_view.ScgGraphView` (the #76
+The view assembler is :class:`~mewbo_graph.scg.graph_view.ScgGraphView` (the
 multiplex twin of the wiki ``KnowledgeGraphView``). This module is the thin
 **typed** transport wrapper around it — every payload is a Pydantic wire model
 (:class:`WorkspaceGraphWire` and its node/edge/stats parts), mirroring the
@@ -18,7 +18,7 @@ console ``WorkspaceGraph`` type 1:1; the only ``dict`` boundary is parsing the
 view's self-contained ``to_wire()`` output, which is immediately validated into
 these models.
 
-The wrapper resolves the workspace's enabled-source scope (the #75 grant
+The wrapper resolves the workspace's enabled-source scope (the grant
 semantics: ``WorkspaceMcpConfig.attached_server_names`` first, falling back to
 ``Workspace.sources``) and adds the two FE affordances the view is intentionally
 agnostic about:
@@ -46,13 +46,13 @@ record value.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from flask_restx import Namespace, Resource, fields
 from mewbo_core.common import get_logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.responses import ApiResponseKit
 
 from . import store as store_mod
@@ -68,16 +68,9 @@ if TYPE_CHECKING:
 logging = get_logger(name="api.agentic_search.graph_routes")
 
 AuthResult = tuple[dict[str, Any], int] | None
-AuthGuard = Callable[[], AuthResult]
 
 GraphLayer = Literal["schema", "memory", "entity", "cross"]
 
-
-def _no_auth() -> AuthResult:
-    return None
-
-
-_require_api_key: AuthGuard = _no_auth
 _runtime: Any = None  # populated by init_agentic_search_graph; carries wiki_store
 
 
@@ -278,17 +271,18 @@ workspace_graph_summary_model = graph_ns.model(
 )
 
 
-def init_agentic_search_graph(
-    api: object, require_api_key: AuthGuard, runtime: Any = None
-) -> None:
-    """Wire the graph namespace + capture the auth guard and session runtime.
+def init_agentic_search_graph(api: object, runtime: Any = None) -> None:
+    """Wire the graph namespace + capture the session runtime.
 
     Shares the ``/api/agentic_search`` path prefix with the main namespace;
     ``runtime`` carries the wiki memory store (``runtime.wiki_store``) the
     multiplex assembler reads for the memory layer.
+
+    Authentication and authorization are NOT wired here: every view declares its
+    own requirement with ``@guard.requires``, which resolves the live
+    ``AuthKit`` through ``guard_registry`` at request time.
     """
-    global _require_api_key, _runtime
-    _require_api_key = require_api_key
+    global _runtime
     _runtime = runtime
     api.add_namespace(graph_ns, path="/api/agentic_search")  # type: ignore[attr-defined]
 
@@ -296,7 +290,7 @@ def init_agentic_search_graph(
 def _scope_for_workspace(
     store: AgenticSearchStoreBase, workspace: Workspace
 ) -> list[str]:
-    """Resolve the workspace's enabled-source scope (#75 grant semantics).
+    """Resolve the workspace's enabled-source scope (grant semantics).
 
     The persisted virtual MCP config's attached server names win when one
     exists; otherwise fall back to the workspace's raw ``sources`` (the current
@@ -310,14 +304,14 @@ def _scope_for_workspace(
 
 
 def _resolve_scope(workspace_id: str) -> tuple[list[str] | None, AuthResult]:
-    """Auth + resolve a workspace's source scope, shared by both graph routes.
+    """Resolve a workspace's source scope, shared by both graph routes.
 
-    Returns ``(scope, None)`` on success or ``(None, response)`` when the API key
-    is missing/invalid or the workspace is unknown — so the full-graph and the
-    lighter summary route apply the identical guard without duplicating it.
+    Returns ``(scope, None)`` on success or ``(None, response)`` when the
+    workspace is unknown — so the full-graph and the lighter summary route apply
+    the identical existence check without duplicating it. Authentication and the
+    ``search.run`` requirement are declared on each view via
+    ``@guard.requires``, so they are already satisfied by the time this runs.
     """
-    if (auth := _require_api_key()) is not None:
-        return None, auth
     store = store_mod.get_store()
     workspace = store.get_workspace(workspace_id)
     if workspace is None:
@@ -330,7 +324,7 @@ def _safe_graph_payload(workspace_id: str, scope: list[str]) -> WorkspaceGraphWi
     try:
         return _build_graph_payload(scope)
     except Exception as exc:  # noqa: BLE001 — never 500 the viewer
-        logging.warning("workspace graph assembly failed for %s: %s", workspace_id, exc)
+        logging.warning("workspace graph assembly failed for {}: {}", workspace_id, exc)
         return _empty_wire(scope)
 
 
@@ -501,6 +495,7 @@ class WorkspaceGraphResource(Resource):
     @graph_ns.response(200, "The workspace graph.", workspace_graph_model)
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, workspace_id: str) -> tuple[dict[str, Any], int]:
         """Get the workspace graph.
 
@@ -553,6 +548,7 @@ class WorkspaceGraphSummaryResource(Resource):
     )
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, workspace_id: str) -> tuple[dict[str, Any], int]:
         """Get the workspace graph summary.
 

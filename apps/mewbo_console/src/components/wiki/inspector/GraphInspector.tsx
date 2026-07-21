@@ -183,7 +183,7 @@ function EmptyState() {
 /** Defensive notice — a kind arrived without the payload it requires. */
 function MalformedSelection({ what }: { what: string }) {
   return (
-    <div className="flex items-center justify-center h-full px-6 text-center text-[11px] text-[hsl(var(--muted-foreground))]">
+    <div className="flex items-center justify-center h-full px-6 text-center text-2xs text-[hsl(var(--muted-foreground))]">
       Nothing to show for this {what} selection.
     </div>
   );

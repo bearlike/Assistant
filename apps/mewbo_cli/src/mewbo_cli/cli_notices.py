@@ -14,9 +14,33 @@ passes the real stdout console.
 from __future__ import annotations
 
 from mewbo_core.config import get_config_value
+from mewbo_core.session_runtime import _STATUS_BY_DONE_REASON, SessionRuntime
 from mewbo_core.session_store import SessionStoreBase
+from mewbo_core.types import BLOCKED_CODES
 from rich.console import Console
 from rich.text import Text
+
+
+def derive_task_outcome(done_reason: str | None, blocked_code: object) -> str:
+    """Map a completed run's ``(done_reason, blocked_code)`` onto its honest status.
+
+    Reads (never re-derives) ``mewbo_core.session_runtime``'s closed
+    ``done_reason`` -> status table and blocked-code set — the same mapping
+    ``summarize_session`` uses for ``/status`` and every other client, so a
+    new reason or wall taught to core is honoured here for free instead of
+    drifting behind a second hand-copied table. ``blocked_code`` outranks
+    every reason: the loop leaves ``done_reason`` at ``"completed"`` for a run
+    that died against an unrecovered repo/network/permission/quota wall,
+    carrying the wall separately, so trusting ``done_reason`` alone would
+    still read as a clean success. A reason absent from the table (including
+    ``"completed"`` itself, which the table intentionally does not name) is
+    trusted as-is — the historical behaviour for an unnamed reason.
+    """
+    if isinstance(blocked_code, str) and blocked_code in BLOCKED_CODES:
+        return "blocked"
+    if not done_reason:
+        return "completed"
+    return _STATUS_BY_DONE_REASON.get(done_reason, done_reason)
 
 
 def model_basename(model: object) -> str:
@@ -89,13 +113,6 @@ def print_resilience_events(console: Console, store: SessionStoreBase, session_i
     return halt_printed
 
 
-# Recoverable ``done_reason`` values mirror ``session_runtime.summarize_session``:
-# any non-clean terminal state that still has a prior user turn.
-RECOVERABLE_DONE_REASONS: frozenset[str] = frozenset(
-    {"error", "max_steps_reached", "halted_no_progress", "canceled"}
-)
-
-
 def maybe_print_recovery_hint(
     console: Console,
     store: SessionStoreBase,
@@ -105,33 +122,32 @@ def maybe_print_recovery_hint(
 ) -> None:
     """Print a concise recovery hint after a recoverable terminal run.
 
-    Skipped when the run completed cleanly, when a doom-loop halt line was
-    already printed (it already mentions /retry and /continue), or when the
-    transcript has no user turn (nothing to retry).
+    Skipped when a doom-loop halt line was already printed (it already
+    mentions /retry and /continue) or when the session parked awaiting a
+    plan-approval decision (that has its own approval UX). Every other case
+    defers to ``summarize_session``'s derived ``recoverable`` flag — the same
+    honest signal ``/status`` and every other client already trust — instead
+    of re-testing ``done_reason`` against a hand-copied allowlist. That flag
+    already folds in "not running", "has a prior user turn", and "not
+    permanently terminated" (an externally terminated session can still carry
+    a recoverable-looking ``done_reason`` like ``"canceled"``, which is why
+    the flag — not the raw reason — is authoritative), so a blocked run
+    (``blocked_code``, which never changes ``done_reason``) or a halted
+    verification failure (``unmet_goal``) offers the hint exactly as reliably
+    as a plain ``error``.
     """
     if halt_printed:
         return
-    transcript = store.load_transcript(session_id)
-    has_user_turn = any(e.get("type") == "user" for e in transcript)
-    if not has_user_turn:
+    summary = SessionRuntime(session_store=store).summarize_session(session_id)
+    if not summary.get("recoverable") or summary.get("status") == "awaiting_approval":
         return
-    for event in reversed(transcript):
-        if event.get("type") != "completion":
-            continue
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-            return
-        reason = str(payload.get("done_reason") or "").lower()
-        if reason not in RECOVERABLE_DONE_REASONS:
-            return
-        console.print(
-            Text(
-                "↩ This session can be recovered — /continue to resume with context "
-                "intact, or /retry to redo the last step.",
-                style="dim cyan",
-            )
+    console.print(
+        Text(
+            "↩ This session can be recovered — /continue to resume with context "
+            "intact, or /retry to redo the last step.",
+            style="dim cyan",
         )
-        return
+    )
 
 
 def print_usage_footer(
@@ -180,7 +196,7 @@ def print_usage_footer(
 
 
 __all__ = [
-    "RECOVERABLE_DONE_REASONS",
+    "derive_task_outcome",
     "fmt_tokens",
     "maybe_print_recovery_hint",
     "model_basename",

@@ -1,0 +1,11 @@
+{
+  "$schema": "~/.config/grove/config.schema.json",
+  "init_script": {
+    "enabled": true,
+    "shell": "bash",
+    "path": ".grove/init.sh",
+    "timeout_seconds": 60,
+    "fail_fast": false,
+    "run_on_resume": true
+  }
+}

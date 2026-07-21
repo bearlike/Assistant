@@ -1,4 +1,4 @@
-"""``ManifestHash`` — the tool-list fingerprint that gates auto re-map (#81-C).
+"""``ManifestHash`` — the tool-list fingerprint that gates auto re-map.
 
 The drift gate is only as good as the hash: it must be (a) order-independent — a
 server that re-orders its advertised tools is NOT a drift — and (b) schema-aware

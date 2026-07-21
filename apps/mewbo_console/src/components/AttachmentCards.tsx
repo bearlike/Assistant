@@ -47,10 +47,10 @@ export function AttachmentCards({ attachments }: AttachmentCardsProps) {
               aria-hidden
             />
             <div className="min-w-0 flex flex-col items-start">
-              <span className="w-full text-[11px] font-medium text-[hsl(var(--foreground))] leading-snug line-clamp-2 break-all text-left">
+              <span className="w-full text-2xs font-medium text-[hsl(var(--foreground))] leading-snug line-clamp-2 break-all text-left">
                 {name}
               </span>
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                 {formatBytes(attachmentSize(att))}
               </span>
             </div>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavioural tests for the rich InputArea widget (issue #155, epic #149).
+"""Behavioural tests for the rich InputArea widget.
 
 Mount the widget in a minimal host App and drive it via the Pilot API.
 """
@@ -146,7 +146,7 @@ def test_escape_dismisses_overlay():
 
 
 def test_cursor_move_out_of_token_hides_stale_overlay():
-    # Regression (I1): moving the caret out of the @token (home) fires no
+    # Regression: moving the caret out of the @token (home) fires no
     # Input.Changed, but the overlay must hide rather than keep stale candidates.
     async def _run() -> None:
         app = _Host(engine=_engine())
@@ -166,7 +166,7 @@ def test_cursor_move_out_of_token_hides_stale_overlay():
 
 
 def test_typing_resets_history_navigation(tmp_path):
-    # Regression (I2): after browsing history, typing must reset the browse
+    # Regression: after browsing history, typing must reset the browse
     # cursor so the next up starts fresh (not jump from the stale index) and a
     # later down doesn't discard the user's mid-browse edit.
     async def _run() -> None:

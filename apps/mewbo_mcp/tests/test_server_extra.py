@@ -24,7 +24,7 @@ import httpx
 import pytest
 from mcp.server.fastmcp import Context
 from mewbo_mcp.auth import AuthError
-from mewbo_mcp.config import McpConfig
+from mewbo_mcp.config import EffectTier, McpConfig, McpToolPolicy, ToolGroup
 from mewbo_mcp.rest import RestClient
 from mewbo_mcp.server import build_server
 
@@ -84,8 +84,23 @@ def _run_tool(
 
 @pytest.fixture
 def server():
-    """A fresh FastMCP server instance for each test."""
-    return build_server(McpConfig(api_url="http://api.test", host="127.0.0.1", port=5127))
+    """A FastMCP server with EVERY tool group exposed.
+
+    This module tests tool WIRING (does each tool delegate to the right
+    `*Tools` class), which is orthogonal to exposure — so it opts every group in
+    rather than tracking the shipped default. That the search/structured groups
+    are withheld by default, and that their tools are never even constructed, is
+    covered in `test_server.py`. The two together are what prove the tools are
+    GATED, not deleted.
+    """
+    return build_server(
+        McpConfig(
+            api_url="http://api.test",
+            host="127.0.0.1",
+            port=5127,
+            tools=McpToolPolicy(exposed=frozenset(ToolGroup), tiers=frozenset(EffectTier)),
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +261,43 @@ def test_server_read_wiki_page_wires_to_wiki_tools(server):
     assert result["body"] == "# Intro"
 
 
+def test_server_list_wiki_pages_wires_to_wiki_tools(server):
+    """list_wiki_pages delegates to WikiTools.list_pages and passes the bounds on."""
+    payload = {
+        "pages": [{"id": "intro", "title": "Intro"}],
+        "count": 1,
+        "total": 4,
+        "truncated": True,
+        "nextOffset": 1,
+    }
+    routes = {"GET /v1/wiki/projects/assistant/pages": (200, payload)}
+    result = _run_tool(
+        server, "list_wiki_pages", {"project": "assistant", "limit": 1}, routes
+    )
+    assert result["pages"] == [{"id": "intro", "title": "Intro"}]
+    assert result["truncated"] is True
+    assert result["nextOffset"] == 1
+
+
+def test_server_graph_neighbors_wires_to_wiki_tools(server):
+    """graph_neighbors delegates to WikiTools.graph_neighbors (navigate tier)."""
+    payload = {
+        "nodes": [{"node_id": "n1", "name": "run"}],
+        "edges": [{"source": "n1", "target": "n2", "kind": "CALLS"}],
+        "hops_reached": 1,
+        "truncated": False,
+    }
+    routes = {"GET /v1/wiki/projects/assistant/graph/neighbors": (200, payload)}
+    result = _run_tool(
+        server,
+        "graph_neighbors",
+        {"project": "assistant", "node_id": "n1", "edge_kind": "CALLS"},
+        routes,
+    )
+    assert result["nodes"][0]["name"] == "run"
+    assert result["hops_reached"] == 1
+
+
 def test_server_submit_insight_wires_to_wiki_tools(server):
     """submit_insight delegates to WikiTools.submit_insight (condense=True default)."""
     response = {"ok": True, "claims": [{"action": "created", "node_id": "n1", "content": "c"}]}
@@ -391,6 +443,50 @@ def test_server_get_search_run_wires_to_search_tools(server):
 
 
 # ---------------------------------------------------------------------------
+# terminate_session + trigger tool wiring
+# ---------------------------------------------------------------------------
+
+
+def test_server_terminate_session_wires_to_session_tools(server):
+    """terminate_session delegates to SessionTools.terminate."""
+    routes = {
+        "POST /api/sessions/s1/terminate": (
+            200,
+            {
+                "session_id": "s1",
+                "status": "terminated",
+                "terminated_at": "2026-07-13T18:24:10+00:00",
+                "cancelled_triggers": 1,
+            },
+        )
+    }
+    result = _run_tool(server, "terminate_session", {"session_id": "s1"}, routes)
+    assert result["session_id"] == "s1"
+    assert result["status"] == "terminated"
+    assert result["cancelled_triggers"] == 1
+
+
+def test_server_list_triggers_wires_to_trigger_tools(server):
+    """list_triggers delegates to TriggerTools.list_triggers."""
+    triggers = {
+        "triggers": [
+            {"id": "tr1", "session_id": "s1", "kind": "time.cron", "status": "armed"}
+        ]
+    }
+    routes = {"GET /api/triggers": (200, triggers)}
+    result = _run_tool(server, "list_triggers", {}, routes)
+    assert result["count"] == 1
+    assert result["triggers"][0]["id"] == "tr1"
+
+
+def test_server_cancel_trigger_wires_to_trigger_tools(server):
+    """cancel_trigger delegates to TriggerTools.cancel."""
+    routes = {"DELETE /api/triggers/tr1": (200, {"id": "tr1", "status": "cancelled"})}
+    result = _run_tool(server, "cancel_trigger", {"trigger_id": "tr1"}, routes)
+    assert result == {"id": "tr1", "status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
 # main() entry point (lines 287-288)
 # ---------------------------------------------------------------------------
 
@@ -425,13 +521,20 @@ def test_build_server_without_config_uses_env_defaults(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_server_instructions_mention_key_capabilities(server):
-    """The _INSTRUCTIONS embedded in the server mention the key tool surfaces."""
-    from mewbo_mcp.server import _INSTRUCTIONS
+def test_server_instructions_mention_key_capabilities():
+    """The instructions mention the key tool surfaces this deployment exposes.
 
-    assert "Bearer" in _INSTRUCTIONS
-    assert "Mewbo Search" in _INSTRUCTIONS
-    assert "Agentic Wiki" in _INSTRUCTIONS
+    Search is named only when it is actually exposed — see
+    `test_instructions_do_not_advertise_withheld_search` for the default.
+    """
+    from mewbo_mcp.server import _instructions
+
+    text = _instructions(
+        McpToolPolicy(exposed=frozenset(ToolGroup), tiers=frozenset(EffectTier))
+    )
+    assert "Bearer" in text
+    assert "Mewbo Search" in text
+    assert "Agentic Wiki" in text
 
 
 # ---------------------------------------------------------------------------

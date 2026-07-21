@@ -326,6 +326,119 @@ class WizardSubmission(BaseModel):
     # Optional branch/tag/sha to clone; null = the repo's default branch (the
     # behaviour when omitted is unchanged).
     ref: str | None = Field(default=None)
+    # Ordered model ladder the indexer falls back through when its primary model
+    # fails. ``None`` = inherit the configured fallback policy, which is what
+    # every indexing run did before this field existed; a list overrides it for
+    # this job only. Optional + defaulted, so existing submissions are unchanged.
+    fallback_models: list[str] | None = Field(default=None, alias="fallbackModels")
+
+
+# ── ProjectSettings (the durable, slug-keyed edit target) ──────────────────
+
+
+class ProjectSettings(BaseModel):
+    """The EDITABLE settings of an onboarded wiki project, keyed by slug.
+
+    Why this exists. :class:`Project` is a DISPLAY snapshot —
+    ``wiki_finalize`` / ``GraphOnlyIndexer`` rebuild it WHOLESALE on every
+    successful (re)index, so any field written directly onto it is silently wiped
+    by the next reindex. The settings a project is actually re-indexed WITH have
+    always been the :class:`WizardSubmission` — but that was persisted as a
+    JOB-keyed sidecar, which gave an editor no stable write target (and made
+    "latest submission" a scan over jobs).
+
+    This record is that target: ONE per slug, holding the submission contract
+    minus the never-persisted ``token``, plus a ``desc`` display override.
+    ``WikiIndexingJob.refresh`` consults it FIRST (falling back to the legacy
+    per-job scan for projects onboarded before it existed) — which is what makes
+    an edit actually take effect on the next index.
+
+    Two fields are deliberately absent. ``slug`` is the store key for pages, jobs,
+    credentials and freshness, so it is immutable — there is no rename primitive.
+    ``token`` never lands here: credentials resolve through the ONE registry
+    (``mewbo_graph.wiki.credentials``), and a secret in this record would be a
+    third source of truth.
+    """
+
+    model_config = _CFG
+
+    slug: str
+    repo_url: str | None = Field(default=None, alias="repoUrl")
+    platform: PlatformId
+    model: str
+    depth: DepthMode
+    language: str
+    filter_mode: FilterMode = Field(alias="filterMode")
+    dirs: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    graph_only: bool = Field(default=False, alias="graphOnly")
+    ref: str | None = None
+    # Ordered model ladder the next index falls back through; ``None`` = inherit
+    # the configured policy. It MUST round-trip through
+    # ``from_submission``/``to_submission``: ``WikiIndexingJob.refresh`` rebuilds
+    # its submission from THIS record, so a ladder the record cannot carry is
+    # silently dropped from every index after the first — including for a project
+    # that was onboarded with one.
+    fallback_models: list[str] | None = Field(default=None, alias="fallbackModels")
+    # User-set description override. ``None`` = no override, so finalize's
+    # platform-API fetch wins (today's behaviour, unchanged). A non-empty value
+    # SURVIVES a reindex — that is the read-preserve contract implemented once in
+    # ``plugins.wiki.finalize._resolve_project_desc`` and shared by both indexers.
+    desc: str | None = None
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+    @classmethod
+    def from_submission(
+        cls, sub: WizardSubmission, *, desc: str | None = None
+    ) -> ProjectSettings:
+        """Project a :class:`WizardSubmission` onto the durable settings record.
+
+        ``sub.token`` is dropped (the credential registry owns it). *desc* carries
+        an existing override forward, so re-seeding this record from a submission
+        — which every ``WikiIndexingJob.start`` does, including the one a refresh
+        drives — cannot clobber a user's edited description.
+        """
+        return cls(
+            slug=sub.slug,
+            repoUrl=sub.repo_url,
+            platform=sub.platform,
+            model=sub.model,
+            depth=sub.depth,
+            language=sub.language,
+            filterMode=sub.filter_mode,
+            dirs=list(sub.dirs),
+            files=list(sub.files),
+            graphOnly=sub.graph_only,
+            ref=sub.ref,
+            fallbackModels=(
+                list(sub.fallback_models) if sub.fallback_models is not None else None
+            ),
+            desc=desc,
+        )
+
+    def to_submission(self) -> WizardSubmission:
+        """Rebuild the :class:`WizardSubmission` a re-index replays.
+
+        Always token-less: the clone tool's ``resolve_chain`` reads the durable
+        credential itself at clone time, so a refresh never needs to carry one.
+        """
+        return WizardSubmission(
+            repoUrl=self.repo_url,
+            slug=self.slug,
+            platform=self.platform,
+            token=None,
+            depth=self.depth,
+            language=self.language,
+            model=self.model,
+            filterMode=self.filter_mode,
+            dirs=list(self.dirs),
+            files=list(self.files),
+            graphOnly=self.graph_only,
+            ref=self.ref,
+            fallbackModels=(
+                list(self.fallback_models) if self.fallback_models is not None else None
+            ),
+        )
 
 
 # ── Catalog document ingestion (non-git StructureProvider) ──────────────────
@@ -373,10 +486,13 @@ class CatalogIngestReport(BaseModel):
 class RepoCredential(BaseModel):
     """A persisted repository credential — a git token OR an SSH/deploy key.
 
-    Stored per-slug in the isolated credential store so re-index can
-    authenticate after the in-process ``CloneTokenCache`` dies with the
-    process. Plaintext-at-rest behind the store's ``_encode``/``_decode``
-    seam; ALWAYS redacted in-flight (SSE / transcript / logs).
+    Stored per-scope in the isolated credential store (``CredentialScope`` —
+    see ``mewbo_graph.wiki.credentials``, which also owns the host-covers-repo
+    sharing rule). The credential itself carries NO scope field: the scope is
+    the store KEY, and it is stamped into the blob at save time — one binding,
+    not two that can disagree. Plaintext-at-rest behind the store's
+    ``_encode``/``_decode`` seam; ALWAYS redacted in-flight (SSE / transcript /
+    logs).
     """
 
     model_config = _CFG
@@ -384,14 +500,42 @@ class RepoCredential(BaseModel):
     kind: Literal["token", "ssh_key"]
     value: str
     username: str | None = None
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _strip_value(cls, v: Any) -> Any:
+        """Strip surrounding whitespace BEFORE validation — a real, silent footgun.
+
+        A PAT pasted from a terminal or a file carries a trailing newline; git
+        injects it verbatim into the URL/header and the remote answers 401 with
+        no hint that an invisible character is the cause. Stripping is safe for
+        an SSH key too: only the surrounding whitespace goes (internal newlines
+        are preserved), and ``clone._ssh_env_for`` re-appends the terminating
+        newline the key file requires.
+        """
+        return v.strip() if isinstance(v, str) else v
 
     @field_validator("value")
     @classmethod
     def _value_not_empty(cls, v: str) -> str:
-        """Reject an empty credential — an empty token/key is never useful."""
-        if not v.strip():
+        """Reject an empty credential — an empty token/key is never useful.
+
+        Runs AFTER :meth:`_strip_value`, so a whitespace-only value is empty here.
+        """
+        if not v:
             raise ValueError("credential value must not be empty")
         return v
+
+    @property
+    def dedup_key(self) -> tuple[str, str, str | None]:
+        """The identity two credentials must share to be considered the same one.
+
+        ``username`` is part of it deliberately: a value shared by two usernames
+        (a GitLab ``oauth2`` deploy token vs a PAT) authenticates DIFFERENTLY, so
+        the resolution chain must try both rather than dedup the second away.
+        """
+        return (self.kind, self.value, self.username)
 
 
 # ── IndexingJob ────────────────────────────────────────────────────────────────
@@ -641,29 +785,61 @@ QaStatus = Literal["running", "complete", "cancelled", "error"]
 QA_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "cancelled", "error"})
 
 
+class QaTurn(BaseModel):
+    """One completed question+answer round within a continued QA answer.
+
+    Snapshotted from ``QaAnswer``'s top-level fields when
+    ``WikiQaSession.follow_up`` starts a new turn on the same answer/session
+    — see ``QaAnswer.turns``.
+    """
+
+    model_config = _CFG
+
+    question: str
+    blocks: list[BlockUnion] = Field(default_factory=list)
+    summary_sources: list[str] = Field(default_factory=list, alias="summarySources")
+    accessed_sources: list[str] = Field(default_factory=list, alias="accessedSources")
+    models_used: list[str] = Field(default_factory=list, alias="modelsUsed")
+    status: QaStatus = Field(default="complete")
+
+
 class QaAnswer(BaseModel):
-    """Complete Q&A answer returned after streaming finishes."""
+    """Complete Q&A answer returned after streaming finishes.
+
+    Top-level ``question``/``blocks``/``summary_sources``/``accessed_sources``/
+    ``models_used``/``status`` always describe the LATEST turn — the shape a
+    single-shot consumer (MCP ``ask_wiki``, a fresh ``GET``) already expects,
+    byte-compatible with before ``turns`` existed. ``turns`` additively carries
+    every PRIOR completed turn once a session is continued via
+    ``WikiQaSession.follow_up``; a never-followed-up answer has an
+    empty ``turns`` list.
+    """
 
     model_config = _CFG
 
     answer_id: str = Field(alias="answerId")
     from_page_id: str = Field(alias="fromPageId")
+    # The current/latest turn's question text. Empty for answers persisted
+    # before this field existed (older snapshots validate unchanged).
+    question: str = Field(default="")
     summary_sources: list[str] = Field(alias="summarySources")
     model: str
     blocks: list[BlockUnion]
-    # Deterministic provenance of the answer (NOT the LLM's hand-picked
+    # Deterministic provenance of the CURRENT turn (NOT the LLM's hand-picked
     # citations). ``accessed_sources`` is the de-duplicated trail of every graph
     # node + source file + page the probes actually touched (the probe tools
     # record an ``access`` event per call; the finalizer folds them). ``models_used``
-    # is the distinct set of models that ran across the hypervisor + its probes.
+    # is the distinct set of models that ran across the hypervisor + its probes,
+    # across every turn (session-wide, never reset — see ``QaFinalizer.enrich``).
     # Both surface so the UI can show "what was read" + "which models" alongside
     # the answer. Defaulted so older persisted answers validate unchanged.
     accessed_sources: list[str] = Field(default_factory=list, alias="accessedSources")
     models_used: list[str] = Field(default_factory=list, alias="modelsUsed")
-    # Run lifecycle on the persisted snapshot — ``running`` until a terminal
-    # event finalizes the run. ``QaFinalizer.close`` sets ``complete``;
-    # ``WikiQaSession.cancel`` sets ``cancelled``. This is the field the MCP
-    # ``ask_wiki`` poll keys off of (no fragile "blocks unchanged" guess).
+    # Run lifecycle of the CURRENT turn on the persisted snapshot — ``running``
+    # until a terminal event finalizes the run. ``QaFinalizer.close`` sets
+    # ``complete``; ``WikiQaSession.cancel`` sets ``cancelled``. This is the
+    # field the MCP ``ask_wiki`` poll keys off of (no fragile "blocks
+    # unchanged" guess).
     status: QaStatus = Field(default="running")
     # Project slug that owns this answer. Persisted so ``resolve_qa_ctx``
     # can recover it after a process restart or any read-back path —
@@ -672,19 +848,31 @@ class QaAnswer(BaseModel):
     # ctx lookup, breaking ``wiki_search_pages`` (empty BM25 corpus). The
     # FE TS type silently ignores the extra field.
     slug: str = Field(default="")
+    # Prior completed turns, oldest first. Empty for a
+    # single-shot (never-followed-up) answer.
+    turns: list[QaTurn] = Field(default_factory=list)
 
 
 # ── QaEvent discriminated union ────────────────────────────────────────────────
 
 
 class MetaEvent(BaseModel):
-    """First QA event carrying answer ID and chosen model."""
+    """First QA event of a turn, carrying answer ID and chosen model.
+
+    Emitted once per turn — at the start of :meth:`WikiQaSession.start` AND
+    :meth:`WikiQaSession.follow_up` — so it also marks where each turn's
+    events begin in the append-only log (see ``QaFinalizer.current_turn_events``).
+    """
 
     model_config = _CFG
     type: Literal["meta"]
     answer_id: str = Field(alias="answerId")
     model: str
     from_page_id: str = Field(alias="fromPageId")
+    # The backing Mewbo session id — exposed so continuation is addressable /
+    # traceable. Defaulted so an older persisted event replays
+    # unchanged.
+    session_id: str = Field(default="", alias="sessionId")
 
 
 class SummaryReadyEvent(BaseModel):
@@ -786,7 +974,7 @@ class PagePlan(BaseModel):
     parent: str | None = None
 
 
-# ── Code graph (schema v2 — validated discriminated union, Gitea #187/#188) ─────
+# ── Code graph (schema v2 — validated discriminated union) ─────
 #
 # Every node kind is a subclass of ``GraphNodeBase`` carrying a ``type`` Literal
 # discriminator (SOTA precedent: Kythe kind+subkind, SCIP two-axis, CPG endpoint
@@ -797,7 +985,7 @@ class PagePlan(BaseModel):
 # (synthesized by ``KnowledgeGraphView`` / ``FolderTree`` in the hierarchy wire
 # mode — never persisted by the extractor) so the viewer reuses one serialiser.
 # ``Object`` (Kotlin ``object``/``companion``) + ``Property`` (fields/constants)
-# are the new kinds the Kotlin/Java child (Phase 1 of #187) emits.
+# are the new kinds the Kotlin/Java child emits.
 GraphNodeType = Literal[
     "File",
     "Module",
@@ -865,6 +1053,18 @@ class GraphNodeBase(BaseModel):
     # change seam for language-specific facts. Defaults empty so legacy nodes
     # (which lack it) validate unchanged.
     attributes: dict[str, _JsonScalar] = Field(default_factory=dict)
+    # Per-job/commit attribution. ``commit_sha`` is the git commit whose index
+    # produced this node; ``job_id`` the job that wrote it. The store stamps both
+    # at write from the owning job ctx. ``commit_sha`` is what makes "the graph
+    # for THIS commit is built" expressible (the resume skip predicate keys on
+    # it) and what a completed re-index supersedes on: every prior-commit node is
+    # reaped, so the store stops being the UNION of every commit ever indexed for
+    # a slug. ``None`` on a commit-less catalog node and on any node written
+    # before artifact isolation (the backfill stamps those); the default keeps
+    # such legacy persisted nodes valid. NOT part of the wire shape — the graph
+    # view assembles its Cytoscape payload field-by-field and never dumps a node.
+    commit_sha: str | None = None
+    job_id: str | None = None
 
     @field_validator("attributes")
     @classmethod
@@ -1005,10 +1205,14 @@ class GraphEdge(BaseModel):
     # ``External`` node (a view concern — the persisted node table stays
     # real-in-repo-symbols only). ``None`` for ordinary in-repo edges.
     target_name: str | None = None
-    # Same open subkind + namespaced extension bag as the node axes (#188).
+    # Same open subkind + namespaced extension bag as the node axes.
     # Defaults keep legacy persisted edges validating unchanged.
     subkind: str | None = None
     attributes: dict[str, _JsonScalar] = Field(default_factory=dict)
+    # Per-job/commit attribution — see ``GraphNodeBase``. Stamped at write and
+    # superseded per commit alongside the nodes an edge connects.
+    commit_sha: str | None = None
+    job_id: str | None = None
 
     @field_validator("attributes")
     @classmethod
@@ -1017,7 +1221,7 @@ class GraphEdge(BaseModel):
         return _require_namespaced(v)
 
 
-# CPG-style endpoint rule (#188): the node kinds legally allowed as the SOURCE of
+# CPG-style endpoint rule: the node kinds legally allowed as the SOURCE of
 # each edge type, derived from what the tree-sitter extractor + scip resolver
 # ACTUALLY emit today, widened to the near-term container kinds (Class→Method
 # CONTAINS) and the new Kotlin Object/Property. A permissive superset — its job
@@ -1038,7 +1242,7 @@ _EDGE_SOURCE_KINDS: dict[str, frozenset[str]] = {
 
 
 class CodeGraph(BaseModel):
-    """Whole-graph validated bundle of nodes + edges (schema v2, Gitea #188).
+    """Whole-graph validated bundle of nodes + edges (schema v2).
 
     Assembled + validated ONCE at ingest (``build_graph_core``) before the store
     persists the flat lists. The ``model_validator`` enforces three invariants a
@@ -1096,3 +1300,7 @@ class Embedding(BaseModel):
     vector: list[float]
     model: str  # embedding model id
     dim: int
+    # Per-job/commit attribution — see ``GraphNodeBase``. An embedding is reaped
+    # with the node it vectorises when a completed re-index supersedes its commit.
+    commit_sha: str | None = None
+    job_id: str | None = None

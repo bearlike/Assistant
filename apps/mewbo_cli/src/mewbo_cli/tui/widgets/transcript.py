@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TranscriptView — streaming-aware scrolling transcript (issue #152, epic #149).
+"""TranscriptView — streaming-aware scrolling transcript.
 
 Rewritten from a ``RichLog`` placeholder to a ``VerticalScroll`` container that
 can mount child widgets (``DiffView``, ``Collapsible``) for rich tool output
@@ -45,7 +45,7 @@ from mewbo_cli.tui.transcript_render import (
 class TranscriptView(VerticalScroll):
     """Streaming-aware transcript container wired to a :class:`MessageRendererRegistry`.
 
-    Replaces the ``RichLog`` placeholder from issue #150.  Consuming code still
+    Replaces the ``RichLog`` placeholder from the Rich-based CLI.  Consuming code still
     calls :meth:`write_item` / :meth:`write_renderable` for non-streaming content;
     streaming assistant turns use :meth:`begin_stream` / :meth:`append_stream`
     / :meth:`end_stream`.
@@ -58,7 +58,7 @@ class TranscriptView(VerticalScroll):
     # Expose a ``lines`` property so legacy tests that check ``len(tv.lines)``
     # continue to pass. We track lines written via the internal counter.
     #
-    # Design language (epic #149): vertical rhythm + per-kind accents driven
+    # Design language: vertical rhythm + per-kind accents driven
     # entirely by CSS classes (``t-<kind>``) tagged onto each mounted child.
     # Colours come from injected theme vars ($panel/$accent/$text-muted) — never
     # a hardcoded hex.  One blank line of margin separates every block; new user
@@ -101,7 +101,7 @@ class TranscriptView(VerticalScroll):
         margin-left: 4;
     }
     /* A settled unit of work (completed/failed tool, finished turn) recedes:
-       lower text-opacity so attention flows to what is still active (#161). */
+       lower text-opacity so attention flows to what is still active. */
     TranscriptView > .t-settled {
         text-opacity: 65%;
     }
@@ -131,7 +131,7 @@ class TranscriptView(VerticalScroll):
         # Streaming state: stream_id → StreamingMarkdown + Static widget id.
         self._streams: dict[str, _StreamSlot] = {}
 
-        # Mutable tool cards (#161): card_id → Static widget, updated in place as
+        # Mutable tool cards: card_id → Static widget, updated in place as
         # a tool settles (running → done/error). ``_tool_diffs`` guards a one-time
         # DiffView mount per card on settle.
         self._tool_cards: dict[str, Static] = {}
@@ -147,7 +147,7 @@ class TranscriptView(VerticalScroll):
         self._activity_label: str = "Working"
         self._activity_start: float = 0.0
         self._activity_frame: int = 0
-        # Optional live-label source (#173): the throughput meter's rendered
+        # Optional live-label source: the throughput meter's rendered
         # phase/rate/stall, pulled every 0.1s tick so the label stays live even
         # when no new event arrives (a hung agent). When set it OWNS the label
         # (phase-scoped timers included); the spinner is still prepended.
@@ -282,7 +282,7 @@ class TranscriptView(VerticalScroll):
             self._render_activity()
 
     def set_activity_label_provider(self, provider: Callable[[], str] | None) -> None:
-        """Install a live label source (the throughput meter) or clear it (#173).
+        """Install a live label source (the throughput meter) or clear it.
 
         When set, the provider is pulled on every 0.1s tick and OWNS the label
         text — phase-scoped timers, tok/s and stall included — so a hung agent
@@ -306,13 +306,20 @@ class TranscriptView(VerticalScroll):
                 pass
             self._activity = None
 
-    def finish_activity(self, elapsed: float | None = None) -> None:
-        """Collapse the live spinner into a SETTLED turn-summary line (#161).
+    def finish_activity(self, elapsed: float | None = None, outcome: str | None = None) -> None:
+        """Collapse the live spinner into a SETTLED turn-summary line.
 
         Stops the animation and, instead of erasing the spinner, rewrites it as a
-        muted ``✓ done · {N}s`` line so the finished turn recedes (lower weight)
-        while the next turn's spinner mounts fresh below it. ``elapsed is None``
-        falls back to :meth:`stop_activity` (no summary).
+        muted turn-summary line so the finished turn recedes (lower weight) while
+        the next turn's spinner mounts fresh below it. ``elapsed is None`` falls
+        back to :meth:`stop_activity` (no summary).
+
+        ``outcome`` is the turn's honest session-derived status (e.g.
+        ``TurnEngine.last_turn_outcome()``) — ``None`` or ``"completed"`` (a
+        command/skill dispatch with no query turn, or a clean finish) keeps the
+        historical green ``✓ done · {N}s`` line; anything else renders its OWN
+        glyph/tone from :data:`ICONS`, so a blocked or unmet-goal turn never
+        reads as success.
         """
         timer = self._activity_timer
         self._activity_timer = None
@@ -327,8 +334,19 @@ class TranscriptView(VerticalScroll):
             self.stop_activity()
             return
         line = Text()
-        line.append(f"{ICONS.check} ", style=f"{self._palette.success}")
-        line.append(f"done · {elapsed:.1f}s", style=f"{self._palette.muted}")
+        if outcome and outcome not in {"completed", "running"}:
+            # Fall back to a neutral "?" / muted tone (mirroring the fleet
+            # panel's own fallback) for a status this vocabulary doesn't name
+            # yet — e.g. ``awaiting_approval`` — rather than mischaracterizing
+            # an unmapped, possibly-benign outcome as a hard failure.
+            glyph = ICONS.agent_state.get(outcome, "?")
+            style_role = ICONS.agent_state_style.get(outcome, "muted")
+            line.append(f"{glyph} ", style=getattr(self._palette, style_role))
+            label = outcome.replace("_", " ")
+            line.append(f"{label} · {elapsed:.1f}s", style=f"{self._palette.muted}")
+        else:
+            line.append(f"{ICONS.check} ", style=f"{self._palette.success}")
+            line.append(f"done · {elapsed:.1f}s", style=f"{self._palette.muted}")
         try:
             self._activity.update(line)
             self._activity.add_class("t-settled")
@@ -472,7 +490,7 @@ class TranscriptView(VerticalScroll):
     def _append_widget(self, widget: Widget) -> None:
         """Mount ``widget`` at the foot — but ABOVE the live activity spinner.
 
-        During a live turn (#161) content streams in while the activity spinner
+        During a live turn content streams in while the activity spinner
         is mounted at the foot; mounting plainly would push new content *below*
         the spinner. Anchoring before ``self._activity`` keeps the spinner the
         last child so the transcript reads top-to-bottom in emission order.
@@ -490,7 +508,7 @@ class TranscriptView(VerticalScroll):
         self.scroll_end(animate=False)
 
     # ------------------------------------------------------------------
-    # Mutable tool card (#161)
+    # Mutable tool card
     # ------------------------------------------------------------------
 
     def upsert_tool(self, card_id: str, item: TranscriptItem) -> None:

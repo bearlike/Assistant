@@ -12,7 +12,7 @@ import dagger.multibindings.IntoSet
 import okhttp3.Interceptor
 
 /**
- * Debug build-type source set's wiring for the mock backend (Gitea #181 follow-up). Two
+ * Debug build-type source set's wiring for the mock backend. Two
  * responsibilities: bind the real [MockBackendFlagsImpl] to the [MockBackendFlags] seam (see that
  * interface's own KDoc for why it lives in `main/`), and contribute [MockBackendInterceptor] into
  * the `Set<Interceptor>` [DataModule.provideOkHttpClient] now consumes via

@@ -186,6 +186,46 @@ class OrchestrationState(BaseModel):
     summary: str | None = None
     plan_approved: bool = False
     plan_path: str | None = None
+    # Verifier-gated completion outcome. ``None`` = the gate never ran (no
+    # spec, or inactive — the historical path); ``True``/``False`` = a
+    # ground-truth check passed/exhausted its retries. ``verify_attempts``
+    # counts how many verifier runs this task drove (0 when the gate was
+    # never active). Both survive to the ``AgentResult`` so a spawner sees an
+    # honest done-claim rather than an invisible null.
+    verified: bool | None = None
+    verify_attempts: int = 0
+    # The tool-envelope error code of a blocked-class condition the run never
+    # recovered from — credentials, reachability, permission, quota. ``None``
+    # (the overwhelming majority) means no such condition stood at the end.
+    # Deliberately NOT folded into ``done_reason``: that vocabulary is a wire
+    # contract every client already switches on, whereas this is an additive
+    # fact the status layer reads to tell a run that FAILED from one that is
+    # BLOCKED on something a user can go fix. Set by the loop, projected onto
+    # the completion event, mapped to a status downstream.
+    blocked_code: str | None = None
+
+
+# ``OrchestrationState.done_reason`` values meaning the run STOPPED WITHOUT
+# REACHING ITS GOAL. Every one of them sets ``done=True``, so none of them
+# raises and none leaves a sticky error string of its own. Shared by the
+# orchestrator's own completion path (attaching a structured diagnostic to a
+# completion that would otherwise reach the store bare) and by
+# ``spawn_agent``'s child-status projection (a halted/budget-spent/
+# ground-truth-failed child must report ``failed`` to its parent, never
+# ``completed``) — a reason added to one consumer's vocabulary must reach the
+# other, so it lives in ONE place rather than two independently-maintained
+# copies.
+UNACHIEVED_DONE_REASONS: frozenset[str] = frozenset(
+    {
+        "unmet_goal",
+        "halted_no_progress",
+        "verification_failed",
+        "max_steps_reached",
+        "max_iterations_reached",
+        "budget_exhausted",
+        "halted_agent_budget",
+    }
+)
 
 
 class AbstractTool(abc.ABC):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the placeholder TUI widgets (issue #150, epic #149).
+"""Tests for the placeholder TUI widgets.
 
 Each widget is mounted in a minimal host App and driven via Textual's
 ``app.run_test()`` / Pilot API (pattern mirrored from test_tui_header.py:

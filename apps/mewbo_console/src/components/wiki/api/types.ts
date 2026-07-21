@@ -40,6 +40,28 @@ export interface Project {
   graphOnly?: boolean;
 }
 
+// ── Freshness (landing card / project header) ─────────────────────────
+//
+// Wire shape of ``GET /v1/wiki/projects/<slug>/freshness`` — how far the
+// indexed snapshot has drifted from the repo's remote HEAD. Every field is
+// nullable because a probe can fail partway: ``ls-remote`` may succeed
+// (``remoteSha`` set) while the platform compare API that yields ``behindBy``
+// is unavailable. Consumers must treat ``behindBy: null`` as "unknown", not
+// "zero".
+
+export interface ProjectFreshness {
+  /** Git sha the wiki was generated from (from the Project / latest job). */
+  indexedSha: string | null;
+  /** Remote HEAD sha from ``git ls-remote``; null when it couldn't be read. */
+  remoteSha: string | null;
+  /** Commits the indexed snapshot is behind remote HEAD. null = unknown. */
+  behindBy: number | null;
+  /** True/false when known; null when the check couldn't complete. */
+  upToDate: boolean | null;
+  /** ISO timestamp the freshness was last computed. */
+  checkedAt: string | null;
+}
+
 // ── Platforms (wizard) ────────────────────────────────────────────────
 
 export interface Platform {
@@ -142,10 +164,130 @@ export interface WizardSubmission {
   files: string[];
   /** Optional branch/tag to clone; omitted = repo default branch. */
   ref?: string;
+  /** Ordered cross-model fallback ladder for the indexing run. Omitted or
+   *  empty = no ladder; a non-empty list IS the ladder. */
+  fallbackModels?: string[];
   /** Developer-mode opt-in: build ONLY the AST code graph — no documentation
    *  pages, no LLM. Only honoured by the backend when ``runtime.developer_mode``
    *  is on; omitted entirely otherwise. Default off. */
   graphOnly?: boolean;
+}
+
+// ── Editable project settings ────────────────────────────
+//
+// Wire shape of ``GET /v1/wiki/projects/<slug>/settings`` and the body of
+// ``PATCH /v1/wiki/projects/<slug>``. camelCase, like every other wiki wire
+// shape (``Project.repoUrl``/``graphOnly``, ``IndexingJob.jobId``) — the server
+// keeps snake_case internals behind Pydantic aliases. An early spec draft said
+// snake_case; that was lifted from the sessions API and is NOT what shipped.
+//
+// Settings take effect on the NEXT index — nothing is re-run by a PATCH.
+
+/** One toggle per PATCHable field. The server is authoritative: a field the
+ *  server does not flag `true` is NOT offered by the UI (fail-closed — this is
+ *  what keeps ``graphOnly``'s developer-mode gate honest on the client too). */
+export interface ProjectSettingsEditable {
+  model?: boolean;
+  fallbackModels?: boolean;
+  ref?: boolean;
+  depth?: boolean;
+  language?: boolean;
+  filterMode?: boolean;
+  dirs?: boolean;
+  files?: boolean;
+  graphOnly?: boolean;
+  desc?: boolean;
+  /** Flagged ``true`` by the server, and deliberately NOT offered by the UI.
+   *  The repo is the project's IDENTITY: the slug keys its pages, jobs and
+   *  credentials, so only a cosmetic re-normalisation (``.git`` suffix, scheme
+   *  case) is accepted — a real (host, owner, repo) change is a 409, and the
+   *  honest way to re-point a wiki is delete + recreate. Rendered read-only. */
+  repoUrl?: boolean;
+  platform?: boolean;
+}
+
+/** The fields the dialog actually renders — the editable set MINUS the
+ *  identity fields it deliberately refuses to offer. Keeping these out of the
+ *  union is what makes the field→form map exhaustively checkable. */
+export type ProjectSettingsField = Exclude<
+  keyof ProjectSettingsEditable,
+  "repoUrl" | "platform"
+>;
+
+/**
+ * Read-only status of the credential covering this repo, resolved server-side
+ * through the ONE credential chain. The value is NEVER echoed — only
+ * whether one is on file and at what scope. The dialog links to the Security
+ * facet to change it; it never offers an inline token field.
+ */
+export interface ProjectSettingsCredential {
+  present: boolean;
+  scope: string | null;
+  scopeType: "host" | "repo" | null;
+}
+
+/** Settings for a git-backed project — the full editable surface. */
+export interface GitProjectSettings {
+  kind?: "git";
+  slug: string;
+  model: string;
+  /** Ordered cross-model fallback ladder. null/absent = no ladder. */
+  fallbackModels?: string[] | null;
+  /** Branch/tag pinned for indexing; null = the repo's default branch. */
+  ref: string | null;
+  depth: "comprehensive" | "concise";
+  language: string;
+  filterMode: FilterMode;
+  dirs: string[];
+  files: string[];
+  graphOnly: boolean;
+  desc?: string;
+  credential?: ProjectSettingsCredential;
+  editable?: ProjectSettingsEditable;
+}
+
+/**
+ * Reduced shape for a catalog (non-git) project: no clone, so no ref / filters
+ * / graph-only. Only the display fields the server flags as editable apply.
+ */
+export interface CatalogProjectSettings {
+  kind: "catalog";
+  slug: string;
+  model?: string;
+  fallbackModels?: string[] | null;
+  desc?: string;
+  credential?: ProjectSettingsCredential;
+  editable?: ProjectSettingsEditable;
+}
+
+export type ProjectSettings = GitProjectSettings | CatalogProjectSettings;
+
+/** Narrow a settings payload to the reduced catalog shape. */
+export function isCatalogSettings(s: ProjectSettings): s is CatalogProjectSettings {
+  return s.kind === "catalog";
+}
+
+/**
+ * Body of ``PATCH /v1/wiki/projects/<slug>``. Only the CHANGED subset is sent
+ * (`extra="forbid"` server-side). Never carries `token` or `slug` — identity is
+ * the URL, and credentials live in the registry, not here.
+ *
+ * ``ref: null`` explicitly clears the pinned branch back to the repo default;
+ * an absent ``ref`` key leaves it untouched.
+ */
+export interface ProjectSettingsPatch {
+  model?: string;
+  /** `null` clears the ladder; an absent key leaves it untouched — the same
+   *  omit-vs-null distinction `ref` carries. */
+  fallbackModels?: string[] | null;
+  ref?: string | null;
+  depth?: "comprehensive" | "concise";
+  language?: string;
+  filterMode?: FilterMode;
+  dirs?: string[];
+  files?: string[];
+  graphOnly?: boolean;
+  desc?: string;
 }
 
 export interface IndexingJob {
@@ -228,6 +370,17 @@ export interface ResumeIndexingResponse {
 }
 
 /**
+ * Response shape from ``GET /v1/wiki/sessions/<sessionId>`` — resolves a
+ * Mewbo session id to the wiki project it belongs to (indexing or Q&A). A
+ * 404 means the session isn't a wiki session at all; the client maps that
+ * to `null` rather than throwing.
+ */
+export interface WikiSessionLink {
+  slug: string;
+  kind: "indexing" | "qa";
+}
+
+/**
  * Discriminated event union streamed by `subscribeToIndexing`.
  *
  * Transport contract:
@@ -297,12 +450,44 @@ export type IndexingEvent =
 
 // ── Q&A ────────────────────────────────────────────────────────────────
 
+/** Terminal (or in-flight) state of a single Q&A turn. */
+export type QaTurnStatus = "running" | "complete" | "cancelled" | "error";
+
+/**
+ * One PRIOR turn of a multi-turn Q&A conversation. The backend returns these
+ * oldest-first in ``QaAnswer.turns``; the CURRENT/latest turn is described by
+ * the top-level ``QaAnswer`` fields instead. A follow-up reuses the same
+ * ``answerId`` (and backend session), appending a turn rather than minting a
+ * new answer.
+ */
+export interface QaTurn {
+  /** The question that opened this turn. */
+  question: string;
+  blocks: Block[];
+  /** The LLM's curated, human-facing citation list for this turn. */
+  summarySources: string[];
+  /** Deterministic provenance trail for this turn — see ``QaAnswer.accessedSources``. */
+  accessedSources?: string[];
+  /** Distinct LLM models that ran across this turn's hypervisor + probes. */
+  modelsUsed?: string[];
+  status: QaTurnStatus;
+}
+
 export interface QaAnswer {
-  /** Stable id assigned by the backend; used for shareable QA URLs. */
+  /** Stable id assigned by the backend; used for shareable QA URLs. Stays the
+   *  SAME across every follow-up in a conversation — it addresses the whole
+   *  growing multi-turn thread, not a single turn. */
   answerId: string;
   /** Page id this answer was generated from, used to caption the summary. */
   fromPageId: string;
-  /** The LLM's curated, human-facing citation list. */
+  /** The CURRENT/latest turn's question. Absent on legacy single-turn answers
+   *  persisted before follow-ups were stored. */
+  question?: string;
+  /** PRIOR completed turns, oldest first. Empty/absent for a never-followed-up
+   *  answer. The top-level fields describe the LATEST turn, so old code paths
+   *  that read only those keep working. */
+  turns?: QaTurn[];
+  /** The LLM's curated, human-facing citation list (LATEST turn). */
   summarySources: string[];
   /** Authoring model — used by the "Generated with…" pill. */
   model: string;
@@ -353,7 +538,7 @@ export interface SourceExcerpt {
  *   `complete` ends the stream cleanly. `error`/`cancelled` end it too.
  */
 export type QaEvent =
-  | { type: "meta"; answerId: string; model: string; fromPageId: string }
+  | { type: "meta"; answerId: string; model: string; fromPageId: string; sessionId?: string }
   | { type: "summary_ready"; sources: string[] }
   | { type: "block_open"; index: number; block: Block }
   | { type: "block_delta"; index: number; textAppend: string }
@@ -376,7 +561,7 @@ export type GraphNodeKind =
   | "Function"
   | "Method"
   | "Interface"
-  // ── Extended symbol kinds (schema v2 — Gitea #188) ──
+  // ── Extended symbol kinds (schema v2) ──
   // ``Object`` is a singleton (Kotlin ``object`` / ``companion object``);
   // ``Property`` is a field / property / constant. Both ride the ``ast`` layer
   // and render as code discs, distinguished only by colour like the others.
@@ -420,7 +605,7 @@ export interface KnowledgeGraphNode {
     id: string;
     label: string;
     kind: GraphNodeKind;
-    /** Open per-kind refinement (schema v2 — Gitea #188): e.g. ``companion``
+    /** Open per-kind refinement (schema v2): e.g. ``companion``
      *  for a Kotlin companion object, ``const`` for a constant. Absent when
      *  the node carries no refinement (every current AST kind). */
     subkind?: string;

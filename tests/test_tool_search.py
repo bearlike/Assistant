@@ -570,7 +570,7 @@ class TestEndToEndRebind:
         """A scoped run (non-empty ``allowed_tools`` that omits tool_search)
         must STILL get tool_search bound and reach its deferred MCP tool.
 
-        This is the #131 Phase 0 correctness property: ``filter_specs``
+        This is the Phase 0 correctness property: ``filter_specs``
         exempts ``always_load`` specs from the allowlist gate. Without the
         exemption a strict sub-agent gets its MCP tools deferred (stripped)
         AND loses the only means to fetch them — zero MCP tools reachable.
@@ -636,18 +636,19 @@ class TestEndToEndRebind:
 
 
 class TestPlanModeDeferral:
-    """Plan-mode semantics (#131 Phase 2).
+    """Plan-mode semantics (Phase 2).
 
     Decision: deferral is ORTHOGONAL to the plan-mode tool filter. The
     deferred ``tool_search`` tool is read-only, so it is always bindable in
     plan mode; the model fetches an MCP schema on demand and the per-turn
-    re-bind hands it to the EXISTING plan-mode filter — which stays the sole
-    authority on MCP visibility via ``agent.plan_mode_allow_mcp``. Net: "MCP
-    visible after the first tool_search in plan mode" when MCP is permitted,
-    and a graceful no-op (the tool never binds) when it is not.
+    re-bind hands it to the EXISTING plan-mode filter — which never
+    mode-filters MCP tools (Mewbo cannot classify a third-party MCP tool's
+    effect). Net: MCP is deferred away from the initial bind like everything
+    else, then visible unconditionally after the first ``tool_search`` in
+    plan mode.
     """
 
-    def _run(self, *, allow_mcp: bool):
+    def _run(self):
         reg = TestEndToEndRebind()._registry_with_real_tool_search()
         responses = [
             _aimsg(tool_call=(TOOL_SEARCH_TOOL_ID, {"query": "select:mcp_linear_get_issue"}, "c1")),
@@ -658,8 +659,6 @@ class TestPlanModeDeferral:
         def _config_lookup(*keys, default=None):
             if keys == ("agent", "tool_search", "mode"):
                 return "on"
-            if keys == ("agent", "plan_mode_allow_mcp"):
-                return allow_mcp
             if keys == ("agent", "default_denied_tools"):
                 return []
             if keys == ("agent", "llm_call_timeout"):
@@ -695,25 +694,16 @@ class TestPlanModeDeferral:
         return bound_models
 
     def test_tool_search_bindable_in_plan_mode_and_mcp_visible_after_search(self):
-        bound = self._run(allow_mcp=True)
+        bound = self._run()
         assert len(bound) >= 2
         initial = {s["function"]["name"] for s in bound[0]._bound_schemas}
         # tool_search is read-only → bindable in plan mode; MCP deferred away.
         assert TOOL_SEARCH_TOOL_ID in initial
         assert "mcp_linear_get_issue" not in initial
         assert "read_file" in initial
-        # After the search, the plan filter (allow_mcp=True) admits the MCP tool.
+        # After the search, the plan filter admits the MCP tool unconditionally.
         post = {s["function"]["name"] for s in bound[1]._bound_schemas}
         assert "mcp_linear_get_issue" in post
-
-    def test_mcp_stays_filtered_in_plan_mode_when_disallowed(self):
-        bound = self._run(allow_mcp=False)
-        # tool_search remains available so the model can still discover, but
-        # the plan filter never binds the MCP tool — graceful, plan gate wins.
-        bound_names = [{s["function"]["name"] for s in m._bound_schemas} for m in bound]
-        for names in bound_names:
-            assert "mcp_linear_get_issue" not in names
-        assert any(TOOL_SEARCH_TOOL_ID in names for names in bound_names)
 
 
 class TestAutoMode:
@@ -722,7 +712,7 @@ class TestAutoMode:
     ``off`` never defers, ``on`` always defers, ``auto`` defers only when
     the deferred-tool count exceeds ``agent.tool_search.auto_threshold`` —
     so lean / zero-MCP sessions keep verbatim binding and pay nothing while
-    a many-MCP session is fixed (#131 Phase 1).
+    a many-MCP session is fixed (Phase 1).
     """
 
     def _mcp_specs(self, n: int) -> list[ToolSpec]:
@@ -779,7 +769,7 @@ class TestFilterSpecsAlwaysLoad:
 
     The allowlist scopes the *ordinary* tool surface; it must never strip a
     tool the model needs to make progress (``tool_search``). An explicit
-    denylist is still authoritative — deny beats always_load (#131 Phase 0).
+    denylist is still authoritative — deny beats always_load (Phase 0).
     """
 
     def test_always_load_survives_non_empty_allowlist(self):
@@ -803,3 +793,169 @@ class TestFilterSpecsAlwaysLoad:
             for s in filter_specs(specs, allowed=["mcp_x"], denied=[TOOL_SEARCH_TOOL_ID])
         }
         assert ids == {"mcp_x"}
+
+
+# ---------------------------------------------------------------------------
+# Supplement: directly-bound tools are searchable too
+# ---------------------------------------------------------------------------
+
+
+def _fn_schema(name: str, description: str = "", params: dict | None = None) -> dict:
+    """An OpenAI-function schema dict — the shape the loop binds directly."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": params or {"type": "object", "properties": {}},
+        },
+    }
+
+
+class _FakeSessionTool:
+    """A minimal act-mode session tool with a bindable schema."""
+
+    def __init__(self, tool_id: str, description: str = "") -> None:
+        self.tool_id = tool_id
+        self.modes = frozenset({"act"})
+        self.schema = _fn_schema(tool_id, description)
+
+    async def handle(self, action_step):  # pragma: no cover - not exercised here
+        return MagicMock(content="ok")
+
+    def should_terminate_run(self) -> bool:
+        return False
+
+
+class TestToolSearchSupplement:
+    """The runner searches directly-bound tools alongside deferred registry specs.
+
+    Before the spawn family / activate_skill / session tools never reached
+    ``ToolRegistry.list_specs()``, so ``tool_search`` returned "No deferred tools
+    are registered." for them — 33 failed searches in production.
+    """
+
+    def _step(self, query: str) -> ActionStep:
+        return ActionStep(
+            tool_id=TOOL_SEARCH_TOOL_ID, operation="get", tool_input={"query": query}
+        )
+
+    def test_supplement_found_by_keyword(self):
+        reg = _registry(_spec("mcp_x", kind="mcp", description="an mcp tool"))
+        runner = ToolSearchRunner(reg)
+        supplement = [_fn_schema("schedule_trigger", "Arm a reverse-invocation trigger")]
+        out = runner.run(self._step("schedule trigger"), supplement=supplement)
+        assert "schedule_trigger" in out.content
+
+    def test_supplement_found_by_select(self):
+        reg = _registry(_spec("mcp_x", kind="mcp"))
+        runner = ToolSearchRunner(reg)
+        supplement = [_fn_schema("submit_app", "Submit the built app")]
+        out = runner.run(self._step("select:submit_app"), supplement=supplement)
+        assert "submit_app" in out.content
+        assert '"parameters"' in out.content  # its schema, not just a mention
+
+    def test_supplement_searchable_with_zero_deferred_registry(self):
+        """A registry with NO deferred specs still searches the supplement."""
+        reg = _registry(_spec("read_file"))  # not deferred
+        runner = ToolSearchRunner(reg)
+        supplement = [_fn_schema("spawn_agent", "Delegate a subtask")]
+        out = runner.run(self._step("spawn_agent"), supplement=supplement)
+        assert "spawn_agent" in out.content
+        assert "No deferred tools" not in out.content
+
+    def test_no_supplement_no_deferred_keeps_message(self):
+        """Empty registry + no supplement ⇒ the historical message (backward compat)."""
+        reg = _registry(_spec("read_file"))
+        runner = ToolSearchRunner(reg)
+        out = runner.run(self._step("anything"), supplement=None)
+        assert "No deferred tools are registered." in out.content
+
+    def test_malformed_supplement_entry_is_skipped(self):
+        """A supplement item with no function.name degrades to a skip, not a crash."""
+        reg = _registry(_spec("mcp_x", kind="mcp", description="mcp"))
+        runner = ToolSearchRunner(reg)
+        out = runner.run(
+            self._step("mcp_x"), supplement=[{"type": "function"}, {"not": "a tool"}]
+        )
+        assert "mcp_x" in out.content
+
+
+class TestDirectlyBoundToolSchemas:
+    """``_directly_bound_tool_schemas`` is the ONE source both bind + search read."""
+
+    def test_root_includes_spawn_family_and_session_tools(self):
+        reg = _registry(_spec("read_file"))
+        loop = _build_loop(reg)
+        loop._session_tools = [_FakeSessionTool("schedule_trigger")]
+        names = {
+            s["function"]["name"]
+            for s in loop._directly_bound_tool_schemas(plan_mode=False)
+        }
+        # Root spawn family (the loop built a spawn tool at depth 0).
+        assert {"spawn_agent", "spawn_agents", "check_agents", "steer_agent"} <= names
+        # The bound session tool.
+        assert "schedule_trigger" in names
+
+    def test_excludes_spawn_family_when_no_spawn_tool(self):
+        loop = _build_loop(_registry(_spec("read_file")))
+        loop._spawn_agent_tool = None
+        loop._session_tools = [_FakeSessionTool("schedule_trigger")]
+        names = {
+            s["function"]["name"]
+            for s in loop._directly_bound_tool_schemas(plan_mode=False)
+        }
+        assert "spawn_agent" not in names
+        assert names == {"schedule_trigger"}
+
+    def test_act_mode_session_tool_hidden_in_plan_mode(self):
+        loop = _build_loop(_registry(_spec("read_file")))
+        loop._spawn_agent_tool = None
+        loop._session_tools = [_FakeSessionTool("schedule_trigger")]  # act-mode only
+        names = {
+            s["function"]["name"]
+            for s in loop._directly_bound_tool_schemas(plan_mode=True)
+        }
+        assert "schedule_trigger" not in names
+
+
+class TestToolSearchDispatchSupplement:
+    """End-to-end: dispatching tool_search surfaces a directly-bound tool.
+
+    The load-bearing property — a bound session tool (schedule_trigger) or
+    spawn_agent is findable via tool_search, while a tool the agent does NOT
+    hold never appears (search cannot widen scope).
+    """
+
+    def _loop_with_session_tool(self) -> ToolUseLoop:
+        from mewbo_core.tool_registry import _register_tool_search
+
+        reg = ToolRegistry()
+        reg.register(_spec("read_file", description="Read local files."))
+        _register_tool_search(reg)
+        loop = _build_loop(reg)
+        loop._session_tools = [
+            _FakeSessionTool("schedule_trigger", "Arm a reverse-invocation trigger")
+        ]
+        return loop
+
+    def _dispatch(self, loop: ToolUseLoop, query: str):
+        tool_call = {"id": "c1", "name": TOOL_SEARCH_TOOL_ID, "args": {"query": query}}
+        return asyncio.run(loop._execute_tool_call(tool_call, loop._tool_registry.list_specs()))
+
+    def test_dispatch_finds_bound_session_tool(self):
+        loop = self._loop_with_session_tool()
+        result = self._dispatch(loop, "select:schedule_trigger")
+        assert result.success
+        assert "schedule_trigger" in result.content
+
+    def test_dispatch_finds_spawn_agent_at_root(self):
+        loop = self._loop_with_session_tool()
+        result = self._dispatch(loop, "spawn_agent")
+        assert "spawn_agent" in result.content
+
+    def test_dispatch_never_surfaces_unheld_tool(self):
+        """A tool the agent does not hold is not in the supplement ⇒ never found."""
+        loop = self._loop_with_session_tool()
+        result = self._dispatch(loop, "select:submit_app")
+        assert "submit_app" not in result.content

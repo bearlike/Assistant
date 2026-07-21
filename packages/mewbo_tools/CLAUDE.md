@@ -44,7 +44,7 @@ The legacy one-shot client is kept as a fallback for environments
 where the pool can't start (e.g. constrained sandboxes), but the pool
 is the default. If a tool needs MCP, request it through the pool.
 
-### Non-blocking init — a slow/dead server never stalls (Gitea #130)
+### Non-blocking init — a slow/dead server never stalls
 
 A slow or unreachable MCP server (cold container, dead host, hung
 `tools/list`) must never block startup or an unrelated tool call. Reducing
@@ -62,11 +62,11 @@ arbitrary time. The pool enforces this with four cooperating seams:
   `refresh_if_config_changed(..., connect=False)` updates config + prunes
   removed/changed servers but **never eagerly dials** — the connect is
   deferred to `get_or_connect(server)` for the one server actually needed.
-  This is the natural place the on-demand `tool_search` round-trip (#131)
+  This is the natural place the on-demand `tool_search` round-trip
   waits for a still-connecting server.
 - **Generalized quarantine + backoff (Phase 3, `_record_failure`).**
   Every connect failure is unwrapped (`unwrap_exception_group` peels the
-  opaque anyio `TaskGroup` wrapper — reused by #132) and classified
+  opaque anyio `TaskGroup` wrapper — reused elsewhere) and classified
   (`classify_connect_failure` → auth/config/dns/refused/timeout/other).
   **Auth/config never auto-retry** — they quarantine until the config hash
   changes (`skip_reason`). Transient causes get **exponential, capped
@@ -91,12 +91,12 @@ have to discriminate.
 The active implementation is selected by `AgentConfig.edit_tool`. When
 empty (default), `ToolUseLoop._configured_edit_tool_id()` auto-picks
 based on the ACTIVE model identity via `llm.model_prefers_structured_patch()`.
-**The model→variant decision is controllable DATA, not code (#113):** that
+**The model→variant decision is controllable DATA, not code:** that
 function now reads `mewbo_core/prompts/model_variants.yaml` (via
 `ModelVariantRegistry`), where the gpt-5/o3/o4/codex/gpt-4 → structured_patch
 defaults were migrated. Onboard a model or flip its preferred variant by editing
 that file (longest-prefix match), not Python; `llm.structured_patch_models` config
-still overrides on top. Selection reads the active model, so a #54-escalated model
+still overrides on top. Selection reads the active model, so an escalated model
 gets ITS variant. Pair a variant with a per-model prompt nudge via a `kind: model`
 override on the `file.tools.*` entry under the SAME prefix.
 
@@ -125,7 +125,35 @@ edited file and appends them as a tool result message. This is what
 catches "you forgot to import this" / "undefined name" without
 explicitly invoking the LSP tool.
 
-## Inline `@<ref>` expansion + file catalog (#119/#124)
+## Path guard (`core/__init__.py:resolve_safe_path`)
+
+The allowlist (CWD + config `projects` roots + `/tmp/mewbo`) is the TENANT
+boundary on the shared multi-tenant host — never widen it to `/tmp` (proven
+symlink → `/etc/passwd` read via the logical-view branch, plus cross-session
+reads). Two contracts around it, both learned from a 13-session thrash corpus:
+
+- **A rejection must name what IS allowed.** The error lists the allowed
+  roots so the model restages in one turn instead of hunting for shell
+  workarounds (the shell only guards `cwd`, so a mute denial trains the model
+  to bypass the guard via `cat`).
+- **Prompt–guard agreement.** No skill/agent/doc may teach a path the guard
+  rejects — the widget SKILL.md once taught bare-`/tmp` staging and a
+  `/tmp/mewbo_gh_results.json` *sibling* of `/tmp/mewbo`, which was the real
+  root cause of the "/tmp is broken" reports. When touching the allowlist or
+  any staging instruction, grep prompts and the roots together. The drift-proof
+  ideal (opencode's `${tmp}` pattern) is to TEMPLATE the live scratch root into
+  prompt/skill text as a render-time variable rather than a literal — worth
+  adopting IF the scratch root ever becomes configurable; today `/tmp/mewbo` is
+  a stable hardcoded constant, so the literal can't drift and templating would
+  be machinery for a non-problem.
+
+Cross-checked against `anthropics/claude-code` (v2.1.49 shipped the identical
+"name the reason, not a bare prompt" fix; two path DSLs reconciled by a doc
+callout, NOT a unifying abstraction — so a tested consistency note is accepted
+practice, not a cut corner) and opencode/kilocode (rejection errors there carry
+zero path context — this contract is deliberately stronger than the field).
+
+## Inline `@<ref>` expansion + file catalog
 
 `integration/reference_expansion.py:ReferenceExpander` is the submit-time
 preprocessor that expands `@file`/`@dir/`/`@diff`/`@https://…` tokens in a user

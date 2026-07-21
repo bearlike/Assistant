@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from mewbo_core.common import get_logger
 from mewbo_core.config import get_config, get_config_value, get_version
+from mewbo_core.run_error import render_exception
 from mewbo_core.types import JsonValue
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -23,6 +24,11 @@ else:
     TraceContext = dict[str, str]
 
 logging = get_logger(name="core.components")
+
+# Cap on the exception text stamped as a span's ``status_message``. Matches the
+# slice the tool-use loop already applies at its own exhaustion seam, so the two
+# writers can never disagree about how much of a provider error a trace keeps.
+_SPAN_STATUS_MESSAGE_MAX = 500
 
 _LANGFUSE_TRACE_CONTEXT: ContextVar[TraceContext | None] = ContextVar(
     "langfuse_trace_context",
@@ -100,7 +106,7 @@ def langfuse_invoke_config(
     the no-loop synthesis primitives (``StructuredSynthesizer`` / ``DraftStreamer``)
     export to Langfuse too. ``langfuse_session_context`` only *propagates
     attributes* — it creates no observation, so a model call that doesn't ATTACH
-    the ``CallbackHandler`` produces zero exported spans (the #87 defect: realtime
+    the ``CallbackHandler`` produces zero exported spans (a known defect: realtime
     synthesis traced nothing, ever). Attaching the handler is the seam that makes
     the generation land in the session-grouped trace.
 
@@ -344,6 +350,20 @@ def langfuse_trace_span(
         logging.debug("Langfuse trace span setup failed.", exc_info=True)
     try:
         yield span
+    except GeneratorExit:
+        # The generator was closed rather than the traced body failing; there is
+        # no operation outcome to record.
+        raise
+    except BaseException as exc:
+        # A traced operation that raised must leave its cause ON the span.
+        # Exiting the observation clean (which is all the ``finally`` below
+        # does) is why a whole failure corpus carried ERROR-level spans with an
+        # empty status_message and no exception event: the span recorded THAT
+        # something failed and never WHAT. ``BaseException`` so a cancellation
+        # or a deadline kill — the shapes a wedged call actually takes — is
+        # recorded too, then re-raised untouched.
+        record_span_exception(span, exc)
+        raise
     finally:
         if cm is not None:
             try:
@@ -352,23 +372,45 @@ def langfuse_trace_span(
                 pass
 
 
-def record_span_exception(span, exc=None, *, message=None, attributes=None):
-    """Record an OTel ``exception`` event on a Langfuse span.
+def _span_status_message(exc) -> str:
+    """Render *exc* as a bounded, never-empty span status message.
 
-    ERROR status is set by the caller's ``span.update``; this bridges the
-    failure-metadata seam to Langfuse's exception tooling, which queries OTel
-    ``exception`` events — ``span.update(level="ERROR")`` only sets span
-    *status*. Fully graceful: no span / no otel / disabled → no-op.
+    ``str(exc)`` is empty for whole exception families — a bare ``TimeoutError``
+    is the one that cost the most forensic effort — and an empty status message
+    reads in a trace exactly like a failure nobody classified. The type name is
+    always present, so it is the floor.
+
+    Delegates to :func:`mewbo_core.run_error.render_exception`, the SAME
+    renderer ``llm_resilience.py:LlmResilienceExhausted.describe_error`` uses,
+    so the two records of one failure never disagree.
+    """
+    return render_exception(exc, limit=_SPAN_STATUS_MESSAGE_MAX)
+
+
+def record_span_exception(span, exc=None, *, message=None, attributes=None):
+    """Record an exception on a Langfuse span: ERROR status + an OTel event.
+
+    Two writes, because Langfuse reads them from different places: the span's
+    own ``level``/``status_message`` drive the UI's error surface, while the
+    exception tooling queries OTel ``exception`` events — ``span.update(
+    level="ERROR")`` alone sets status with no cause attached. Setting the
+    status here (rather than leaving it to each call site) is what makes the
+    non-empty guarantee in :func:`_span_status_message` hold for every writer.
+    Fully graceful: no span / no otel / disabled → no-op.
     """
     if span is None:
         return
+    detail = exc if exc is not None else (RuntimeError(message) if message else None)
+    if detail is None:
+        return
+    try:
+        span.update(level="ERROR", status_message=_span_status_message(detail))
+    except Exception:  # pragma: no cover - never disrupt the run
+        logging.debug("Langfuse span status update failed.", exc_info=True)
     otel = getattr(span, "_otel_span", None)
     try:
         if otel is not None and otel.is_recording():
-            if exc is not None:
-                otel.record_exception(exc, attributes=attributes or None)
-            elif message is not None:
-                otel.record_exception(RuntimeError(message), attributes=attributes or None)
+            otel.record_exception(detail, attributes=attributes or None)
     except Exception:  # pragma: no cover - never disrupt the run
         logging.debug("Langfuse record_exception failed.", exc_info=True)
 

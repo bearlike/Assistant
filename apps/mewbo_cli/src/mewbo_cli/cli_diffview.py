@@ -1,7 +1,7 @@
-"""DiffView — reusable Textual diff widget for the Mewbo CLI (task #153).
+"""DiffView — reusable Textual diff widget for the Mewbo CLI (task).
 
-A single :class:`DiffView` widget is mounted by both the approval modal (#154)
-and the transcript tool-output (#152).  It owns:
+A single :class:`DiffView` widget is mounted by both the approval modal
+and the transcript tool-output.  It owns:
 
 - difflib-based hunk computation (``DiffLine`` typed model)
 - Rich ``Syntax`` highlighting with hash-based cache (no recompute on resize)

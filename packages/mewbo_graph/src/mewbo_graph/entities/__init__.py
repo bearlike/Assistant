@@ -1,4 +1,4 @@
-"""Abstract-entity layer over the shared multiplex (Gitea Issue #35).
+"""Abstract-entity layer over the shared multiplex.
 
 Entities are UML-actor-like nouns (person/project/product/organization/concept/
 student/team + open extension) minted by an LLM-driven agent into the SAME

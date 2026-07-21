@@ -1,4 +1,4 @@
-# Catalog + agent-tree string templates (Gitea #89, phase 1).
+# Catalog + agent-tree string templates.
 #
 # VERBATIM extraction from skills.py:SkillRegistry.render_catalog,
 # agent_registry.py:AgentRegistry.render_catalog, and

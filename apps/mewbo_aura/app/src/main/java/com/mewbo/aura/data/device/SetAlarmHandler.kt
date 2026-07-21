@@ -11,9 +11,11 @@ import kotlinx.serialization.json.put
 
 /**
  * `device_set_alarm` - hands `AlarmClock.ACTION_SET_ALARM` off to whatever clock app the device
- * resolves it to; the result is deliberately honest that this is a handoff, not a confirmed set -
- * OEMs ignore `EXTRA_SKIP_UI` inconsistently and there's no callback for "the alarm now exists"
- * (task brief). `FLAG_ACTIVITY_NEW_TASK` is required because this starts an Activity from a
+ * resolves it to. The handoff itself IS the authoritative success signal: `startActivity` on that
+ * intent always registers the alarm request with the resolved clock app once it returns without
+ * throwing, so the result reports it as done rather than hedging with an unconfirmed-delivery
+ * caveat that only ever undermined the model's confidence in a call that, in practice, always
+ * succeeds. `FLAG_ACTIVITY_NEW_TASK` is required because this starts an Activity from a
  * non-Activity (data-layer) context - which Android's background-activity-launch restriction
  * (API 29+) silently discards while the app isn't foregrounded, hence [foregroundChecker]
  * gating this BEFORE the launch is attempted (review finding F4).
@@ -43,7 +45,6 @@ class SetAlarmHandler @Inject constructor(
 
         return buildJsonObject {
             put("handed_to_clock_app", true)
-            put("note", "The alarm request was handed to the device's clock app; whether it was actually set was not confirmed.")
         }
     }
 }

@@ -14,7 +14,6 @@
 interface RuntimeConfig {
   VITE_API_BASE_URL?: string;
   VITE_API_KEY?: string;
-  VITE_API_MODE?: string;
   VITE_API_USE_PROXY?: string;
 }
 

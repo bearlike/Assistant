@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set the terminal window/tab title via an OSC escape sequence (issue #156).
+"""Set the terminal window/tab title via an OSC escape sequence.
 
 ``OSC 2 ; <text> BEL`` sets the window title on every mainstream terminal
 emulator. Textual owns the alternate screen, so we write the raw sequence

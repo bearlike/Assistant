@@ -35,7 +35,7 @@ import org.junit.Test
  * types). Virtual time via `runTest`/`advanceTimeBy` makes the 8s silence timeout AND the scripted
  * live-event timelines deterministic and fast.
  *
- * v5 (Gitea #181) contract: the FIRST turn of an invocation (voice or text) streams its response
+ * v5 contract: the FIRST turn of an invocation (voice or text) streams its response
  * in-overlay ([AssistUiState.Streaming], folding `liveEvents` through [com.mewbo.aura.data.model.TranscriptReducer])
  * - no handoff fires until either a SECOND turn is sent or [AssistTurnMachine.expand] is tapped.
  * [dismiss] resets the machine's own turn/session bookkeeping so a REUSED instance (the real
@@ -118,6 +118,7 @@ class AssistTurnMachineTest {
         val calls = mutableListOf<String>()
         override fun invocation() { calls += "invocation" }
         override fun transcriptAccepted() { calls += "transcriptAccepted" }
+        override fun listeningEnded() { calls += "listeningEnded" }
         override fun settle() { calls += "settle" }
         override fun error() { calls += "error" }
     }
@@ -195,7 +196,7 @@ class AssistTurnMachineTest {
         assertEquals("Yesterday's chat", (ready as AssistUiState.Ready).lastSessionTitle)
     }
 
-    // ---- Gitea #181: auto-listen is the CALLER's (AuraSession's) decision - the machine only
+    // ---- auto-listen is the CALLER's (AuraSession's) decision - the machine only
     // needs to behave correctly whichever way that decision goes. ----
 
     @Test
@@ -225,7 +226,7 @@ class AssistTurnMachineTest {
         assertTrue(machine.state.value is AssistUiState.Ready)
     }
 
-    // ---- Gitea #181: the FIRST turn of an invocation streams its response IN the overlay - no
+    // ---- the FIRST turn of an invocation streams its response IN the overlay - no
     // handoff fires. ----
 
     @Test
@@ -242,7 +243,7 @@ class AssistTurnMachineTest {
         )
 
         val visitedKinds = mutableListOf<String>()
-        // Gitea #181 fix wave, finding 0 (flakiness guard, not a current failure): routed through
+        // (flakiness guard, not a current failure): routed through
         // its own machineScope() instance instead of a bare `launch` (a direct structural child of
         // runTest's own TestScope job) - the latter shape is exactly what this file's own class doc
         // warns against for an "infinite background collector" (machine.state never completes on
@@ -320,6 +321,93 @@ class AssistTurnMachineTest {
         assertTrue(haptics.calls.contains("settle"))
     }
 
+    // ---- `stream_end` is a genuine terminal frame `SessionStreamClient` really delivers (after
+    // `trySend`, before its own termination flag flips - `data/sse/SessionStreamClient.kt`), and
+    // `RunRepository.live`'s `shareIn(... WhileSubscribed ...)` SharedFlow never itself completes -
+    // so a real collect loop sees `StreamEnd` as just another event, and the post-collect fallback
+    // below never runs. Both scripted flows model that with `awaitCancellation()` after `StreamEnd`. ----
+
+    @Test
+    fun `stream_end after completion keeps the card done - terminal frame must not reset to streaming`() = runTest {
+        val machine = machine(
+            transcriber = ScriptedTranscriber(emptyList()),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            liveEvents = {
+                flow {
+                    emit(SessionEvent.AgentMessageDelta(ts = "t1", payload = AgentMessageDeltaPayload(text = "Hi there", agentId = "root", depth = 0)))
+                    emit(SessionEvent.Assistant(ts = "t2", payload = TextPayload(text = "Hi there")))
+                    emit(SessionEvent.Completion(ts = "t3", payload = CompletionPayload()))
+                    emit(SessionEvent.StreamEnd) // the terminal frame SessionStreamClient really delivers
+                    awaitCancellation() // shareIn's SharedFlow never completes - the fallback is dead
+                }
+            },
+        )
+
+        machine.sendText("hello")
+        advanceUntilIdle()
+
+        val streaming = machine.state.value
+        assertTrue(streaming is AssistUiState.Streaming)
+        assertTrue("stream_end after completion must not reset done to false", (streaming as AssistUiState.Streaming).done)
+    }
+
+    @Test
+    fun `a non-terminal event between completion and stream_end keeps done sticky - settle fires once`() = runTest {
+        val haptics = RecordingHaptics()
+        val machine = machine(
+            transcriber = ScriptedTranscriber(emptyList()),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            liveEvents = {
+                flow {
+                    emit(SessionEvent.Assistant(ts = "t1", payload = TextPayload(text = "Hi there")))
+                    emit(SessionEvent.Completion(ts = "t2", payload = CompletionPayload()))
+                    // A stray non-terminal delta arriving AFTER completion but BEFORE stream_end must
+                    // NOT reset the just-finalized card back to streaming - done is sticky, so
+                    // finishStreaming() (and its settle haptic) fires exactly once, not again on the
+                    // trailing stream_end.
+                    emit(SessionEvent.AgentMessageDelta(ts = "t3", payload = AgentMessageDeltaPayload(text = "!", agentId = "root", depth = 0)))
+                    emit(SessionEvent.StreamEnd)
+                    awaitCancellation() // shareIn's SharedFlow never completes - the post-collect fallback is dead
+                }
+            },
+            haptics = haptics,
+        )
+
+        machine.sendText("hello")
+        advanceUntilIdle()
+
+        val streaming = machine.state.value
+        assertTrue(streaming is AssistUiState.Streaming)
+        assertTrue("a post-completion non-terminal event must not reset done to false", (streaming as AssistUiState.Streaming).done)
+        assertEquals(1, haptics.calls.count { it == "settle" })
+    }
+
+    @Test
+    fun `stream_end without completion also finalizes the turn`() = runTest {
+        val machine = machine(
+            transcriber = ScriptedTranscriber(emptyList()),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            liveEvents = {
+                flow {
+                    emit(SessionEvent.AgentMessageDelta(ts = "t1", payload = AgentMessageDeltaPayload(text = "Hi there", agentId = "root", depth = 0)))
+                    emit(SessionEvent.Assistant(ts = "t2", payload = TextPayload(text = "Hi there")))
+                    emit(SessionEvent.StreamEnd) // terminal control frame, no prior `completion` at all
+                    awaitCancellation()
+                }
+            },
+        )
+
+        machine.sendText("hello")
+        advanceUntilIdle()
+
+        val streaming = machine.state.value
+        assertTrue(streaming is AssistUiState.Streaming)
+        assertTrue("stream_end with no prior completion must still finalize done=true", (streaming as AssistUiState.Streaming).done)
+    }
+
     @Test
     fun `a lost live connection surfaces as ERROR with no retry text`() = runTest {
         val haptics = RecordingHaptics()
@@ -340,7 +428,7 @@ class AssistTurnMachineTest {
         assertTrue(haptics.calls.contains("error"))
     }
 
-    // ---- Gitea #181: the SECOND interaction of an invocation hands off to the app instead of
+    // ---- the SECOND interaction of an invocation hands off to the app instead of
     // streaming again - the session is REUSED, never re-created. ----
 
     @Test
@@ -394,7 +482,7 @@ class AssistTurnMachineTest {
         assertEquals(listOf("sendQuery(session-1,second)", "onHandoff(session-1,Voice)"), calls)
     }
 
-    // ---- Gitea #181: stopStreaming / expand / toggleSpeak (the card's own controls) ----
+    // ---- stopStreaming / expand / toggleSpeak (the card's own controls) ----
 
     @Test
     fun `stopStreaming cancels the live job and marks the card done - a later scripted event never folds in`() = runTest {
@@ -534,7 +622,7 @@ class AssistTurnMachineTest {
         assertEquals(Triple<String?, String?, InputModality>(null, null, InputModality.Text), pulled)
     }
 
-    // ---- Gitea #181: speak-along (voice modality only), moved into AssistTurnMachine's own
+    // ---- speak-along (voice modality only), moved into AssistTurnMachine's own
     // SpeechController instance. ----
 
     @Test
@@ -603,7 +691,7 @@ class AssistTurnMachineTest {
         assertEquals(spokenBeforeMute, synthesizer.spoken.size) // no NEW utterances after mute
     }
 
-    // ---- Gitea #181: dismiss resets turn/session bookkeeping - the real VoiceInteractionSession
+    // ---- dismiss resets turn/session bookkeeping - the real VoiceInteractionSession
     // (and this SAME machine instance) survives hide->show, so this is the regression test for
     // "a second invocation must not inherit the first invocation's turn count." ----
 
@@ -667,7 +755,7 @@ class AssistTurnMachineTest {
         assertTrue(machine.state.value is AssistUiState.Idle) // the t=1010 delta never resurrected Streaming
     }
 
-    // ---- InputModality tagging (Gitea #180 P1) - client-only, never dispatched to the backend;
+    // ---- InputModality tagging - client-only, never dispatched to the backend;
     // threaded through onHandoff so the picked-up chat can tell a voice turn from a typed one. ----
 
     @Test
@@ -692,7 +780,7 @@ class AssistTurnMachineTest {
 
         assertEquals("old-session", handedOff)
         // No query was ever dispatched, so there's no "originating" turn to tag - Text is the
-        // neutral default (Gitea #180 P1).
+        // neutral default.
         assertEquals(InputModality.Text, handedOffModality)
         assertTrue(calls.isEmpty())
         assertEquals(listOf("settle"), haptics.calls)
@@ -750,7 +838,7 @@ class AssistTurnMachineTest {
         assertTrue(machine.state.value is AssistUiState.Ready)
     }
 
-    // ---- Mic-tap permission gate (Gitea #180 P5) - AuraSession is what actually holds a Context
+    // ---- Mic-tap permission gate - AuraSession is what actually holds a Context
     // and decides RECORD_AUDIO's grant state; the machine just needs a way to surface the result
     // as the SAME quiet notice a failed send already uses. ----
 
@@ -784,7 +872,7 @@ class AssistTurnMachineTest {
 
     @Test
     fun `barge-in stops the synthesizer on a fresh LISTENING turn and on dismiss`() = runTest {
-        // Routed through AssistTurnMachine's own SpeechController.bargeIn() since Gitea #181, which
+        // Routed through AssistTurnMachine's own SpeechController.bargeIn(), which
         // itself calls synthesizer.stop() - the OBSERVABLE stop-count contract is unchanged.
         val synthesizer = RecordingSynthesizer()
         val machine = machine(
@@ -848,6 +936,102 @@ class AssistTurnMachineTest {
         advanceUntilIdle()
 
         assertEquals(listOf("settle"), haptics.calls)
+    }
+
+    // ---- [R4 2026-07-10] listeningEnded haptic: an a11y-mandated non-visual "mic is off" cue for
+    // every way capture can end WITHOUT an accepted transcript - distinct from transcriptAccepted's
+    // accepted-Final path (the two moments must never both fire for the same capture). ----
+
+    @Test
+    fun `cancelListening fires the listeningEnded haptic`() = runTest {
+        val haptics = RecordingHaptics()
+        val machine = machine(
+            transcriber = ScriptedTranscriber(listOf(100L to TranscriberEvent.Ready)),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        machine.cancelListening()
+
+        assertEquals(listOf("listeningEnded"), haptics.calls)
+    }
+
+    @Test
+    fun `silence timeout fires the listeningEnded haptic`() = runTest {
+        val haptics = RecordingHaptics()
+        val transcriber = ScriptedTranscriber(listOf(100L to TranscriberEvent.Ready)) // never emits Final
+        val machine = machine(
+            transcriber = transcriber,
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        advanceTimeBy(8_100) // past SILENCE_TIMEOUT_MS (8_000ms), reset once by the scripted Ready at t=100
+        advanceUntilIdle()
+
+        assertEquals(listOf("listeningEnded"), haptics.calls)
+    }
+
+    @Test
+    fun `a recognizer error fires the listeningEnded haptic`() = runTest {
+        val haptics = RecordingHaptics()
+        val transcriber = ScriptedTranscriber(listOf(10L to TranscriberEvent.Error(code = TranscriberError.Other)))
+        val machine = machine(
+            transcriber = transcriber,
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        advanceUntilIdle()
+
+        assertEquals(listOf("listeningEnded"), haptics.calls)
+        assertTrue(machine.state.value is AssistUiState.Ready)
+    }
+
+    @Test
+    fun `an accepted final transcript does NOT fire listeningEnded`() = runTest {
+        val haptics = RecordingHaptics()
+        val machine = machine(
+            transcriber = ScriptedTranscriber(listOf(10L to TranscriberEvent.Final("hello"))),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        advanceUntilIdle() // Final -> transcriptAccepted -> beginTurn -> streaming completes -> settle
+
+        assertEquals(listOf("transcriptAccepted", "settle"), haptics.calls)
+        assertEquals(0, haptics.calls.count { it == "listeningEnded" })
+    }
+
+    @Test
+    fun `cancelListening is a no-op once a Final has been accepted - no listeningEnded, state unchanged`() = runTest {
+        val haptics = RecordingHaptics()
+        val machine = machine(
+            transcriber = ScriptedTranscriber(listOf(10L to TranscriberEvent.Final("hello"))),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        advanceUntilIdle() // Final accepted -> transcriptAccepted -> beginTurn -> streaming completes
+        val stateAfterFinal = machine.state.value
+        assertTrue(stateAfterFinal is AssistUiState.Streaming) // no longer Listening
+        val hapticsAfterFinal = haptics.calls.toList()
+
+        machine.cancelListening() // must early-return: the machine is not Listening anymore
+
+        assertFalse(haptics.calls.contains("listeningEnded")) // no end-of-listening cue for a turn that already ended
+        assertEquals(hapticsAfterFinal, haptics.calls) // no haptic fired at all
+        assertEquals(stateAfterFinal, machine.state.value) // state untouched (still the done Streaming card)
     }
 
     @Test

@@ -90,6 +90,44 @@ class TestAgentAndSkill:
 # ---------------------------------------------------------------------------
 
 
+class TestAgentPromptResolvesPluginPath:
+    """The agent's example paths must resolve through the REAL substitution seam.
+
+    Regression: the prompt used the unbraced ``$CLAUDE_PLUGIN_ROOT``, which
+    ``substitute_agent_body`` pass 1 (``${KEY}`` from ``subs``) never matches —
+    it fell through to pass 3 (plain ``$VAR`` from the process env), where the
+    var is unset, so the shell later expanded ``ls "$CLAUDE_PLUGIN_ROOT/…"`` to
+    ``ls "/examples/components/"`` and the sub-agent thrashed hunting for a
+    directory that never existed. Braced ``${CLAUDE_PLUGIN_ROOT}`` resolves
+    deterministically from the spawn's ``plugin_root``, independent of any
+    runtime shell env.
+    """
+
+    def test_example_paths_resolve_to_the_real_plugin_root(self):
+        from mewbo_core.agent_registry import parse_agent_file
+        from mewbo_core.spawn_agent import substitute_agent_body
+
+        agent_md = _plugin_root() / "agents" / "st-widget-builder.md"
+        agent_def = parse_agent_file(agent_md, source="built-in:widget-builder")
+        assert agent_def is not None
+
+        # Substitute with the real seam, an EMPTY env (mobile/deployed reality
+        # where CLAUDE_PLUGIN_ROOT is not exported to the shell), so only the
+        # ${...} substitution from subs can resolve the path.
+        rendered = substitute_agent_body(
+            agent_def.body,
+            {"SESSION_ID": "s1", "CLAUDE_PLUGIN_ROOT": "/opt/plugin"},
+            env={},
+        )
+
+        # Every example path must point at the real plugin root...
+        assert "/opt/plugin/examples/components" in rendered
+        # ...and NO unresolved CLAUDE_PLUGIN_ROOT reference may survive (either
+        # form) into the text the sub-agent's shell will run.
+        assert "$CLAUDE_PLUGIN_ROOT" not in rendered
+        assert "${CLAUDE_PLUGIN_ROOT}" not in rendered
+
+
 class TestSessionToolLoad:
     def test_load_entry_imports_submit_widget_class(self):
         from mewbo_core.session_tools import SessionToolRegistry
@@ -144,6 +182,166 @@ def test_widget_id_accepts_plain_identifier():
 
     args = SubmitWidgetArgs(widget_id="widget_123")
     assert args.widget_id == "widget_123"
+
+
+class TestWidgetReadyPayload:
+    """The typed ``WidgetReadyPayload`` contract — wire-frozen snake_case keys
+    mirrored by the console TS type and an Android Kotlin type."""
+
+    FROZEN_KEYS = {"widget_id", "session_id", "files", "requirements", "summary"}
+
+    def test_round_trip_matches_frozen_wire_shape(self):
+        from mewbo_core.builtin_plugins.widget_builder.submit_widget import (
+            WidgetReadyPayload,
+        )
+
+        payload = WidgetReadyPayload(
+            widget_id="w1",
+            session_id="s1",
+            files={"app.py": "import streamlit as st\n", "data.json": "{}"},
+            requirements=["pandas"],
+            summary="a widget",
+        )
+        dumped = payload.model_dump()
+
+        assert set(dumped) == self.FROZEN_KEYS
+        assert dumped["widget_id"] == "w1"
+        assert dumped["session_id"] == "s1"
+        assert dumped["files"] == {"app.py": "import streamlit as st\n", "data.json": "{}"}
+        assert dumped["requirements"] == ["pandas"]
+        assert dumped["summary"] == "a widget"
+        assert isinstance(dumped["widget_id"], str)
+        assert isinstance(dumped["session_id"], str)
+        assert isinstance(dumped["files"], dict)
+        assert isinstance(dumped["requirements"], list)
+        assert isinstance(dumped["summary"], str)
+
+    def test_handle_emits_widget_ready_event_matching_frozen_shape(self, tmp_path, monkeypatch):
+        """End-to-end: a successful ``submit_widget`` call emits a
+        ``widget_ready`` event whose payload is exactly the frozen shape —
+        not a hand-assembled dict that happens to look right."""
+        import asyncio
+
+        from mewbo_core.builtin_plugins.widget_builder.submit_widget import (
+            SubmitWidgetTool,
+        )
+        from mewbo_core.classes import ActionStep
+
+        widget_root = tmp_path / "widgets"
+        widget_dir = widget_root / "s1" / "w1"
+        widget_dir.mkdir(parents=True)
+        (widget_dir / "app.py").write_text("import streamlit as st\n", encoding="utf-8")
+        (widget_dir / "data.json").write_text("{}", encoding="utf-8")
+
+        monkeypatch.setenv("MEWBO_WIDGET_ROOT", str(widget_root))
+
+        events: list[dict] = []
+        tool = SubmitWidgetTool(session_id="s1", event_logger=events.append)
+
+        step = ActionStep(
+            tool_id="submit_widget",
+            operation="run",
+            tool_input={"widget_id": "w1", "requirements": ["pandas"], "summary": "demo"},
+        )
+        result = asyncio.run(tool.handle(step))
+
+        assert "submitted successfully" in result.content
+        assert len(events) == 1
+        event = events[0]
+        assert event["type"] == "widget_ready"
+        payload = event["payload"]
+        assert set(payload) == self.FROZEN_KEYS
+        assert payload == {
+            "widget_id": "w1",
+            "session_id": "s1",
+            "files": {"app.py": "import streamlit as st\n", "data.json": "{}"},
+            "requirements": ["pandas"],
+            "summary": "demo",
+        }
+
+    def test_rejects_extra_key(self):
+        from mewbo_core.builtin_plugins.widget_builder.submit_widget import (
+            WidgetReadyPayload,
+        )
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            WidgetReadyPayload(
+                widget_id="w1",
+                session_id="s1",
+                files={"app.py": "x", "data.json": "{}"},
+                extra_field="not allowed",
+            )
+
+    @pytest.mark.parametrize(
+        "bad_files",
+        [
+            {"app.py": "x"},  # missing data.json
+            {"data.json": "{}"},  # missing app.py
+            {"app.py": "x", "data.json": "{}", "extra.txt": "y"},  # extra file key
+            {},  # empty
+        ],
+    )
+    def test_rejects_incomplete_or_extra_file_keys(self, bad_files):
+        from mewbo_core.builtin_plugins.widget_builder.submit_widget import (
+            WidgetReadyPayload,
+        )
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            WidgetReadyPayload(
+                widget_id="w1",
+                session_id="s1",
+                files=bad_files,
+            )
+
+
+def test_successful_submit_does_not_force_loop_termination(tmp_path, monkeypatch):
+    """A successful submit must NOT force the run to terminate.
+
+    Regression for Aura session ``e58f7cf7…``: ``submit_widget`` set a
+    terminate flag, so the loop's terminal poll
+    (``tool_use_loop.py``: ``should_terminate_run()`` then
+    ``terminal_reason()``) read ``terminal_reason()`` — which this tool never
+    defined — and crashed the run with ``AttributeError`` *after* the widget
+    was already built and ``widget_ready`` emitted. The widget renders off the
+    event, not off termination, so the tool is terminal-free like
+    ``update_todos``: the agent stops naturally on its next (text) turn.
+
+    This replicates the loop's poll verbatim against the real tool so it fails
+    the exact way production did if the termination behaviour ever returns.
+    """
+    import asyncio
+
+    from mewbo_core.builtin_plugins.widget_builder.submit_widget import (
+        SubmitWidgetTool,
+    )
+    from mewbo_core.classes import ActionStep
+
+    widget_root = tmp_path / "widgets"
+    widget_dir = widget_root / "s1" / "w1"
+    widget_dir.mkdir(parents=True)
+    (widget_dir / "app.py").write_text("import streamlit as st\n", encoding="utf-8")
+    (widget_dir / "data.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("MEWBO_WIDGET_ROOT", str(widget_root))
+
+    events: list[dict] = []
+    tool = SubmitWidgetTool(session_id="s1", event_logger=events.append)
+    step = ActionStep(
+        tool_id="submit_widget",
+        operation="run",
+        tool_input={"widget_id": "w1"},
+    )
+    result = asyncio.run(tool.handle(step))
+
+    assert "submitted successfully" in result.content
+    assert len(events) == 1 and events[0]["type"] == "widget_ready"
+
+    # Verbatim replica of the loop's terminal poll (tool_use_loop.py:767-773).
+    terminating = [t for t in [tool] if t.should_terminate_run()]
+    done_reason = terminating[0].terminal_reason() if terminating else "completed"
+    assert terminating == []
+    assert done_reason == "completed"
 
 
 def test_handle_runtime_traversal_guard_rejects_symlink_escape(tmp_path, monkeypatch):

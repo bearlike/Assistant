@@ -52,6 +52,22 @@ object AuraType {
     )
 
     /**
+     * The payload line of a promoted-tool action card (`ui/chat/toolcards/`) - the alarm's "8:00 AM".
+     * Reference-measured on a GMS device 2026-07-12 (158px line box @560dpi ⇒ 45dp ⇒ 36/44).
+     *
+     * Its own token rather than [greetingDisplay] (32/40) deliberately: that style was measured for
+     * the full-screen landing greeting, and borrowing it here would silently couple the card's
+     * hierarchy to an unrelated surface - the next tweak to the greeting would shrink the alarm. The
+     * card's whole job is that this line DOMINATES; it needs a size that is its own to defend.
+     */
+    val toolCardDisplay = TextStyle(
+        fontFamily = FigtreeFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 36.sp,
+        lineHeight = 44.sp,
+    )
+
+    /**
      * Base style for the title bar's product word ("Aura", spec: 500 weight, `textPrimary`). The
      * muted variant word (backend model short name, Rev D §D-4, else "Core") is composed
      * downstream as a second `Text` with `.copy(fontWeight = FontWeight.Normal, color =
@@ -83,6 +99,12 @@ object AuraType {
         fontSize = 16.sp,
         lineHeight = 24.sp,
     )
+
+    /** Overlay composer field + "Ask Mewbo" invitation [R4 2026-07-10]: the invitation is set
+     * comfortably title-scale so the pill reads as a conversation surface; the typed text shares
+     * it so placeholder→text never jumps size. Overlay-only — the docked composer stays
+     * [bodyMessage] (16sp). */
+    val composerOverlay = bodyMessage.copy(fontSize = 20.sp, lineHeight = 26.sp)
 
     /**
      * Compact scale (user directive 2026-07-04): 16sp / 22sp — supersedes the Rev F/181 measured

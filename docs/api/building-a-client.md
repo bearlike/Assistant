@@ -147,6 +147,36 @@ The same endpoint does double duty. If the run is active, the text steers it and
 
 [POST /api/sessions/{session_id}/interrupt](endpoint:POST /api/sessions/{session_id}/interrupt) signals the current tool step to pause. Interrupting an idle session is a no-op that returns `200`.
 
+### Terminate a session
+
+Interrupting stops a run; the session lives on and can be steered or resumed afterward. Terminating is different: it ends the session itself, permanently.
+
+[POST /api/sessions/{session_id}/terminate](endpoint:POST /api/sessions/{session_id}/terminate) is irreversible. There is no un-terminate call:
+
+```bash
+curl -X POST "$MEWBO_API_URL/api/sessions/9e2d47c1a0b34f12/terminate" \
+  -H "X-API-KEY: $MEWBO_API_KEY"
+```
+
+```json
+{
+  "session_id": "9e2d47c1a0b34f12",
+  "status": "terminated",
+  "terminated_at": "2026-07-13T18:24:10.882001+00:00",
+  "cancelled_triggers": 2
+}
+```
+
+`cancelled_triggers` counts any [triggers](triggers.md) armed on the session, they're cancelled in the same call, so a terminated session can never wake itself back up later. The call is idempotent: terminating an already-terminated session returns the same original values.
+
+After termination, every mutating route on that session, a new query, a steering message, recovery, forking, plan approval, returns `410 Gone`:
+
+```json
+{ "error": { "code": "session_terminated", "reason": "Session is permanently terminated", "retryable": false } }
+```
+
+Termination is not deletion. The transcript stays fully readable: `GET /api/sessions/{session_id}/events`, the stream, export, and share all keep working exactly as before. Only the ability to make the session do anything else is gone.
+
 ## Client capability negotiation
 
 Clients advertise the UI primitives they can render with the `X-Mewbo-Capabilities` request header. The value is a comma-separated list of capability ids, for example `stlite`. The API writes the advertised list onto the session's context event, and the orchestrator reads it to filter which agent types, skills, and session tools the model can see.

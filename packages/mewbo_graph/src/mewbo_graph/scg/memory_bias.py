@@ -1,4 +1,4 @@
-"""Memory-aware routing bias over the SCG learned layer (#76).
+"""Memory-aware routing bias over the SCG learned layer.
 
 ``docs/features-search.md``: "Before each query, the top-k relevant memory notes
 are retrieved via vector search and surfaced to ``scg_route``, biasing routing

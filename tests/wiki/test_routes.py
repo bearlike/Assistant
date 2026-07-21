@@ -5,7 +5,7 @@ Uses a temp JsonWikiStore and a stub runtime so no real DB is needed.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -152,6 +152,7 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/v1/wiki/languages"),
     ("GET", "/v1/wiki/index/job-001"),
     ("GET", "/v1/wiki/qa/ans-001"),
+    ("GET", "/v1/wiki/sessions/sess-001"),
 ]
 
 
@@ -322,6 +323,59 @@ def test_get_qa_snapshot(client):
     resp404 = c.get("/v1/wiki/qa/no-such-ans", headers={"X-Api-Key": API_KEY})
     assert resp404.status_code == 404
     assert resp404.get_json()["code"] == "not_found"
+
+
+# ── Session linkage ─────────────────────────────────────────────────────────────
+
+
+def test_get_session_link_resolves_indexing_session(client):
+    """A session attached to an indexing job → {slug, kind: 'indexing'}."""
+    c, store = client
+    _seed_job(store, job_id="job-001", slug="org/repo")
+    store.attach_job_session("job-001", "sess-idx")
+
+    resp = c.get("/v1/wiki/sessions/sess-idx", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"slug": "org/repo", "kind": "indexing"}
+
+
+def test_get_session_link_resolves_qa_session(client):
+    """A session attached to a QA answer → {slug, kind: 'qa'}."""
+    c, store = client
+    from mewbo_graph.wiki.types import QaAnswer
+
+    store.save_qa(QaAnswer(
+        answer_id="ans-001",
+        from_page_id="overview",
+        summary_sources=[],
+        model="anthropic/claude-sonnet-4-5",
+        blocks=[],
+        slug="org/repo",
+    ))
+    store.attach_qa_session("ans-001", "sess-qa")
+
+    resp = c.get("/v1/wiki/sessions/sess-qa", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"slug": "org/repo", "kind": "qa"}
+
+
+def test_get_session_link_indexing_checked_before_qa(client):
+    """A session can only back one kind — indexing wins the lookup order."""
+    c, store = client
+    _seed_job(store, job_id="job-001", slug="org/repo")
+    store.attach_job_session("job-001", "sess-both")
+
+    resp = c.get("/v1/wiki/sessions/sess-both", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert resp.get_json()["kind"] == "indexing"
+
+
+def test_get_session_link_unknown_session_404(client):
+    """A session with no wiki linkage at all → 404 not_found."""
+    c, _ = client
+    resp = c.get("/v1/wiki/sessions/no-such-session", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 404
+    assert resp.get_json()["code"] == "not_found"
 
 
 # ── Slug with slashes ──────────────────────────────────────────────────────────
@@ -505,19 +559,23 @@ def test_post_index_rate_limit(client, monkeypatch):
 
 def test_delete_project_also_deletes_credential(client):
     """DELETE /projects/<slug> drops the durable credential, not just the project."""
-    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
     from mewbo_graph.wiki.types import RepoCredential
 
     c, store = client
     _seed_project(store, slug="org/repo")
-    CredentialStore.save(store, "org/repo", RepoCredential(kind="token", value="s", username=None))
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug("org/repo"),
+        RepoCredential(kind="token", value="s", username=None),
+    )
 
     resp = c.delete("/v1/wiki/projects/org%2Frepo", headers={"X-Api-Key": API_KEY})
     assert resp.status_code == 200
-    assert CredentialStore.load(store, "org/repo") is None
+    assert CredentialStore.load(store, CredentialScope.from_slug("org/repo")) is None
 
 
-# ── Checkpoint-aware resume (Gitea #54, Part B) ──────────────────────────────────
+# ── Checkpoint-aware resume (Part B) ──────────────────────────────────
 
 
 def _seed_resumable_job(store, *, job_id="rj1", slug="org/repo", status="interrupted"):
@@ -529,11 +587,14 @@ def _seed_resumable_job(store, *, job_id="rj1", slug="org/repo", status="interru
         scannedCount=0, totalCount=0, currentFile=None,
         model="anthropic/claude-sonnet-4-6", commitSha="deadbeef",
     ))
+    # Stamp the node with the job's commit, as real indexing does — the resume
+    # skip predicate now counts nodes FOR THIS COMMIT, so a commit-less node
+    # would (correctly) not count as "the graph for deadbeef is built".
     store.upsert_nodes(slug, [
         make_graph_node(
             slug=slug, node_id="n1", type="Function", name="f", file="a.py", range=(0, 1)
         ),
-    ])
+    ], commit_sha="deadbeef")
     store.save_job_plan(job_id, [{"id": p, "title": p} for p in ("a", "b", "c")])
     _seed_page(store, slug=slug, page_id="a")
     _seed_page(store, slug=slug, page_id="b")
@@ -770,12 +831,14 @@ def test_post_branches_repo_access_envelope(client, monkeypatch):
 def test_post_branches_resolves_durable_credential(client, monkeypatch):
     """No body token but a slug → the durable CredentialStore token is used."""
     from mewbo_graph.plugins.wiki.branches import RemoteBranches
-    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
     from mewbo_graph.wiki.types import RepoCredential
 
     c, store = client
     CredentialStore.save(
-        store, "org/repo", RepoCredential(kind="token", value="ghp_durable", username=None)
+        store,
+        CredentialScope.from_slug("org/repo"),
+        RepoCredential(kind="token", value="ghp_durable", username=None),
     )
     seen: dict = {}
 
@@ -793,3 +856,328 @@ def test_post_branches_resolves_durable_credential(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert seen["token"] == "ghp_durable"
+
+
+def test_post_branches_chain_falls_through_rejected_stored_credential(client, monkeypatch):
+    """A revoked repo-scoped credential auth-fails; the chain advances to the
+    next candidate (host-scoped store) instead of failing the whole request —
+    exactly the cascading-failure scenario the resolution chain exists to fix."""
+    from mewbo_graph.plugins.wiki.branches import BranchListError, RemoteBranches
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(slug),
+        RepoCredential(kind="token", value="ghp_revoked", username=None),
+    )
+    CredentialStore.save(
+        store, CredentialScope.from_slug("git.example.com"),
+        RepoCredential(kind="token", value="ghp_host_valid", username=None),
+    )
+    seen_tokens: list[str | None] = []
+
+    def _list_heads(self):
+        seen_tokens.append(self.token)
+        if self.token == "ghp_revoked":
+            raise BranchListError("HTTP Basic: Access denied")
+        return RemoteBranches(branches=["main"], default_branch="main")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _list_heads
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": f"https://{slug}", "slug": slug},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"branches": ["main"], "defaultBranch": "main"}
+    assert seen_tokens == ["ghp_revoked", "ghp_host_valid"]
+
+
+def test_post_branches_explicit_token_is_exclusive_and_fails_fast(client, monkeypatch):
+    """[B2] An explicit body token is EXCLUSIVE: a rejected typed token returns a
+    400 'token rejected' error and NEVER falls through to a valid stored/ambient
+    credential (that masking is what let onboarding persist an untested-bad token
+    after a 'successful' branch list)."""
+    from mewbo_graph.plugins.wiki.branches import BranchListError, RemoteBranches
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    # A perfectly valid stored credential that MUST NOT rescue a bad typed token.
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(slug),
+        RepoCredential(kind="token", value="ghp_stored_valid", username=None),
+    )
+    seen_tokens: list[str | None] = []
+
+    def _list_heads(self):
+        seen_tokens.append(self.token)
+        if self.token == "ghp_typed_bad":
+            raise BranchListError("HTTP Basic: Access denied")
+        return RemoteBranches(branches=["main"], default_branch="main")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _list_heads
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": f"https://{slug}", "slug": slug, "token": "ghp_typed_bad"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["code"] == "validation"
+    assert "rejected" in body["message"].lower()
+    # ONLY the typed token was tried — the stored valid one never masked it.
+    assert seen_tokens == ["ghp_typed_bad"]
+
+
+def test_post_branches_explicit_token_success_short_circuits(client, monkeypatch):
+    """[B2] A valid body token short-circuits: 200 with ONLY that token tried
+    (the stored credential is never consulted when an explicit token is sent)."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranches
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(slug),
+        RepoCredential(kind="token", value="ghp_stored", username=None),
+    )
+    seen_tokens: list[str | None] = []
+
+    def _list_heads(self):
+        seen_tokens.append(self.token)
+        return RemoteBranches(branches=["main"], default_branch="main")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _list_heads
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": f"https://{slug}", "slug": slug, "token": "ghp_typed_good"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"branches": ["main"], "defaultBranch": "main"}
+    assert seen_tokens == ["ghp_typed_good"]
+
+
+def test_post_branches_threads_stored_credential_username(client, monkeypatch):
+    """A username-bearing stored credential (GitLab oauth2 / custom username) is
+    injected with its OWN username at the branch-list step — matching what
+    clone/freshness/validate do — not the default x-access-token."""
+    from mewbo_graph.plugins.wiki.branches import RemoteBranches
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(slug),
+        RepoCredential(kind="token", value="glpat_x", username="oauth2"),
+    )
+    seen: dict = {}
+
+    def _list_heads(self):
+        seen["token"] = self.token
+        seen["username"] = self.username
+        return RemoteBranches(branches=["main"], default_branch="main")
+
+    monkeypatch.setattr(
+        "mewbo_graph.plugins.wiki.branches.RemoteBranchLister.list_heads", _list_heads
+    )
+    resp = c.post(
+        "/v1/wiki/branches",
+        json={"repoUrl": f"https://{slug}", "slug": slug},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert seen["token"] == "glpat_x"
+    assert seen["username"] == "oauth2"
+
+
+# ── GET /v1/wiki/projects/<slug>/freshness ──────────────────────────────────
+#
+# The route imports ``RepoFreshness`` lazily INSIDE the handler, so these tests
+# patch the REAL engine (``mewbo_graph.plugins.wiki.freshness.RepoFreshness.check``)
+# with ``autospec=True``. A namesake fake module (the prior approach) would let
+# the route "pass" even if the engine's ``check`` signature drifted; binding to
+# the real callable + autospec enforces the exact kwargs the route passes.
+
+
+def _seed_git_project_with_commit(store, slug: str, commit_sha: str):
+    from mewbo_graph.wiki.types import Project
+
+    store.create_project(Project(
+        slug=slug, source="gitea", lang="en",
+        indexedAt="2026-01-01T00:00:00Z", pages=3, desc="x",
+        commitSha=commit_sha, repoUrl=f"https://{slug}", branch="main",
+    ))
+
+
+def _freshness_result(**over):
+    """Build a real ``FreshnessResult`` (route reads .remote_sha/.behind_by/.up_to_date)."""
+    from mewbo_graph.plugins.wiki.freshness import FreshnessResult
+
+    base = dict(remote_sha="def456", behind_by=2, up_to_date=False, error=None)
+    base.update(over)
+    return FreshnessResult(**base)
+
+
+def test_get_freshness_requires_auth(client):
+    c, _ = client
+    resp = c.get("/v1/wiki/projects/org%2Frepo/freshness")
+    assert resp.status_code == 401
+
+
+def test_get_freshness_project_not_found(client):
+    c, _ = client
+    resp = c.get("/v1/wiki/projects/no%2Fsuch/freshness", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 404
+
+
+def test_get_freshness_no_indexed_commit_returns_404(client):
+    from mewbo_graph.wiki.types import Project
+
+    c, store = client
+    store.create_project(Project(
+        slug="org/nocommit", source="github", lang="en",
+        indexedAt="2026-01-01T00:00:00Z", pages=1, desc="x",
+    ))
+    resp = c.get("/v1/wiki/projects/org%2Fnocommit/freshness", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 404
+
+
+def test_get_freshness_caches_within_ttl_and_force_busts(client):
+    """First call computes + caches; a second call within the TTL reuses the
+    cached body without recomputing; ``?force=1`` always recomputes. The engine
+    is patched with autospec so a signature drift in ``RepoFreshness.check``
+    (the exact kwargs the route passes) fails this test instead of silently
+    passing a namesake fake."""
+    import mewbo_api.wiki.routes as routes_mod
+    from mewbo_graph.plugins.wiki.freshness import RepoFreshness
+
+    routes_mod._freshness_cache.clear()
+    c, store = client
+    slug = "git.example.com/org/repo"
+    _seed_git_project_with_commit(store, slug, "abc123")
+    encoded = slug.replace("/", "%2F")
+
+    with patch.object(RepoFreshness, "check", autospec=True) as mock_check:
+        mock_check.return_value = _freshness_result()
+
+        resp1 = c.get(f"/v1/wiki/projects/{encoded}/freshness", headers={"X-Api-Key": API_KEY})
+        assert resp1.status_code == 200
+        body1 = resp1.get_json()
+        assert body1["indexedSha"] == "abc123"
+        assert body1["remoteSha"] == "def456"
+        assert body1["behindBy"] == 2
+        assert body1["upToDate"] is False
+        assert mock_check.call_count == 1
+        # Autospec already rejects an unknown kwarg; assert the load-bearing ones
+        # the route threads through so a route-side wiring regression is caught too.
+        _pos, kwargs = mock_check.call_args
+        assert kwargs["slug"] == slug
+        assert kwargs["platform"] == "gitea"
+        assert kwargs["ref"] == "main"
+
+        # Second call within the TTL reuses the cache — engine not invoked again.
+        resp2 = c.get(f"/v1/wiki/projects/{encoded}/freshness", headers={"X-Api-Key": API_KEY})
+        assert resp2.status_code == 200
+        assert resp2.get_json() == body1
+        assert mock_check.call_count == 1
+
+        # force=1 busts the cache and recomputes.
+        resp3 = c.get(
+            f"/v1/wiki/projects/{encoded}/freshness?force=1", headers={"X-Api-Key": API_KEY}
+        )
+        assert resp3.status_code == 200
+        assert mock_check.call_count == 2
+
+
+def test_get_freshness_fallback_uses_most_recent_complete_job(client):
+    """[L2] When the Project has no ``commit_sha``, the baseline is the MOST
+    RECENT complete job's commit — ordered by ``phase_started_at``, never the
+    uuid4 ``job_id`` (which is random and would pick an arbitrary job)."""
+    import mewbo_api.wiki.routes as routes_mod
+    from mewbo_graph.plugins.wiki.freshness import RepoFreshness
+    from mewbo_graph.wiki.types import IndexingJob, Project
+
+    routes_mod._freshness_cache.clear()
+    c, store = client
+    slug = "git.example.com/org/nofield"
+    # Project WITHOUT a commit_sha → forces the job fallback.
+    store.create_project(Project(
+        slug=slug, source="gitea", lang="en",
+        indexedAt="2026-01-01T00:00:00Z", pages=1, desc="x",
+        repoUrl=f"https://{slug}", branch="main",
+    ))
+    # Two complete jobs. The one with the LATER phase_started_at carries the
+    # sha we expect, but its job_id sorts EARLIER lexicographically — so a
+    # job_id sort would (wrongly) pick the older job's commit.
+    store.create_job(IndexingJob(
+        jobId="aaaa-older", slug=slug, status="complete",
+        scannedCount=0, totalCount=0, currentFile=None,
+        commitSha="oldsha", phaseStartedAt="2026-01-01T00:00:00Z",
+    ))
+    store.create_job(IndexingJob(
+        jobId="zzzz-newer", slug=slug, status="complete",
+        scannedCount=0, totalCount=0, currentFile=None,
+        commitSha="newsha", phaseStartedAt="2026-06-01T00:00:00Z",
+    ))
+    encoded = slug.replace("/", "%2F")
+
+    with patch.object(RepoFreshness, "check", autospec=True) as mock_check:
+        mock_check.return_value = _freshness_result(
+            remote_sha="newsha", behind_by=0, up_to_date=True
+        )
+        resp = c.get(f"/v1/wiki/projects/{encoded}/freshness", headers={"X-Api-Key": API_KEY})
+
+    assert resp.status_code == 200
+    assert resp.get_json()["indexedSha"] == "newsha"
+    # The recent job's sha is what got compared, not the lexicographically-first job_id.
+    _pos, kwargs = mock_check.call_args
+    assert _pos[1] == "newsha"
+
+
+def test_refresh_busts_freshness_cache(client, runtime_stub):
+    """[A3/E5] POST .../refresh evicts the slug's cached freshness so a re-index
+    never keeps serving a stale 'behind by N' badge."""
+    import mewbo_api.wiki.routes as routes_mod
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    _seed_git_project_with_commit(store, slug, "abc123")
+    encoded = slug.replace("/", "%2F")
+    routes_mod._freshness_cache[slug] = (1.0e18, {"indexedSha": "abc123", "cached": True})
+
+    resp = c.post(f"/v1/wiki/projects/{encoded}/refresh", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert slug not in routes_mod._freshness_cache
+
+
+def test_delete_project_busts_freshness_cache(client):
+    """[A3/E5] DELETE .../projects evicts the slug's cached freshness so a
+    re-created same-slug project can't inherit the deleted one's badge."""
+    import mewbo_api.wiki.routes as routes_mod
+
+    c, store = client
+    slug = "git.example.com/org/repo"
+    _seed_git_project_with_commit(store, slug, "abc123")
+    encoded = slug.replace("/", "%2F")
+    routes_mod._freshness_cache[slug] = (1.0e18, {"indexedSha": "abc123", "cached": True})
+
+    resp = c.delete(f"/v1/wiki/projects/{encoded}", headers={"X-Api-Key": API_KEY})
+    assert resp.status_code == 200
+    assert slug not in routes_mod._freshness_cache

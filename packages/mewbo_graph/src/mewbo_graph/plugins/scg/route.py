@@ -83,7 +83,7 @@ class ScgRouteTool(SessionToolBase):
             return err_result("validation", str(ve))
         try:
             store = ScgCore.store()
-            # route_with_memory carries the learned-memory bias (#76) so each
+            # route_with_memory carries the learned-memory bias so each
             # recipe can surface its anchored usage hints without a second lookup.
             recipes, bias = ScgCore.router(store).route_with_memory(
                 args.query, k=args.k
@@ -108,7 +108,7 @@ class ScgRouteTool(SessionToolBase):
         the route result carries the full per-source toolbox and the playbook
         copies it instead of leaving the scope to model inference.
 
-        ``memory_hints`` (#76) are the capped anchored connector insights for the
+        ``memory_hints`` are the capped anchored connector insights for the
         pathway — short "how to call this right" parameter-usage guidance the
         orchestrator/probe reads inline, so it never needs a second ``scg_memory``
         read. Absent (omitted) when the learned layer has nothing for the pathway.

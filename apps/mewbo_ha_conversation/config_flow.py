@@ -76,6 +76,7 @@ class MewboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore
         try:
             self.client = MewboApiClient(
                 base_url=cv.url_no_path(user_input[CONF_BASE_URL]),
+                api_key=user_input[CONF_API_KEY],
                 timeout=user_input[CONF_TIMEOUT],
                 session=async_create_clientsession(self.hass),
             )
@@ -97,7 +98,10 @@ class MewboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore
         else:
             return self.async_create_entry(
                 title=f"Mewbo - {user_input[CONF_BASE_URL]}",
-                data={CONF_BASE_URL: user_input[CONF_BASE_URL]},
+                data={
+                    CONF_BASE_URL: user_input[CONF_BASE_URL],
+                    CONF_API_KEY: user_input[CONF_API_KEY],
+                },
                 options={CONF_TIMEOUT: user_input[CONF_TIMEOUT]},
             )
 

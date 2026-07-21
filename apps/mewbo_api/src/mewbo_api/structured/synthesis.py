@@ -5,7 +5,7 @@ core :class:`~mewbo_core.structured_synthesis.StructuredSynthesizer` drives ONE
 grounded LLM call (+ one optional reask) — no ``ToolUseLoop``, no probes — so a
 caller that wants cheap, fast, retrieval-only structured output gets ~1–3s
 latency on the SAME endpoint as the agentic lane. This folds in the former
-``POST /v1/structured/fast`` sibling (#85): one synthesis engine, surfaced as a
+``POST /v1/structured/fast`` sibling: one synthesis engine, surfaced as a
 *mode* on ``/v1/structured`` instead of a parallel endpoint with its own request
 model, stamp seam, and session-backing path.
 

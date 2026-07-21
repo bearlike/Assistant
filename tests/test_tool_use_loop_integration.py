@@ -1266,17 +1266,13 @@ class TestPlanModePermission:
         step = ActionStep(tool_id="random_write_tool", operation="set", tool_input={})
         assert loop._plan_mode_permission(step) is False
 
-    def test_mcp_tool_allowed_when_flag_true(self):
-        """MCP tools pass when plan_mode_allow_mcp is True."""
+    def test_mcp_tool_allowed_unconditionally(self):
+        """MCP tools pass with no flag involved: Mewbo cannot classify a
+        third-party MCP tool's effect, so plan mode never mode-filters MCP.
+        """
         loop = self._make_plan_loop()
-        with patch(
-            "mewbo_core.tool_use_loop.get_config_value",
-            side_effect=lambda *args, **kw: (
-                True if "plan_mode_allow_mcp" in args else kw.get("default")
-            ),
-        ):
-            step = ActionStep(tool_id="mcp_search", operation="get", tool_input={"query": "x"})
-            assert loop._plan_mode_permission(step) is True
+        step = ActionStep(tool_id="mcp_search", operation="get", tool_input={"query": "x"})
+        assert loop._plan_mode_permission(step) is True
 
     def test_shell_blocked_with_unsafe_command(self):
         """Shell tool is denied when command contains metacharacters."""
@@ -1677,3 +1673,73 @@ class TestWatchdogRootSelfStall:
         assert diagnostics
         assert all(ctx.agent_id[:8] not in m for m in diagnostics)
         assert any("web_search" in m for m in diagnostics)
+
+
+class TestWatchdogConfigurableKnobs:
+    """Stall threshold + check interval are config-tunable —
+    the watchdog no longer carries the hardcoded 120s/30s values."""
+
+    def test_honors_configured_stall_threshold(self):
+        """A tighter configured ``stall_threshold_s`` flags a child the
+        hardcoded 120s default would have missed (stale by 10s only)."""
+
+        async def run():
+            ctx = _make_agent_context()
+            loop = _make_loop(agent_context=ctx)
+            child = AgentHandle(
+                agent_id="child0005",
+                parent_id=ctx.agent_id,
+                depth=1,
+                model_name="test-model",
+                task_description="child task",
+                status="running",
+                last_step_at=time.monotonic() - 10,
+                last_tool_id=None,
+                active_tool_id=None,
+                message_queue=queue.Queue(),
+            )
+            await ctx.registry.register(child)
+            with patch(
+                "mewbo_core.tool_use_loop.get_config_value",
+                side_effect=lambda *args, **kw: (
+                    5.0 if "stall_threshold_s" in args else kw.get("default")
+                ),
+            ):
+                await _run_watchdog_once(loop)
+            return ctx
+
+        ctx = asyncio.run(run())
+
+        diagnostics = []
+        while not ctx.message_queue.empty():
+            diagnostics.append(ctx.message_queue.get_nowait())
+        assert diagnostics, "expected the tighter configured threshold to flag the child"
+        assert any("over 5s" in m for m in diagnostics)
+
+    def test_honors_configured_check_interval(self):
+        """The watchdog's poll sleep uses the configured
+        ``stall_check_interval_s``, not the hardcoded 30s."""
+        captured: list[float] = []
+        real_sleep = asyncio.sleep
+
+        async def _capture_sleep(seconds):
+            captured.append(seconds)
+            if len(captured) > 1:
+                raise asyncio.CancelledError
+            await real_sleep(0)
+
+        async def run():
+            loop = _make_loop()
+            with (
+                patch("mewbo_core.tool_use_loop.asyncio.sleep", new=_capture_sleep),
+                patch(
+                    "mewbo_core.tool_use_loop.get_config_value",
+                    side_effect=lambda *args, **kw: (
+                        7.0 if "stall_check_interval_s" in args else kw.get("default")
+                    ),
+                ),
+            ):
+                await loop._watchdog()
+
+        asyncio.run(run())
+        assert captured[0] == 7.0

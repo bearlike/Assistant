@@ -758,3 +758,79 @@ class TestLSPToolFormatHover:
         hover.contents = Weird()
         result = LSPTool._format_hover(hover)  # type: ignore[arg-type]
         assert "weird content" in result
+
+
+# ---------------------------------------------------------------------------
+# LSPTool workspace-containment guard
+# ---------------------------------------------------------------------------
+
+
+class TestLSPToolContainmentGuard:
+    """The LSP tool otherwise bypasses ``resolve_safe_path``; under an ACTIVE
+    workspace containment it is jailed to the workspace, and is byte-identical
+    (unguarded) when no containment applies."""
+
+    def _tool(self):
+        return LSPTool.__new__(LSPTool)  # skip __init__ (no AbstractTool wiring)
+
+    def _step(self, file_path: str) -> ActionStep:
+        return ActionStep(
+            title="lsp",
+            tool_id="lsp",
+            operation="diagnostics",
+            tool_input={"operation": "diagnostics", "file_path": file_path},
+        )
+
+    def test_denies_path_outside_workspace_under_containment(self, tmp_path: Path):
+        from mewbo_core.workspace import WorkspaceContainment, active_containment
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        outside = tmp_path / "elsewhere" / "x.py"
+        outside.parent.mkdir()
+        outside.write_text("y = 2\n")
+        cont = WorkspaceContainment(mode="read_only", root=str(ws))
+
+        with active_containment(cont):
+            result = self._tool().run(self._step(str(outside)))
+        assert "Path not permitted" in result.content
+
+    def test_allows_path_inside_workspace_under_containment(self, tmp_path: Path):
+        from mewbo_core.workspace import WorkspaceContainment, active_containment
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        inside = ws / "foo.py"
+        inside.write_text("z = 3\n")
+        cont = WorkspaceContainment(mode="read_only", root=str(ws))
+
+        mgr = MagicMock()
+        mgr.server_for_file.return_value = None  # → "no server configured"
+        with (
+            active_containment(cont),
+            patch(
+                "mewbo_tools.integration.lsp.tool.get_lsp_manager", return_value=mgr
+            ),
+            patch("mewbo_tools.integration.lsp.tool.run_lsp_async", return_value=None),
+        ):
+            result = self._tool().run(self._step(str(inside)))
+        # Passed the guard: reaches the (stubbed) manager, no denial.
+        assert "Path not permitted" not in result.content
+
+    def test_unguarded_when_no_active_containment(self, tmp_path: Path):
+        # No active containment → the historical unguarded resolve; even an
+        # out-of-tree path reaches the manager (never a containment denial).
+        outside = tmp_path / "elsewhere" / "x.py"
+        outside.parent.mkdir()
+        outside.write_text("y = 2\n")
+
+        mgr = MagicMock()
+        mgr.server_for_file.return_value = None
+        with (
+            patch(
+                "mewbo_tools.integration.lsp.tool.get_lsp_manager", return_value=mgr
+            ),
+            patch("mewbo_tools.integration.lsp.tool.run_lsp_async", return_value=None),
+        ):
+            result = self._tool().run(self._step(str(outside)))
+        assert "Path not permitted" not in result.content

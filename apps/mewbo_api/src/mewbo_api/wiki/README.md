@@ -39,8 +39,8 @@ Backend env knobs:
 
 ## Demo repo
 
-A tiny Python pkg fixture with a `.mewbo/wiki.json` grounder, hosted on the
-project's private Gitea instance. Used for E2E smoke tests.
+A tiny Python pkg fixture with a `.mewbo/wiki.json` grounder. Used for E2E
+smoke tests.
 
 ## Grounder
 

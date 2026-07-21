@@ -2,6 +2,10 @@
 #
 # Post-init scripts: docker/init.d/*.sh run at container startup before the API.
 # Mount the directory read-only so scripts can be added/edited without rebuilding.
+# The images already bake the tracked scripts, so this mount is OPTIONAL — it is
+# how you add local-only ones (an internal CA trust script, extra tooling).
+# Mounting SHADOWS the baked copies, so the mounted directory must still carry
+# the tracked scripts you want to keep; copy them in rather than starting empty.
 #
 # Project directories: mount at identical paths so configs/app.json works as-is.
 services:

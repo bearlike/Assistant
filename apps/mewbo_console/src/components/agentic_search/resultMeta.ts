@@ -35,7 +35,8 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { RelativeTime } from "../wiki/relativeTime"
+import { formatBytes } from "../../lib/utils"
+import { RelativeTime } from "../../utils/relativeTime"
 
 export type MetaChipKind = "count" | "time" | "tag" | "status"
 
@@ -103,19 +104,10 @@ function isSizeKey(normKey: string): boolean {
   )
 }
 
-/** Humanize a byte count: 1536 → "1.5 KB", 24_576 → "24 KB". */
-export function formatBytes(n: number): string {
-  if (!Number.isFinite(n)) return String(n)
-  if (Math.abs(n) < 1024) return `${n} B`
-  const units = ["KB", "MB", "GB", "TB"]
-  let val = n / 1024
-  let i = 0
-  while (Math.abs(val) >= 1024 && i < units.length - 1) {
-    val /= 1024
-    i += 1
-  }
-  return `${val.toFixed(1).replace(/\.0$/, "")} ${units[i]}`
-}
+// `formatBytes` was a byte-identical copy of the canonical `lib/utils` home;
+// re-exported from there so the size-key chip below and this module's
+// co-located test both resolve one implementation.
+export { formatBytes }
 
 // status VALUE (normalized) → tone. Unmapped values fall back to "neutral", so
 // any `state`/`status` still renders as a badge — only the colour is unknown.

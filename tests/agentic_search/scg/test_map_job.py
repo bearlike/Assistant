@@ -1,4 +1,4 @@
-"""Tests for ``MapSourceJob`` — the map-source lifecycle façade (spec #19 §16.2).
+"""Tests for ``MapSourceJob`` — the map-source lifecycle façade (spec §16.2).
 
 Mirrors ``tests/wiki`` job tests: the ONLY seam mocked is the runtime — a FAKE
 ``SessionRuntime`` that records ``resolve_session`` / ``append_context_event`` /

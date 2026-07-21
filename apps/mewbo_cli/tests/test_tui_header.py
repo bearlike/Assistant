@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for HeaderContext, HeaderView, and HeaderWidget (issue #150).
+"""Tests for HeaderContext, HeaderView, and HeaderWidget.
 
 TDD: these tests were written before the implementation.
 """

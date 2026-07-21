@@ -1,6 +1,153 @@
 {
   "$id": "https://thekrishna.in/Assistant/latest/app.schema.json",
   "$defs": {
+    "APIAuthConfig": {
+      "additionalProperties": false,
+      "description": "Identity & access management for the REST API (opt-in).\n\nOff by default: with no ``auth`` block \u2014 or ``enabled: false`` \u2014 every\nrequest resolves to the built-in full-power identity and the server behaves\nexactly as it did before IAM existed. The union-shaped fields\n(``authenticators``, the group mappings, ``bootstrap``) are carried here as\nopen objects and validated in full against the identity kernel's typed models\nat server startup, which refuses to boot on an invalid block. These settings\nare documented in full in ``docs/authentication.md``.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Master switch for identity & access management. When off (the default), every request resolves to the built-in full-power identity and the server behaves exactly as it did before IAM. Turn on only after configuring at least one authenticator.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "authenticators": {
+          "description": "Ordered list of identity sources (local API keys, OIDC, trusted reverse-proxy headers, LDAP, SAML). Each entry is an object whose `kind` field selects the authenticator type, plus that type's own settings. Validated in full at server startup; an invalid entry stops the server from booting. Each authenticator type's own settings are documented in `docs/authentication.md`.",
+          "items": {
+            "$ref": "#/$defs/AuthenticatorEntry"
+          },
+          "title": "Authenticators",
+          "type": "array"
+        },
+        "role_mappings": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rules mapping identity-provider group names to Mewbo roles at login: an object with an ordered `rules` list and a `default_role` applied when no rule matches. The rule format is documented in `docs/authentication.md`.",
+          "title": "Role Mappings"
+        },
+        "team_mappings": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rules mapping identity-provider group names to team slugs at login: an object with an ordered `rules` list. The rule format is documented in `docs/authentication.md`.",
+          "title": "Team Mappings"
+        },
+        "bootstrap": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Cold-start admin rule: grants the admin role to the first users matching an identity-provider group or an explicit subject allowlist, so an administrator exists before any role has been assigned. Documented in `docs/authentication.md`.",
+          "title": "Bootstrap"
+        },
+        "session": {
+          "$ref": "#/$defs/APIAuthSessionConfig"
+        },
+        "avatars": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Avatar-resolution policy: whether to fall back to Gravatar for users without a profile picture, and the default image style. Documented in `docs/authentication.md`.",
+          "title": "Avatars"
+        },
+        "scim": {
+          "$ref": "#/$defs/APIAuthScimConfig"
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Auth audit-trail settings: an object with an `enabled` flag; on by default once IAM is enabled. The events recorded are listed in `docs/authentication.md`.",
+          "title": "Audit"
+        }
+      },
+      "title": "Authentication",
+      "type": "object"
+    },
+    "APIAuthScimConfig": {
+      "additionalProperties": false,
+      "description": "SCIM 2.0 provisioning settings.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether the SCIM 2.0 provisioning endpoint is served.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "secret": {
+          "default": "",
+          "description": "Bearer secret an identity provider presents to the SCIM endpoint. Write-only: never returned by the config API.",
+          "title": "Secret",
+          "type": "string",
+          "x-secret": true
+        }
+      },
+      "title": "SCIM",
+      "type": "object"
+    },
+    "APIAuthSessionConfig": {
+      "additionalProperties": false,
+      "description": "Browser session/cookie settings for federated logins.",
+      "properties": {
+        "cookie_name": {
+          "default": "mewbo_session",
+          "description": "Name of the browser session cookie issued after a federated login.",
+          "title": "Cookie Name",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "default": 28800,
+          "description": "Lifetime of a browser session, in seconds.",
+          "minimum": 1,
+          "title": "Ttl Seconds",
+          "type": "integer"
+        },
+        "secret": {
+          "default": "",
+          "description": "Signing secret for the browser session cookie. Required once any non-API-key authenticator is configured. Write-only: never returned by the config API.",
+          "title": "Secret",
+          "type": "string",
+          "x-secret": true
+        }
+      },
+      "title": "Session",
+      "type": "object"
+    },
     "APIConfig": {
       "description": "REST API authentication.",
       "properties": {
@@ -16,9 +163,20 @@
         },
         "allow_external_cwd": {
           "default": false,
-          "description": "Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers such as Grove that manage their own worktrees.",
+          "description": "Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers that manage their own worktrees.",
           "title": "Allow External Cwd",
           "type": "boolean"
+        },
+        "apps_token_secret": {
+          "default": "",
+          "description": "Signing secret for Mewbo Apps render tokens \u2014 the short-lived, app-scoped read tokens the served app frontend presents on the read-only data/system endpoints. Set this to sign (and rotate) app tokens independently of the master token; when left empty it falls back to the master token, logging one startup warning.",
+          "title": "Apps Token Secret",
+          "type": "string",
+          "x-secret": true
+        },
+        "auth": {
+          "$ref": "#/$defs/APIAuthConfig",
+          "description": "Identity & access management (opt-in; off by default). Configures authenticators, roles, and sessions. Documented in `docs/authentication.md`."
         }
       },
       "title": "API Server",
@@ -64,6 +222,14 @@
           "title": "Allowed Models",
           "type": "array"
         },
+        "model_tiers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Coarse model-cost tier -> concrete model id map (e.g. {'economy': 'anthropic/claude-haiku-4-5', 'frontier': 'anthropic/claude-opus-4-6'}), resolved by a spawned agent's DelegationContract.model_tier. An explicit spawn model arg or an agent_type's configured model always wins; a declared tier with no map entry is a silent no-op fallthrough.",
+          "title": "Model Tiers",
+          "type": "object"
+        },
         "max_iters": {
           "default": 30,
           "deprecated": true,
@@ -77,6 +243,89 @@
           "description": "Deprecated. Sub-agents now run until natural completion. This field is retained for API backward compatibility but is not enforced. Safety is provided by session_step_budget, stall detection, and LLM timeouts.",
           "title": "Sub Agent Max Steps",
           "type": "integer"
+        },
+        "session_step_budget": {
+          "default": 0,
+          "description": "Ceiling on total tool-execution steps across every agent in a session (root + all sub-agents combined), enforced by the hypervisor: a warning is injected as the budget nears, and the run hard-stops at exhaustion. 0 = unlimited.",
+          "title": "Session Step Budget",
+          "type": "integer"
+        },
+        "attestation_enabled": {
+          "default": true,
+          "description": "Record a best-effort provenance hash chain over every spawn/terminal transition in a session's agent tree \u2014 bounded scalars + a contract snapshot + a summary FINGERPRINT only, never task text or raw summary content. Additive and never fatal: a failed or absent chain degrades to the historical no-attestation behaviour. Default ON; this is the kill switch.",
+          "title": "Attestation Enabled",
+          "type": "boolean"
+        },
+        "default_workspace_mode": {
+          "default": "full_access",
+          "description": "Root filesystem-containment tier every session starts at, narrowed per sub-agent by spawn_agent's workspace_mode. One of 'read_only' (reads confined to the workspace, no writes), 'workspace_write' (reads + writes confined to the workspace), or 'full_access' (no path restriction; default, historical behaviour). Only bites when workspace_enforcement is on.",
+          "examples": [
+            "full_access",
+            "workspace_write",
+            "read_only"
+          ],
+          "title": "Default Workspace Mode",
+          "type": "string"
+        },
+        "workspace_enforcement": {
+          "default": false,
+          "description": "Master switch for workspace_mode filesystem containment. OFF by default (staged): while off, every path resolves through the historical tenant-union allowlist regardless of an agent's workspace_mode, so the tiers are carried + narrowed but never enforced. Flip on to collapse each contained agent's reachable paths to its own workspace root + Mewbo scratch.",
+          "title": "Workspace Enforcement",
+          "type": "boolean"
+        },
+        "stall_threshold_s": {
+          "default": 120.0,
+          "description": "Seconds of no tool-execution progress before the watchdog flags an agent as stalled and injects an NL warning into its message queue.",
+          "title": "Stall Threshold S",
+          "type": "number"
+        },
+        "stall_check_interval_s": {
+          "default": 30.0,
+          "description": "Seconds between watchdog stall-detection sweeps.",
+          "title": "Stall Check Interval S",
+          "type": "number"
+        },
+        "write_progress_signal_step_threshold": {
+          "default": 25,
+          "description": "Consecutive non-write tool-execution steps before the write-progress signal fires telemetry for a write-capable agent. 0 disables.",
+          "title": "Write Progress Signal Step Threshold",
+          "type": "integer"
+        },
+        "write_progress_signal_event_interval": {
+          "default": 10,
+          "description": "Steps between repeat write-progress signal events once the threshold is crossed.",
+          "title": "Write Progress Signal Event Interval",
+          "type": "integer"
+        },
+        "write_progress_signal_max_events": {
+          "default": 2,
+          "description": "Maximum write-progress signal events emitted before it goes quiet.",
+          "title": "Write Progress Signal Max Events",
+          "type": "integer"
+        },
+        "write_progress_signal_reminder_enabled": {
+          "default": false,
+          "description": "When the write-progress signal fires, also inject a criterion-blind objective-restatement reminder (states the task goal only \u2014 never the signal or its criteria). Default off: telemetry alone is the observe-only default.",
+          "title": "Write Progress Signal Reminder Enabled",
+          "type": "boolean"
+        },
+        "verification_enabled": {
+          "default": false,
+          "description": "Master switch for verifier-gated completion. OFF by default (staged): while off, a spawn's verification spec is carried but never run, so every natural completion is accepted exactly as historically. Flip on to gate a write-capable agent's claimed completion behind a ground-truth command check before its text is accepted.",
+          "title": "Verification Enabled",
+          "type": "boolean"
+        },
+        "verification_max_retries": {
+          "default": 2,
+          "description": "Maximum times a failed completion verifier re-drives the agent before its text is accepted, honestly flagged verification_failed. Clamped to [0, 10] and bounded ALSO by the step/wall budget, whichever is tighter. 0 = one check, no retry.",
+          "title": "Verification Max Retries",
+          "type": "integer"
+        },
+        "verification_timeout_s": {
+          "default": 60.0,
+          "description": "Ceiling in seconds on a single verifier subprocess; a spawn's per-spec timeout_s is clamped down to this at run. Clamped to [1, 600].",
+          "title": "Verification Timeout S",
+          "type": "number"
         },
         "llm_call_timeout": {
           "default": 120.0,
@@ -121,12 +370,6 @@
           "title": "Plan Mode Shell Allowlist",
           "type": "array"
         },
-        "plan_mode_allow_mcp": {
-          "default": true,
-          "description": "Allow ALL user-enabled MCP tools (tools with kind='mcp') during plan mode. Uses a permissive default and trusts the user's mcp.json configuration. Set to false to block MCP tools in plan mode regardless of their read-only status.",
-          "title": "Plan Mode Allow Mcp",
-          "type": "boolean"
-        },
         "web_ide": {
           "anyOf": [
             {
@@ -151,6 +394,56 @@
       "type": "object",
       "x-group": "agent",
       "x-order": 1
+    },
+    "AuthenticatorEntry": {
+      "additionalProperties": true,
+      "description": "One identity source in ``api.auth.authenticators``.\n\nDeliberately PERMISSIVE (``extra=\"allow\"``): the authoritative model is the\nidentity kernel's discriminated authenticator union, which sits a layer\nabove core and must never be imported down into it. Every kind-specific\nsetting therefore rides through here untyped and is re-validated STRICTLY \u2014\nper-kind, ``extra=\"forbid\"`` \u2014 when the server builds its auth settings at\nstartup, which refuses to boot on an invalid entry. So this model is not a\nsecond validator and must not grow into one.\n\nWhat it DOES declare is the plaintext credentials, because the config API\nredacts by SCHEMA: a field carries ``x-secret`` or its value is returned to\nevery caller holding ``config.read``. An untyped ``dict`` contributes no\nschema, so nothing marked these and they were served in the clear. Core\nknows these two NAMES \u2014 a stable wire contract it shares with the identity\nkernel \u2014 without knowing which kind each belongs to or what it means, which\nis precisely the sliver of knowledge redaction needs and no more.\n``kind``/``name`` stay typed so an entry is self-describing.",
+      "properties": {
+        "name": {
+          "description": "Unique label for this identity source, used in logs and the admin UI.",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which authenticator type this entry configures: `api_key`, `oidc`, `trusted_header`, `ldap`, or `saml`. Selects which further settings the entry must carry.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "client_secret": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OIDC client secret issued by the identity provider. Write-only: never returned by the config API.",
+          "title": "Client Secret",
+          "x-secret": true
+        },
+        "bind_password": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Password for the LDAP service account used to search the directory. Write-only: never returned by the config API.",
+          "title": "Bind Password",
+          "x-secret": true
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "title": "Authenticator",
+      "type": "object"
     },
     "CLIConfig": {
       "description": "Terminal CLI display and interaction settings.",
@@ -209,11 +502,11 @@
     },
     "CliRemoteConfig": {
       "additionalProperties": false,
-      "description": "Opt-in remote endpoint for the terminal CLI \u2014 CLI-scoped ONLY.\n\nEvery other surface ignores this block. When ``base_url`` is set the CLI is\nstill a strictly-local engine (the run loop + authoritative JSONL transcript\nstay on this host), but it additionally (a) mirrors each session event to the\nremote REST API fire-and-forget for cross-device visibility and (b)\nauto-registers the Mewbo MCP server so the product tools\n(``ask_wiki``/``search``/``structured_query`` + wiki-graph reads) appear in\nthe CLI registry and execute remotely (compute offload). Empty \u21d2 fully local.",
+      "description": "Opt-in remote endpoint for the terminal CLI; CLI-scoped ONLY.\n\nEvery other surface ignores this block. When ``base_url`` is set the CLI is\nstill a strictly-local engine (the run loop + authoritative JSONL transcript\nstay on this host), but it additionally (a) mirrors each session event to the\nremote REST API fire-and-forget for cross-device visibility and (b)\nauto-registers the Mewbo MCP server so the product tools\n(``ask_wiki``/``search``/``structured_query`` + wiki-graph reads) appear in\nthe CLI registry and execute remotely (compute offload). Empty \u21d2 fully local.",
       "properties": {
         "base_url": {
           "default": "",
-          "description": "Base URL of the remote Mewbo deployment \u2014 a reverse-proxy root that serves the REST API under ``/api`` and the Mewbo MCP server under ``/mcp``. Empty (default) \u21d2 the CLI is fully local.",
+          "description": "Base URL of the remote Mewbo deployment, a reverse-proxy root that serves the REST API under ``/api`` and the Mewbo MCP server under ``/mcp``. Empty (default) \u21d2 the CLI is fully local.",
           "examples": [
             "https://mewbo.example.com"
           ],
@@ -295,7 +588,7 @@
       "x-order": 3
     },
     "FallbackConfig": {
-      "description": "Opt-in cross-model fallback policy.\n\nDisabled by default so a run never fans out to a different model \u2014 with\ndifferent cost, latency, output style and prompt-cache behaviour \u2014 without\nan explicit opt-in. When disabled, an error that is hopeless on the current\nmodel (e.g. quota exhausted) halts cleanly for one-click recovery instead.",
+      "description": "Opt-in cross-model fallback policy.\n\nDisabled by default so a run never fans out to a different model, with\ndifferent cost, latency, output style and prompt-cache behaviour, without\nan explicit opt-in. When disabled, an error that is hopeless on the current\nmodel (e.g. quota exhausted) halts cleanly for one-click recovery instead.",
       "properties": {
         "enabled": {
           "default": false,
@@ -370,7 +663,7 @@
         },
         "command": {
           "default": "",
-          "description": "Shell command to execute (type=command).",
+          "description": "Shell command run via subprocess with shell=True, on the host running the API/CLI process and with that process's own privileges: no sandboxing, no approval prompt. Only point this at trusted, version-controlled scripts. (type=command)",
           "title": "Command",
           "type": "string"
         },
@@ -412,7 +705,7 @@
       "type": "object"
     },
     "HooksConfig": {
-      "description": "External shell hooks fired during the session lifecycle.",
+      "description": "External shell hooks fired during the session lifecycle.\n\nCommand hooks run unsandboxed shell commands with the API/CLI process's\nown privileges (see ``HookEntry.command``'s docstring) \u2014 a caller who can\nPATCH this section can execute arbitrary code on the host. ``x-protected``\nputs the whole section in the same never-read-never-written-via-API tier\nas the other host-level settings in this file: settable only by editing\nthe config file directly, never over the network regardless of\ncredential (see ``ConfigSchemaView`` in ``apps/mewbo_api``).",
       "properties": {
         "pre_tool_use": {
           "description": "Hooks executed before each tool invocation.",
@@ -458,7 +751,8 @@
       "title": "Hooks",
       "type": "object",
       "x-group": "integrations",
-      "x-order": 3
+      "x-order": 3,
+      "x-protected": true
     },
     "LLMConfig": {
       "description": "LLM provider connection and model selection.",
@@ -494,7 +788,7 @@
         },
         "action_plan_model": {
           "default": "",
-          "description": "Model ID for action-plan generation. Falls back to default_model when empty.",
+          "description": "Model ID the orchestrator uses to generate a session's initial plan and, when no explicit model is passed in, as that session's default model. Falls back to default_model when empty.",
           "examples": [
             "anthropic/claude-sonnet-4-6"
           ],
@@ -573,7 +867,7 @@
           "type": "string"
         },
         "reasoning_effort_models": {
-          "description": "Model name patterns that support the reasoning_effort parameter.",
+          "description": "Additional model IDs (or 'prefix*' patterns) that should receive the reasoning_effort parameter, on top of the built-in match for gpt-5, o3, Claude, and Gemini models. Use this to opt in a model the built-in detection doesn't recognize yet.",
           "items": {
             "type": "string"
           },
@@ -601,7 +895,7 @@
       "properties": {
         "enabled": {
           "default": true,
-          "description": "Enable native LSP tool.",
+          "description": "Master switch for the native LSP tool (hover/diagnostics/go-to-definition). When off, or when the pygls dependency isn't installed, the tool is never registered and the agent works from grep/read alone.",
           "title": "Enabled",
           "type": "boolean"
         },
@@ -728,7 +1022,7 @@
       "properties": {
         "enabled": {
           "default": true,
-          "description": "Enable the plugin system.",
+          "description": "Turn the whole plugin system on, including Mewbo's own built-in suites such as `widget_builder`.\n\nWhile this is off, no plugin contributes anything to the agent, whether it is built in or installed from a marketplace: no agent definitions, no skills, no hooks, no MCP tools. The `enabled_plugins` and `marketplaces` settings below are ignored entirely until you turn it back on.",
           "title": "Enabled",
           "type": "boolean"
         },
@@ -763,21 +1057,21 @@
       },
       "title": "Plugins",
       "type": "object",
-      "x-group": "agent",
-      "x-order": 3
+      "x-group": "plugins",
+      "x-order": 1
     },
     "ProjectConfig": {
       "description": "A project directory exposed to the REST API for session scoping.",
       "properties": {
         "path": {
           "default": "",
-          "description": "Absolute path to the project root. Tilde (~) is expanded.",
+          "description": "Absolute path to the project's root directory on the API host's filesystem (tilde is expanded). The directory must already exist, because Mewbo does not create it, and a session request against this project fails if the path is missing.",
           "title": "Path",
           "type": "string"
         },
         "description": {
           "default": "",
-          "description": "Short human-readable description of the project.",
+          "description": "Short blurb shown next to this project's name in project pickers. Purely informational, with no effect on behavior.",
           "title": "Description",
           "type": "string"
         }
@@ -826,7 +1120,7 @@
         },
         "retry_after_cap": {
           "default": 60.0,
-          "description": "Upper bound applied to a server Retry-After before sleeping on it.",
+          "description": "Upper bound in seconds applied to a server's Retry-After header before the loop sleeps on it; caps how long one misbehaving response can stall a run.",
           "title": "Retry After Cap",
           "type": "number"
         },
@@ -875,7 +1169,7 @@
       "properties": {
         "envmode": {
           "default": "dev",
-          "description": "Environment mode (e.g. dev, prod).",
+          "description": "Free-text label for this deployment (e.g. dev, staging, prod). Its only effect is being stamped onto every Langfuse trace as the `release` tag, so you can filter and compare traces across environments.",
           "examples": [
             "dev"
           ],
@@ -893,7 +1187,7 @@
         },
         "log_style": {
           "default": "",
-          "description": "Log output style for the core engine (empty for default).",
+          "description": "Legacy override for the CLI's terminal log format. Only the literal value 'dark' has any effect (dims the log line style for a dark background); anything else uses the plain format. Takes priority over cli_log_style when set; leave empty to use that instead.",
           "examples": [
             ""
           ],
@@ -902,7 +1196,7 @@
         },
         "cli_log_style": {
           "default": "dark",
-          "description": "Rich console log theme for the CLI (dark or light).",
+          "description": "CLI terminal log format: only the literal value 'dark' has any effect (dims the log line style for a dark background); any other value uses the plain format. Overridden by runtime.log_style when that's set.",
           "examples": [
             "dark"
           ],
@@ -999,7 +1293,7 @@
     },
     "ScgTierModelsConfig": {
       "additionalProperties": false,
-      "description": "Per-tier model mapping \u2014 the tier picks the brain, not just the budget.\n\nA tier maps to the LLM that drives the whole run (orchestrator session AND\nits probe sub-agents, which inherit the session model). An empty string\nfalls back to ``llm.default_model``. An explicit per-request ``model``\noverride (where the endpoint offers one) always wins over the tier map.",
+      "description": "Per-tier model mapping: the tier picks the brain, not just the budget.\n\nA tier maps to the LLM that drives the whole run (orchestrator session AND\nits probe sub-agents, which inherit the session model). An empty string\nfalls back to ``llm.default_model``. An explicit per-request ``model``\noverride (where the endpoint offers one) always wins over the tier map.",
       "properties": {
         "fast": {
           "default": "openai/gpt-oss-120b",
@@ -1029,7 +1323,7 @@
       "properties": {
         "default_tier": {
           "default": "auto",
-          "description": "Default search tier \u2014 one budget knob over decomposition depth and probe fan-out. Overridable per run.",
+          "description": "Default search tier, one budget knob over decomposition depth and probe fan-out. Overridable per run.",
           "enum": [
             "fast",
             "auto",
@@ -1107,11 +1401,11 @@
     },
     "ToolSearchConfig": {
       "additionalProperties": false,
-      "description": "Deferred tool loading via on-demand schema fetching.\n\nWhen ``mode='on'``, MCP tool schemas (and any spec with\n``metadata.deferred=True``) are stripped from the initial ``bind_tools``\ncall and surfaced to the model by name only via\n``<available-deferred-tools>``. The model fetches schemas it actually\nneeds by calling the built-in ``tool_search`` tool. Mirrors Claude\nCode's ``ToolSearchTool`` mechanism \u2014 saves substantial context tokens\non sessions with many MCP servers connected.",
+      "description": "Deferred tool loading via on-demand schema fetching.\n\nWhen ``mode='on'``, MCP tool schemas (and any spec with\n``metadata.deferred=True``) are stripped from the initial ``bind_tools``\ncall and surfaced to the model by name only via\n``<available-deferred-tools>``. The model fetches schemas it actually\nneeds by calling the built-in ``tool_search`` tool. Mirrors Claude\nCode's ``ToolSearchTool`` mechanism, saving substantial context tokens\non sessions with many MCP servers connected.",
       "properties": {
         "mode": {
           "default": "auto",
-          "description": "'off' keeps every tool's schema in the initial bind. 'on' always defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search. 'auto' defers only when the number of deferrable tools exceeds auto_threshold \u2014 so lean / zero-MCP sessions keep verbatim binding and pay nothing, while many-MCP sessions are spared ~240 tokens per tool every turn.",
+          "description": "'off' keeps every tool's schema in the initial bind. 'on' always defers MCP tools and any spec with metadata.deferred=True; the model loads schemas on demand via tool_search. 'auto' defers only when the number of deferrable tools exceeds auto_threshold, so lean / zero-MCP sessions keep verbatim binding and pay nothing, while many-MCP sessions are spared ~240 tokens per tool every turn.",
           "enum": [
             "off",
             "on",
@@ -1131,22 +1425,96 @@
       "title": "Tool Search",
       "type": "object"
     },
+    "TriggersConfig": {
+      "description": "Reverse-invocation trigger subsystem.\n\nThe durable peer of the sub-agent hypervisor: a background watcher that\nfires time / cron / CI / forge-PR / webhook triggers and re-invokes the\nsessions that armed them. OFF by default (``enabled=False``), so the feature\nis un-enableable until an operator turns it on and a stock deployment pays\nnothing. The lower half of this section is the admission policy the\n``schedule_trigger`` tool + the arm route enforce (mirrors\n``mewbo_core.triggers.policy.TriggerPolicy`` field-for-field; ``to_policy``\nbuilds one).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Turn the trigger watcher on. Nothing fires until you do.\n\nA trigger is how Mewbo starts a session later, on its own, with nobody watching: at a set time, on a repeating schedule, or when a CI run finishes, a pull request changes, or a webhook calls in. The watcher is the background loop that notices those moments and wakes the session that asked to be woken. While it is off, the trigger routes still work, so a session can arm a trigger and you can list, pause, or cancel it, but no trigger ever fires. Armed triggers simply wait until you turn the watcher on.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "tick_interval_seconds": {
+          "default": 5.0,
+          "description": "How often the watcher wakes up to look at the schedule, in seconds.\n\nOn each pass it expires the triggers whose deadline has gone by and fires the time and cron triggers that have come due. A shorter interval wakes a session closer to the moment it asked for; a longer one costs the server less. This is also the cadence at which the forge poll below gets a chance to run.",
+          "minimum": 1.0,
+          "title": "Tick Interval Seconds",
+          "type": "number"
+        },
+        "poll_interval_seconds": {
+          "default": 60.0,
+          "description": "How often the watcher asks the forge about CI runs and pull requests, in seconds.\n\nTime and cron triggers can be judged from the clock alone, but `ci.workflow` and `forge.pr` triggers cannot: the watcher has to call the forge's REST API to see what changed. Those calls are rate-limited and cost a round trip each, so they run on this deliberately coarser cadence rather than on every pass. Raise it if you are bumping into API limits; lower it if you want CI results picked up sooner.",
+          "minimum": 5.0,
+          "title": "Poll Interval Seconds",
+          "type": "number"
+        },
+        "max_consecutive_failures": {
+          "default": 5,
+          "description": "How many errors in a row one trigger may hit before it is given up on.\n\nWhen a fire or a forge poll raises, the watcher records the error on the trigger and leaves it armed, so a passing outage never throws away a schedule. Once a trigger has failed this many times back to back without a single success in between, the watcher stops retrying it and moves it to `failed`. Any success resets the count to zero.",
+          "minimum": 1,
+          "title": "Max Consecutive Failures",
+          "type": "integer"
+        },
+        "max_armed_per_session": {
+          "default": 20,
+          "description": "The most triggers one session may have armed at the same time.\n\nTriggers are armed by the agent from inside a session, so this ceiling is what keeps a single session from filling the schedule with wakes. An attempt to arm one past the limit is refused, and the agent is told why. Cancelling a trigger, or letting one finish, frees the slot again.",
+          "minimum": 1,
+          "title": "Max Armed Per Session",
+          "type": "integer"
+        },
+        "max_fires_cap": {
+          "default": 100,
+          "description": "The ceiling on how many times any single trigger may fire.\n\nA repeating trigger, a cron schedule for instance, can name its own `max_fires` limit when it is armed. This is the ceiling on that request: an attempt to arm a trigger asking for more is refused. A trigger that reaches its own limit completes and stops firing.",
+          "minimum": 1,
+          "title": "Max Fires Cap",
+          "type": "integer"
+        },
+        "default_expiry_days": {
+          "default": 7.0,
+          "description": "How long an armed trigger lives when it names no expiry of its own, in days.\n\nEvery trigger expires eventually, so that a wake nobody remembers arming cannot linger forever. When the agent arms one without setting an expiry date, this many days from the moment of arming is stamped on it. Once that moment passes, the watcher expires the trigger instead of firing it.",
+          "exclusiveMinimum": 0.0,
+          "title": "Default Expiry Days",
+          "type": "number"
+        },
+        "cron_min_interval_seconds": {
+          "default": 60,
+          "description": "The shortest gap allowed between two fires of a cron trigger, in seconds.\n\nA cron expression can be written to fire far more often than a session is worth waking, so this is the floor. When a cron trigger is armed, the gap between its first two fires is measured, and a schedule tighter than this is rejected there and then rather than being throttled later.",
+          "minimum": 1,
+          "title": "Cron Min Interval Seconds",
+          "type": "integer"
+        },
+        "webhook_payload_max_bytes": {
+          "default": 200000,
+          "description": "How much of an incoming webhook body the woken session gets to see, in bytes.\n\nA webhook can carry a large payload, and all of it becomes context the session has to read. A body bigger than this is truncated rather than rejected: the call still fires the trigger, the session receives the first part of the body, and it is told the payload was cut short. When a signature is configured, it is checked against the whole body before any truncation happens.",
+          "minimum": 1,
+          "title": "Webhook Payload Max Bytes",
+          "type": "integer"
+        }
+      },
+      "title": "Triggers",
+      "type": "object",
+      "x-group": "automation",
+      "x-order": 1
+    },
     "WebIdeConfig": {
       "additionalProperties": false,
       "description": "Config for the per-session code-server \"Open in Web IDE\" feature.",
       "properties": {
         "enabled": {
           "default": false,
+          "description": "Turn on the 'Open in Web IDE' feature (per-session code-server containers via Docker). Also requires a MongoDB-backed session store; toggling this needs an API process restart to take effect since the /api/ide routes are registered at startup.",
           "title": "Enabled",
           "type": "boolean"
         },
         "image": {
           "default": "codercom/code-server:latest",
+          "description": "Docker image used to launch each session's code-server container.",
           "title": "Image",
           "type": "string"
         },
         "default_lifetime_hours": {
           "default": 1,
+          "description": "Hours a new Web IDE container stays up before it self-terminates, unless the session extends it first.",
           "maximum": 24,
           "minimum": 1,
           "title": "Default Lifetime Hours",
@@ -1154,6 +1522,7 @@
         },
         "max_lifetime_hours": {
           "default": 8,
+          "description": "Hard ceiling on a session's total Web IDE lifetime across all extensions; a request to extend past this is rejected.",
           "maximum": 168,
           "minimum": 1,
           "title": "Max Lifetime Hours",
@@ -1161,6 +1530,7 @@
         },
         "cpus": {
           "default": 1.0,
+          "description": "CPU core limit for each Web IDE container, e.g. 1.0 = one core (maps to Docker's --cpus / nano_cpus).",
           "maximum": 16.0,
           "minimum": 0.1,
           "title": "Cpus",
@@ -1168,12 +1538,14 @@
         },
         "memory": {
           "default": "1g",
+          "description": "Memory limit for each Web IDE container, in Docker's --memory syntax: digits followed by m or g, e.g. '1g' or '512m'.",
           "pattern": "^\\d+[mgMG]$",
           "title": "Memory",
           "type": "string"
         },
         "pids_limit": {
           "default": 512,
+          "description": "Maximum number of processes/threads allowed inside a Web IDE container; bounds a runaway process from exhausting the host.",
           "maximum": 4096,
           "minimum": 64,
           "title": "Pids Limit",
@@ -1181,6 +1553,7 @@
         },
         "network": {
           "default": "mewbo-ide",
+          "description": "Docker network each Web IDE container joins. Must be the same network the ide-proxy is attached to, or the proxy can't reach the container.",
           "pattern": "^[a-zA-Z0-9_-]+$",
           "title": "Network",
           "type": "string"
@@ -1193,6 +1566,7 @@
         },
         "state_dir": {
           "default": "/tmp/mewbo-ide",
+          "description": "Host directory where each Web IDE container's expiry-deadline file is written; the container's internal watchdog reads it to self-terminate on schedule.",
           "title": "State Dir",
           "type": "string"
         }
@@ -1272,7 +1646,7 @@
         },
         "model": {
           "default": "openai/text-embedding-3-small",
-          "description": "Embedding model ID routed through the LLM proxy. Must support the OpenAI ``/v1/embeddings`` shape (LiteLLM normalises Gemini and others to this shape). Pin a fast model here to speed up indexing \u2014 embedding is per-node and runs synchronously.",
+          "description": "Embedding model ID routed through the LLM proxy. Must support the OpenAI ``/v1/embeddings`` shape (LiteLLM normalises Gemini and others to this shape). Pin a fast model here to speed up indexing, since embedding is per-node and runs synchronously.",
           "examples": [
             "openai/gemini-embedding-001",
             "openai/text-embedding-3-large"
@@ -1282,7 +1656,7 @@
         },
         "batch_size": {
           "default": 64,
-          "description": "Batch size when embedding nodes in chunks.",
+          "description": "Number of graph nodes embedded per API call during indexing. Higher values index faster but send larger requests; lower it if you hit the embedding provider's rate or payload limits.",
           "examples": [
             32,
             64,
@@ -1344,7 +1718,7 @@
         },
         "fusion_w_ppr": {
           "default": 0.1,
-          "description": "Additive memory-expansion weight (GAAMA 0.1\u00b7ppr + 1.0\u00b7sim).",
+          "description": "Weight applied to a code node's score when it's surfaced only by following a memory note's anchor rather than direct text/code search. Raise it to rank memory-anchored context higher relative to direct hits; lower it toward 0 to favor direct hits.",
           "title": "Fusion W Ppr",
           "type": "number"
         },
@@ -1492,7 +1866,12 @@
       "description": "External hooks fired during the session lifecycle (command or http)."
     },
     "plugins": {
-      "$ref": "#/$defs/PluginsConfig"
+      "$ref": "#/$defs/PluginsConfig",
+      "description": "How Mewbo finds, installs, and enables plugins.\n\nA plugin extends what the agent can do. It brings its own skills, agent definitions, lifecycle hooks, and MCP tools, and those hooks run on this machine, so install only what you trust. Marketplaces are the catalogs Mewbo looks in for plugins to offer you; the list above shows what is installed today and what is available to install."
+    },
+    "triggers": {
+      "$ref": "#/$defs/TriggersConfig",
+      "description": "Ceilings on the triggers that start a session without you.\n\nA trigger is a reverse invocation. Instead of you opening a session, a session asks to be woken later and Mewbo wakes it, on its own, with nobody watching. There are five kinds: `time.at` fires once at a set moment, `time.cron` fires on a repeating schedule, `ci.workflow` fires when a CI run finishes, `forge.pr` fires when a pull request changes, and `webhook` fires when something outside calls in. The agent arms a trigger from inside a session, and the triggers list above is where you watch, pause, and cancel what it armed. The settings here are the limits all of that has to stay inside."
     },
     "channels": {
       "additionalProperties": {
@@ -1509,7 +1888,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/ProjectConfig"
       },
-      "description": "Named project directories exposed to the REST API for session scoping.",
+      "description": "Directories you've already created, registered here by hand under a short name; sessions reference them by that name (e.g. `\"project\": \"<key>\"`). Distinct from Mewbo-managed (\"virtual\") projects, which the API creates and owns itself and which sessions reference as `managed:<project_id>`: entries here are never created, modified, or deleted by Mewbo, only pointed at.",
       "title": "Projects",
       "type": "object",
       "x-group": "workspace",

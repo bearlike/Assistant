@@ -1,10 +1,13 @@
 package com.mewbo.aura.ui.aurora
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,8 +40,9 @@ import com.mewbo.aura.ui.orb.OrbShowcase
 import com.mewbo.aura.ui.orb.SparkState
 import com.mewbo.aura.ui.theme.AuraMotion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-// "Bottom glow" retired Gitea #181 (AuroraGlowBottom deleted - the wash's own new Resting state,
+// "Bottom glow" retired (AuroraGlowBottom deleted - the wash's own new Resting state,
 // exercised on the Wash page, replaced it as the landing/idle liveness layer).
 private val PAGE_TITLES = listOf("Wash", "Edge glow", "Scrim", "Spark", "Orb")
 
@@ -87,7 +92,7 @@ fun LivenessShowcase(modifier: Modifier = Modifier) {
 
 @Composable
 private fun WashPage() {
-    // Defaults to Resting (Gitea #181: the new landing/idle state - the page most worth checking
+    // Defaults to Resting (the new landing/idle state - the page most worth checking
     // first now that AuroraGlowBottom is retired).
     var state by remember { mutableStateOf<AuroraState>(AuroraState.Resting) }
     Box(Modifier.fillMaxSize()) {
@@ -115,40 +120,63 @@ private fun EdgeGlowPage() {
     var replayTick by remember { mutableIntStateOf(0) }
     var replaying by remember { mutableStateOf(false) }
     val replayProgress = remember { mutableFloatStateOf(0f) }
+    // [R4] Perimeter-bloom envelope, driven by Replay the same way the overlay's own choreography
+    // does: snap to 1 for the ignite, then exhale to 0 over bloomSettleMs while the Listen dwell
+    // begins (launch, so the settle runs concurrently and doesn't block the state timeline).
+    val bloom = remember { Animatable(0f) }
 
     LaunchedEffect(replayTick) {
         if (replayTick == 0) return@LaunchedEffect
         replaying = true
+        bloom.snapTo(1f)
         val steps = 30
         repeat(steps + 1) { i ->
             replayProgress.floatValue = i / steps.toFloat()
             state = EdgeGlowState.Igniting(replayProgress.floatValue)
             delay(AuraMotion.edgeSweepMs.toLong() / steps)
         }
+        launch { bloom.animateTo(0f, tween(AuraMotion.bloomSettleMs, easing = FastOutSlowInEasing)) }
         state = EdgeGlowState.Listening(6f)
         delay(1800)
         state = EdgeGlowState.Thinking
         delay(1800)
+        state = EdgeGlowState.Resting
         replaying = false
     }
 
     Box(Modifier.fillMaxSize()) {
-        AuroraEdgeGlow(state = state)
+        // [R5] Preview the OVERLAY look: full multi-hue hue-drift field + persistent edge-lit
+        // perimeter (chat keeps both at the composable's 0f defaults). Matches AssistOverlayScreen's
+        // OVERLAY_AURORA_HUE_DRIFT / OVERLAY_PERIMETER_PRESENCE (1f each), which are private there.
+        AuroraEdgeGlow(
+            state = state,
+            perimeterBloom = bloom.asState(),
+            hueDriftAmount = 1f,
+            perimeterPresence = 1f,
+        )
         Column(
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(state.debugLabel(), color = MaterialTheme.colorScheme.onBackground)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Six state buttons no longer fit one screen width unscrolled (Rest was the one that
+            // tipped it over) - a plain non-scrolling Row doesn't clip cleanly, it compresses/wraps
+            // the overflowing children instead. horizontalScroll is this codebase's established
+            // fix for exactly this shape (ChatMessageRows.kt, AuraComposer.kt).
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 TextButton(onClick = { state = EdgeGlowState.Hidden }) { Text("Hidden") }
                 TextButton(onClick = { state = EdgeGlowState.Igniting(1f) }) { Text("Ignited") }
                 TextButton(onClick = { state = EdgeGlowState.Listening(1f) }) { Text("Listen (quiet)") }
                 TextButton(onClick = { state = EdgeGlowState.Listening(9f) }) { Text("Listen (loud)") }
                 TextButton(onClick = { state = EdgeGlowState.Thinking }) { Text("Think") }
+                TextButton(onClick = { state = EdgeGlowState.Resting }) { Text("Rest") }
             }
             TextButton(enabled = !replaying, onClick = { replayTick++ }) {
-                Text(if (replaying) "Replaying…" else "Replay: Ignite -> Listen -> Think")
+                Text(if (replaying) "Replaying…" else "Replay: Bloom -> Listen -> Think -> Rest")
             }
         }
     }
@@ -159,6 +187,7 @@ private fun EdgeGlowState.debugLabel(): String = when (this) {
     is EdgeGlowState.Igniting -> "Igniting (${(progress * 100).toInt()}%)"
     is EdgeGlowState.Listening -> "Listening (rms=$rmsDb dB)"
     EdgeGlowState.Thinking -> "Thinking"
+    EdgeGlowState.Resting -> "Resting"
 }
 
 @Composable

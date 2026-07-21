@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Tests for the foundation TUI extension seams (issue #150).
+"""Tests for the foundation TUI extension seams.
 
 These four seams are the stable extension points every Wave-2 child mounts
 into without editing shared wiring:
 
-- ``MessageRendererRegistry`` (consumed by #152 transcript)
-- ``SidebarSlotRegistry`` (consumed by #156 agent panel/status)
-- ``PermissionGateway`` (consumed by #154 permission modal)
-- ``InputGateway`` (consumed by #155 input/completion)
+- ``MessageRendererRegistry`` (consumed by transcript)
+- ``SidebarSlotRegistry`` (consumed by agent panel/status)
+- ``PermissionGateway`` (consumed by permission modal)
+- ``InputGateway`` (consumed by input/completion)
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def test_permission_auto_approve_short_circuits() -> None:
 
 
 def test_permission_default_decision_is_deny() -> None:
-    # esc=deny safe default until #154 injects the modal decision.
+    # esc=deny safe default before the App injects the modal decision.
     gateway = PermissionGateway(auto_approve=lambda: False)
     assert gateway(_Step()) is False  # type: ignore[arg-type]
 

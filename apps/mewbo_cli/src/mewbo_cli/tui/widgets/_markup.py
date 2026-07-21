@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Textual content-markup helpers for #156 sidebar widgets.
+"""Shared Textual content-markup helpers for sidebar widgets.
 
 ``TodoPanel`` and ``StatusBar`` both render their content as Textual markup
 strings (``[$var]…[/]``) handed straight to ``Static.update`` so theme color

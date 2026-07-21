@@ -181,7 +181,7 @@ def test_runtime_start_async_forwards_structured_params(tmp_path):
 
 
 def test_start_async_emits_run_accepted_before_registry_build(tmp_path, monkeypatch):
-    """#138: ``run_accepted`` is emitted BEFORE the run thread builds the registry.
+    """``run_accepted`` is emitted BEFORE the run thread builds the registry.
 
     ``orchestrate_session`` is where ``Orchestrator.__init__`` builds the tool
     registry + discovers project instructions. We capture the transcript at the
@@ -461,7 +461,7 @@ def test_resolve_recovery_query_retry_truncates_failed_turn(tmp_path):
 
 
 def test_resolve_recovery_query_continue_preserves_interrupted_turn(tmp_path):
-    """#84: ``continue`` keeps an interrupted turn that emitted NO completion.
+    """``continue`` keeps an interrupted turn that emitted NO completion.
 
     A run killed mid-flight (api restart) writes its tool work but never a
     ``completion`` for that turn. Anchoring the truncation on the LAST completion
@@ -503,9 +503,14 @@ def test_resolve_recovery_query_continue_drops_stale_prior_attempt(tmp_path):
     """A SECOND ``continue`` drops the stale prior recovery attempt + its turn.
 
     The truncation's real job: keep the transcript from accreting duplicate
-    recovery prompts. When a prior ``recovery`` marker exists, re-continuing cuts
-    from just before it — removing the stale synthetic continue-turn while
-    keeping the real work that preceded it.
+    recovery prompts. A prior ``recovery`` marker whose attempt produced nothing
+    durable is cut from just before the marker — removing the unanswered
+    synthetic continue-turn while keeping the real work that preceded it.
+
+    The marker alone is not enough: an attempt that emitted an ``assistant``
+    message, a ``tool_result`` or a ``completion`` is never cut, so this fixture
+    leaves the synthetic re-prompt genuinely unanswered. See
+    ``tests/test_recovery_truncation.py`` for the durable-work side.
     """
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
@@ -520,7 +525,6 @@ def test_resolve_recovery_query_continue_drops_stale_prior_attempt(tmp_path):
     store.append_event(
         session_id, {"type": "user", "payload": {"text": "stale continue prompt"}}
     )
-    store.append_event(session_id, {"type": "assistant", "payload": {"text": "stale"}})
 
     runtime.resolve_recovery_query(session_id, "continue")
 
@@ -691,7 +695,7 @@ def test_resolve_recovery_query_refuses_running_session(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Recovery capability re-injection (Gitea #54, Part F1)
+# Recovery capability re-injection (Part F1)
 # ---------------------------------------------------------------------------
 
 
@@ -771,7 +775,7 @@ def test_reinject_recovery_context_uses_latest_gating_value(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# ``recoverable`` flag (Gitea #54, Part F2)
+# ``recoverable`` flag (Part F2)
 # ---------------------------------------------------------------------------
 
 
@@ -816,6 +820,32 @@ def test_recoverable_true_when_incomplete(tmp_path):
     assert summary["recoverable"] is True
 
 
+def test_recoverable_true_when_budget_exhausted(tmp_path):
+    """Graduated exhaustion finishes the run cleanly (``done=True``,
+    a forced wrap-up turn already ran) but never reached natural completion —
+    same ``incomplete``/recoverable treatment as ``max_steps_reached``."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=True, done_reason="budget_exhausted")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "incomplete"
+    assert summary["recoverable"] is True
+
+
+def test_recoverable_true_when_halted_agent_budget(tmp_path):
+    """Forward-compat: a future per-agent contract-budget halt maps the same way."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "do it"}})
+    _append_completion(store, session_id, done=True, done_reason="halted_agent_budget")
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "incomplete"
+    assert summary["recoverable"] is True
+
+
 def test_recoverable_true_when_died_without_completion(tmp_path):
     """The real failure mode: process killed mid-call, NO completion event.
 
@@ -844,7 +874,7 @@ def test_recoverable_false_when_completed(tmp_path):
 
 def test_recoverable_true_when_awaiting_approval(tmp_path):
     """A session parked in ``awaiting_approval`` is recoverable — recovery
-    ``continue`` is the auto-exit, mirroring send_followup re-engagement (#66)."""
+    ``continue`` is the auto-exit, mirroring send_followup re-engagement."""
     store = SessionStore(root_dir=str(tmp_path))
     runtime = SessionRuntime(session_store=store)
     session_id = runtime.resolve_session()
@@ -890,3 +920,165 @@ def test_recoverable_false_when_running(tmp_path):
         deadline = time.time() + 2.0
         while time.time() < deadline and runtime.is_running(session_id):
             time.sleep(0.01)
+
+
+# ---------------------------------------------------------------------------
+# Permanent termination (WP2)
+# ---------------------------------------------------------------------------
+
+
+def test_is_terminated_choke_point(tmp_path):
+    """runtime.is_terminated reflects the store's terminated stamp."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    assert runtime.is_terminated(session_id) is False
+    store.terminate_session(session_id)
+    assert runtime.is_terminated(session_id) is True
+
+
+def test_terminate_session_shape_and_event(tmp_path):
+    """First terminate returns the 200 shape and appends a session_terminated event."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+
+    result = runtime.terminate_session(session_id)
+    assert result["session_id"] == session_id
+    assert result["status"] == "terminated"
+    assert result["terminated_at"] is not None
+    assert result["cancelled_triggers"] == 0
+
+    events = store.load_transcript(session_id)
+    marker = next((e for e in events if e.get("type") == "session_terminated"), None)
+    assert marker is not None
+    assert marker["payload"]["terminated_at"] == result["terminated_at"]
+
+
+def test_terminate_session_idempotent_repeat(tmp_path):
+    """A repeat terminate returns the ORIGINAL timestamp and appends no 2nd event."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    first = runtime.terminate_session(session_id)
+    second = runtime.terminate_session(session_id)
+    assert second["terminated_at"] == first["terminated_at"]
+    assert second["cancelled_triggers"] == 0
+
+    markers = [
+        e for e in store.load_transcript(session_id) if e.get("type") == "session_terminated"
+    ]
+    assert len(markers) == 1
+
+
+def test_terminate_on_terminate_callbacks_fire_once(tmp_path):
+    """on_terminate callbacks run exactly once on the first terminate, summed."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    seen: list[str] = []
+
+    def cb_two(sid: str) -> int:
+        seen.append(sid)
+        return 2
+
+    def cb_three(sid: str) -> int:
+        return 3
+
+    runtime.register_on_terminate(cb_two)
+    runtime.register_on_terminate(cb_three)
+
+    result = runtime.terminate_session(session_id)
+    assert result["cancelled_triggers"] == 5  # 2 + 3
+    assert seen == [session_id]
+
+    # Idempotent repeat must NOT re-fire callbacks.
+    repeat = runtime.terminate_session(session_id)
+    assert repeat["cancelled_triggers"] == 0
+    assert seen == [session_id]
+
+
+def test_terminate_callback_failure_is_isolated(tmp_path):
+    """A raising callback is skipped, never blocking termination or later callbacks."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+
+    def boom(_sid: str) -> int:
+        raise RuntimeError("cascade blew up")
+
+    def ok(_sid: str) -> int:
+        return 4
+
+    runtime.register_on_terminate(boom)
+    runtime.register_on_terminate(ok)
+    result = runtime.terminate_session(session_id)
+    # boom contributes nothing; ok still runs and counts.
+    assert result["cancelled_triggers"] == 4
+    assert runtime.is_terminated(session_id) is True
+
+
+def test_terminate_session_side_effects_gated_by_store_return(tmp_path, monkeypatch):
+    """Side effects run only when the STORE reports it newly stamped the timestamp.
+
+    Models the losing side of a concurrency race (fix): the store
+    already holds a real ``terminated_at`` (a concurrent winner stamped it
+    out of band), yet the runtime must gate its cancel/callback/event side
+    effects on the store's own set-once return value, never on its own
+    unlocked ``get_terminated_at`` read — else two concurrent FIRST callers
+    could both observe "not yet terminated" and both run the side effects.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.terminate_session(session_id)  # out-of-band winner
+
+    seen: list[str] = []
+    runtime.register_on_terminate(lambda sid: seen.append(sid) or 1)
+    monkeypatch.setattr(store, "terminate_session", lambda _sid: False)
+
+    result = runtime.terminate_session(session_id)
+
+    assert result["cancelled_triggers"] == 0
+    assert seen == []
+    markers = [
+        e for e in store.load_transcript(session_id) if e.get("type") == "session_terminated"
+    ]
+    assert markers == []
+
+
+def test_summarize_terminated_beats_completion(tmp_path):
+    """terminated wins over a completed run and is never recoverable."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+    store.append_event(
+        session_id,
+        {"type": "completion", "payload": {"done": True, "done_reason": "completed"}},
+    )
+    runtime.terminate_session(session_id)
+
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "terminated"
+    assert summary["terminated"] is True
+    assert summary["terminated_at"] is not None
+    assert summary["recoverable"] is False
+
+
+def test_summarize_terminated_beats_running(tmp_path, monkeypatch):
+    """terminated wins even over a still-unwinding live run (cancel is cooperative)."""
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = runtime.resolve_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+    store.terminate_session(session_id)
+    # Force is_running True to model the window between terminate and loop unwind.
+    monkeypatch.setattr(runtime, "is_running", lambda sid: True)
+
+    summary = runtime.summarize_session(session_id)
+    assert summary["status"] == "terminated"
+    assert summary["recoverable"] is False

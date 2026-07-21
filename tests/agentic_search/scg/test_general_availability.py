@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""SCG as a general reasoning surface (#83-B) — availability, scope, approval.
+"""SCG as an scg-capable reasoning surface — gating, scope, approval.
 
-These cover the four facets that turn the SCG from a search-only capability into
-a surface ordinary sessions (CLI chat, console tasks, channels) can reason over:
+The SCG reasoning tools (``scg_route`` / ``scg_observe`` / ``scg_memory``) are
+gated on the ``scg`` capability. This file covers WHO reaches them and how an
+scg-capable-but-UNSCOPED session behaves:
 
-* the runtime capability predicate (`_scg_runtime_capability`) — grants ``scg``
-  ONLY when ``scg.enabled`` is on AND the store holds ≥1 mapped source; withholds
-  when disabled or the graph is empty;
-* an UNSCOPED session reads the WHOLE graph (no ``ScgScope`` bound → the scope
-  default permits every source);
+* **advertisement-only gating** — importing this suite registers NO
+  runtime capability provider, so a bare session (advertised nothing, named no
+  scg tool) is NOT auto-granted ``scg`` even when ``scg.enabled`` is on and a
+  source is mapped. The earlier blanket provider that granted ``scg`` to
+  any such session (binding all 12 scg/agentic_search schemas on every LLM call
+  and misclassifying it as ``origin:search``) is removed;
+* an UNSCOPED scg session reads the WHOLE graph (no ``ScgScope`` bound → the
+  scope default permits every source);
 * an UNSCOPED ``scg_memory`` write lands with ``session:<id>`` attribution + a
-  live ``ANCHORS`` edge (capability-seeded store, per the #81-A lesson — never an
+  live ``ANCHORS`` edge (capability-seeded store, per the lesson — never an
   ``entity_type``-only fixture, which masked the dropped-anchor bug);
 * the approval default-allow path — ``scg_route`` / ``scg_observe`` / ``scg_memory``
   classify ``get`` so the DEFAULT permission policy ALLOWs them with no extra knob.
 
 No LLM, no network, no Mongo — the ``ScgCore`` seam is patched to a tmp store +
-fake embedder for the read/write paths, and the predicate runs over a real
+fake embedder for the read/write paths, and the gating check runs over a real
 JSON-backed store with the config flag mocked.
 """
 
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,7 +38,7 @@ import pytest
 from mewbo_core.classes import ActionStep
 from mewbo_core.permissions import PermissionDecision, _default_policy
 from mewbo_core.tool_use_loop import _infer_operation
-from mewbo_graph.plugins.scg import _core, _scg_runtime_capability
+from mewbo_graph.plugins.scg import _core
 from mewbo_graph.plugins.scg.memory import ScgMemoryTool
 from mewbo_graph.plugins.scg.observe import ScgObserveTool
 from mewbo_graph.scg.store import JsonScgStore
@@ -63,9 +68,9 @@ class _FakeEmbedder:
 
 @pytest.fixture()
 def mapped_store(tmp_path: Path) -> JsonScgStore:
-    """A store with ONE mapped source whose nodes are ``capability`` kind (#81-A).
+    """A store with ONE mapped source whose nodes are ``capability`` kind.
 
-    The #81-A lesson: an MCP-tool-list source mints ``capability`` nodes (no entity
+    The lesson: an MCP-tool-list source mints ``capability`` nodes (no entity
     layer), so a fixture seeding only ``entity_type`` masks the dropped-anchor bug.
     This fixture seeds a real two-capability source with a typed edge so the
     predicate, scope read, and anchor resolution all exercise the live shape.
@@ -122,56 +127,41 @@ def _run(tool: Any, tool_input: dict) -> dict:
     return ast.literal_eval(asyncio.run(tool.handle(_step(tool_input))).content)
 
 
-# ── 1. Runtime capability predicate ──────────────────────────────────────────
+# ── 1. Advertisement-only gating (no blanket runtime grant) ────────────
 
 
-def test_predicate_grants_scg_when_enabled_and_mapped(mapped_store: JsonScgStore) -> None:
-    """``scg.enabled`` ON + ≥1 mapped source ⇒ the predicate grants ``scg``."""
+def test_suite_registers_no_capability_provider(mapped_store: JsonScgStore) -> None:
+    """Importing the scg suite must NOT auto-grant ``scg`` to bare sessions.
+
+    The blanket provider granted ``scg`` to ANY session once ``scg.enabled``
+    + ≥1 mapped source held — binding all 12 scg/agentic_search schemas on every
+    LLM call of a bare ``POST /api/sessions`` coding session and tagging it
+    ``origin:search``. It is removed. Re-running the suite's import side-effects
+    registers NO capability provider, so ``augment_session_capabilities`` is a
+    pass-through for a session that advertised nothing — even with the feature
+    enabled and a source mapped. ``scg`` is advertisement-only now.
+    """
+    import mewbo_core.capabilities as core_caps
+    import mewbo_graph.plugins.scg as scg_pkg
     from mewbo_graph.scg.store import set_scg_store
 
     set_scg_store(mapped_store)
+    core_caps.reset_session_capability_providers()  # drop any sibling-test leak
     try:
+        importlib.reload(scg_pkg)  # re-run the suite's import-time registration
+        # The suite pushes nothing into core's generic provider seam...
+        assert core_caps._CAPABILITY_PROVIDERS == []
+        # ...and the symbols are gone entirely.
+        assert not hasattr(scg_pkg, "_scg_runtime_capability")
+        assert not hasattr(scg_pkg, "register_scg_capability")
+        # So a bare session gains nothing even with scg.enabled + a mapped source.
         with patch("mewbo_core.config.get_config_value", return_value=True):
-            assert _scg_runtime_capability(()) == ("scg",)
+            assert core_caps.augment_session_capabilities(()) == ()
+        # An explicit advertisement is the ONLY path — and survives untouched.
+        assert core_caps.augment_session_capabilities(("scg",)) == ("scg",)
     finally:
         set_scg_store(None)
-
-
-def test_predicate_withholds_when_disabled(mapped_store: JsonScgStore) -> None:
-    """``scg.enabled`` OFF ⇒ no grant even with a mapped source."""
-    from mewbo_graph.scg.store import set_scg_store
-
-    set_scg_store(mapped_store)
-    try:
-        with patch("mewbo_core.config.get_config_value", return_value=False):
-            assert _scg_runtime_capability(()) == ()
-    finally:
-        set_scg_store(None)
-
-
-def test_predicate_withholds_when_graph_empty(tmp_path: Path) -> None:
-    """Enabled but NO mapped source ⇒ no grant (the graph isn't usable yet)."""
-    from mewbo_graph.scg.store import set_scg_store
-
-    empty = JsonScgStore(root_dir=tmp_path / "empty")
-    set_scg_store(empty)
-    try:
-        with patch("mewbo_core.config.get_config_value", return_value=True):
-            assert _scg_runtime_capability(()) == ()
-    finally:
-        set_scg_store(None)
-
-
-def test_predicate_noops_when_already_advertised(mapped_store: JsonScgStore) -> None:
-    """A workspace-bound run already advertises ``scg`` ⇒ the provider no-ops."""
-    from mewbo_graph.scg.store import set_scg_store
-
-    set_scg_store(mapped_store)
-    try:
-        with patch("mewbo_core.config.get_config_value", return_value=True):
-            assert _scg_runtime_capability(("scg",)) == ()
-    finally:
-        set_scg_store(None)
+        core_caps.reset_session_capability_providers()
 
 
 # ── 2. Unscoped read = whole graph ───────────────────────────────────────────
@@ -205,7 +195,7 @@ def test_unscoped_write_lands_with_session_attribution_and_anchor(
     """An unscoped deposit attributes to ``session:<id>`` AND creates an ANCHORS edge.
 
     Exercises the REAL ``ScgMemoryBridge`` (only the wiki store factory is pointed
-    at a tmp JSON store) so the kind-agnostic anchor resolution (#81-A) creates a
+    at a tmp JSON store) so the kind-agnostic anchor resolution creates a
     live ``ANCHORS`` edge to a ``capability`` source_key — the exact shape that a
     legacy ``entity_type``-only fixture would have silently dropped.
     """

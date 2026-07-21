@@ -1,4 +1,4 @@
-"""Workspace-scoped VIEW over the GLOBAL Source Capability Graph (#75).
+"""Workspace-scoped VIEW over the GLOBAL Source Capability Graph.
 
 ``docs/features-search.md`` is explicit: the SCG is "a tenant of the same
 three-layer multiplex graph that powers the Agentic Wiki" and the layers
@@ -33,7 +33,7 @@ _active_scope: contextvars.ContextVar[frozenset[str] | None] = contextvars.Conte
     "scg_active_source_scope", default=None
 )
 
-# The workspace id for the CURRENT execution context — ATTRIBUTION ONLY (#76),
+# The workspace id for the CURRENT execution context — ATTRIBUTION ONLY,
 # never a partition. A connector insight deposited inside a bound scope is tagged
 # with this id so the multiplex can say which workspace LEARNED a fact, while the
 # shared graph still lets every workspace READ it (cross-pollination). ``None``
@@ -61,7 +61,7 @@ class ScgScope:
 
     @staticmethod
     def workspace() -> str | None:
-        """Return the active workspace id for attribution, or ``None`` (#76).
+        """Return the active workspace id for attribution, or ``None``.
 
         Attribution only — a deposit reads this to TAG which workspace learned a
         fact; routing/reading never partitions on it (cross-pollination stays).
@@ -104,7 +104,7 @@ class ScgScope:
         worker thread's next task.
 
         ``workspace`` (optional) binds the workspace id for deposit attribution
-        (#76) for the same block — additive, so existing ``use(source_ids)``
+        for the same block — additive, so existing ``use(source_ids)``
         callers are unchanged. Both reset together on exit.
         """
         scope = None if source_ids is None else frozenset(source_ids)

@@ -6,7 +6,7 @@ import org.junit.Test
 /**
  * [InputModality.fromExtra] is the one seam that turns the assist-overlay handoff's plain-string
  * `EXTRA_HANDOFF_MODALITY` extra back into a real [InputModality] ([ChatViewModel][com.mewbo.aura.ui.chat.ChatViewModel].bind
- * is the only caller, Gitea #180 P1) - covering it directly here since it's the actual parse the
+ * is the only caller) - covering it directly here since it's the actual parse the
  * production code runs, not just an implementation detail of a bigger class.
  */
 class InputModalityTest {

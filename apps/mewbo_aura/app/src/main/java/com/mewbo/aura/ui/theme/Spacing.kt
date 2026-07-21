@@ -15,9 +15,16 @@ object AuraSpacing {
 
     object Composer {
         val height: Dp = 64.dp
+
+        /** Overlay-only floating pill height [R4 2026-07-10]: the invocation pill reads as a full
+         * conversational surface, not a media strip — "large FAB-and-a-half" (56dp M3 FAB × 1.5).
+         * Deliberately a SEPARATE token from the docked [height] (64dp), same two-token law as
+         * [horizontalMargin]/[overlayHorizontalMargin]. */
+        val overlayHeight: Dp = 84.dp
+
         val horizontalMargin: Dp = 16.dp
 
-        /** Overlay-only floating pill side margin (Gitea #181 P3 item 6, measured capture) -
+        /** Overlay-only floating pill side margin (measured capture) -
          * WIDER than the docked in-chat composer's own [horizontalMargin] (16dp); the two are
          * deliberately separate tokens so a future in-app change can never accidentally drag the
          * overlay pill's margin along with it, or vice versa. */
@@ -28,8 +35,29 @@ object AuraSpacing {
         val internalPadding: Dp = 16.dp
         val iconSize: Dp = 24.dp
 
+        /**
+         * Left inset for the pre-session scope row (`ChatSurface.ComposerScopeIndicator`) so its
+         * leading glyph lines up with where the docked composer pill's rounded cap ENDS and its
+         * straight top edge begins — the pill's outer [horizontalMargin] (16dp) plus the stadium
+         * corner radius, which is [height]/2 (32dp) because [AuraShape.radiusPill] is a 50% stadium.
+         * User directive 2026-07-14: the row read too close to the screen edge; align its content
+         * with the composer's body, not the composer's outer margin. The row's RIGHT inset reuses
+         * [screenGutter] so both boundaries sit well within the screen edge (never flush).
+         */
+        val scopeRowStartInset: Dp = horizontalMargin + height / 2
+
+        /** Leading-glyph size for the scope row + tool-picker scope-section headers — one step down
+         * from [iconSize] so the small provenance markers sit proportionate to their `chipLabel`
+         * (13sp) / `sectionHeader` (14sp) text rather than competing with it. */
+        val scopeRowIconSize: Dp = 16.dp
+
         /** Trailing action circle (mic/send/stop). */
         val actionCircleSize: Dp = 44.dp
+
+        /** Overlay-only trailing circle/tile size [R4 2026-07-10]: the primary voice action must
+         * dominate the pill's right side (reference-parity hierarchy: talk is primary). Docked
+         * keeps [actionCircleSize] (44dp). Touch floor stays minimumInteractiveComponentSize. */
+        val overlayActionCircleSize: Dp = 56.dp
 
         /** Tight inter-icon gap (half of [internalPadding]) — e.g. between the C5 trailing mic
          * circle and waveform tile (spec §6.2 C5, Rev E E-3). Named so call sites stop dividing
@@ -204,10 +232,42 @@ object AuraSpacing {
         val runningDotGap: Dp = 6.dp
     }
 
+    /**
+     * Drawer-sheet (side rail) elevation — side-rail visual-polish task, 2026-07-14. Byte-verified
+     * against material3 1.4.0's `NavigationDrawer.kt`: `ModalDrawerSheet`'s `drawerTonalElevation`
+     * flows into an inner `Surface(... tonalElevation = ...)` call that never sets `shadowElevation`
+     * — so a stock `ModalDrawerSheet` casts NO drop shadow by default, only a tonal color blend
+     * (and one tinted toward [AuraColors.accentPrimary] via this app's `ColorScheme.primary`, which
+     * doesn't suit the neutral rail surface anyway). [shadowElevation] is applied via
+     * `Modifier.shadow(...)` at the call site instead — the same built-in primitive `Surface`'s own
+     * `shadowElevation` parameter draws with, just reached one layer down since `ModalDrawerSheet`
+     * doesn't expose it. 16dp matches Material's own classic modal-drawer resting elevation.
+     */
+    object DrawerSheet {
+        val shadowElevation: Dp = 16.dp
+    }
+
     val searchRowHeight: Dp = 64.dp
 
     /**
-     * Reference-style tool-call fold group (Gitea #177 W1-B) — the collapsible card that replaced the
+     * Mewbo Apps gallery card + detail health row (design spec §4D). Every generic gap/padding
+     * reuses an existing token ([screenGutter], [Composer.internalPadding], [Composer.gapTight],
+     * [DrawerRow.runningDotSize]/[DrawerRow.runningDotGap] for the status dot) — only the app icon
+     * slot (a large emoji glyph, not a Material icon) has no existing analog.
+     */
+    object AppCard {
+        /** The `icon` field (an emoji, spec §3) rendered at display scale in a fixed square slot so
+         * every gallery row / the detail health row's title aligns regardless of the emoji glyph's
+         * own metrics. */
+        val iconSlot: Dp = 40.dp
+
+        /** Gap between adjacent gallery cards — a step down from [Turn]'s 48dp chat-turn rhythm; a
+         * gallery is a dense list, not a conversation. */
+        val cardGap: Dp = 12.dp
+    }
+
+    /**
+     * Reference-style tool-call fold group — the collapsible card that replaced the
      * old one-pill-per-`tool_result` activity chip. [rowHeight] is the same 36dp the chip family
      * (`PlanCard`/`AgentChipRow`) already used before this token existed (previously a private,
      * un-tokenized literal — closed here, not a new size).
@@ -231,9 +291,63 @@ object AuraSpacing {
         val detailMaxHeight: Dp = 200.dp
     }
 
+    /**
+     * The promoted-tool "action card" (`ui/chat/toolcards/ToolActionCard`) - a filled card that
+     * lifts a handful of allowlisted tools OUT of the collapsed [ActivityGroup] tool fold onto their
+     * own surface (it renders ABOVE the turn's prose reply, not instead of it). Deliberately NOT a
+     * member of the chip family: those are 36dp glance rows, this is a payload surface, so it
+     * carries its own geometry.
+     *
+     * Reference-measured on a GMS device, 2026-07-12 (560dpi, dp = px/3.5). The outer gutter (24dp)
+     * and the horizontal inner padding (16dp) already had tokens - [AssistantText.gutter] and
+     * [Composer.internalPadding] - and are reused verbatim; only the four values below were
+     * genuinely uncovered.
+     */
+    object ToolCard {
+        /** Roomier than the 16dp horizontal padding on purpose: the payload is a big display line
+         * that needs air above and below it, and the asymmetry is what makes the card read as a
+         * calm block rather than a cramped one. */
+        val paddingVertical: Dp = 20.dp
+
+        /** Header glyph - one step DOWN from the chip family's 18dp. The header answers "which
+         * tool is this", so it must not compete with the content slot underneath it. */
+        val headerIconSize: Dp = 16.dp
+
+        /** Header glyph -> label. Tight enough that the pair reads as one unit (a label with a
+         * glyph), not as two items in a row - hence smaller than [Composer.gapTight]. */
+        val headerIconGap: Dp = 4.dp
+
+        /** Header -> content slot: the one hierarchy break inside the card. */
+        val headerToContentGap: Dp = 12.dp
+    }
+
     object Greeting {
         val sparkSize: Dp = 48.dp
         val gapBelowSpark: Dp = 20.dp
+    }
+
+    /**
+     * Stlite widget card. A widget is a chat attachment, not a page - it renders in a
+     * bounded WebView that scrolls INTERNALLY when its content overflows, so the chat pane stays the
+     * chat pane (the console's `WidgetCard` sizing note). [height] is a fixed cap rather than the
+     * console's content-height-mirroring dance - a phone WebView can't hand Compose a live content
+     * height without a JS resize bridge, and a stable cap avoids the card growing without bound; the
+     * console's own MAX is 600px / 70vh, and 360dp sits comfortably under that on a phone.
+     * [summaryPadding] is the inset for the overlay's compact summary rendering.
+     */
+    object Widget {
+        val height: Dp = 360.dp
+        val summaryPadding: Dp = 16.dp
+
+        /**
+         * The "view full screen" affordance below the bounded card. [affordanceIcon]
+         * is the compact 20dp glyph scale shared with [ActionRow.iconSize] (the 48dp a11y touch
+         * target is [androidx.compose.material3.IconButton]'s own intrinsic minimum, so it needs no
+         * token); [affordanceGap] is the breathing room above and below it so it reads as a distinct
+         * control, not part of the widget.
+         */
+        val affordanceIcon: Dp = 20.dp
+        val affordanceGap: Dp = 8.dp
     }
 
     /**
@@ -263,9 +377,9 @@ object AuraSpacing {
     val toastWidthInset: Dp = 24.dp
 
     /**
-     * The assist overlay's Streaming-state response card (Gitea #181 P3 item 1) - a floating card
+     * The assist overlay's Streaming-state response card - a floating card
      * above the composer pill (reference-app-parity pattern, recovered from the pre-v4 `ResponseSheet`
-     * with measured geometry replacing its old full-bleed 0.75-height sheet). Values are #181's
+     * with measured geometry replacing its old full-bleed 0.75-height sheet). Values are v5's
      * on-device measured captures (GMS reference), not estimates.
      */
     object ResponseCard {

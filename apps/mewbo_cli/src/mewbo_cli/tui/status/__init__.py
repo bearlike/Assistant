@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Status-line / context-meter subpackage for the Mewbo TUI (issue #156, epic #149).
+"""Status-line / context-meter subpackage for the Mewbo TUI.
 
 Holds the file-contract status surfaces that hang off the second sidebar slot:
 

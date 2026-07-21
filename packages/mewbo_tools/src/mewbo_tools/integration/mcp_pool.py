@@ -27,7 +27,7 @@ MAX_CONCURRENT_CONNECTS = 5
 
 # Exponential backoff applied to TRANSIENT connect failures (dns/refused/
 # timeout) so a dead host is never re-dialed on every refresh — it fast-fails
-# until the window elapses (Gitea #130). Permanent failures (auth/config) do
+# until the window elapses. Permanent failures (auth/config) do
 # not back off; they quarantine until the config changes.
 BACKOFF_START = 5.0
 BACKOFF_FACTOR = 2.0
@@ -37,6 +37,25 @@ BACKOFF_CAP = 300.0
 # edit (new config hash) can clear them. A wrong secret or an adapter-rejected
 # config key will fail identically forever, so retrying wastes the loop.
 _NEVER_RETRY_REASONS = frozenset({"auth", "config"})
+
+# Lowercased markers of a failure that says THIS SESSION is gone, not that the
+# server is unhealthy — a streamable-HTTP server answers 404 to a request
+# carrying a session id it has discarded, and a dropped transport surfaces as a
+# closed-resource error. Every subsequent call on that session fails
+# identically, so counting to ``MAX_ERRORS_BEFORE_RECONNECT`` spends two more
+# round trips proving what the first failure already established.
+_SESSION_INVALID_MARKERS = (
+    "session not found",
+    "invalid session",
+    "session expired",
+    "session terminated",
+    "missing session id",
+    "mcp-session-id",
+    "session is closed",
+    "session closed",
+    "closedresourceerror",
+    "brokenresourceerror",
+)
 
 # Monotonic clock seam — module attribute so tests can patch it for
 # deterministic backoff windows without real sleeps.
@@ -177,7 +196,7 @@ class MCPConnectionPool:
         """
         reason = classify_connect_failure(exc)
         # ``describe`` names the real cause(s) — including multi-child groups,
-        # which ``unwrap`` returns as the still-opaque wrapper (Gitea #132).
+        # which ``unwrap`` returns as the still-opaque wrapper.
         detail = describe_exception_group(exc)
         if reason in _NEVER_RETRY_REASONS:
             await self._quarantine(name, config, f"{reason}: {detail}")
@@ -309,9 +328,12 @@ class MCPConnectionPool:
     ) -> str:
         """Invoke *tool_name* on *server_name* with timeout and auto-reconnect.
 
-        On success the server's error counter is reset.  After
-        ``MAX_ERRORS_BEFORE_RECONNECT`` consecutive failures the server is
-        invalidated and a single reconnect + retry is attempted.
+        On success the server's error counter is reset.  A reconnect + single
+        retry is attempted after ``MAX_ERRORS_BEFORE_RECONNECT`` consecutive
+        failures, or IMMEDIATELY when the failure says the session itself is no
+        longer valid (:data:`_SESSION_INVALID_MARKERS`) — that one cannot heal
+        by being retried into. Either way the retry gets exactly one attempt;
+        a second failure propagates.
         """
         state = await self.get_or_connect(server_name)
         tool_map = {getattr(t, "name", ""): t for t in state.tools}
@@ -336,11 +358,14 @@ class MCPConnectionPool:
                 describe_exception_group(exc),
             )
             logger.opt(exception=exc).debug("MCP call traceback for {}.{}", server_name, tool_name)
-            if state.consecutive_errors >= MAX_ERRORS_BEFORE_RECONNECT:
+            stale_session = self._is_session_invalid(exc)
+            if stale_session or state.consecutive_errors >= MAX_ERRORS_BEFORE_RECONNECT:
                 logger.info(
-                    "Reconnecting to '{}' after {} consecutive errors",
+                    "Reconnecting to '{}' ({})",
                     server_name,
-                    state.consecutive_errors,
+                    "session no longer valid"
+                    if stale_session
+                    else f"{state.consecutive_errors} consecutive errors",
                 )
                 await self.invalidate_server(server_name)
                 # Retry once after reconnect
@@ -355,6 +380,16 @@ class MCPConnectionPool:
                 state.consecutive_errors = 0
                 return str(result)
             raise
+
+    @staticmethod
+    def _is_session_invalid(exc: BaseException) -> bool:
+        """True when *exc* says the server discarded the session we are holding.
+
+        Read off the UNWRAPPED cause, since the transport failure arrives inside
+        an anyio task-group wrapper whose own text names nothing.
+        """
+        text = describe_exception_group(exc).lower()
+        return any(marker in text for marker in _SESSION_INVALID_MARKERS)
 
     async def invalidate_server(self, server_name: str) -> None:
         """Clear connection and tool cache for a single server."""
@@ -371,7 +406,7 @@ class MCPConnectionPool:
         With ``connect=False`` the config is updated and removed/changed
         servers are pruned, but new servers are NOT eagerly dialed — the
         connect is deferred to the first ``get_or_connect`` for that specific
-        server (Gitea #130 Phase 2). This is what callers on the hot tool-use
+        server. This is what callers on the hot tool-use
         path use so a dead server never blocks an unrelated tool call.
 
         Returns ``True`` if the config changed and the pool was refreshed.

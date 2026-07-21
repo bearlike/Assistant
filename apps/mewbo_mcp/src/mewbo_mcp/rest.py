@@ -43,7 +43,7 @@ class RestClient:
         """Build the client. ``transport`` is injectable for testing (no live server)."""
         # Structured timeout: keep the ``timeout`` read budget for individual fast
         # calls but bound connect to 10s. The aggregate long-running-tool runtime
-        # risk is handled upstream by the lowered poll budgets (#41) — each is held
+        # risk is handled upstream by the lowered poll budgets — each is held
         # strictly under this read ceiling so the tool returns a resumable handle
         # before any transport/proxy timeout.
         # ``X-Mewbo-Surface`` stamps the originating client surface onto every

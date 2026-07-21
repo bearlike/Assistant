@@ -39,6 +39,15 @@ object AuraColors {
     val surfaceBubbleOnWash = Color(0xEB141518)
     val surfaceSelected = Color(0xFF26282C)
 
+    /** Side-rail (nav drawer) canvas — side-rail visual-polish task, 2026-07-14: "the drawer surface
+     * is currently pure black — make it slightly gray... so the open rail reads as a distinct layer."
+     * Deliberately its OWN token rather than reusing [surfaceSelected] (that IS the same rail's
+     * selected-row/pill fill — painting the whole canvas that color would erase the selected-row
+     * highlight, the exact "same-color-on-same-color" regression this file's own law calls out
+     * elsewhere) or [surfaceInput] (reserved for bubbles/composer/chips). Roughly midway between
+     * [surfaceCanvas] (#000000) and [surfaceInput] (#1E1F23) — a subtle, neutral lift, not a jump. */
+    val surfaceDrawer = Color(0xFF0F1012)
+
     /** `#0A0A0A` at 80% alpha — pill/circle scrims behind top-bar icons when over an aurora wash. */
     val surfaceIconScrim = Color(0xCC0A0A0A)
     val textPrimary = Color(0xFFE9EAED)
@@ -54,6 +63,18 @@ object AuraColors {
     val accentError = Color(0xFFE46962)
 
     /**
+     * Composer scope-row provenance accents (user directive 2026-07-14): the project scope and the
+     * tool scope each carry their OWN glyph tint so a glance separates "where this chat runs" from
+     * "what it can do". Deliberately distinct from each other AND from [accentPrimary] (selection)
+     * and [accentError] (failure), and kept clear of the yellow/brown/green the user rejected for the
+     * chat aurora (§4 [R2]) — a cool violet↔cyan pair, both light enough to read on the pure-black
+     * [surfaceCanvas]. Applied to the scope glyphs (composer scope row + project/tool pickers), never
+     * to body text (hierarchy stays structural, §1).
+     */
+    val scopeProject = Color(0xFFB79CE8) // amethyst — the "project / workspace" scope glyph
+    val scopeTool = Color(0xFF5CC8D6) // cyan — the "tools" scope glyph, distinct from the blue accent
+
+    /**
      * Brand mark gradient (Rev D §D-2): conic clay → coral → violet → gold. Supersedes the spec's
      * four-point-star stops — designer's stops 2-4 retained, `#4285F4` replaced by brand clay as
      * the leading stop. Rendered by the clay-flower SDF orb/spark (out of this task's ownership).
@@ -66,16 +87,16 @@ object AuraColors {
     )
 
     // ---- §6.2 C5 / §6.9 component-specific fills — not in the original §3 table, added once
-    // downstream tasks hit real gaps; Gitea #181's four real-device captures (pixel-sampled,
+    // downstream tasks hit real gaps; 's four real-device captures (pixel-sampled,
     // outrank the earlier Rev E frame estimate) confirm these hues precisely. ----
 
-    /** Overlay floating composer's pill AND response card fill — one shared token (#181: both
+    /** Overlay floating composer's pill AND response card fill — one shared token (both
      * surfaces sampled to the exact same hex across four captures). Measured `#020B2B`; supersedes
      * the Rev E frame estimate `#10182E` (lighter/more saturated than reality). */
     val surfaceOverlayPill = Color(0xFF020B2B)
 
     /** Overlay composer's filled mic circle (spec §6.2 C5): light-blue fill, dark glyph. Measured
-     * `#709FF8` (#181, pixel-sampled center of the real filled circle); supersedes the Rev E
+     * `#709FF8` (pixel-sampled center of the real filled circle); supersedes the Rev E
      * estimate `#A9C7FF` (notably lighter/whiter than reality). */
     val accentOverlayMic = Color(0xFF709FF8)
 
@@ -90,11 +111,11 @@ object AuraColors {
     // hue blending, dither, waviness) is owned by ui/aurora/, not this file.
 
     /** Landing/generation top wash: gold↔green top blend, fading to fully transparent (revealing
-     * [surfaceCanvas]) by roughly this fraction of screen height. Gitea #181: real captures show
+     * [surfaceCanvas]) by roughly this fraction of screen height.: real captures show
      * the wash still visibly fading past 40% of screen height (a prior 0.35 estimate cut it short). */
     const val auroraWashTopFadeHeightFraction = 0.42f
 
-    /** Gitea #181, four real-device captures (pixel-sampled — supersedes the Rev C "purple↔amber"
+    /** four real-device captures (pixel-sampled — supersedes the Rev C "purple↔amber"
      * eyeballed estimate, which no capture ever showed): gold top-left fading toward green
      * top-right, both measured with smooth monotonic falloff and zero banding — used for BOTH the
      * resting landing state and the active generation wash (see [AuroraState.Resting]). */
@@ -115,7 +136,7 @@ object AuraColors {
     val auroraOverlayBloomDecayDepth = 139.dp
 
     /**
-     * Bottom bloom, blue family only (Gitea #181, four real-device captures — zero
+     * Bottom bloom, blue family only (four real-device captures — zero
      * green/clay/violet in any scanline). Blended by the bloom's own intensity in `ui/aurora/`
      * (bright→lighter stop, faint→darker stop) rather than by angle — this also removes the
      * periodic wrong-dominant-hue bug the old angular wheel had.
@@ -131,11 +152,57 @@ object AuraColors {
         GradientStop(Color(0xFF131C36), 1f), // fade stop — near-black navy, melts into the canvas
     )
 
-    /** `#000000` at 40% (spec range 35-45%, midpoint) + slight desaturation of the app underneath
-     * (rendering detail, not tokenized here). Gitea #181 measured the composited result at
-     * `#2A2A2E` over Chrome's dark surface but flagged the backdrop as uncontrolled/unverified —
-     * kept as-is pending a controlled-backdrop re-measure (see the issue's honest caveat). */
-    val scrimOverlay = Color(0x66000000)
+    /** Invocation ignition stops [R4 2026-07-10]: the phase-1 perimeter bloom runs brighter,
+     * blue-forward hues derived from [accentPrimary] (#4C6EF5) so the moment is ownable brand
+     * light, decaying into the caller's own `colors` pair as the bloom settles — the overlay's
+     * [auroraOverlayLiveBloom]; the chat surface never blooms (the CPU-side pair-lerp lives in
+     * ui/aurora — the shader stays a two-stop intensity blend, Rule 4). User-directive values,
+     * not capture-measured. */
+    val auroraIgnitionBloom: List<GradientStop> = listOf(
+        GradientStop(Color(0xFF5C7BF0), 0f), // bright stop — accentPrimary-adjacent ignition peak
+        GradientStop(Color(0xFF23336B), 1f), // deep stop — navy bridge toward the resting pair
+    )
+
+    /** Overlay LIVE bloom stops [R4 2026-07-10]: the RAW reference-capture scanline values
+     * (#6D85B9/#4562A0) that the 2026-07-03 dark-blend directive darkened into
+     * [auroraOverlayBloom]. That directive is CHAT-scoped atmosphere ("never competes with
+     * content on top"); the overlay inherited the darkened pair and rendered a mathematically
+     * present but perceptually invisible glow (debug-verified: peak pixel (47,61,100) matched
+     * the darkened prediction exactly). [R4] — the newer directive — demands a VISIBLE overlay
+     * glow, so the overlay renders this capture-restored pair; the chat surface keeps
+     * [auroraOverlayBloom] untouched. */
+    val auroraOverlayLiveBloom: List<GradientStop> = listOf(
+        GradientStop(Color(0xFF6D85B9), 0f), // bright stop — raw ref2 bottom-edge sample
+        GradientStop(Color(0xFF4562A0), 1f), // fade stop — raw ref2 mid-falloff sample
+    )
+
+    /** [R5 2026-07-11] Aurora hue family B — violet. The overlay's multi-hue aurora drifts the
+     * two-stop pair through three families (A = [auroraOverlayLiveBloom] blue, B = this violet,
+     * C = [auroraOverlayEmberBloom]); violet sits BETWEEN blue and ember so the drift path never
+     * crosses muddy gray. Chat never drifts (iHueDrift 0) and never renders these. */
+    val auroraOverlayVioletBloom: List<GradientStop> = listOf(
+        GradientStop(Color(0xFF9A7BD8), 0f), // light stop — soft amethyst
+        GradientStop(Color(0xFF5B3E96), 1f), // deep stop — deep violet over navy
+    )
+
+    /** [R5 2026-07-11] Aurora hue family C — ember. Warm accent for the aurora drift: ember/
+     * burnt-sienna, deliberately NOT yellow/gold/green (the 2026-07-04 chat rejection informs
+     * taste). Overlay-only, same scoping as family B above. */
+    val auroraOverlayEmberBloom: List<GradientStop> = listOf(
+        GradientStop(Color(0xFFE8956B), 0f), // light stop — warm ember
+        GradientStop(Color(0xFFA34E2E), 1f), // deep stop — burnt sienna
+    )
+
+    /** Overlay scrim vertical gradient [R4 2026-07-10]: supersedes the flat 60%-black fill (Rev E
+     * §E-2) AND the 40% `scrimOverlay` token it overrode — a screen-aware assistant must not dim
+     * the screen it claims to understand. Near-transparent over the user's app (top→60%), one
+     * bottom-concentrated ramp guaranteeing pill/glow contrast over arbitrary bright content.
+     * Stops are alpha-over-black; geometry (verticalGradient) is owned by ui/aurora/OverlayScrim. */
+    val scrimOverlayGradient: List<GradientStop> = listOf(
+        GradientStop(Color(0x14000000), 0f), // 8% — status/dismiss region, app legible
+        GradientStop(Color(0x1A000000), 0.60f), // 10% — context preserved
+        GradientStop(Color(0x8C000000), 1f), // 55% — contrast bed behind pill + resting glow
+    )
 }
 
 /**

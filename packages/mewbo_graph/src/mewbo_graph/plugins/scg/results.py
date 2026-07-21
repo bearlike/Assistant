@@ -6,7 +6,7 @@ discrete hits the answer is built from. Before this tool the agents had no way
 to surface those cards, so a fast-tier run that inlined all work (no probe
 sub-agents) produced ``results: []`` even with a real answer.
 
-EVERY search agent emits through it, ONCE each (#95 root, #102 probes): each
+EVERY search agent emits through it, ONCE each (root and probes): each
 ``scg-path-probe`` emits the hits its pathway grounded right before its
 evidence block, and the ``scg-search`` root emits only the hits it grounded
 inline (the fast-tier root-inline path) right before the synthesis. The tool

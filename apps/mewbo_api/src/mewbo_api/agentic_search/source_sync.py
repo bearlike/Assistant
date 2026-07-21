@@ -1,6 +1,6 @@
 """``WorkspaceSourceSync`` — refresh a workspace's virtual MCP config + auto-map.
 
-The save/attach hook (#75): whenever a workspace's source selection changes
+The save/attach hook: whenever a workspace's source selection changes
 (``POST`` / ``PATCH`` workspace), this atomic class
 
 1. **refreshes the persisted virtual MCP config** (:class:`WorkspaceMcpConfig`) so
@@ -55,12 +55,12 @@ _NL_DIGEST_CHARS = 16
 
 
 class NlContextFingerprint:
-    """Deterministic digest of a workspace's NL-context prose (#83).
+    """Deterministic digest of a workspace's NL-context prose.
 
     The NL-context sibling of :class:`~mewbo_graph.scg.manifest.ManifestHash`:
     where ``ManifestHash`` fingerprints a connector's tool-list *schema* to gate a
     structural re-map, this fingerprints the workspace ``instructions`` + ``desc``
-    that seed the map-time enrich step (#81-B) to gate a re-*enrich*. It lives here
+    that seed the map-time enrich step to gate a re-*enrich*. It lives here
     (not on ``ManifestHash``) because it digests untrusted operator prose, a
     different domain from a tool-list schema — extending ``ManifestHash`` would
     couple the two unrelated drift signals.
@@ -88,7 +88,7 @@ class NlContextFingerprint:
 class WorkspaceSourceSync:
     """Refresh the virtual MCP config + best-effort auto-map newly-enabled sources."""
 
-    # The most recent fan-out thread (#97). Route-level tests can't reach the
+    # The most recent fan-out thread. Route-level tests can't reach the
     # Thread returned by ``on_workspace_saved`` (the routes ignore it), so they
     # synchronize through :meth:`join_last_fan_out` instead of sleeping.
     _last_fan_out: threading.Thread | None = None
@@ -117,10 +117,10 @@ class WorkspaceSourceSync:
         sources in *new_sources* that weren't already enabled — and that aren't
         already mapped / in-flight — are mapped. Additionally, already-mapped
         enabled sources whose **live tool list drifted** from the mapped
-        :class:`ManifestHash` are re-mapped (idempotent — #81-C), AND — when the
+        :class:`ManifestHash` are re-mapped (idempotent), AND — when the
         workspace's NL-context prose (``instructions`` + ``desc``) changed since the
         last enrich — already-mapped enabled sources are re-driven to re-seed the
-        map-time enrich step (#83). Always refreshes the virtual MCP config first
+        map-time enrich step. Always refreshes the virtual MCP config first
         (stamping the new NL fingerprint) so it tracks the new selection even when
         auto-map is disabled or a source can't be mapped.
 
@@ -135,7 +135,7 @@ class WorkspaceSourceSync:
         route ignores the return value.
         """
         # Compute the new NL-context fingerprint and read the prior one BEFORE the
-        # save overwrites it — the change is what gates the re-enrich (#83). Both
+        # save overwrites it — the change is what gates the re-enrich. Both
         # reads are best-effort: a store hiccup degrades to "no prose change", so a
         # save is never blocked by the fingerprint plumbing.
         new_fingerprint = cls._nl_fingerprint_for(store, workspace_id)
@@ -143,7 +143,7 @@ class WorkspaceSourceSync:
             prev_fingerprint = WorkspaceMcpConfig.nl_fingerprint_of(store, workspace_id)
         except Exception as exc:  # noqa: BLE001 — best-effort; treat as unchanged
             logging.warning(
-                "workspace %s NL-fingerprint read failed: %s", workspace_id, exc
+                "workspace {} NL-fingerprint read failed: {}", workspace_id, exc
             )
             prev_fingerprint = new_fingerprint
         nl_changed = new_fingerprint != prev_fingerprint
@@ -160,7 +160,7 @@ class WorkspaceSourceSync:
             )
         except Exception as exc:  # noqa: BLE001 — best-effort; never block the save
             logging.warning(
-                "workspace %s virtual MCP config refresh failed: %s",
+                "workspace {} virtual MCP config refresh failed: {}",
                 workspace_id,
                 exc,
             )
@@ -238,7 +238,7 @@ class WorkspaceSourceSync:
             # so neither _mappable nor _drifted fires — yet the enrich notes are now
             # stale. Re-drive the map (idempotent, in-flight-guarded) for the
             # workspace's enabled, already-mapped sources so the map-time enrich
-            # re-seeds against the new prose (#83). Only on a real fingerprint change.
+            # re-seeds against the new prose. Only on a real fingerprint change.
             reenrich = cls._reenrich_targets(store, already) if nl_changed else []
             to_map = list(
                 dict.fromkeys(
@@ -248,7 +248,7 @@ class WorkspaceSourceSync:
             if not to_map:
                 return
             # The workspace prose that triggered this map seeds the enrich step — it
-            # is UNTRUSTED and rides the user turn only (#81-B). Read it once and
+            # is UNTRUSTED and rides the user turn only. Read it once and
             # pass it to every mapped source (anchored to that source's caps).
             # Best-effort like every other step here: enrich plumbing must never
             # fail the workspace save that carried the prose.
@@ -256,7 +256,7 @@ class WorkspaceSourceSync:
                 nl_context = cls._nl_context_for(store, workspace_id)
             except Exception as exc:  # noqa: BLE001 — degrade to descriptor-only map
                 logging.warning(
-                    "workspace %s NL-context read failed (mapping without enrich prose): %s",
+                    "workspace {} NL-context read failed (mapping without enrich prose): {}",
                     workspace_id,
                     exc,
                 )
@@ -267,7 +267,7 @@ class WorkspaceSourceSync:
                 )
         except Exception as exc:  # noqa: BLE001 — best-effort; never crash the daemon
             logging.warning(
-                "workspace %s background automap fan-out failed: %s", workspace_id, exc
+                "workspace {} background automap fan-out failed: {}", workspace_id, exc
             )
 
     @staticmethod
@@ -336,7 +336,7 @@ class WorkspaceSourceSync:
             out.append(sid)
         return out
 
-    # -- which already-mapped enabled sources need a prose re-enrich (#83) ----
+    # -- which already-mapped enabled sources need a prose re-enrich ----
 
     @classmethod
     def _reenrich_targets(
@@ -375,10 +375,10 @@ class WorkspaceSourceSync:
         try:
             return {s.source_id for s in get_scg_store().list_sources()}
         except Exception as exc:  # noqa: BLE001 — read is best-effort
-            logging.warning("SCG mapped-source read failed: %s", exc)
+            logging.warning("SCG mapped-source read failed: {}", exc)
             return set()
 
-    # -- which already-mapped enabled sources drifted (#81-C) ----------------
+    # -- which already-mapped enabled sources drifted ----------------
 
     @classmethod
     def _drifted(
@@ -420,7 +420,7 @@ class WorkspaceSourceSync:
         """``source_id -> stamped manifest hash`` for every mapped source.
 
         Empty when the SCG library is absent or unreadable (best-effort). A
-        source whose ``schema_version`` is unset (mapped before #81-C, or a
+        source whose ``schema_version`` is unset (mapped before drift-tracking landed, or a
         non-tool-list source) is omitted — it simply never reports drift until its
         next clean re-map stamps a hash.
         """
@@ -435,7 +435,7 @@ class WorkspaceSourceSync:
                 if s.schema_version
             }
         except Exception as exc:  # noqa: BLE001 — read is best-effort
-            logging.warning("SCG manifest-hash read failed: %s", exc)
+            logging.warning("SCG manifest-hash read failed: {}", exc)
             return {}
 
     @staticmethod
@@ -457,7 +457,7 @@ class WorkspaceSourceSync:
         except (LookupError, RuntimeError):
             return None
         except Exception as exc:  # noqa: BLE001 — never block a save on one source
-            logging.warning("drift-check descriptor build failed for %s: %s", source_id, exc)
+            logging.warning("drift-check descriptor build failed for {}: {}", source_id, exc)
             return None
         return ManifestHash.of_descriptor_raw(built.raw)
 
@@ -480,7 +480,7 @@ class WorkspaceSourceSync:
         unconfigured id) raises :class:`LookupError` from the builder and is
         skipped — auto-map only touches real connectors. Every failure is logged,
         never raised: the workspace save already succeeded. ``nl_context`` (the
-        workspace's untrusted prose) seeds the map-time enrich step (#81-B).
+        workspace's untrusted prose) seeds the map-time enrich step.
         """
         from .scg.descriptors import SourceDescriptorBuilder
         from .scg.map_job import MapSourceJob, SourceMapInput
@@ -491,10 +491,10 @@ class WorkspaceSourceSync:
             # No configured MCP connector — a demo fixture / unconfigured id.
             return
         except RuntimeError as exc:
-            logging.warning("auto-map descriptor build failed for %s: %s", source_id, exc)
+            logging.warning("auto-map descriptor build failed for {}: {}", source_id, exc)
             return
         except Exception as exc:  # noqa: BLE001 — never block on one source
-            logging.warning("auto-map skipped for %s: %s", source_id, exc)
+            logging.warning("auto-map skipped for {}: {}", source_id, exc)
             return
 
         try:
@@ -505,9 +505,9 @@ class WorkspaceSourceSync:
                 nl_context=nl_context,
             )
             MapSourceJob.start(source, store=store, runtime=runtime)
-            logging.info("auto-map started for newly-enabled source %s", source_id)
+            logging.info("auto-map started for newly-enabled source {}", source_id)
         except Exception as exc:  # noqa: BLE001 — best-effort
-            logging.warning("auto-map start failed for %s: %s", source_id, exc)
+            logging.warning("auto-map start failed for {}: {}", source_id, exc)
 
 
 __all__ = ["NlContextFingerprint", "WorkspaceSourceSync"]

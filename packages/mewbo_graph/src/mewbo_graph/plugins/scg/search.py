@@ -24,11 +24,19 @@ api-registered :class:`~mewbo_graph.scg.search_launcher.SearchLauncher` seam
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from mewbo_core.common import MockSpeaker, pydantic_to_openai_tool
 from mewbo_core.session_tools import DEFAULT_SESSION_TOOL_MODES
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from mewbo_graph.plugins.scg._core import (
     SessionToolBase,
@@ -64,19 +72,37 @@ class AgenticSearchArgs(BaseModel):
     )
     workspace: str | None = Field(
         default=None,
+        validation_alias=AliasChoices("workspace", "workspace_id"),
+        serialization_alias="workspace",
         description=(
-            "Workspace id or name to search within. Omit to use the only "
-            "configured workspace; if several exist you'll get the list to pick "
-            "from. Ignored when fetching by run_id."
+            "Workspace to search within, given as an EXISTING workspace id or its "
+            "exact name. A workspace is never created implicitly — an unknown "
+            "value is an error, not a new workspace. Omit to use the only "
+            "configured workspace; when several exist the reply lists them to "
+            "choose from. Also accepted as `workspace_id`. Ignored when fetching "
+            "by run_id."
         ),
     )
     tier: Literal["fast", "auto", "deep"] | None = Field(
         default=None,
         description=(
-            "Budget knob — decomposition depth + probe fan-out (fast|auto|deep). "
-            "Omit for the configured default. Ignored when fetching by run_id."
+            "Budget knob controlling decomposition depth and probe fan-out. One "
+            "of `fast`, `auto`, `deep` (case-insensitive). Omit for the "
+            "configured default. Ignored when fetching by run_id."
         ),
     )
+
+    @field_validator("tier", mode="before")
+    @classmethod
+    def _normalise_tier(cls, value: Any) -> Any:
+        """Accept any casing — a caller sending ``"Deep"`` means ``deep``.
+
+        Case carries no meaning for this field, so rejecting it spent a whole
+        tool call teaching the caller nothing; observed sessions abandoned the
+        tool outright after one such miss. A non-``str`` passes through
+        untouched so the ``Literal`` still reports the real type error.
+        """
+        return value.strip().lower() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _exactly_one_mode(self) -> AgenticSearchArgs:
@@ -92,6 +118,17 @@ class AgenticSearchTool(SessionToolBase):
     """SessionTool: start/fetch a workspace agentic-search run (async by handle)."""
 
     tool_id = "agentic_search"
+    # This ONE tool id both STARTS a run (``query``) and POLLS it (``run_id``),
+    # distinguishable only by argument. A fetch is honest waiting on a nested run
+    # per this tool's own async-by-handle contract — the DoomLoopGuard read two
+    # sub-second "processing" answers as a stuck loop and killed the run
+    # (100%-reproducible). Declaring the poll argument exempts a FETCH while
+    # leaving a repeated START counted toward progress, so a genuinely stuck
+    # agent re-issuing the same search is still caught. The loop reads this via
+    # ``getattr`` (a session tool is a structural Protocol, absent from the
+    # registry); a key present-but-empty (``run_id=None``/``""``) is not a poll —
+    # which matches the exactly-one-of ``query``/``run_id`` validator below.
+    poll_when_args: tuple[str, ...] = ("run_id",)
     modes = DEFAULT_SESSION_TOOL_MODES
     # Kick-off + snapshot read are both read-only over connectors and over the
     # run store, so several may run in parallel.

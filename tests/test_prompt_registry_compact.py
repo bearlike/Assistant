@@ -1,4 +1,4 @@
-"""Golden byte-equality tests for the migrated compaction prompts (Gitea #89).
+"""Golden byte-equality tests for the migrated compaction prompts.
 
 Phase 1 is a VERBATIM extraction: the registry must reproduce the exact bytes
 that ``compact.py`` previously hardcoded. Each ``EXPECTED_*`` literal below is a

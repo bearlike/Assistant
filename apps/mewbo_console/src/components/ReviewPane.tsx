@@ -49,7 +49,7 @@ function FileEntry({ file, expanded, onToggle }: FileEntryProps) {
         className={`w-full flex items-center gap-2 px-3 py-2 ${TITLE_BG} hover:brightness-110 transition-[filter] text-left`}
       >
         <span className={`${fileIconClass(file.path)} shrink-0`} style={{ fontSize: '16px' }} />
-        <span className="text-[11px] text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
+        <span className="text-2xs text-[hsl(var(--code-fg))] truncate flex-1 min-w-0" title={file.path}>
           {basename(file.path)}
         </span>
         <DiffStats additions={file.additions} deletions={file.deletions} className="shrink-0" />
@@ -64,7 +64,7 @@ function FileEntry({ file, expanded, onToggle }: FileEntryProps) {
           {parsed ? (
             <FileDiffSection file={parsed} expanded gutterWidth={gutterWidth} />
           ) : (
-            <div className="px-3 py-2 text-xs text-[hsl(var(--code-fg-subtle))] font-mono">No diff data.</div>
+            <div className="px-3 py-2 text-xs text-[hsl(var(--code-fg-subtle))]">No diff data.</div>
           )}
         </div>
       )}
@@ -112,7 +112,7 @@ export function ReviewPane({ sessionId, selectedTurn, sessionFiles }: ReviewPane
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Scope selector */}
-      <div className="flex items-center gap-6 px-4 h-9 border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--surface))] shrink-0">
+      <div className="flex items-center gap-6 px-4 h-9 border-b border-[hsl(var(--border))] bg-[hsl(var(--surface))] shrink-0">
         {tabs.map(({ key, label }) => (
           <button
             key={key}
@@ -127,7 +127,7 @@ export function ReviewPane({ sessionId, selectedTurn, sessionFiles }: ReviewPane
           </button>
         ))}
         {usingFallback && sessionFiles.length > 0 && (
-          <span className="ml-auto text-[10px] text-[hsl(var(--muted-foreground))] italic">
+          <span className="ml-auto text-2xs text-[hsl(var(--muted-foreground))] italic">
             git unavailable — showing session edits
           </span>
         )}

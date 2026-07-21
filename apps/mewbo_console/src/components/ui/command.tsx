@@ -44,7 +44,10 @@ const CommandInput = React.forwardRef<
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        // cmdk renders a real `<input>`, so it carries the same iOS zoom floor
+        // as `ui/input.tsx`: 16px on narrow viewports, 13px from `md:` up.
+        // `text-field`, never `text-input` — see the collision note on `Input`.
+        "flex h-10 w-full rounded-md bg-transparent py-3 text-field outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
         className
       )}
       {...props}

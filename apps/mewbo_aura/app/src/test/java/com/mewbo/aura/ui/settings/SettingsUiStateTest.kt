@@ -1,14 +1,40 @@
 package com.mewbo.aura.ui.settings
 
+import com.mewbo.aura.data.model.ModelCapabilities
+import com.mewbo.aura.data.model.ModelCatalog
 import com.mewbo.aura.data.model.ProjectSummary
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Coverage for [resolveProjectDisplayName] (Gitea #178 W1-A default-project setting). */
+/** Coverage for [resolveProjectDisplayName] (default-project setting) and
+ * [resolveModelDisplayName] (per-surface model defaults). */
 class SettingsUiStateTest {
 
     private val configProject = ProjectSummary(name = "Assistant", source = "config")
     private val managedProject = ProjectSummary(name = "scratch-worktree", source = "managed", projectId = "abc123")
+
+    private val catalog = ModelCatalog(
+        rawModels = listOf("claude-sonnet-5", "claude-opus-4-8"),
+        default = "openai/claude-sonnet-5",
+        capabilities = mapOf("claude-sonnet-5" to ModelCapabilities(supportsVision = true)),
+    )
+
+    @Test
+    fun `a blank model resolves to Default regardless of the catalog`() {
+        assertEquals("Default", resolveModelDisplayName(modelId = "", models = null))
+        assertEquals("Default", resolveModelDisplayName(modelId = "", models = catalog))
+    }
+
+    @Test
+    fun `a known model id resolves to the catalog's pretty display name`() {
+        assertEquals("Claude Sonnet 5", resolveModelDisplayName(modelId = "claude-sonnet-5", models = catalog))
+        assertEquals("Claude Opus 4.8", resolveModelDisplayName(modelId = "claude-opus-4-8", models = catalog))
+    }
+
+    @Test
+    fun `a non-blank model degrades to the normalized raw id when the catalog hasn't loaded`() {
+        assertEquals("claude-sonnet-5", resolveModelDisplayName(modelId = "openai/claude-sonnet-5", models = null))
+    }
 
     @Test
     fun `an empty key resolves to Temporary regardless of the catalog`() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Route tests for POST /api/sessions/<id>/message idle re-engagement.
 
-Pins the context-inheritance contract (Gitea #177): a re-engaged run must
+Pins the context-inheritance contract: a re-engaged run must
 inherit the session's persisted context (model / mode / mcp_tools allowlist)
 exactly like /query and /recover — never clobber it with the config default.
 
@@ -116,3 +116,74 @@ def test_message_reengage_matches_created_context(client, monkeypatch):
     assert resp.status_code == 200
     assert captured["model_name"] == (persisted[-1] if persisted else None)
     assert captured["allowed_tools"] is None
+
+
+def test_message_reengage_reapplies_persisted_strict_scope_and_playbook(client, monkeypatch):
+    """Idle /message re-applies strict_tool_scope/skill_instructions/step budget.
+
+    A session that was started with a narrower-than-default scope (e.g. the
+    wiki-qa hypervisor's QA_TOOLS/strict_tool_scope=True/playbook/step budget)
+    must NOT silently widen back to the unscoped generic default just because
+    it was re-engaged through the *generic* continuation endpoint instead of
+    the QA-specific one. This is the same context the wiki QA context event
+    now persists (jobs.py WikiQaSession.start) — this pins the GENERIC side of
+    that contract, independent of any wiki-specific code.
+    """
+    c, rt = client
+    captured: dict = {}
+
+    def fake_start_async(**kwargs):
+        captured.update(kwargs)
+        return f"{kwargs['session_id']}:r1"
+
+    monkeypatch.setattr(rt, "start_async", fake_start_async)
+
+    resp = c.post(
+        "/api/sessions",
+        json={
+            "context": {
+                "model": "claude-sonnet-5",
+                "mcp_tools": ["wiki_list_pages", "spawn_agent"],
+                "strict_tool_scope": True,
+                "skill_instructions": "You are a QA hypervisor. Delegate retrieval.",
+                "session_step_budget": 50,
+            }
+        },
+        headers=_headers(),
+    )
+    sid = resp.get_json()["session_id"]
+
+    resp = c.post(
+        f"/api/sessions/{sid}/message",
+        json={"text": "follow-up question"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    assert captured["strict_tool_scope"] is True
+    assert captured["skill_instructions"] == "You are a QA hypervisor. Delegate retrieval."
+    assert captured["session_step_budget"] == 50
+    assert captured["allowed_tools"] == ["wiki_list_pages", "spawn_agent"]
+
+
+def test_message_reengage_defaults_scope_when_never_persisted(client, monkeypatch):
+    """A session that never declared a scope re-engages unscoped, as before."""
+    c, rt = client
+    captured: dict = {}
+
+    def fake_start_async(**kwargs):
+        captured.update(kwargs)
+        return f"{kwargs['session_id']}:r1"
+
+    monkeypatch.setattr(rt, "start_async", fake_start_async)
+
+    resp = c.post("/api/sessions", json={}, headers=_headers())
+    sid = resp.get_json()["session_id"]
+
+    resp = c.post(
+        f"/api/sessions/{sid}/message",
+        json={"text": "hi"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    assert captured["strict_tool_scope"] is False
+    assert captured["skill_instructions"] is None

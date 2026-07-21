@@ -22,19 +22,19 @@ the run through the down-only `mewbo_graph.scg.search_launcher.SearchLauncher`
 seam the API registers (`RunStoreSearchLauncher`, reusing `SearchRun.start` + the
 run store), degrading to a structured "unavailable" error when none is wired.
 The id is `search`-classified in core `_infer_operation` → default-allowed, so it
-surfaces to any ordinary task agent the `scg` capability grants (#84) — the same
-async run/poll shape the external MCP `search`/`get_search_run` tools expose. `scg_results` (#95/#102) is the thinnest of all —
+surfaces to any task agent in an `scg`-advertised session (advertisement-only) — the same async run/poll shape the external MCP `search`/`get_search_run`
+tools expose. `scg_results` is the thinnest of all —
 **transcript-as-transport**: it only VALIDATES the search-result entries
 (≤50, `extra="forbid"`, relevance/confidence 0..1) and returns `{ok, count}`;
 it writes nothing (no store, no sink — the api projects the validated
 `tool_input` from the session transcript onto the run event log; a child loop
 inherits the parent's event_logger, so a PROBE's emit rides the same
-transcript stamped with its `agent_id`). EVERY search agent emits once (#102):
+transcript stamped with its `agent_id`). EVERY search agent emits once:
 each probe right before its evidence block (its cards, ids salted by its
 agent_id api-side), the ROOT before the synthesis for inline-grounded hits
 only. Emitting is never terminal — the probe's terminal stays the stop-summary
 evidence block. Read the api-side subsystem `CLAUDE.md`
-(`apps/mewbo_api/.../agentic_search/scg/`) and Gitea #19 for the durable
+(`apps/mewbo_api/.../agentic_search/scg/`) for the durable
 architecture decisions.
 
 **`ScgResultEntry.meta` + `ScgResultsArgs.related_questions` (the wire contract
@@ -45,7 +45,7 @@ QUANTITATIVE/ENUMERABLE fact (repo stars/forks/language, package
 version/downloads, paper year/citations, issue state/comments) rides as data
 instead of being flattened into snippet prose — the playbooks teach the per-kind
 vocab and keep `snippet` purely descriptive. **`meta` IS the card's "card_meta"
-footer (#111): OPEN-vocab — the agent PROPOSES whatever facts make a hit read
+footer: OPEN-vocab — the agent PROPOSES whatever facts make a hit read
 richer, naming the connector's own fields; the console's `resultMeta` classifier
 renders any key (counts→`46.2k`, byte `size`→`24 KB`, dates→relative,
 `state`/`status`→a colour-coded badge). Do NOT add a second `card_meta` field or
@@ -101,7 +101,7 @@ embedder. Don't re-spread late imports across the tools; add the seam to
 - **A pathway is the probe's ENTRY, not its ceiling** (scg-path-probe.md): the
   probe chases the sub-query to ground with any granted tool of the same
   source and declares NO DATA only when the SOURCE can't supply it.
-- **`scg_route` is memory-aware (#76).** `ScgCore.router` DI's the memory bridge
+- **`scg_route` is memory-aware.** `ScgCore.router` DI's the memory bridge
   so routing biases toward learned-productive pathways (best-effort: a failed
   bridge → empty bias, never a route failure). The tool calls `route_with_memory`
   and projects capped `memory_hints` (anchored "how to call this right" notes)
@@ -121,32 +121,48 @@ embedder. Don't re-spread late imports across the tools; add the seam to
   filtered (out-of-scope hops dropped), `auth_scope` redacted; wire is the
   established `ok_result(dict)` shape (typed `ObservedNode.to_wire()`).
 
-## Capability gating (data-driven, no hardcoded literal)
+## Capability gating (data-driven, advertisement-only)
 
 The plugin manifest (`.claude-plugin/plugin.json`) declares
 `requires-capabilities: ["scg"]`, and the AgentDefs (`agents/*.md`) repeat it in
-frontmatter. A map/search session advertises `client_capabilities: ["scg"]` (via
+frontmatter. A session reaches the `scg_*` / `agentic_search` tools and the
+map/search AgentDefs when it advertises `client_capabilities: ["scg"]` (via
 `runtime.append_context_event`) so the AgentDefs surface in `spawn_agent` lookups
-and the `scg_*` tools scope in — the generalized form of the wiki gate (no `scg`
-string is hardcoded in `agent_registry.py` / `capabilities.py`; gating flows
-entirely through `requires-capabilities`). The deterministic core is *also*
-opt-in behind the `scg.enabled` config flag. #77 widened the GRANT seam to any
-workspace-bound session; **#83-B makes it GENERAL**: this package registers a
-runtime capability provider (`_scg_runtime_capability`, wired via
-`mewbo_graph.register_runtime_capabilities` → core `register_session_capability_provider`)
-that grants `scg` to ORDINARY sessions (CLI/console/channel) whenever
-`scg.enabled` AND the store has ≥1 mapped source — so the gating mechanism itself
-still never changes; only WHO advertises `scg` widened. **#84 closed the half that
-#83-B left open:** the grant unioned `scg` into `session_caps`, but core's
-`SessionToolRegistry.build_for` selected session tools by `allowed_tools` ALONE —
-so these tools surfaced to a ROOT agent only when its AgentDef/allowlist named
-them, NOT from the capability. A plain re-engaged session (root depositing
-directly, no `scg-mapper` spawn) therefore saw no `scg_*` and answered
-`TOOLS-MISSING`. `build_for` now ALSO builds any factory whose
+and the tools scope in — the generalized form of the wiki gate (no `scg` string is
+hardcoded in `agent_registry.py` / `capabilities.py`; gating flows entirely
+through `requires-capabilities`). The deterministic core is *also* opt-in behind
+the `scg.enabled` config flag. Every genuine surface advertises `scg` explicitly
+and unconditionally: the search / structured run
+(`agentic_search/scg/workspace_binding.py`), the map job (`map_job.py`), and — via
+the request-scoped derivation — any session that names an
+`scg_*`/`agentic_search` id in its `allowed_tools`.
+
+**`scg` is advertisement-only — the blanket runtime grant is REMOVED.** An earlier change widened the GRANT seam to any workspace-bound session;
+**A later iteration tried to make it GENERAL** by registering a runtime capability provider
+(`_scg_runtime_capability`) that granted `scg` to ORDINARY sessions
+(CLI/console/channel) whenever `scg.enabled` AND ≥1 mapped source. That was
+**wrong**: the provider only ever sees the ADVERTISED cap tuple (no context/tags),
+so it could not tell a search surface from a bare `POST /api/sessions` coding
+session that requested no integrations — and fired for the latter, binding all 12
+scg/agentic_search tool schemas on EVERY LLM call (~half the catalog, pure token
+waste under zero prompt caching) and leaking the augmented cap set into
+the trace context so the session mis-tagged `origin:search`/`product:search`. The
+provider is deleted — this suite registers NOTHING into core's (still-present,
+generic) `register_session_capability_provider` seam. A session that never asked
+for search now carries a lean toolset + neutral provenance; want `scg` on an
+ordinary session? Advertise it (`X-Mewbo-Capabilities: scg`) or name the tool in
+the request `allowed_tools`.
+
+**The two-surface capability-gate fix still stands (keep those tests green) — it is orthogonal to WHERE `scg`
+comes from.** Even for a genuinely-advertised session, core's
+`SessionToolRegistry.build_for` used to select session tools by `allowed_tools`
+ALONE — so the `scg_*` tools surfaced to a ROOT agent only when its
+AgentDef/allowlist named them, NOT from the capability. A plain re-engaged search
+session (root depositing directly, no `scg-mapper` spawn) therefore saw no `scg_*`
+and answered `TOOLS-MISSING`. `build_for` now ALSO builds any factory whose
 `requires-capabilities` ⊆ `session_caps` (the manifest gate finally reaches the
-session-tool build), so these three tools reach the root of every ordinary session
-the predicate grants — verified live: 16 root-issued `scg_memory` deposits on
-re-engagement. An unscoped session binds
+session-tool build), so the reasoning tools reach the root of an `scg`-advertised
+session — that fix is untouched by the advertisement-only change. An unscoped scg session binds
 no `ScgScope` ⇒ `scg_observe`/`scg_route` read the WHOLE graph (the scope default);
 `scg_memory write` attributes to `session:<id>` (a `labels` fallback for `ws:<id>`,
 no new field) when no workspace is bound. The three reasoning tools are

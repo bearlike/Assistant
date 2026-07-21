@@ -2,9 +2,11 @@ package com.mewbo.aura.ui.theme
 
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 
 /**
@@ -30,6 +32,11 @@ object AuraMotion {
     /** M1: floating composer bar is settled by this point in the timeline. */
     const val barSlideSettleMs: Int = 340
 
+    /** [R4 2026-07-10] M1 phase-2 "settle": the invocation perimeter bloom decays 1→0 over this
+     * window (FastOutSlowIn — an exhale, not a linear wipe), starting when the 450ms ignite
+     * completes. Top/side edges fade with it; the bottom term persists into the live states. */
+    const val bloomSettleMs: Int = 950
+
     /** M1: spring damping ratio for the composer bar slide-up — also D-1's orb dock ("spring, same damping as M1"). */
     const val invocationSpringDamping: Float = 0.8f
 
@@ -47,13 +54,10 @@ object AuraMotion {
     /** M2: edge glow breathe intensity, peak-to-trough. */
     const val listeningBreatheAmplitude: Float = 0.20f
 
-    /** Slowed 1200 → 6500 (three rounds) (user directive, #181 follow-up): the 1.2s cycle read as frantic
+    /** Slowed 1200 → 6500 (three rounds) (user directive): the 1.2s cycle read as frantic
      * ("not a breathing machine") - the ambient glow should drift calmly. One shared token: every
      * breathe consumer (glow, orb) slows together. */
     const val listeningBreathePeriodMs: Int = 6500
-
-    /** M2: C3 waveform bar per-frame RMS decay. */
-    const val rmsDecayMs: Int = 80
 
     // ---- M3 — Thinking (send → first delta) ----
     /** M3: edge glow (overlay) / auroraWashTop (in-app) ramp-in duration; the spark/orb pulses as the thinking indicator. */
@@ -101,6 +105,22 @@ object AuraMotion {
     const val actionRowFadeMs: Int = 250
     val actionRowRise: Dp = 4.dp
 
+    // ---- Transcript item transitions (streaming reflow smoothing) ----
+    /** Placement spring for the transcript's `LazyColumn` items (`Modifier.animateItem`): smooths
+     * the abrupt pop-in / shuffle / pop-out of live-turn content — in-flight text growth, tool
+     * activity rows, the spark, the disclaimer — that read as flicker. `StiffnessMediumLow`
+     * tracks the ~20 Hz streaming reflow as a continuous drift rather than lagging behind it;
+     * `NoBouncy` so a settling row never overshoots its resting position. Reduced motion drops
+     * placement travel entirely (rows snap) — a fade is opacity, not travel, so the flat fades stay
+     * (M8 spirit). `IntOffset.VisibilityThreshold` (1px) matches the platform `animateItem` default so
+     * the spring resolves promptly instead of trailing sub-pixel. */
+    val transcriptItemPlacementSpring: FiniteAnimationSpec<IntOffset> =
+        spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+            visibilityThreshold = IntOffset.VisibilityThreshold,
+        )
+
     // ---- M8 — Reduced motion ----
     /**
      * M8 reduced-motion substitutions (documented, not all are numeric): edge glow → static
@@ -114,7 +134,7 @@ object AuraMotion {
      * orb/spark brand-mark family ([com.mewbo.aura.ui.orb.rememberShaderTimeSeconds]'s
      * `reducedMotionBreatheAlpha`) - half-period of the slow sine breathe (full cycle = 2x this),
      * named once so `Orb.kt`'s `ReducedMotionOrb` and `AuraSpark.kt`'s `ReducedMotionSpark` share
-     * one value instead of each hardcoding the same literal (Gitea #181 fix wave, finding 11). */
+     * one value instead of each hardcoding the same literal. */
     const val reducedMotionBreatheHalfPeriodMs: Int = 1800
 
     // ---- Orb state transitions (predate the M-table; values unchanged from v1's tuning) ----

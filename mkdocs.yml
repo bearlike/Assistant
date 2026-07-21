@@ -79,6 +79,7 @@ theme:
         /v1/structured: Structured Outputs
         /v1/draft: Draft Streaming
         /v1/wiki: Wiki Ingestion
+        /api/triggers: Triggers
         /api/automation: Automation
   versions_root: Assistant
   show_version_switcher: true
@@ -123,6 +124,7 @@ theme:
 
     API: lucide:webhook
     Automation: lucide:bot
+    Triggers: lucide:alarm-clock
     "Device Tool Bridge": lucide:cable
     "Full Reference": lucide:globe
 
@@ -148,6 +150,9 @@ theme:
     "Knowledge Graph": lucide:waypoints
     "Agentic Search": lucide:search
     "Source Capability Graph": lucide:route
+    "Agentic Apps": lucide:app-window
+    "Building an App": lucide:hammer
+    "Living with an App": lucide:heart-pulse
     "Structured Outputs": lucide:brackets
     "Composition & Delegation": lucide:users
     "Sub-agents": lucide:git-branch
@@ -170,6 +175,15 @@ theme:
     Configure: lucide:sliders-horizontal
     "LLM Setup": lucide:brain
     "Project Setup": lucide:folder-cog
+    "Authentication & Access": lucide:key-round
+    "Identity Providers": lucide:fingerprint
+    Authelia: lucide:shield-check
+    Authentik: lucide:shield-check
+    Google: lucide:shield-check
+    Keycloak: lucide:shield-check
+    "Microsoft Entra ID": lucide:shield-check
+    AWS: lucide:shield-check
+    "LDAP & Active Directory": lucide:server
     "Configuration Reference": lucide:file-json
 
     Develop: lucide:code
@@ -261,11 +275,16 @@ nav:
       - Voice: android/voice.md
       - Chat and Sessions: android/chat.md
       - Device Tools: android/device-tools.md
+  - Agentic Apps:
+      - Overview: apps/index.md
+      - Building an App: apps/building.md
+      - Living with an App: apps/operating.md
   - API:
       - Get Started: api/index.md
       - Building a Client: api/building-a-client.md
       - Structured Outputs: api/structured-outputs.md
       - Automation: api/automation.md
+      - Triggers: api/triggers.md
       - Device Tool Bridge: api/device-tools.md
       - Full Reference: rest-api.md
   - Client Integrations:
@@ -307,6 +326,16 @@ nav:
   - Configure:
       - LLM Setup: llm-setup.md
       - Project Setup: project-configuration.md
+      - Authentication & Access:
+          - Overview: authentication.md
+          - Identity Providers: authentication-providers.md
+          - Authelia: integrations-authelia.md
+          - Authentik: integrations-authentik.md
+          - Google: integrations-google.md
+          - Keycloak: integrations-keycloak.md
+          - Microsoft Entra ID: integrations-entra-id.md
+          - AWS: integrations-aws.md
+          - LDAP & Active Directory: integrations-ldap.md
       - Configuration Reference: configuration.md
   - Develop:
       - Architecture Overview: core-orchestration.md

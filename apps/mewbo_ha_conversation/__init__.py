@@ -44,7 +44,13 @@ try:
     from homeassistant.util import ulid
 
     from .api import MewboApiClient
-    from .const import CONF_BASE_URL, CONF_TIMEOUT, DEFAULT_TIMEOUT
+    from .const import (
+        CONF_API_KEY,
+        CONF_BASE_URL,
+        CONF_TIMEOUT,
+        DEFAULT_API_KEY,
+        DEFAULT_TIMEOUT,
+    )
     from .coordinator import MewboDataUpdateCoordinator
     from .exceptions import ApiClientError
 
@@ -93,8 +99,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # https://developers.home-assistant.io/docs/config_entries_index/#setting-up-an-entry
     hass.data.setdefault(DOMAIN, {})
+    # Legacy entries (created before the key was persisted) carry no API key —
+    # fall back to the old placeholder token and warn, rather than break setup.
+    api_key = entry.data.get(CONF_API_KEY)
+    if not api_key:
+        LOGGER.warning(
+            "No API key stored for this Mewbo entry; falling back to the "
+            "deprecated default token. Re-add the integration to configure "
+            "your API key."
+        )
+        api_key = DEFAULT_API_KEY
     client = MewboApiClient(
         base_url=entry.data[CONF_BASE_URL],
+        api_key=api_key,
         timeout=entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
         session=async_get_clientsession(hass),
     )
@@ -236,6 +253,27 @@ class MewboAgent(_BaseConversationAgent):
         return conversation.ConversationResult(
             response=intent_response, conversation_id=conversation_id
         )
+
+    async def query(self, messages: MewboMessage) -> MewboResponse:
+        """Send one conversation turn to the Mewbo API.
+
+        Continuity lives on the wire: ``messages`` carries the ``session_id``
+        stored from the prior turn (``None`` on the first), which
+        ``async_generate`` forwards to ``POST /api/query`` so the server
+        continues the same session. That is what preserves multi-turn context
+        for a Home Assistant conversation — no server-side session tags.
+
+        Args:
+            messages: The conversation turn, carrying ``prompt`` and the
+                per-conversation ``session_id``.
+
+        Returns:
+            The parsed Mewbo API response.
+        """
+        if not _HOMEASSISTANT_AVAILABLE:
+            raise _missing_homeassistant_error()
+
+        return await self.client.async_generate(dict(messages))
 
     def _async_generate_prompt(
         self, raw_prompt: str, exposed_entities: list[dict[str, Any]]

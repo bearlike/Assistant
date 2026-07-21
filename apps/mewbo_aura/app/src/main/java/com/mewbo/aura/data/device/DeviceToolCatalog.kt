@@ -9,8 +9,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * One client-executable tool ([toolId] must match `^device_[a-z0-9_]{1,48}$` - wire contract,
- * Gitea #179) advertised to the backend via `context.device_tools`. [requiredPermission] is the
+ * One client-executable tool ([toolId] must match `^device_[a-z0-9_]{1,48}$` - wire contract)
+ * advertised to the backend via `context.device_tools`. [requiredPermission] is the
  * Android runtime permission (if any) that gates this tool out of [DeviceToolCatalog.availableTools]
  * when not granted - Task 2's five tools all ship with none (normal/no-permission APIs); Task 3's
  * two SMS tools are the first to actually gate on one.
@@ -45,15 +45,28 @@ fun interface DevicePermissionChecker {
     fun isGranted(permission: String): Boolean
 }
 
+/** Single-method seam over [com.mewbo.aura.data.settings.SettingsStore.disabledDeviceToolIds]
+ * so [DeviceToolCatalog] and [DeviceToolExecutor] stay unit-testable without an
+ * Android-backed DataStore - the SAME reason [DevicePermissionChecker] exists. Bound in
+ * `DeviceModule` to a `settingsStore.disabledDeviceToolIds.first()` read. */
+fun interface DeviceToolGate {
+    /** Tool ids the user has switched OFF in Settings; empty = every tool enabled (the default). */
+    suspend fun disabledToolIds(): Set<String>
+}
+
 /**
- * Static catalog of every `device_*` tool this build ships, filtered per call to only the ones
- * whose [DeviceToolDefinition.requiredPermission] is currently granted (or has none) - OS runtime
- * grants are the SOLE gate, there is no separate consent toggle anywhere in the app (task brief).
+ * Static catalog of every `device_*` tool this build ships, filtered per call to the ones whose
+ * [DeviceToolDefinition.requiredPermission] is currently granted (or has none) AND which the user
+ * hasn't switched off in Settings ([DeviceToolGate]). OS runtime grants remain the
+ * SOLE gate for a tool's PERMISSION; the per-tool toggle is a separate user-intent layer, and the
+ * two intersect here so a disabled tool is never advertised in `context.device_tools`.
  */
 class DeviceToolCatalog @Inject constructor(
     private val permissionChecker: DevicePermissionChecker,
+    private val gate: DeviceToolGate,
 ) {
-    fun availableTools(): List<DeviceToolDefinition> = filterAvailable(ALL, permissionChecker)
+    suspend fun availableTools(): List<DeviceToolDefinition> =
+        filterAvailable(ALL, permissionChecker, gate.disabledToolIds())
 
     companion object {
         val ALL: List<DeviceToolDefinition> = listOf(
@@ -106,7 +119,7 @@ class DeviceToolCatalog @Inject constructor(
                     put("properties", buildJsonObject { put("reason", stringSchema()) })
                 },
             ),
-            // --- Phase 4 (Gitea #179) ---
+            // --- Phase 4 ---
             DeviceToolDefinition(
                 toolId = "device_read_latest_sms",
                 description = "Read the most recent SMS message(s) from the inbox, optionally filtered by sender. " +
@@ -184,13 +197,18 @@ class DeviceToolCatalog @Inject constructor(
             put("enum", JsonArray(values.map { JsonPrimitive(it) }))
         }
 
-        /** Pure filter, split out of [availableTools] so it's directly testable against a synthetic
-         * [DeviceToolDefinition] carrying a [DeviceToolDefinition.requiredPermission] - none of
-         * [ALL]'s current defs gate on a real permission yet (Task 2 ships none that need one). */
+        /** Pure filter, split out of [availableTools] so it's directly testable: a tool survives iff
+         * its [DeviceToolDefinition.requiredPermission] is granted (or absent) AND it is not in
+         * [disabledToolIds] (the user's per-tool Settings toggle). [disabledToolIds]
+         * defaults empty so pre-toggle call sites (and the permission-only tests) read unchanged. */
         internal fun filterAvailable(
             definitions: List<DeviceToolDefinition>,
             checker: DevicePermissionChecker,
+            disabledToolIds: Set<String> = emptySet(),
         ): List<DeviceToolDefinition> =
-            definitions.filter { it.requiredPermission == null || checker.isGranted(it.requiredPermission) }
+            definitions.filter {
+                (it.requiredPermission == null || checker.isGranted(it.requiredPermission)) &&
+                    it.toolId !in disabledToolIds
+            }
     }
 }

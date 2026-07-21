@@ -58,7 +58,7 @@ class WikiReadPageTool(WikiSessionTool):
         # 1. Resolve runtime and QA ctx.
         ctx = self._qa_ctx()
         if ctx is None:
-            return _err_result("internal", "wiki QA ctx not found for this session")
+            return self._ungrounded_result()
 
         # 2. Parse and validate args.
         # model_validate accepts both "pageId" and "page_id" because

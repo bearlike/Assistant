@@ -5,12 +5,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -24,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import com.mewbo.aura.data.model.ModelCatalog
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraShape
@@ -108,6 +112,26 @@ private fun ModelRow(id: String, label: String, selected: Boolean, onClick: () -
             .clickable(onClick = onClick)
             .padding(horizontal = AuraSpacing.screenGutter),
     ) {
+        val providerIconRes = ModelProviderIcons.iconFor(id)
+        val providerLabel = ModelProviderIcons.providerNameFor(id)
+        if (providerIconRes != null) {
+            Icon(
+                painter = painterResource(providerIconRes),
+                contentDescription = providerLabel,
+                tint = AuraColors.iconPrimary,
+                modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
+            )
+        } else {
+            // No brand match (unrecognized/self-hosted model id) - material-icons-extended's
+            // generic "spark" glyph, not a hand-drawn fallback (orchestrator directive 2026-07-14).
+            Icon(
+                imageVector = Icons.Filled.AutoAwesome,
+                contentDescription = providerLabel,
+                tint = AuraColors.iconPrimary,
+                modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
+            )
+        }
+        Spacer(Modifier.width(AuraSpacing.DrawerRow.iconToLabelGap))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
             Text(text = label, style = AuraType.listItem, color = AuraColors.textPrimary)
             Text(text = id, style = AuraType.caption, color = AuraColors.textSecondary)

@@ -82,7 +82,7 @@ def test_query_returns_neighbors(setup):
     assert "auth" not in content # f1 itself not returned
 
 
-# ── Access-trail recording (#168) — navigation is not grounding ────────────────
+# ── Access-trail recording — navigation is not grounding ────────────────
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ def qa_setup(tmp_path):
 
 
 def test_query_graph_records_only_seed_not_full_result(qa_setup):
-    """A neighbours query records ONLY the seed node, not the ~50-node walk (#168)."""
+    """A neighbours query records ONLY the seed node, not the ~50-node walk."""
     store, sid = qa_setup
     runtime = MagicMock(wiki_store=store)
     tool = WikiQueryGraphTool(session_id=sid)

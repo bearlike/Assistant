@@ -99,12 +99,12 @@ function MermaidBlockInner({ diagramId, inlineSource, onZoom }: MermaidBlockProp
       className="group relative w-full my-6 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]/30 p-4 cursor-zoom-in hover:border-[hsl(var(--border-strong))] transition-colors overflow-hidden"
       title="Click to zoom"
     >
-      <div className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-[hsl(var(--muted))]/80 text-[hsl(var(--muted-foreground))] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        <Maximize2 className="h-2.5 w-2.5" />
+      <div className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium bg-[hsl(var(--muted))]/80 text-[hsl(var(--muted-foreground))] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+        <Maximize2 className="size-3" />
         Click to zoom
       </div>
       {error ? (
-        <div className="text-xs text-[hsl(var(--destructive))] py-6 text-center">{error}</div>
+        <div className="text-xs text-[hsl(var(--destructive-text))] py-6 text-center">{error}</div>
       ) : svg ? (
         <div
           className="flex items-center justify-center [&_svg]:max-w-full [&_svg]:h-auto"

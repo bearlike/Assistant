@@ -140,6 +140,12 @@ export function WidgetCard({ widget }: WidgetCardProps) {
   // Observe the widget's `.stMainBlockContainer` for content-height changes
   // so the card placeholder grows/shrinks to match. Mounted on widgetRef
   // (the portalled wrapper) since the widget DOM lives there now.
+  //
+  // The reserved height is content + the panel's chrome title bar
+  // (`[data-widget-chrome]` in StliteWidgetPanel). The chrome sits INSIDE
+  // the card, so sizing the card to content alone left the widget viewport
+  // ~24px shorter than the content — permanently clipping the app's bottom
+  // padding and parking the last row's border right on the clip edge.
   useEffect(() => {
     const root = widgetRef.current;
     if (!root) return;
@@ -147,17 +153,19 @@ export function WidgetCard({ widget }: WidgetCardProps) {
     let resizeObserver: ResizeObserver | undefined;
     let observedTarget: HTMLElement | null = null;
 
+    const measure = (target: HTMLElement) => {
+      const chrome = root.querySelector<HTMLElement>("[data-widget-chrome]");
+      const h = target.scrollHeight + (chrome?.offsetHeight ?? 0);
+      if (h > 0) setContentHeight(h);
+    };
+
     const attach = (target: HTMLElement) => {
       if (observedTarget === target) return;
       resizeObserver?.disconnect();
       observedTarget = target;
-      resizeObserver = new ResizeObserver(() => {
-        const h = target.scrollHeight;
-        if (h > 0) setContentHeight(h);
-      });
+      resizeObserver = new ResizeObserver(() => measure(target));
       resizeObserver.observe(target);
-      const initial = target.scrollHeight;
-      if (initial > 0) setContentHeight(initial);
+      measure(target);
     };
 
     const sync = () => {
@@ -259,7 +267,7 @@ export function WidgetCard({ widget }: WidgetCardProps) {
       <div
         ref={cardRef}
         style={cardStyle}
-        className="relative rounded-lg border border-[hsl(var(--border))] shadow-sm overflow-hidden bg-[hsl(var(--widget-panel-bg))] transition-[height] duration-200"
+        className="relative rounded-lg border border-[hsl(var(--border))] [box-shadow:var(--elev-1)] overflow-hidden bg-[hsl(var(--widget-panel-bg))] transition-[height] duration-200"
       >
         {isMaximized && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-[hsl(var(--muted-foreground))] pointer-events-none">
@@ -320,14 +328,13 @@ export function WidgetCard({ widget }: WidgetCardProps) {
             // animate every frame, dragging the widget behind the chat.
             transitioning && "transition-[left,top,width,height] duration-300 ease-out",
             isMaximized
-              ? "z-50 rounded-xl shadow-2xl"
-              : "z-[5] rounded-lg border border-[hsl(var(--border))] shadow-sm"
+              ? "z-50 rounded-xl [box-shadow:var(--elev-3)]"
+              : "z-[5] rounded-lg border border-[hsl(var(--border))] [box-shadow:var(--elev-1)]"
           )}
         >
           <Suspense fallback={loadingFallback}>
             <StliteWidgetPanel
               widget={widget}
-              zoom={isMaximized ? 1 : 0.85}
               className="h-full"
               onMaximize={isMaximized ? undefined : () => toggleMaximize(true)}
               onClose={isMaximized ? () => toggleMaximize(false) : undefined}

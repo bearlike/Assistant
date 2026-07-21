@@ -20,6 +20,7 @@ import {
   getAnswer,
   getIndexingJob,
   getPage,
+  getProjectSettings,
   isWikiError,
   listLanguages,
   listPlatforms,
@@ -30,6 +31,7 @@ import {
   startAnswer,
   streamAnswer,
   subscribeToIndexing,
+  updateProject,
   uploadCatalogDocuments,
 } from "../../components/wiki/api/client";
 
@@ -114,6 +116,47 @@ describe("deleteProject", () => {
     expect(url).toBe("/v1/wiki/projects/owner%2Frepo");
     expect(init.method).toBe("DELETE");
     expect(result).toEqual({ deleted: true });
+  });
+});
+
+// ── Project settings ──────────────────────────────────────────
+
+describe("getProjectSettings", () => {
+  it("GETs the slug-encoded settings URL", async () => {
+    const payload = { slug: "owner/repo", model: "m", ref: null };
+    fetchSpy.mockResolvedValueOnce(jsonResp(payload));
+
+    const result = await getProjectSettings("owner/repo");
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/wiki/projects/owner%2Frepo/settings");
+    expect(init.method).toBe("GET");
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("updateProject", () => {
+  it("PATCHes only the given subset, verbatim", async () => {
+    fetchSpy.mockResolvedValueOnce(jsonResp({ slug: "owner/repo", model: "m2" }));
+
+    await updateProject("owner/repo", { model: "m2", ref: null });
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/wiki/projects/owner%2Frepo");
+    expect(init.method).toBe("PATCH");
+    // `ref: null` is an explicit "clear to the default branch" — it must survive
+    // serialisation, unlike an absent key which means "leave it alone".
+    expect(JSON.parse(init.body as string)).toEqual({ model: "m2", ref: null });
+  });
+
+  it("surfaces a 403 developer-mode rejection as a typed WikiError", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      jsonResp({ code: "forbidden", message: "Developer mode is disabled" }, 403),
+    );
+
+    await expect(
+      updateProject("owner/repo", { graphOnly: true }),
+    ).rejects.toMatchObject({ code: "forbidden", message: "Developer mode is disabled" });
   });
 });
 

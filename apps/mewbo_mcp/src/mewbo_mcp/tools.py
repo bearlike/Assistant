@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from .rest import RestClient, RestError
-from .timeline import Turn, build_timeline
+from .timeline import TerminationMarker, TriggerMarker, Turn, build_timeline, extract_trigger_events
 
 # ---------------------------------------------------------------------------
 # Shared coercion primitives (cross-cutting — belong to no single feature)
@@ -74,7 +74,7 @@ async def bounded_poll(
         await asyncio.sleep(interval_s)
 
 
-# Long-running-tool budget invariant (#41): every inline poll budget
+# Long-running-tool budget invariant: every inline poll budget
 # (``WikiTools``/``SearchTools``/``StructuredQueryTools`` ``timeout_s``) MUST be
 # strictly below the transport/proxy timeout (httpx read 30s, and the shorter
 # front-proxy ceiling of this deployment's MCP reverse proxy). The budget is the tightest ceiling
@@ -96,7 +96,7 @@ async def poll_or_handle(
     """Bounded-poll a started run; degrade to the resumable handle on timeout.
 
     On budget OR transport timeout, return the resumable handle as
-    ``status:'running'`` instead of raising (#41). ``run_id`` is obtained before
+    ``status:'running'`` instead of raising. ``run_id`` is obtained before
     polling, so a slow API / short proxy can't strand the caller.
 
     Only a *transport-level* failure (``RestError.status_code is None`` — a
@@ -141,7 +141,7 @@ class SessionTools:
     # Truncation budget for user/assistant text in the ``turns`` tier so a long
     # conversation stays cheap for the consuming agent.
     TURN_TEXT_TRUNC: ClassVar[int] = 500
-    # ``full`` tier caps (#42): page the step list and bound each inlined field so
+    # ``full`` tier caps: page the step list and bound each inlined field so
     # a single fat turn can't blow the token cap. ``STEP_FIELD_TRUNC`` is a backstop
     # — the API ``?truncate=1`` already trims oversized fields at the source; we
     # keep the MCP cap ≥ the API cap so MCP only trims if the API didn't.
@@ -272,6 +272,26 @@ class SessionTools:
         ok = bool(_as_dict(result).get("interrupted"))
         return {"session_id": session_id, "status": "interrupted" if ok else "no_active_run"}
 
+    async def terminate(self, *, session_id: str) -> dict[str, Any]:
+        """PERMANENTLY terminate a session — a kill switch, not a recoverable state.
+
+        Wires ``POST /api/sessions/<id>/terminate``. Distinct from
+        :meth:`interrupt`, which only stops the CURRENT RUN and leaves the
+        session steerable — this blocks run/steer/recover/fork forever after
+        the call returns (reads stay open; there is no un-terminate). Every
+        armed trigger on the session is cancelled as part of the same
+        operation (``cancelled_triggers``). Idempotent: a repeat call on an
+        already-terminated session returns the original
+        ``terminated_at``/``cancelled_triggers`` rather than erroring.
+        """
+        result = _as_dict(await self.client.post(f"/api/sessions/{session_id}/terminate"))
+        return {
+            "session_id": result.get("session_id", session_id),
+            "status": result.get("status", "terminated"),
+            "terminated_at": result.get("terminated_at"),
+            "cancelled_triggers": result.get("cancelled_triggers", 0),
+        }
+
     # -- discover & read (tiered) -----------------------------------------
 
     async def list_sessions(
@@ -288,8 +308,12 @@ class SessionTools:
         locally, returns at most ``limit`` rows (default 20, newest-first) so the
         default response stays small. Each row is projected to
         ``{session_id, title, project, status, done_reason, created_at, origin?,
-        archived?}`` — dropping the redundant ``running`` flag and the verbose raw
-        ``context`` while SURFACING the ``project`` the filter matches on.
+        archived?, recoverable, blocked_code?, failure_reason?, models_tried?}`` —
+        dropping the redundant ``running`` flag and the verbose raw ``context``
+        while SURFACING the ``project`` the filter matches on and the honest-
+        outcome facets a caller needs to know WHAT went wrong and whether it can
+        retry (the ``blocked``/``failure`` facets are omitted for an untroubled
+        session).
 
         ``project`` matches the underlying repo name/identity: a session matches
         when ``project`` equals ``context.repo`` OR ``context.project`` (any
@@ -341,8 +365,21 @@ class SessionTools:
             "done_reason": s.get("done_reason"),
             "created_at": s.get("created_at"),
         }
-        for key in ("origin", "archived"):
+        # "terminated"/"terminated_at": read defensively via .get() — the
+        # API's list route already forwards them, but nothing here assumes it.
+        for key in ("origin", "archived", "terminated", "terminated_at"):
             if s.get(key) is not None:
+                out[key] = s.get(key)
+        # The honest-outcome facets: the row is core's ``summarize_session``
+        # output, which already appends these (blocked_code/failure_reason/
+        # models_tried when present, recoverable always), so this is pure
+        # forwarding — a caller reading ``status:"blocked"`` gets WHICH wall and
+        # whether it can retry, not just that something is wrong. Append-when-
+        # present keeps an untroubled row byte-identical.
+        if "recoverable" in s:
+            out["recoverable"] = bool(s.get("recoverable"))
+        for key in ("blocked_code", "failure_reason", "models_tried"):
+            if s.get(key):
                 out[key] = s.get(key)
         return out
 
@@ -355,15 +392,15 @@ class SessionTools:
         ``steps`` and ``full`` tiers require ``turn`` (1-based). The consuming
         agent picks the tier so it controls its own context spend. The ``full``
         tier pages its steps (``FULL_STEPS_PAGE`` per call from ``step_offset``)
-        so a fat turn can't blow the token cap (#42).
+        so a fat turn can't blow the token cap.
         """
         if level not in self.LEVELS:
             raise ValueError(f"Invalid level '{level}'. Use overview|turns|steps|full.")
 
-        turns, meta = await self._load_turns(session_id)
+        turns, triggers, terminated, meta = await self._load_turns(session_id)
 
         if level == "overview":
-            return self._overview(session_id, turns, meta)
+            return self._overview(session_id, turns, meta, terminated)
         if level == "turns":
             return {"session_id": session_id, "turns": [self._turn_summary(t) for t in turns]}
 
@@ -397,6 +434,17 @@ class SessionTools:
             "step_offset": offset,
             "agents": "call get_agent_tree(session_id) for the sub-agent tree",
         }
+        if selected.error:
+            out["error"] = self._cap_field(selected.error)
+        if selected.blocked_code:
+            out["blocked_code"] = selected.blocked_code
+        if selected.unmet_goal_reason:
+            out["unmet_goal_reason"] = selected.unmet_goal_reason
+        turn_triggers = [
+            self._shape_trigger_marker(t) for t in triggers if t.turn_index == selected.index
+        ]
+        if turn_triggers:
+            out["triggers"] = turn_triggers
         attachments = self._shape_attachments(selected)
         if attachments:
             out["attachments"] = attachments
@@ -446,17 +494,22 @@ class SessionTools:
             raise RestError("Worktree creation did not return a project_id.")
         return wt
 
-    async def _load_turns(self, session_id: str) -> tuple[list[Turn], dict[str, Any]]:
-        """Fetch a session's events and reconstruct turns.
+    async def _load_turns(
+        self, session_id: str
+    ) -> tuple[list[Turn], list[TriggerMarker], TerminationMarker | None, dict[str, Any]]:
+        """Fetch a session's events and reconstruct turns + trigger/termination markers.
 
-        Returns ``(turns, meta)`` where ``meta`` is the raw ``/events`` payload —
-        it carries the API's authoritative ``status``/``done_reason``/``title``/
-        ``running`` so the overview never has to reconstruct them from the
-        timeline tail (the old source of the ``status: null`` / title bugs).
+        Returns ``(turns, triggers, terminated, meta)`` where ``meta`` is the raw
+        ``/events`` payload — it carries the API's authoritative
+        ``status``/``done_reason``/``title``/``running`` so the overview never
+        has to reconstruct them from the timeline tail (the old source of the
+        ``status: null`` / title bugs). ``triggers``/``terminated`` are a
+        SEPARATE pass (:func:`extract_trigger_events`) over the same events —
+        see ``timeline.py``'s module docstring for why.
 
         ``?truncate=1`` opts into the API's field-capping so oversized
         ``result``/``tool_input`` fields are trimmed at the source for every tier
-        (only ``full`` inlines them) — the first half of the #42 token-cap fix.
+        (only ``full`` inlines them) — the first half of the token-cap fix.
         """
         payload = _as_dict(
             await self.client.get(
@@ -464,7 +517,8 @@ class SessionTools:
             )
         )
         events = _dict_list(payload, "events")
-        return build_timeline(events), payload
+        triggers, terminated = extract_trigger_events(events)
+        return build_timeline(events), triggers, terminated, payload
 
     async def _safe_agent_tree(self, session_id: str) -> dict[str, Any] | None:
         """Fetch the agent tree, returning ``None`` if the call fails."""
@@ -492,7 +546,11 @@ class SessionTools:
 
     @classmethod
     def _overview(
-        cls, session_id: str, turns: list[Turn], meta: dict[str, Any]
+        cls,
+        session_id: str,
+        turns: list[Turn],
+        meta: dict[str, Any],
+        terminated: TerminationMarker | None = None,
     ) -> dict[str, Any]:
         """Build the cheapest tier: counts + token totals, no per-turn detail."""
         first = turns[0] if turns else None
@@ -500,12 +558,14 @@ class SessionTools:
         total_steps = sum(t.step_count for t in turns)
         total_input = 0
         total_output = 0
+        total_billed_input = 0
         for t in turns:
             usage = t.token_usage()
             if usage is None:
                 continue
             total_input += usage.input_tokens + usage.sub_input_tokens
             total_output += usage.output_tokens + usage.sub_output_tokens
+            total_billed_input += usage.billed_input_tokens
         running = bool(meta.get("running"))
         # Prefer the API's authoritative status/title/done_reason; reconstruct
         # from the timeline only when the events payload omits them.
@@ -513,7 +573,7 @@ class SessionTools:
             "running" if running else (last.done_reason if last else None)
         )
         title = meta.get("title") or (first.user_text[:120] if first else "")
-        return {
+        out: dict[str, Any] = {
             "session_id": session_id,
             "title": title,
             "summary": cls._clean_summary(last) if last else "",
@@ -522,9 +582,57 @@ class SessionTools:
             "running": running,
             "turn_count": len(turns),
             "step_count": total_steps,
+            # Two different quantities, both real, previously indistinguishable
+            # because only the first was reported. ``total_input_tokens`` sums
+            # per-turn PEAKS (root peak + each sub-agent's peak) and measures
+            # context pressure; ``total_billed_input_tokens`` sums EVERY call's
+            # input and is what the per-call event log adds up to. On a
+            # tool-heavy session the second is several times the first — the
+            # whole prompt is resent on every step — so reporting the peak alone
+            # under a "total" name read as a metering discrepancy.
             "total_input_tokens": total_input,
+            "total_billed_input_tokens": total_billed_input,
             "total_output_tokens": total_output,
         }
+        # terminated/terminated_at: prefer the API's authoritative meta
+        # (read defensively — GET /events does not forward these fields yet as
+        # of this writing); fall back to the transcript's session_terminated
+        # marker, which works even before that API-side change lands.
+        out["terminated"] = bool(meta.get("terminated")) or terminated is not None
+        terminated_at = meta.get("terminated_at") or (terminated.ts if terminated else None)
+        if terminated_at:
+            out["terminated_at"] = terminated_at
+        cls._forward_outcome_facets(out, meta, last)
+        return out
+
+    @staticmethod
+    def _forward_outcome_facets(
+        out: dict[str, Any], meta: dict[str, Any], last: Turn | None
+    ) -> None:
+        """Surface the four honest-outcome facets an external agent acts on.
+
+        A caller that reads ``status:"blocked"`` but not ``blocked_code`` knows
+        something is wrong but not what, nor whether a retry could ever succeed;
+        ``recoverable`` is the retry-affordance signal, and
+        ``failure_reason``/``models_tried`` are what let a retry default AWAY from
+        the model that just failed. All four are derived ONCE in core's
+        ``summarize_session``. ``recoverable`` already rides the ``/events`` meta;
+        ``blocked_code`` is reconstructed from the transcript here (the same
+        authoritative-or-reconstructed idiom this tier already uses for
+        ``status``/``terminated``) so it surfaces without waiting on the API;
+        ``failure_reason``/``models_tried`` ride the meta once the API forwards
+        them from the summary it already computes. Every one is append-when-present
+        so an untroubled session's shape is unchanged.
+        """
+        if "recoverable" in meta:
+            out["recoverable"] = bool(meta.get("recoverable"))
+        blocked_code = meta.get("blocked_code") or (last.blocked_code if last else "")
+        if blocked_code:
+            out["blocked_code"] = blocked_code
+        for key in ("failure_reason", "models_tried"):
+            value = meta.get(key)
+            if value:
+                out[key] = value
 
     @classmethod
     def _clean_summary(cls, turn: Turn) -> str:
@@ -564,9 +672,34 @@ class SessionTools:
             "step_count": turn.step_count,
             "tokens": usage.to_dict() if usage else None,
         }
+        # Additive, and omitted unless the run actually failed — a turn whose
+        # only record of the failure was a blanked assistant bubble read as an
+        # empty success at this tier.
+        if turn.error:
+            out["error"] = cls._truncate(turn.error)
+        # ``done_reason`` already reads ``"blocked"`` for a blocked run; the code
+        # names WHICH wall it hit, so a reader knows what to fix and whether a
+        # retry could ever succeed.
+        if turn.blocked_code:
+            out["blocked_code"] = turn.blocked_code
+        # ``done_reason`` reads ``"unmet_goal"`` for a run a session-end hook
+        # contradicted; the reason names WHICH purpose went unmet (the detail
+        # rides ``error``).
+        if turn.unmet_goal_reason:
+            out["unmet_goal_reason"] = turn.unmet_goal_reason
         attachments = cls._shape_attachments(turn)
         if attachments:
             out["attachments"] = attachments
+        return out
+
+    @staticmethod
+    def _shape_trigger_marker(t: TriggerMarker) -> dict[str, Any]:
+        """Compact projection of a trigger marker for the ``full`` tier."""
+        out: dict[str, Any] = {"action": t.action, "kind": t.kind, "ts": t.ts}
+        if t.trigger_id:
+            out["trigger_id"] = t.trigger_id
+        if t.summary:
+            out["summary"] = t.summary
         return out
 
     @staticmethod
@@ -610,7 +743,7 @@ class SessionTools:
         """Full per-step log: inputs, result, and error for the ``full`` tier.
 
         ``tool_input``/``result`` are capped to :attr:`STEP_FIELD_TRUNC` as a
-        backstop in case the API's ``?truncate=1`` didn't trim them (#42).
+        backstop in case the API's ``?truncate=1`` didn't trim them.
         """
         payload = cls._event_payload(event)
         return {
@@ -669,13 +802,20 @@ class WikiTools:
 
     client: RestClient
     # How long ``ask`` polls before returning a partial "still running" answer
-    # rather than hanging. Kept strictly under :data:`PROXY_CEILING_S` (#41) so
+    # rather than hanging. Kept strictly under :data:`PROXY_CEILING_S` so
     # the tool always returns the resumable ``answer_id`` before any transport/
     # proxy timeout can strand the caller.
     timeout_s: float = 25.0
     poll_interval_s: float = 1.5
     # Terminal QA snapshot statuses (the snapshot's ``status`` starts "running").
     TERMINAL_QA: ClassVar[frozenset[str]] = frozenset({"complete", "cancelled", "error"})
+    # External traversal ceilings. The shared args model defaults to 50 nodes for
+    # the IN-SESSION tool, which spends its own context budget; an external
+    # caller's context is not ours to spend, so the facade asks for less. The
+    # edge ceiling has no counterpart in that model — the node limit does not
+    # bound a hub's incident edges — so this is the only cap on them.
+    NEIGHBOR_LIMIT: ClassVar[int] = 25
+    NEIGHBOR_EDGE_LIMIT: ClassVar[int] = 200
 
     # -- behaviors --------------------------------------------------------
 
@@ -731,7 +871,7 @@ class WikiTools:
         if detail == "stats":
             return out
         if layer:
-            # Nodes are Cytoscape-shaped — ``layer`` lives under ``data`` (#63).
+            # Nodes are Cytoscape-shaped — ``layer`` lives under ``data``.
             nodes = [n for n in nodes if cls._data(n).get("layer") == layer]
         if isinstance(limit, int) and limit > 0:
             nodes = nodes[:limit]
@@ -765,6 +905,78 @@ class WikiTools:
         Wires ``GET /v1/wiki/projects/<slug>/pages/<page_id>``.
         """
         return _as_dict(await self.client.get(f"/v1/wiki/projects/{project}/pages/{page_id}"))
+
+    async def list_pages(
+        self,
+        *,
+        project: str,
+        title_contains: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List a project's generated wiki pages as ``{id, title}`` rows.
+
+        Wires ``GET /v1/wiki/projects/<slug>/pages``. The page-id roster
+        ``read_page`` consumes: without it an external caller has no way to
+        discover what a project's wiki actually contains.
+
+        Bounded at the QUERY, not by truncating the reply — the server slices to
+        ``limit`` and reports ``truncated`` + ``nextOffset``, so every response is
+        a COMPLETE list of rows, just not necessarily all of them.
+        """
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if title_contains:
+            params["titleContains"] = title_contains
+        return _as_dict(
+            await self.client.get(f"/v1/wiki/projects/{project}/pages", params=params)
+        )
+
+    async def graph_neighbors(
+        self,
+        *,
+        project: str,
+        node_id: str,
+        edge_kind: str | None = None,
+        direction: str = "any",
+        hops: int = 1,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Walk the code graph outward from ``node_id`` — no model call, no run.
+
+        Wires ``GET /v1/wiki/projects/<slug>/graph/neighbors``. ``limit`` bounds
+        the NODES the server walks to; the edge list it returns is bounded here
+        instead, because a hub node's incident edges are not capped by the node
+        limit at all. That cap is reported as ``edgesTruncated`` — an explicit
+        signal, never a silent cut — and the nodes stay complete either way, so a
+        truncated walk is still a usable answer rather than a mangled one.
+        """
+        params: dict[str, Any] = {
+            "node_id": node_id,
+            "direction": direction,
+            "hops": hops,
+            "limit": self.NEIGHBOR_LIMIT if limit is None else limit,
+        }
+        if edge_kind:
+            params["edge_kind"] = edge_kind
+        result = _as_dict(
+            await self.client.get(
+                f"/v1/wiki/projects/{project}/graph/neighbors", params=params
+            )
+        )
+        return self._bound_edges(result)
+
+    @classmethod
+    def _bound_edges(cls, result: dict[str, Any]) -> dict[str, Any]:
+        """Cap a traversal's edge list at :attr:`NEIGHBOR_EDGE_LIMIT`."""
+        edges = _as_list(result.get("edges"))
+        if len(edges) <= cls.NEIGHBOR_EDGE_LIMIT:
+            return result
+        return {
+            **result,
+            "edges": edges[: cls.NEIGHBOR_EDGE_LIMIT],
+            "edgeCount": len(edges),
+            "edgesTruncated": True,
+        }
 
     async def submit_insight(
         self,
@@ -828,7 +1040,7 @@ class WikiTools:
             raise RestError("Wiki QA did not emit a meta event with an answer id.")
 
         # ``answer_id`` is captured BEFORE polling, so a transport/proxy timeout
-        # mid-poll degrades to the resumable handle (#41), never strands.
+        # mid-poll degrades to the resumable handle, never strands.
         return await poll_or_handle(
             answer_id,
             lambda: self._fetch_answer(answer_id),
@@ -1152,7 +1364,7 @@ class SearchTools:
 
     client: RestClient
     # Bounded await for an async run (see :meth:`search`). Held strictly under
-    # :data:`PROXY_CEILING_S` (#41) so a slow run returns the resumable ``run_id``
+    # :data:`PROXY_CEILING_S` so a slow run returns the resumable ``run_id``
     # as ``status:"running"`` before any transport/proxy timeout strands it.
     timeout_s: float = 25.0
     poll_interval_s: float = 1.5
@@ -1221,7 +1433,7 @@ class SearchTools:
             return self._shape_run(payload, status, ws_name, detail)
 
         # ``run_id`` captured below so even an EMPTY snapshot (transport timeout
-        # degraded to the handle, #41) still surfaces the resumable id + running.
+        # degraded to the handle) still surfaces the resumable id + running.
         def _shape(record: dict[str, Any], terminal: bool) -> dict[str, Any]:
             rec = _as_dict(record)
             rec_status = str(rec.get("status") or "running")
@@ -1396,7 +1608,7 @@ class StructuredQueryTools:
     """
 
     client: RestClient
-    # Held strictly under :data:`PROXY_CEILING_S` (#41) so a slow run returns the
+    # Held strictly under :data:`PROXY_CEILING_S` so a slow run returns the
     # resumable ``run_id`` as ``status:"running"`` before any transport/proxy
     # timeout strands the caller.
     timeout_s: float = 25.0
@@ -1431,7 +1643,7 @@ class StructuredQueryTools:
         if self._is_settled(created) or not run_id:
             return self._shape(created, run_id)
         # ``run_id`` captured before polling, so a transport/proxy timeout
-        # mid-poll degrades to the resumable handle (#41), never strands.
+        # mid-poll degrades to the resumable handle, never strands.
         return await poll_or_handle(
             run_id,
             lambda: self._fetch_run(run_id),
@@ -1525,11 +1737,105 @@ class ProjectTools:
         return out
 
 
+# ---------------------------------------------------------------------------
+# H. Triggers — external manage/observe surface
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerTools:
+    """The reverse-invocation trigger tool surface — one atomic unit.
+
+    Holds the injected REST :attr:`client` and exposes list + cancel over
+    ``GET /api/triggers`` / ``DELETE /api/triggers/<id>``: the cross-session
+    collection view an external caller uses to observe and manage triggers.
+
+    Deliberately NO create/arm method here. Arming a trigger is an
+    agent-facing, IN-SESSION capability — the ``schedule_trigger`` SessionTool
+    an agent calls on itself mid-turn to end its turn and wait to be woken,
+    never a general external mutation surface (mirrors the ``kind`` classes'
+    "never an LLM-authored script" guardrail: arming decisions stay inside the
+    session that will be woken). This class is the READ/manage counterpart,
+    the same role the console's trigger dashboard plays for a human operator.
+    """
+
+    client: RestClient
+
+    async def list_triggers(
+        self,
+        *,
+        session_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """List triggers, optionally scoped, compact rows.
+
+        Wires ``GET /api/triggers`` with the server's own
+        ``session_id``/``kind``/``status``/``limit`` query filters (an unknown
+        ``status`` is silently ignored server-side, matching the API). A
+        trigger is a durable "wake me up" record — ``time.at``/``time.cron``/
+        ``ci.workflow``/``forge.pr``/``webhook`` — that re-engages a session
+        later; see :class:`TriggerTools`'s docstring for why there is no
+        matching arm/create tool.
+        """
+        params: dict[str, Any] = {}
+        if session_id:
+            params["session_id"] = session_id
+        if kind:
+            params["kind"] = kind
+        if status:
+            params["status"] = status
+        if isinstance(limit, int) and limit > 0:
+            params["limit"] = limit
+        payload = _as_dict(await self.client.get("/api/triggers", params=params or None))
+        triggers = [self._shape(t) for t in _dict_list(payload, "triggers")]
+        return {"triggers": triggers, "count": len(triggers)}
+
+    async def cancel(self, *, trigger_id: str) -> dict[str, Any]:
+        """Cancel a trigger by id (idempotent).
+
+        Wires ``DELETE /api/triggers/<id>``; a repeat call on an
+        already-terminal trigger just reports its current status rather than
+        erroring — same idempotency contract as :meth:`SessionTools.terminate`.
+        """
+        result = _as_dict(await self.client.request("DELETE", f"/api/triggers/{trigger_id}"))
+        return {"id": result.get("id", trigger_id), "status": result.get("status")}
+
+    @staticmethod
+    def _shape(t: dict[str, Any]) -> dict[str, Any]:
+        """Compact projection of a Trigger DTO (drops ``args``/``provenance``).
+
+        The API never includes the webhook ``secret`` on a list response
+        (``include_secret=False`` server-side), so nothing here has to strip
+        it. ``args`` (the kind-specific fields, e.g. a cron expression or a PR
+        number) is dropped from this compact row — a caller that needs it
+        already knows the kind and armed it itself.
+        """
+        out: dict[str, Any] = {
+            "id": t.get("id"),
+            "session_id": t.get("session_id"),
+            "kind": t.get("kind"),
+            "status": t.get("status"),
+            "wake_prompt": t.get("wake_prompt"),
+            "action": t.get("action"),
+            "fires": t.get("fires"),
+            "max_fires": t.get("max_fires"),
+            "next_fire_at": t.get("next_fire_at"),
+            "expires_at": t.get("expires_at"),
+            "created_at": t.get("created_at"),
+        }
+        if t.get("last_error"):
+            out["last_error"] = t.get("last_error")
+        return out
+
+
 __all__ = [
     "IntegrationTools",
     "ProjectTools",
     "SearchTools",
     "SessionTools",
     "StructuredQueryTools",
+    "TriggerTools",
     "WikiTools",
 ]

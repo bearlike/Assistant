@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Cheap LLM session auto-titling for the CLI (#157).
+"""Cheap LLM session auto-titling for the CLI.
 
 After the first turn we want a short navigable title (it feeds the ``/resume``
-switcher and, via #156, the OSC terminal-title write). The engine ALREADY has a
+switcher and the OSC terminal-title write). The engine ALREADY has a
 title seam — :func:`mewbo_core.title_generator.generate_session_title` (a one-shot
 3-7 word model call) plus the store's ``save_title``/``load_title`` — so this is
 a thin orchestrator over that seam, NOT a new LLM client.

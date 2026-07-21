@@ -1,5 +1,5 @@
 /**
- * Live-SSE leg tests for Agentic Search (#80 follow-up / #82).
+ * Live-SSE leg tests for Agentic Search.
  *
  * Two layers:
  *  1. `reduceRun` unit: the fold attaches on the FIRST frame of any type (so a
@@ -19,7 +19,7 @@ import {
   initialRunStreamState,
   reduceRun,
   toRunPayload,
-} from "../hooks/useAgenticSearch"
+} from "../hooks/runStream"
 import type { SearchResult } from "../types/agenticSearch"
 
 // ── reduceRun unit ───────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ describe("reduceRun attach + first-frame attach", () => {
     expect(s.attached).toBe(false)
   })
 
-  it("agent_done projects the probe's evidence onto the lane (#86)", () => {
+  it("agent_done projects the probe's evidence onto the lane", () => {
     let s = reduceRun(initialRunStreamState, { type: "attach", runId: "r1" })
     s = reduceRun(s, {
       type: "agent_start",
@@ -104,7 +104,7 @@ describe("reduceRun attach + first-frame attach", () => {
     expect(lane?.lines.at(-1)).toMatchObject({ done: true, empty: false })
   })
 
-  it("agent_done flags a NO-DATA dead-end as empty (#86)", () => {
+  it("agent_done flags a NO-DATA dead-end as empty", () => {
     let s = reduceRun(initialRunStreamState, { type: "attach", runId: "r1" })
     s = reduceRun(s, {
       type: "agent_start",
@@ -144,7 +144,7 @@ vi.mock("../api/agenticSearch", async (orig) => {
   }
 })
 
-import AgenticSearchView from "../components/agentic_search/AgenticSearchView"
+import { AgenticSearchView } from "../components/agentic_search/AgenticSearchView"
 import * as api from "../api/agenticSearch"
 import type { RunRecord, SearchEvent, Workspace } from "../types/agenticSearch"
 
@@ -196,7 +196,7 @@ function renderView() {
   )
 }
 
-describe("AgenticSearch live-SSE view transition (#80)", () => {
+describe("AgenticSearch live-SSE view transition", () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.mocked(api.listSources).mockResolvedValue([
@@ -257,6 +257,25 @@ describe("AgenticSearch live-SSE view transition (#80)", () => {
   })
 
   it("flips from 'Starting search…' to the trace view on the first agent_start (no run_started)", async () => {
+    // Warm the `ResultsPanel` chunk BEFORE mounting. `AgenticSearchView` code-splits
+    // it behind `React.lazy()`/`Suspense` so the landing page's first paint
+    // never downloads it — it only imports on an active run, i.e. exactly the
+    // transition this test drives. Left cold, the assertion below races the
+    // Suspense boundary's FIRST-EVER `import()` (a real filesystem read + esbuild
+    // transform under vitest) against the default 1000ms `waitFor` window. That
+    // race is invisible running this file alone (nothing else contends for CPU),
+    // but under the full suite (62 files across worker threads) the transform can
+    // take >1000ms and the assertion observes the `Suspense` fallback
+    // ("Loading results…") instead of the real view — this is what surfaced as
+    // "fails only under full-suite load" (verified: `--no-file-parallelism`
+    // makes it pass every time). Pre-importing resolves the SAME cached module
+    // record `AgenticSearchView`'s internal `import("./ResultsPanel")` will hit
+    // (Vite/vite-node keys the module graph by resolved file id, not import
+    // specifier text), so the Suspense boundary's import settles on the next
+    // microtask instead of a cold transform — this is not a timeout bump, it
+    // removes the actual bottleneck the test was never meant to race against.
+    await import("../components/agentic_search/ResultsPanel")
+
     const { gen, push, close } = makeControllableStream()
     vi.mocked(api.streamRun).mockReturnValue(gen as ReturnType<typeof api.streamRun>)
 

@@ -1,0 +1,870 @@
+{
+  "projects": [
+    {
+      "slug": "github.com/bearlike/Grove",
+      "source": "github",
+      "lang": "Python",
+      "desc": "A lightweight session manager for git worktrees. Grove tracks your active branches, keeps each worktree tidy, and lets you hop between parallel tasks without context-switching chaos.",
+      "landing_page_id": "grove-overview",
+      "host": "github.com",
+      "commit_sha": "6f7ce065a7fb43a496b85eb194ce2a442fe970c0",
+      "commit_short": "6f7ce06",
+      "branch": "main",
+      "repo_url": "https://github.com/bearlike/Grove",
+      "indexed_offset_seconds": -172800,
+      "pages": [
+        {
+          "id": "grove-overview",
+          "title": "Grove Overview",
+          "body": "# Grove Overview\n\nGrove is a lightweight session manager for git worktrees. It tracks your active\nbranches, keeps each worktree tidy, and lets you hop between parallel tasks\nwithout context-switching chaos.\n\n## Why Grove\n\nWorking several branches at once usually means stashing, checking out, and\nlosing your place. Grove gives each task its **own worktree and tmux session**,\nso switching is instant and nothing leaks between tasks.\n\n## How a session flows\n\n```mermaid\nflowchart TD\n    A[Session submitted] --> B[\"bind_tools()\"]\n    B --> C[Create worktree]\n    C --> D[Start tmux session]\n    D --> E[Run agent loop]\n    E --> F{Done?}\n    F -- no --> E\n    F -- yes --> G[Prune worktree]\n```\n\n## At a glance\n\n- `grove create <branch>` provisions an isolated workspace.\n- `grove list` shows every active worktree and its status.\n- `grove peek <id>` prints a bounded snapshot without attaching.\n- `grove kill <id>` tears the workspace down and prunes the worktree.\n\nGrove is pure Python and needs no daemon for the core flow; a small optional\ndaemon exposes the same operations over HTTP.\n",
+          "sources": [
+            "grove/__init__.py",
+            "grove/cli.py"
+          ]
+        },
+        {
+          "id": "runtime-model",
+          "title": "Runtime Model",
+          "body": "# Runtime Model\n\nGrove's runtime is a thin coordinator around three long-lived resources: the\n**workspace store**, a **git runner**, and a **tmux adapter**. Nothing is global\n— every operation resolves the workspace it targets, then delegates to a\ncollaborator injected at construction.\n\n## The core loop\n\nA running workspace is an agent process inside a tmux session. Grove itself does\nnot drive the agent; it provisions the environment, records the mapping, and\ngets out of the way. State transitions (`active`, `paused`, `killed`) are\nrecorded on the workspace record, never inferred from tmux.\n\n```python\nws = store.create(branch=\"feature/login\")\ntmux.start(ws.session, cwd=ws.worktree)\nstore.mark(ws.id, \"active\")\n```\n\n## Why a coordinator, not a daemon\n\nThe core flow is synchronous and local: create a worktree, start a session,\nrecord it. Keeping that daemonless means `grove` works over SSH with no server\nto babysit. The optional daemon reuses the exact same coordinator behind an\nHTTP surface.\n",
+          "sources": [
+            "grove/session.py",
+            "grove/daemon.py"
+          ]
+        },
+        {
+          "id": "workspace-store",
+          "title": "Workspace Store",
+          "body": "# Workspace Store\n\nThe workspace store is the single source of truth for which branch maps to which\nworktree and which tmux session. It is a small, append-friendly record set keyed\nby a stable workspace id.\n\n## Record shape\n\n| Field | Meaning |\n| --- | --- |\n| `id` | stable short id (the tmux session name) |\n| `branch` | the branch checked out in the worktree |\n| `worktree` | absolute path under the grove root |\n| `status` | `active`, `paused`, or `killed` |\n\n## Guarantees\n\n- A branch maps to **at most one** live worktree; creating a second reuses the\n  first.\n- The record is written **before** the worktree exists and updated after, so a\n  crash mid-create is recoverable by `grove prune`.\n- `kill` marks the record and removes the worktree in one step, so the store and\n  the filesystem never drift.\n",
+          "sources": [
+            "grove/store.py"
+          ]
+        },
+        {
+          "id": "session-lifecycle",
+          "title": "Session Lifecycle",
+          "body": "# Session Lifecycle\n\nEvery workspace moves through a small, explicit lifecycle. Grove never guesses a\nstate from tmux or the filesystem — each transition is an operation that writes\nthe store first.\n\n## States\n\n- **create** — reserve a record, add the worktree, start the tmux session.\n- **pause** — detach the agent and mark the record `paused`; the worktree stays.\n- **resume** — reattach and mark `active`.\n- **kill** — stop the session, prune the worktree, mark `killed`.\n\n## Cleanup\n\nKilling a workspace tears down the tmux session and runs `git worktree prune`,\nleaving the repository exactly as it was before the task started. Orphaned\nworktrees (from an interrupted create) are reclaimed by `grove prune`, which\nreconciles the store against `git worktree list`.\n",
+          "sources": [
+            "grove/session.py",
+            "grove/worktree.py"
+          ]
+        },
+        {
+          "id": "cli-reference",
+          "title": "CLI Reference",
+          "body": "# CLI Reference\n\nGrove is driven entirely from the `grove` command. Every verb resolves a\nworkspace, then delegates to the runtime.\n\n## Verbs\n\n| Command | Description |\n| --- | --- |\n| `grove create <branch>` | provision an isolated worktree + tmux session |\n| `grove list` | list active workspaces and their status |\n| `grove peek <id>` | print a bounded status snapshot |\n| `grove attach <id>` | attach to the workspace's tmux session |\n| `grove pause <id>` | detach and mark the workspace paused |\n| `grove resume <id>` | reattach a paused workspace |\n| `grove kill <id>` | stop the session and prune the worktree |\n| `grove prune` | reconcile the store against `git worktree list` |\n\n## Example\n\n```console\n$ grove create feature/login\ncreated ws-7f3a  ->  .grove/feature-login  (tmux: ws-7f3a)\n$ grove list\nws-7f3a  active   feature/login\n```\n",
+          "sources": [
+            "grove/cli.py"
+          ]
+        },
+        {
+          "id": "configuration",
+          "title": "Configuration",
+          "body": "# Configuration\n\nGrove reads an optional `grove.toml` from the repository root, falling back to\nsensible defaults so it works with zero configuration.\n\n## Keys\n\n```toml\n[grove]\nroot = \".grove\"          # where worktrees are created\nnaming = \"branch-slug\"    # how session ids are derived\ndefault_shell = \"zsh\"     # shell started inside each tmux session\n\n[hooks]\npost_create = \"direnv allow\"\npre_kill = \"git status --porcelain\"\n```\n\n## Precedence\n\nConfiguration resolves lowest-to-highest: built-in defaults, then `grove.toml`,\nthen any `GROVE_*` environment variable. A missing file is not an error — the\ndefaults are the documented behaviour.\n",
+          "sources": [
+            "grove/config.py"
+          ]
+        },
+        {
+          "id": "git-and-tmux",
+          "title": "Git & Tmux",
+          "body": "# Git & Tmux\n\nGrove's isolation rests on two primitives it never abstracts away: **git\nworktrees** for filesystem isolation and **tmux sessions** for process\nisolation.\n\n## Worktrees\n\nEach workspace is created with `git worktree add <path> <branch>`, pinned to its\nown branch under the grove root. Because worktrees share the object store but\nnot the working tree, two tasks can build against the same repository without a\nshared index.\n\n## Tmux\n\nA tmux session named for the workspace holds the agent process. Switching tasks\nis a `tmux switch-client`, not a `git checkout` — your place in each task is\npreserved exactly. Grove shells out through a small adapter so the tmux calls are\ntestable without a live server.\n\n## Teardown\n\n`kill` runs `git worktree remove` and `git worktree prune`, then kills the tmux\nsession, so neither git nor tmux is left holding a dead reference.\n",
+          "sources": [
+            "grove/git.py",
+            "grove/tmux.py"
+          ]
+        },
+        {
+          "id": "contributor-workflow",
+          "title": "Contributor Workflow",
+          "body": "# Contributor Workflow\n\nGrove is small on purpose. The contributor loop is: fork a worktree with Grove\nitself, make the change, run the suite, open a PR.\n\n## Setup\n\n```console\n$ uv sync --all-extras --all-groups\n$ grove create feature/my-change\n$ grove attach ws-...\n```\n\n## Conventions\n\n- One atomic class per feature; collaborators injected as fields.\n- Tests prefer real code paths and stub only the git/tmux subprocess boundary.\n- Commit messages follow Gitmoji + Conventional Commits.\n\n## Tests\n\n`pytest` runs the full suite. The git and tmux adapters are the only I/O seams,\nso most tests inject fakes and never touch a real repository or server.\n"
+        },
+        {
+          "id": "architecture",
+          "title": "Architecture",
+          "body": "# Architecture\n\nGrove layers cleanly: a **CLI** on top, a **runtime coordinator** in the middle,\nand three injected collaborators — the **store**, the **git runner**, and the\n**tmux adapter** — at the bottom.\n\n## Dependency flow\n\n```mermaid\nflowchart LR\n    CLI --> Runtime\n    Runtime --> Store\n    Runtime --> Git\n    Runtime --> Tmux\n```\n\nDependencies flow strictly downward. The runtime never imports the CLI, and the\ncollaborators never import the runtime — each is constructed and injected, which\nis what makes the runtime testable without a shell.\n\n## The daemon\n\nThe optional daemon is a thin HTTP surface over the *same* runtime. It hosts no\nlogic of its own; it composes the coordinator exactly as the CLI does, so the\ntwo front ends can never drift.\n",
+          "sources": [
+            "grove/session.py",
+            "grove/store.py"
+          ]
+        },
+        {
+          "id": "daemon-api",
+          "title": "Daemon API",
+          "body": "# Daemon API\n\nThe optional `groved` daemon exposes Grove's operations over HTTP for tools that\ncan't shell out. It is a thin transport over the same runtime the CLI uses.\n\n## Endpoints\n\n| Method | Path | Description |\n| --- | --- | --- |\n| `GET` | `/workspaces` | list active workspaces |\n| `POST` | `/workspaces` | create a workspace for a branch |\n| `GET` | `/workspaces/{id}` | a bounded status snapshot |\n| `POST` | `/workspaces/{id}/pause` | pause a workspace |\n| `DELETE` | `/workspaces/{id}` | kill and prune |\n\n## Contract\n\nRequest and response bodies are strict, validated models — an unknown field is a\nclean `400`, never a silent no-op. The daemon owns transport only; every state\ntransition still goes through the runtime coordinator.\n",
+          "sources": [
+            "grove/api/routes.py"
+          ]
+        }
+      ],
+      "primary": true,
+      "graph_nodes": 760,
+      "page_count": 72
+    },
+    {
+      "slug": "github.com/bearlike/Assistant",
+      "source": "github",
+      "lang": "Python",
+      "desc": "AI assistant with a built-in agent hypervisor. Spawns, scopes, and manages parallel sub-agents across tasks.",
+      "landing_page_id": "overview",
+      "host": "github.com",
+      "commit_sha": "1dbd184b5e50121f76afdb9b06fa5ccdba8982ec",
+      "commit_short": "1dbd184",
+      "branch": "main",
+      "repo_url": "https://github.com/bearlike/Assistant",
+      "indexed_offset_seconds": -10800,
+      "pages": [
+        {
+          "id": "overview",
+          "title": "Project Overview",
+          "body": "# Project Overview\n\nMewbo is an AI assistant modelled as a **conversation state machine** with a\nhierarchical **agent hypervisor**. A single async tool-use loop is bound to an\nLLM via native `bind_tools`; sub-agents are admitted through `spawn_agent` and\nresolved into one of four terminal states.\n\n## What it does\n\n- Runs an agentic loop over your own tools, with strict validated contracts at\n  every trust boundary.\n- Spawns, scopes, and manages **parallel sub-agents** across tasks.\n- Exposes the one engine through the CLI, web console, REST API, Home Assistant,\n  and Nextcloud Talk.\n\n## Where to go next\n\nThe **Agentic Search Engine** and **Source Capability Graph** pages cover\nretrieval; the **Mewbo API Server** page covers the HTTP surface.\n",
+          "sources": [
+            "README.md",
+            "packages/mewbo_core/__init__.py"
+          ]
+        },
+        {
+          "id": "agentic-search",
+          "title": "Agentic Search Engine",
+          "body": "# Agentic Search Engine\n\nAgentic Search answers a question by fanning probes across saved multi-source\nworkspaces, then returning a **cited** answer plus the results it drew from.\n\n## Flow\n\n1. A search run spins up its own session and a fleet of probe leaves.\n2. Each probe records an `access` event per retrieval call.\n3. A finalizer folds the accesses into a bounded, ranked provenance trail.\n\nThe root agent holds no retrieval tools of its own — it orchestrates the\nprobes and synthesises the cited answer.\n",
+          "sources": [
+            "apps/mewbo_api/src/mewbo_api/agentic_search/__init__.py"
+          ]
+        },
+        {
+          "id": "source-capability-graph",
+          "title": "Source Capability Graph (SCG)",
+          "body": "# Source Capability Graph (SCG)\n\nThe SCG is a **reachability engine**: given a task, it routes to the capability\n(a tool, a connector, a source) most likely to satisfy it. The store is global\nper source — flat, content-addressed node ids — and a workspace is a scoped\n*view*, never a copy.\n\n## Routing\n\nA cheap router scores candidate recipes over `cosine + edge` and can blend a\nmemory-bias term, all with **zero LLM** on the hot path. Out-of-scope\ncandidates are dropped by the ambient scope, so per-source mappings stay shared\nwhile insights stay workspace-isolated.\n",
+          "sources": [
+            "packages/mewbo_graph/src/mewbo_graph/scg/router.py"
+          ]
+        },
+        {
+          "id": "channels-integrations",
+          "title": "Channels & Integrations",
+          "body": "# Channels & Integrations\n\nEvery interface shares the same core engine — only the transport differs.\n\n| Channel | Surface |\n| --- | --- |\n| CLI | Rich/Textual terminal app |\n| Web console | React + shadcn console |\n| REST API | Flask-RESTX server |\n| Home Assistant | conversation agent |\n| Nextcloud Talk | chat bridge |\n\nBecause the engine is one library the channels compose, a capability added once\nis available everywhere without per-channel glue.\n"
+        },
+        {
+          "id": "mewbo-api-server",
+          "title": "Mewbo API Server",
+          "body": "# Mewbo API Server\n\nThe API server is a thin shell: HTTP routes, SSE framing, run/job lifecycle, and\npersistence glue. The reusable engine and domain models live in the libraries it\ncomposes — it never re-hosts an engine.\n\n## Contracts\n\nAnything crossing a trust boundary — tool arguments, request bodies, persisted\ndocuments — is a strict Pydantic model with `extra=\"forbid\"`, so a smuggled\nfield is a clean `400`, not a silent no-op.\n",
+          "sources": [
+            "apps/mewbo_api/src/mewbo_api/backend.py"
+          ]
+        },
+        {
+          "id": "agent-hypervisor",
+          "title": "Agent Hypervisor",
+          "body": "# Agent Hypervisor\n\nThe hypervisor tracks every spawned sub-agent and resolves it into exactly one\nterminal state: `completed`, `failed`, `cancelled`, or `rejected`. It owns\nadmission (`spawn_agent`), accounting, and teardown.\n\n## Why a hypervisor\n\nA flat loop can't reason about a tree of concurrent agents. The hypervisor makes\nthe tree explicit, so scoping, cancellation, and attribution are first-class\nrather than emergent.\n",
+          "sources": [
+            "packages/mewbo_core/src/mewbo_core/hypervisor.py"
+          ]
+        },
+        {
+          "id": "tool-use-loop",
+          "title": "Tool-Use Loop",
+          "body": "# Tool-Use Loop\n\nThe core engine is a single async `ToolUseLoop` bound to an LLM. Each turn: the\nmodel proposes tool calls, the loop validates and runs them, and the results\nfeed the next turn until the task completes.\n\n## Normalisation\n\nCross-model tool-calling differences are handled at the LiteLLM/adapter seam —\nnever by sniffing text format inside the loop — so the orchestration stays model\nagnostic.\n",
+          "sources": [
+            "packages/mewbo_core/src/mewbo_core/loop.py"
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "git.example.com/acme/beacon",
+      "source": "gitea",
+      "lang": "TypeScript",
+      "desc": "A feature-flag and remote-config service: typed flags, attribute targeting, and stable percentage rollouts.",
+      "landing_page_id": "beacon-overview",
+      "host": "git.example.com",
+      "commit_sha": "891b1a5b4d09fc7cd51c3b87a24c8de119d84f1d",
+      "commit_short": "891b1a5",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/beacon",
+      "indexed_offset_seconds": -259200,
+      "pages": [
+        {
+          "id": "beacon-overview",
+          "title": "Overview",
+          "body": "# Beacon\n\nBeacon is a **feature-flag and remote-config service**. It stores typed flags,\nevaluates them against a caller-supplied context, and serves the result to\napplication SDKs over a small HTTP API.\n\n## At a glance\n\n- Flags are typed: boolean, string, integer, or JSON.\n- Every evaluation is a pure function of `(flag, context)` — no hidden state.\n- Clients cache the ruleset locally and re-evaluate offline.\n"
+        },
+        {
+          "id": "flag-model",
+          "title": "Flag Model",
+          "body": "# Flag Model\n\nA flag is a named, typed value plus an ordered list of rules. The first rule\nwhose predicate matches wins; if none match, the flag's default value is\nreturned.\n\n```json\n{\n  \"key\": \"checkout.new-basket\",\n  \"type\": \"boolean\",\n  \"default\": false,\n  \"rules\": [\n    { \"when\": { \"plan\": \"enterprise\" }, \"value\": true }\n  ]\n}\n```\n\nA flag's `type` is immutable once created — changing it would silently break\nevery SDK that already decoded the old type.\n"
+        },
+        {
+          "id": "targeting-rules",
+          "title": "Targeting Rules",
+          "body": "# Targeting Rules\n\nA rule predicate matches on attributes the caller supplies in the evaluation\ncontext: plan, region, app version, or any custom key.\n\n| Operator | Meaning |\n| --- | --- |\n| `eq` / `neq` | exact match |\n| `in` / `not_in` | membership in a list |\n| `gte` / `lte` | numeric or semver comparison |\n| `matches` | anchored regular expression |\n\nUnknown attributes never throw — a predicate over a missing key simply does\nnot match, so a stale SDK cannot fail a rollout closed.\n"
+        },
+        {
+          "id": "evaluation-engine",
+          "title": "Evaluation Engine",
+          "body": "# Evaluation Engine\n\nEvaluation is deliberately boring: no I/O, no clock, no network. The engine\ntakes a ruleset snapshot and a context map and returns a value plus the id of\nthe rule that produced it.\n\n```mermaid\nflowchart LR\n    Context --> Engine[Evaluator]\n    Ruleset --> Engine\n    Engine --> Value\n    Engine --> Reason[Matched rule id]\n```\n\nReturning the matched rule id is what makes a surprising flag value\ndebuggable — the caller can see *why* it got what it got.\n"
+        },
+        {
+          "id": "progressive-rollouts",
+          "title": "Progressive Rollouts",
+          "body": "# Progressive Rollouts\n\nA rule can hand its value to a percentage of traffic instead of all of it. The\nbucket is a stable hash of `(flag key, unit id)`, so a given user stays on the\nsame side of a 10% rollout across every request and every process.\n\nRaising a rollout from 10% to 25% only ever *adds* units to the treatment\ngroup; nobody is silently moved back.\n"
+        },
+        {
+          "id": "sdk-clients",
+          "title": "SDK Clients",
+          "body": "# SDK Clients\n\nThe server is the source of truth, but evaluation happens in the client. An\nSDK fetches the ruleset, caches it, and evaluates locally — so a flag check\ncosts a map lookup, not a round trip.\n\n- Cached rulesets are versioned with an ETag; a poll with no change is a 304.\n- A cold start with no cache falls back to each flag's compiled-in default.\n- Losing the server never fails a request; it freezes the last known ruleset.\n"
+        },
+        {
+          "id": "self-hosting",
+          "title": "Self-Hosting",
+          "body": "# Self-Hosting\n\nBeacon runs as two processes: an API server and Postgres. The ruleset is small\nenough that a single node comfortably serves a whole fleet of SDK pollers.\n\n```yaml\nservices:\n  beacon:\n    image: acme/beacon:latest\n    environment:\n      DATABASE_URL: postgres://beacon@db/beacon\n  db:\n    image: postgres:16\n```\n\nThere is no separate worker tier: rollout bucketing is computed in the SDK, so\nthe server only ever reads and writes flag definitions.\n"
+        },
+        {
+          "id": "api-reference",
+          "title": "API Reference",
+          "body": "# API Reference\n\n| Method | Path | Description |\n| --- | --- | --- |\n| `GET` | `/api/rulesets/{env}` | fetch the current ruleset (ETag-cached) |\n| `GET` | `/api/flags` | list flag definitions |\n| `POST` | `/api/flags` | create a flag |\n| `PATCH` | `/api/flags/{key}` | update rules or default |\n| `POST` | `/api/evaluate` | server-side evaluation, for scripts |\n\n`POST /api/evaluate` exists for callers with no SDK (a shell script, a cron\njob). It runs the same evaluator the SDKs embed.\n"
+        }
+      ]
+    },
+    {
+      "slug": "git.example.com/acme/sandbox",
+      "source": "gitea",
+      "lang": "Python",
+      "desc": "A small in-process task queue for Python: typed jobs, retries with backoff, and a pluggable broker.",
+      "landing_page_id": "sandbox-overview",
+      "host": "git.example.com",
+      "commit_sha": "e347df14b18698cac7275127112ffc77704a9a7b",
+      "commit_short": "e347df1",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/sandbox",
+      "indexed_offset_seconds": -28800,
+      "pages": [
+        {
+          "id": "sandbox-overview",
+          "title": "Overview",
+          "body": "# sandbox\n\nSandbox is a small in-process task queue for Python. It runs typed jobs on a pool\nof workers, retries failures with exponential backoff, and keeps queue state in a\npluggable broker.\n\n## At a glance\n\n- Jobs are plain functions registered with a decorator.\n- Workers pull from one ordered queue; ordering is FIFO within a priority band.\n- A broker adapter (memory, Redis, or Postgres) owns durability.\n"
+        },
+        {
+          "id": "sandbox-configuration",
+          "title": "Configuration",
+          "body": "# Configuration\n\nSandbox reads an optional `sandbox.toml` and falls back to defaults, so an\nimport-and-go setup needs no configuration file at all.\n\n```toml\n[queue]\nworkers = 4\nmax_retries = 3\nbackoff = \"exponential\"\n\n[broker]\nkind = \"memory\"\n```\n\nEvery key can be overridden by a matching `SANDBOX_*` environment variable, which\ntakes precedence over the file.\n"
+        }
+      ],
+      "page_count": 24
+    },
+    {
+      "slug": "github.com/bearlike/Simple-Secrets-Manager",
+      "source": "github",
+      "lang": "Python",
+      "desc": "Self-hosted secrets and env vars manager for teams, delivered at runtime via CLI, API, and Web UI.",
+      "landing_page_id": "secrets-overview",
+      "host": "github.com",
+      "commit_sha": "5cf064c5c2af4ce600e5405eeefbdf9b9e37556a",
+      "commit_short": "5cf064c",
+      "branch": "main",
+      "repo_url": "https://github.com/bearlike/Simple-Secrets-Manager",
+      "indexed_offset_seconds": -777600,
+      "pages": [
+        {
+          "id": "secrets-overview",
+          "title": "Overview",
+          "body": "# Simple Secrets Manager\n\nA self-hosted secrets and environment-variable manager for teams.\nSecrets are sealed at rest and delivered at runtime through a CLI, a\nREST API, and a web UI, so a service reads its config without a\nplaintext `.env` ever landing on disk.\n"
+        }
+      ],
+      "page_count": 9
+    },
+    {
+      "slug": "git.example.com/acme/pickup-demo",
+      "source": "gitea",
+      "lang": "Python",
+      "desc": "Sandbox for the issue to agent to PR reverse-invocation pickup loop.",
+      "landing_page_id": "pickup-overview",
+      "host": "git.example.com",
+      "commit_sha": "3d556da2baf62d0043cf2c446a9c0f5e06437b44",
+      "commit_short": "3d556da",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/pickup-demo",
+      "indexed_offset_seconds": -432000,
+      "pages": [
+        {
+          "id": "pickup-overview",
+          "title": "Overview",
+          "body": "# pickup-demo\n\nA sandbox for the reverse-invocation pickup loop: a Gitea issue is picked up by\nan agent, worked in an isolated worktree, and closed by an auto-opened PR.\n"
+        }
+      ],
+      "page_count": 6
+    },
+    {
+      "slug": "git.example.com/acme/uptime-monitor",
+      "source": "gitea",
+      "lang": "Go",
+      "desc": "A tiny uptime monitor that pings your endpoints and alerts on failures.",
+      "landing_page_id": "uptime-overview",
+      "host": "git.example.com",
+      "commit_sha": "ad7eb46cdd4d64004a3d477da82734ffdcbb6efd",
+      "commit_short": "ad7eb46",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/uptime-monitor",
+      "indexed_offset_seconds": -1209600,
+      "pages": [
+        {
+          "id": "uptime-overview",
+          "title": "Overview",
+          "body": "# uptime-monitor\n\nA tiny uptime monitor. It pings your endpoints on a schedule, tracks latency,\nand alerts on consecutive failures through a pluggable notifier.\n"
+        }
+      ],
+      "page_count": 11
+    },
+    {
+      "slug": "git.example.com/acme/docs-theme",
+      "source": "gitea",
+      "lang": "CSS",
+      "desc": "A shadcn-flavored MkDocs theme with a component-driven layout.",
+      "landing_page_id": "docs-theme-overview",
+      "host": "git.example.com",
+      "commit_sha": "e6942caadff127a2a99616d7a1d462797c4cd8c7",
+      "commit_short": "e6942ca",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/docs-theme",
+      "indexed_offset_seconds": -1814400,
+      "pages": [
+        {
+          "id": "docs-theme-overview",
+          "title": "Overview",
+          "body": "# docs-theme\n\nA shadcn-flavored MkDocs theme. It swaps the default layout for component-driven\npartials so docs match a shadcn app's look without leaving Markdown.\n"
+        }
+      ],
+      "page_count": 14
+    },
+    {
+      "slug": "git.example.com/acme/device-farm",
+      "source": "gitea",
+      "lang": "Shell",
+      "desc": "Containerized Android device farm for automated UI capture and testing.",
+      "landing_page_id": "redroid-overview",
+      "host": "git.example.com",
+      "commit_sha": "b22d988e5c05b6cb533d25af9e51c860388a9347",
+      "commit_short": "b22d988",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/device-farm",
+      "indexed_offset_seconds": -2419200,
+      "pages": [
+        {
+          "id": "redroid-overview",
+          "title": "Overview",
+          "body": "# device-farm\n\nA containerized Android device farm. It boots pooled emulators\nfor automated UI capture and Maestro test runs on real ARM/x86 images.\n"
+        }
+      ],
+      "page_count": 8
+    },
+    {
+      "slug": "git.example.com/acme/llm-gateway-config",
+      "source": "gitea",
+      "lang": "Python",
+      "desc": "Declarative LiteLLM proxy config with per-model billing hooks and spend logging.",
+      "landing_page_id": "litellm-overview",
+      "host": "git.example.com",
+      "commit_sha": "6c944985833a7a099b0b9ee41a575873b070dba0",
+      "commit_short": "6c94498",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/llm-gateway-config",
+      "indexed_offset_seconds": -3628800,
+      "pages": [
+        {
+          "id": "litellm-overview",
+          "title": "Overview",
+          "body": "# llm-gateway-config\n\nDeclarative configuration for a LiteLLM proxy: model routes, per-model billing\nhooks that shape requests at the proxy seam, and a Postgres spend log.\n"
+        }
+      ],
+      "page_count": 5
+    },
+    {
+      "slug": "git.example.com/acme/platform-infra",
+      "source": "gitea",
+      "lang": "HCL",
+      "desc": "Terraform and Ansible modules for a small self-hosted platform: CI runners, registries, and storage.",
+      "landing_page_id": "infra-overview",
+      "host": "git.example.com",
+      "commit_sha": "d48083ac4cdb8dfdb877acf3986a75fb691a7e97",
+      "commit_short": "d48083a",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/platform-infra",
+      "indexed_offset_seconds": -64800,
+      "pages": [
+        {
+          "id": "infra-overview",
+          "title": "Overview",
+          "body": "# platform-infra\n\nTerraform and Ansible modules for a small self-hosted platform. It stands up the\nCI runners, the container registries, and shared object storage, and keeps their\nconfiguration in version control.\n"
+        }
+      ],
+      "page_count": 19
+    },
+    {
+      "slug": "git.example.com/acme/nextcloud-talk-bot",
+      "source": "gitea",
+      "lang": "Python",
+      "desc": "A Nextcloud Talk bot that bridges chat rooms to the Mewbo agent loop.",
+      "landing_page_id": "talkbot-overview",
+      "host": "git.example.com",
+      "commit_sha": "364e4100bad808cafc1e86713bcf0dd1e7c57d97",
+      "commit_short": "364e410",
+      "branch": "main",
+      "repo_url": "https://git.example.com/acme/nextcloud-talk-bot",
+      "indexed_offset_seconds": -129600,
+      "pages": [
+        {
+          "id": "talkbot-overview",
+          "title": "Overview",
+          "body": "# nextcloud-talk-bot\n\nA Nextcloud Talk bot that bridges chat rooms into the Mewbo agent loop, so a\nroom can hand a task to an agent and stream the reply back as messages.\n"
+        }
+      ],
+      "page_count": 7
+    }
+  ],
+  "jobs": [
+    {
+      "job_id": "job-demo-project-64-0001",
+      "slug": "git.example.com/acme/demo-project-64",
+      "status": "finalizing",
+      "phase": "finalize",
+      "scanned_count": 102,
+      "total_count": 102,
+      "total_pages": 18,
+      "pages_submitted": 18,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "e18d99ea41da3260cd2a78a892d67f866a0b2c16",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -20,
+      "log_lines": [
+        "Cloned 104 files into 7f3a9c2",
+        "Scanning 102 files…",
+        "Scanned 102 files",
+        "Parsing 104 files with tree-sitter…",
+        "Built graph: 715 nodes, 3918 edges",
+        "Embedding 715 nodes via openai/gemini-embedding-001…",
+        "Embedded 715 nodes (dim=3072)"
+      ]
+    },
+    {
+      "job_id": "job-vault-sync-0001",
+      "slug": "git.example.com/acme/vault-sync",
+      "status": "failed",
+      "phase": "graph",
+      "scanned_count": 88,
+      "total_count": 88,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "4835dee482feed475b1a3daa587bbf22ad2d5f62",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -1800,
+      "resume_graph_nodes": 18
+    },
+    {
+      "job_id": "job-photo-dedupe-0001",
+      "slug": "git.example.com/acme/photo-dedupe",
+      "status": "failed",
+      "phase": "enrich",
+      "scanned_count": 96,
+      "total_count": 96,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "cd85f7972ab4f80120229671f88e2c731bebeff7",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -7200,
+      "resume_graph_nodes": 24
+    },
+    {
+      "job_id": "job-home-dashboard-0001",
+      "slug": "git.example.com/acme/home-dashboard",
+      "status": "failed",
+      "phase": "graph",
+      "scanned_count": 74,
+      "total_count": 74,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "a71ec5d0d6facfabc669fa0d77566812de66084f",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -12600,
+      "resume_graph_nodes": 30
+    },
+    {
+      "job_id": "job-recipe-box-0001",
+      "slug": "git.example.com/acme/recipe-box",
+      "status": "cancelled",
+      "phase": "enrich",
+      "scanned_count": 61,
+      "total_count": 61,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "873ba684fe460161d9982afd7fca9fa6fd744260",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -18000,
+      "resume_graph_nodes": 36
+    },
+    {
+      "job_id": "job-ledger-cli-0001",
+      "slug": "git.example.com/acme/ledger-cli",
+      "status": "failed",
+      "phase": "plan",
+      "scanned_count": 53,
+      "total_count": 53,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "132f0347b1be2a5e0ecff3a1ead77a9f3bd05f47",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -23400,
+      "resume_graph_nodes": 42
+    },
+    {
+      "job_id": "job-paperless-ingest-0001",
+      "slug": "git.example.com/acme/paperless-ingest",
+      "status": "failed",
+      "phase": "pages",
+      "scanned_count": 129,
+      "total_count": 129,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "392791b17a7aebe89c0a75f77d95f210b6d1e5f2",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -28800,
+      "resume_graph_nodes": 18,
+      "total_pages": 22,
+      "pages_submitted": 7
+    },
+    {
+      "job_id": "job-mqtt-bridge-0001",
+      "slug": "git.example.com/acme/mqtt-bridge",
+      "status": "failed",
+      "phase": "graph",
+      "scanned_count": 77,
+      "total_count": 77,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "a7c270fb0d0e3354063e0aeb333d3043f2c835d3",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -34200,
+      "resume_graph_nodes": 24
+    },
+    {
+      "job_id": "job-grafana-panels-0001",
+      "slug": "git.example.com/acme/grafana-panels",
+      "status": "cancelled",
+      "phase": "plan",
+      "scanned_count": 92,
+      "total_count": 92,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "9d9131d15905661eb91c4274677d5d027ffc6d6e",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -39600,
+      "resume_graph_nodes": 30
+    },
+    {
+      "job_id": "job-torrent-janitor-0001",
+      "slug": "git.example.com/acme/torrent-janitor",
+      "status": "failed",
+      "phase": "enrich",
+      "scanned_count": 44,
+      "total_count": 44,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "5406ddcff330a89c55c0473230c74b8cee36c85f",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -45000,
+      "resume_graph_nodes": 36
+    },
+    {
+      "job_id": "job-dns-adblock-0001",
+      "slug": "git.example.com/acme/dns-adblock",
+      "status": "failed",
+      "phase": "pages",
+      "scanned_count": 58,
+      "total_count": 58,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "0d5ac58cabf05744df7b2c64ea4eb1649e974d44",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -50400,
+      "resume_graph_nodes": 42,
+      "total_pages": 12,
+      "pages_submitted": 4
+    },
+    {
+      "job_id": "job-backup-orchestrator-0001",
+      "slug": "git.example.com/acme/backup-orchestrator",
+      "status": "failed",
+      "phase": "graph",
+      "scanned_count": 140,
+      "total_count": 140,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "5bbbbe09042a696d2b8a20ea3997c1d3e6b15238",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -55800,
+      "resume_graph_nodes": 18
+    },
+    {
+      "job_id": "job-webhook-relay-0001",
+      "slug": "git.example.com/acme/webhook-relay",
+      "status": "failed",
+      "phase": "enrich",
+      "scanned_count": 63,
+      "total_count": 63,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "1bee99776a8718ac965604ac528f8871cf34cc87",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -61200,
+      "resume_graph_nodes": 24
+    },
+    {
+      "job_id": "job-k3s-bootstrap-0001",
+      "slug": "git.example.com/acme/k3s-bootstrap",
+      "status": "failed",
+      "phase": "plan",
+      "scanned_count": 110,
+      "total_count": 110,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "cdc5a782916c32799018cddfef47ab3e20b9ac53",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -66600,
+      "resume_graph_nodes": 30
+    },
+    {
+      "job_id": "job-invoice-parser-0001",
+      "slug": "git.example.com/acme/invoice-parser",
+      "status": "cancelled",
+      "phase": "plan",
+      "scanned_count": 67,
+      "total_count": 67,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "ab7f8fda60ad934449a01e6dc683536779c60499",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -72000,
+      "resume_graph_nodes": 36
+    },
+    {
+      "job_id": "job-subtitle-fetcher-0001",
+      "slug": "git.example.com/acme/subtitle-fetcher",
+      "status": "failed",
+      "phase": "pages",
+      "scanned_count": 41,
+      "total_count": 41,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "067f9593fcd99f2b954c581439b766db753e37b8",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -77400,
+      "resume_graph_nodes": 42,
+      "total_pages": 9,
+      "pages_submitted": 6
+    },
+    {
+      "job_id": "job-prometheus-rules-0001",
+      "slug": "git.example.com/acme/prometheus-rules",
+      "status": "failed",
+      "phase": "enrich",
+      "scanned_count": 85,
+      "total_count": 85,
+      "current_file": null,
+      "model": "claude-sonnet-4-6",
+      "host": "git.example.com",
+      "platform": "gitea",
+      "branch": "main",
+      "commit_sha": "574dd566dfcffb6cf6a5f32b8d2543ae17f3ba3b",
+      "landing_page_id": null,
+      "phase_started_offset_seconds": -82800,
+      "resume_graph_nodes": 18
+    }
+  ],
+  "qa": [
+    {
+      "answer_id": "qa-assistant-what-is-this-for-0001",
+      "slug": "github.com/bearlike/Assistant",
+      "from_page_id": "overview",
+      "question": "What is this project for?",
+      "model": "claude-sonnet-4-6",
+      "summary_sources": [
+        "wiki:overview",
+        "wiki:agentic-search",
+        "wiki:source-capability-graph",
+        "wiki:channels-integrations",
+        "wiki:mewbo-api-server"
+      ],
+      "accessed_sources": [
+        "wiki:overview",
+        "wiki:agentic-search",
+        "wiki:channels-integrations",
+        "wiki:source-capability-graph"
+      ],
+      "models_used": [
+        "claude-sonnet-4-6"
+      ],
+      "blocks": [
+        {
+          "kind": "p",
+          "text": "Mewbo is an AI assistant modelled as a conversation state machine with a hierarchical agent hypervisor (wiki:overview). A single async tool-use loop is bound to an LLM via native bind_tools, and sub-agents are admitted through spawn_agent and tracked to one of four terminal states."
+        },
+        {
+          "kind": "h2",
+          "id": "core-capabilities",
+          "text": "Core Capabilities"
+        },
+        {
+          "kind": "ul",
+          "items": [
+            "Agentic Search — cited, multi-source answers over saved workspaces (wiki:agentic-search).",
+            "Source Capability Graph — a reachability engine that routes a task to the right capability (wiki:source-capability-graph).",
+            "Channels & Integrations — CLI, web console, REST API, Home Assistant and Nextcloud Talk share the one core engine (wiki:channels-integrations).",
+            "Agentic Wiki — an indexed, queryable knowledge base per repository."
+          ]
+        },
+        {
+          "kind": "h2",
+          "id": "repository-structure",
+          "text": "Repository Structure"
+        },
+        {
+          "kind": "table",
+          "head": [
+            "Path",
+            "Purpose"
+          ],
+          "rows": [
+            [
+              "packages/mewbo_core",
+              "Lean orchestration SDK — the tool-use loop and agent hypervisor."
+            ],
+            [
+              "packages/mewbo_graph",
+              "Knowledge-graph substrate: wiki, memory, and the SCG."
+            ],
+            [
+              "apps/mewbo_api",
+              "HTTP API server — wiki and search routes (wiki:mewbo-api-server)."
+            ],
+            [
+              "apps/mewbo_console",
+              "React web console."
+            ]
+          ]
+        },
+        {
+          "kind": "p",
+          "text": "In short: Mewbo spawns, scopes, and manages parallel sub-agents across tasks, and exposes that one engine through every channel a homelab operator already uses."
+        },
+        {
+          "kind": "sources",
+          "items": [
+            "wiki:overview",
+            "wiki:agentic-search",
+            "wiki:source-capability-graph",
+            "wiki:channels-integrations",
+            "wiki:mewbo-api-server"
+          ]
+        }
+      ]
+    },
+    {
+      "answer_id": "qa-grove-worktree-isolation-0001",
+      "slug": "github.com/bearlike/Grove",
+      "from_page_id": "grove-overview",
+      "question": "How does Grove isolate parallel worktrees?",
+      "model": "claude-sonnet-4-6",
+      "summary_sources": [
+        "wiki:workspace-store",
+        "wiki:git-and-tmux",
+        "wiki:session-lifecycle"
+      ],
+      "accessed_sources": [
+        "wiki:workspace-store",
+        "wiki:git-and-tmux",
+        "wiki:session-lifecycle"
+      ],
+      "models_used": [
+        "claude-sonnet-4-6"
+      ],
+      "blocks": [
+        {
+          "kind": "p",
+          "text": "Grove gives every task its own git worktree plus a dedicated tmux session, so parallel branches never share a working tree or a shell (wiki:workspace-store)."
+        },
+        {
+          "kind": "h2",
+          "id": "isolation-model",
+          "text": "Isolation Model"
+        },
+        {
+          "kind": "ul",
+          "items": [
+            "Each workspace is created with git worktree add under a per-task path, pinned to its own branch (wiki:git-and-tmux).",
+            "A tmux session named for the workspace holds the agent process, so switching tasks is a session hop, not a checkout.",
+            "The workspace store is the single source of truth for which branch maps to which worktree and session (wiki:workspace-store).",
+            "Killing a workspace tears down the tmux session and prunes the worktree, leaving the repository clean (wiki:session-lifecycle)."
+          ]
+        },
+        {
+          "kind": "p",
+          "text": "Because state lives in separate worktrees rather than a shared index, two agents can run against the same repository at once without stepping on each other."
+        },
+        {
+          "kind": "sources",
+          "items": [
+            "wiki:workspace-store",
+            "wiki:git-and-tmux",
+            "wiki:session-lifecycle"
+          ]
+        }
+      ]
+    }
+  ]
+}

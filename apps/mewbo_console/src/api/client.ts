@@ -1,22 +1,24 @@
 // Thin façade over `realClient` — exports each API function as a direct call.
 // The runtime mock fallback was removed in Phase 4; tests now own their mocks
-// via `vi.mock('../api/client', ...)` and fixtures live in
-// `src/__tests__/fixtures/mockData.ts`.
+// inline via `vi.mock('../api/client', ...)`.
 import {
   AttachmentPayload,
   AttachmentRecord,
   EventRecord,
   NotificationItem,
+  QuestionAnswerItemPayload,
   QueryMode,
   SessionContext,
   SessionExport,
+  SessionSpecResponse,
   SessionSummary,
   SessionUsage,
   ShareRecord
 } from '../types';
-import { AgentSummary, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolScope, ToolSummary } from './contracts';
+import { AgentSummary, AnswerQuestionResult, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, ForkResponse, MarketplacePlugin, ModelInfo, PluginSummary, ProjectSummary, RecoverResponse, SkillSummary, ToolScope, ToolSummary } from './contracts';
 import { createRealClient } from './realClient';
 import { readRuntimeConfig } from '../runtimeConfig';
+import { apiFetch, withBase as sharedWithBase, authHeaders, readJson } from './httpBase';
 
 // Runtime config injected by nginx (docker), falls back to Vite build-time env.
 const _rc = readRuntimeConfig();
@@ -35,6 +37,10 @@ function parseBool(value?: string): boolean {
     return false;
   }
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function withBase(path: string): string {
+  return sharedWithBase(API_BASE, path);
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +68,23 @@ export async function postQuery(
 export async function fetchEvents(
   sessionId: string,
   after?: string
-): Promise<{ events: EventRecord[]; running: boolean }> {
+): Promise<{
+  events: EventRecord[];
+  running: boolean;
+  status?: string;
+  done_reason?: string;
+  terminated?: boolean;
+  recoverable?: boolean;
+}> {
   return realClient.fetchEvents(sessionId, after);
 }
 
 export async function fetchUsage(sessionId: string): Promise<SessionUsage> {
   return realClient.fetchUsage(sessionId);
+}
+
+export async function getSessionSpec(sessionId: string): Promise<SessionSpecResponse> {
+  return realClient.getSessionSpec(sessionId);
 }
 
 export async function archiveSession(sessionId: string): Promise<void> {
@@ -151,6 +168,14 @@ export async function approvePlan(sessionId: string, approved: boolean): Promise
   return realClient.approvePlan(sessionId, approved);
 }
 
+export async function answerQuestion(
+  sessionId: string,
+  callId: string,
+  body: { call_token: string; answers: QuestionAnswerItemPayload[] }
+): Promise<AnswerQuestionResult> {
+  return realClient.answerQuestion(sessionId, callId, body);
+}
+
 export async function recoverSession(
   sessionId: string,
   action: "retry" | "continue",
@@ -164,22 +189,8 @@ export async function recoverSession(
 export async function forkSession(
   sessionId: string,
   opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }
-): Promise<{ session_id: string; forked_from: string; forked_at: string | null }> {
+): Promise<ForkResponse> {
   return realClient.forkSession(sessionId, opts);
-}
-
-export async function fetchPlanMarkdown(sessionId: string): Promise<string> {
-  return realClient.fetchPlanMarkdown(sessionId);
-}
-
-export async function listAgents(sessionId: string): Promise<{
-  agents: AgentSummary[];
-  running: boolean;
-  total_steps: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-}> {
-  return realClient.listAgents(sessionId);
 }
 
 export async function getConfigSchema(): Promise<Record<string, unknown>> {
@@ -249,12 +260,11 @@ export async function fetchGitDiff(
   sessionId: string,
   scope: "uncommitted" | "branch"
 ): Promise<{ git_repo: boolean; reason?: string; diff?: string }> {
-  const res = await fetch(
-    `${API_BASE}/api/sessions/${sessionId}/git-diff?scope=${scope}`,
-    { headers: { "X-Api-Key": API_KEY } }
+  const response = await apiFetch(
+    withBase(`/api/sessions/${sessionId}/git-diff?scope=${scope}`),
+    { headers: authHeaders() }
   );
-  if (!res.ok) throw new Error(`git-diff ${res.status}`);
-  return res.json();
+  return readJson(response);
 }
 
 export async function fetchCommands(): Promise<import("../types").CommandSpec[]> {
@@ -297,11 +307,10 @@ export async function fetchProjectFiles(opts: {
   if (opts.q) params.set("q", opts.q);
   if (opts.limit != null) params.set("limit", String(opts.limit));
   const qs = params.toString();
-  const res = await fetch(`${API_BASE}/api/files${qs ? `?${qs}` : ""}`, {
-    headers: { "X-Api-Key": API_KEY },
+  const response = await apiFetch(withBase(`/api/files${qs ? `?${qs}` : ""}`), {
+    headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`files ${res.status}`);
-  const data = (await res.json()) as Partial<ProjectFiles>;
+  const data = await readJson<Partial<ProjectFiles>>(response);
   return { files: data.files ?? [], attachments: data.attachments ?? [] };
 }
 

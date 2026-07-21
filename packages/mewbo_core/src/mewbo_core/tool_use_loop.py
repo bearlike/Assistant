@@ -12,7 +12,7 @@ import queue as _queue_mod
 import re
 import time as _time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path
 from typing import Any
@@ -46,28 +46,40 @@ from mewbo_core.exit_plan_mode import (
     plan_file_for,
 )
 from mewbo_core.hooks import HookManager
-from mewbo_core.hypervisor import AgentHandle
+from mewbo_core.hypervisor import AgentHandle, DelegationContract
 from mewbo_core.llm import build_chat_model, specs_to_langchain_tools
 from mewbo_core.llm_resilience import (
+    DOOM_LOOP_EXEMPT_TOOLS,
     DoomLoopGuard,
     LlmResilienceExhausted,
+    PollClassRule,
     RetryStrategy,
+    WriteProgressSignal,
     repair_tool_pairing,
 )
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
 from mewbo_core.prompt_registry import get_prompt_registry
 from mewbo_core.session_tools import (
+    DEFAULT_SESSION_TOOL_MAX_RESULT_CHARS,
     DEFAULT_SESSION_TOOL_MODES,
     SessionTool,
     SessionToolRegistry,
 )
 from mewbo_core.tool_registry import (
+    TOOL_SEARCH_TOOL_ID,
     ToolRegistry,
     ToolSpec,
     is_deferred,
 )
-from mewbo_core.types import Event, RecoveryHaltPayload
+from mewbo_core.types import BLOCKED_CODES, Event, RecoveryHaltPayload, VerificationPayload
 from mewbo_core.update_todos import UpdateTodosTool
+from mewbo_core.verification import (
+    CommandVerification,
+    CommandVerifierRunner,
+    VerifierOutcome,
+    VerifierRunner,
+)
+from mewbo_core.workspace import WorkspaceContainment, active_containment
 
 logging = get_logger(name="core.tool_use_loop")
 
@@ -84,6 +96,87 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 # The placeholder is filtered out of ``agent_message`` events so it never
 # reaches the UI.
 _NO_CONTENT_PLACEHOLDER = "(no content)"
+
+# How many of the most recent LLM retry/fallback events the resilience note
+# carries. Bounded so a storm of retries can't balloon the system prompt; the
+# error strings are already truncated to 200 chars upstream (``LlmRetryPayload``).
+DEFAULT_RESILIENCE_NOTE_EVENTS = 5
+
+# Fixed, directive-free header for the resilience-note prompt slot. It labels
+# ground truth (what the harness already did), never instructs the model — the
+# sanctioned "feed the grounded fact back" precedent, not a detector's verdict.
+_RESILIENCE_NOTE_HEADER = (
+    "Automatic model-resilience activity on this run so far "
+    "(performed by the harness, most recent last):"
+)
+
+
+@dataclass
+class ResilienceNote:
+    """Bounded, factual record of this run's LLM retry/fallback events.
+
+    The model is otherwise BLIND to its own retries: ``RetryStrategy.run`` has
+    only two outward channels — ``emit`` (event log / console / CLI) and
+    ``raise`` — and never touches the message list, so a run that quietly
+    re-drives a failing model, or escalates down its ladder, never sees any of
+    it. This note carries the SAME grounded facts the event log already holds —
+    which model was tried, how many attempts, the error class, whether a switch
+    occurred — into a dedicated system-prompt slot.
+
+    Holds only the most recent ``max_events`` records (hot in-process runtime
+    state — a plain dataclass, no trust boundary). :meth:`render` returns the
+    whole note, or ``""`` when nothing has gone wrong yet, so a clean run pays
+    nothing and the slot stays empty.
+    """
+
+    max_events: int = DEFAULT_RESILIENCE_NOTE_EVENTS
+    _events: list[str] = field(default_factory=list)
+
+    def record(self, event: Event) -> None:
+        """Append a compact summary for a retry/fallback event; ignore the rest."""
+        etype = event.get("type")
+        if etype not in ("llm_retry", "llm_fallback"):
+            return
+        payload = event.get("payload") or {}
+        self._events.append(self._summarize(etype, payload))
+        if len(self._events) > self.max_events:
+            del self._events[: len(self._events) - self.max_events]
+
+    @staticmethod
+    def _summarize(etype: str, payload: dict[str, Any]) -> str:
+        """One factual line for a retry or a fallback event."""
+        if etype == "llm_retry":
+            return (
+                f"retried {payload.get('model', '?')} "
+                f"(attempt {payload.get('attempt', '?')}/{payload.get('max_attempts', '?')}, "
+                f"{payload.get('error_type', '?')})"
+            )
+        return (
+            f"switched {payload.get('from_model', '?')} -> {payload.get('to_model', '?')} "
+            f"({payload.get('reason', '?')})"
+        )
+
+    def render(self) -> str:
+        """The full note text, or ``""`` when no resilience event has occurred."""
+        if not self._events:
+            return ""
+        lines = "\n".join(f"- {entry}" for entry in self._events)
+        return f"{_RESILIENCE_NOTE_HEADER}\n{lines}"
+
+# How many times the promise-as-completion gate refuses a clean terminal while
+# owned background runs are live before letting a stubborn model through. One
+# nudge is normally enough — the model waits with ``check_agents(wait=true)``,
+# the children settle, the next terminal is honest. The cap only bounds a model
+# that keeps re-declaring done without waiting; the orchestrator's honesty
+# downgrade still records the truth once it is let through, so the whole run's
+# budget is never spent spinning here.
+_PROMISE_GATE_MAX_NUDGES = 3
+
+# Event-side snapshot cap, decoupled from the per-tool model-facing cap: the
+# frontend scrolls the full output and ``result_file`` backstops anything
+# pathological. Acts as a FLOOR — a tool declaring a larger model-facing cap
+# raises this too, so the store always records at least what the model read.
+_EVENT_SNAPSHOT_MAX_CHARS = 100_000
 
 # Maps tool_id patterns to the AbstractTool operation ("get" or "set").
 _OPERATION_SET_KEYWORDS = frozenset(
@@ -124,8 +217,8 @@ _OPERATION_GET_KEYWORDS = frozenset(
         # config knob, the same way `web_url_read` is GET-classified by its exact
         # id. The verbs (route/observe) carry no SET keyword; `scg_memory` is the
         # one deliberate write whitelisted here because a connector insight is a
-        # propositional reachability fact, never a record value or credential
-        # (#83-B). Exact ids — no false-positive substring match on other tools.
+        # propositional reachability fact, never a record value or credential.
+        # Exact ids — no false-positive substring match on other tools.
         "scg_route",
         "scg_observe",
         "scg_memory",
@@ -141,6 +234,13 @@ class ToolCallResult:
     tool_id: str
     content: str
     success: bool
+    # Structured-envelope facts, present only for a session tool that returned
+    # one. ``blocked_code`` is the envelope code when it names a condition no
+    # retry can clear (credentials, reachability, permission, quota);
+    # ``permanence`` is the tool's own retry verdict. Both default to ``None``,
+    # so every other execution path is unchanged.
+    blocked_code: str | None = None
+    permanence: str | None = None
 
 
 @dataclass
@@ -178,16 +278,21 @@ class ToolUseLoop:
         approval_callback: Callable[[ActionStep], bool] | None = None,
         hook_manager: HookManager,
         project_instructions: str | None = None,
+        user_instructions: str | None = None,
         skill_instructions: str | None = None,
         skill_registry: Any = None,
         agent_registry: Any = None,
         session_tool_registry: SessionToolRegistry | None = None,
         allowed_tools: list[str] | None = None,
+        strict_tool_scope: bool = False,
         cwd: str | None = None,
         session_id: str | None = None,
         session_capabilities: tuple[str, ...] = (),
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
+        contract: DelegationContract | None = None,
+        verification: CommandVerification | None = None,
+        verifier_runner: VerifierRunner | None = None,
     ) -> None:
         """Initialize the tool-use loop.
 
@@ -198,6 +303,11 @@ class ToolUseLoop:
             approval_callback: Optional callback for ASK decisions (None for sub-agents).
             hook_manager: Lifecycle hooks.
             project_instructions: CLAUDE.md / AGENTS.md content discovered at session start.
+            user_instructions: Operator-authored custom instructions, ALREADY RENDERED
+                by ``Orchestrator`` from the stored template (``system_instructions/``).
+                A plain string — the loop does no Jinja and no store work. Lives on the
+                instance, not on a per-call arg, so it survives the in-place system-prompt
+                re-render that a model escalation performs.
             skill_instructions: Pre-rendered skill body (from user /skill invocation).
             skill_registry: SkillRegistry for auto-invocation catalog + activate_skill handling.
             agent_registry: AgentRegistry for agent type catalog + spawn_agent type lookup.
@@ -208,6 +318,13 @@ class ToolUseLoop:
                 tools the plugin registry should build for this agent.  ``None``
                 means "no plugin session tools" (root agents get only the
                 built-in ``ExitPlanModeTool``).
+            strict_tool_scope: Whether ``allowed_tools`` is AUTHORITATIVE for this
+                agent. ``True`` (spawned leaf sub-agents, wiki-qa/search runs) —
+                the allowlist is the whole tool scope, so it also gates
+                ``spawn_agent``. ``False`` (the FE default) — ``allowed_tools`` is
+                only a PERMISSIVE ceiling over MCP tools (``context.mcp_tools``);
+                built-ins and the internal ``spawn_agent`` are NOT scoped by it,
+                mirroring the orchestrator's permissive ``filter_specs`` branch.
             cwd: Working directory for this agent (project root).
             session_id: Session identifier — used for plan-mode path scoping.
             session_capabilities: Client-advertised capability tuple from the
@@ -223,10 +340,23 @@ class ToolUseLoop:
                 headless product drive (search/wiki) can opt out so it doesn't
                 burn its first step activating a host ``~/.claude`` skill it
                 never intended to expose. Default ``True`` (unchanged behavior).
+            contract: The spawner's declared ``DelegationContract`` for THIS
+                agent — ``None``/disabled is the historical
+                unbounded child. Checked in the run loop's budget block
+                IN ADDITION TO (never instead of) the shared session budget.
+            verification: The spawner's declared ground-truth completion check
+                for THIS agent — ``None`` is the historical ungated path. Only
+                RUN when the two-gate ``self._verification_active`` holds
+                (master switch on AND a spec AND an execute/all capability
+                mode); otherwise it is carried but inert.
+            verifier_runner: Injected ``VerifierRunner`` (defaults to
+                ``CommandVerifierRunner``). A test passes a recording fake so
+                the gate is exercised without a real subprocess.
         """
         self._ctx = agent_context
+        self._contract = contract
         # The model whose per-model prompt overrides + tool variant are ACTIVE.
-        # Starts at the configured primary; the #54 fallback ladder promotes it
+        # Starts at the configured primary; the fallback ladder promotes it
         # to the escalated model on a sticky switch (see ``_apply_model_escalation``)
         # so the heal becomes behavioural, not just a model swap.
         self._active_model = agent_context.model_name
@@ -236,6 +366,7 @@ class ToolUseLoop:
         self._approval_callback = approval_callback
         self._hook_manager = hook_manager
         self._project_instructions = project_instructions
+        self._user_instructions = user_instructions
         self._skill_instructions = skill_instructions
         self._skill_registry = skill_registry
         self._agent_registry = agent_registry
@@ -243,6 +374,51 @@ class ToolUseLoop:
         self._cwd = cwd
         self._session_id = session_id
         self._session_capabilities = session_capabilities
+        # Retained so the tool ceiling can reach the tools this loop injects
+        # OUTSIDE ``filter_specs`` — see :meth:`_loop_injected_admitted`.
+        self._allowed_tools = allowed_tools
+        self._strict_tool_scope = strict_tool_scope
+
+        # Filesystem-containment firebreak. Built ONCE here from
+        # three inputs: the enforcement kill-switch (``agent.workspace_
+        # enforcement``, staged OFF by default), this agent's narrowed
+        # ``workspace_mode``, and the workspace ``cwd``. It is a non-None
+        # ``WorkspaceContainment`` ONLY when all three admit containment
+        # (enforcement on AND a restrictive tier AND a real cwd) — so with the
+        # flag off, a full_access tier, or no cwd, ``self._containment is None``
+        # and EVERY path resolves byte-identically to the historical tenant union.
+        # ``self._containment is not None`` is therefore the single "containment
+        # active" predicate the loop's root-injection + tool-execution seams read.
+        self._containment: WorkspaceContainment | None = None
+        if (
+            cwd
+            and agent_context.workspace_mode != "full_access"
+            and bool(get_config_value("agent", "workspace_enforcement", default=False))
+        ):
+            self._containment = WorkspaceContainment(
+                mode=agent_context.workspace_mode, root=cwd
+            )
+
+        # Verifier-gated completion. Two-gate arming computed ONCE (mirrors the
+        # write-progress signal): a ground-truth check only gates an agent that
+        # (a) has a spec, (b) runs under the master switch, and (c) could
+        # plausibly ACT — capability_mode ∈ {execute, all}. A read-only child,
+        # the disabled default, or the staged-off switch leaves the gate inert,
+        # so every natural completion is accepted byte-identically. The runner
+        # is injected (default ``CommandVerifierRunner``) so a test drives the
+        # gate with a recording fake and never spawns a real subprocess.
+        self._verification = verification
+        self._verifier_runner: VerifierRunner = verifier_runner or CommandVerifierRunner()
+        self._verification_active = verification is not None and CommandVerification.gate_active(
+            enabled=bool(get_config_value("agent", "verification_enabled", default=False)),
+            capability_mode=agent_context.capability_mode,
+        )
+        # Latches for the run: whether a check has already passed (never re-run
+        # once green) and how many failed re-drives remain.
+        self._verify_passed = False
+        self._verify_retries_left = int(
+            get_config_value("agent", "verification_max_retries", default=2)
+        )
 
         # Dedup cache for read_file: prevents redundant reads when the
         # same file + range hasn't changed on disk (mtime check).
@@ -254,9 +430,67 @@ class ToolUseLoop:
         # usage_metadata.input_tokens. Zero until the first call lands.
         self._last_input_tokens: int = 0
 
-        # Create SpawnAgentTool when this agent can spawn children.
+        # In-flight LLM call, for the liveness leg. ``None`` whenever no call is
+        # outstanding; a monotonic timestamp while one is. The retry strategy
+        # already bounds each attempt with ``asyncio.wait_for``, but that bound
+        # can only fire if the awaited coroutine reaches a cancellation point —
+        # a provider read wedged below the event loop never does, and one such
+        # call sat silent for 24 minutes having emitted ``llm_call_start`` and
+        # no end. Nothing noticed it live: the sweepers that would have run once
+        # each, at process boot.
+        self._llm_call_started_at: float | None = None
+        self._llm_call_step: int = 0
+
+        # Error-visibility seam: a bounded, factual note of this run's LLM
+        # retry/fallback events, injected as its OWN system-prompt slot so the
+        # model is no longer blind to its own retries. ``_active_resilience_note``
+        # tracks the text last baked into ``messages[0]`` so the loop re-renders
+        # the prompt only when the note actually changes (a clean run never
+        # pays; a healing run re-renders at most once per new event).
+        self._resilience_note = ResilienceNote()
+        self._active_resilience_note: str = ""
+
+        # Self-steering routing state. The live per-run ``RetryStrategy`` (set in
+        # ``run``) is what the ``model_control`` tool reuses for its switch
+        # budget + cooldown; ``_requested_switch`` is a model the tool asked to
+        # switch to, applied at the NEXT turn boundary (like a sticky fallback,
+        # transcript tail untouched); ``_live_messages`` lets the continuity-lock
+        # guardrail inspect the in-flight transcript.
+        self._retry_strategy: RetryStrategy | None = None
+        self._requested_switch: str | None = None
+        self._live_messages: list[BaseMessage] | None = None
+
+        # Create SpawnAgentTool when this agent can spawn children — gated on
+        # BOTH depth (``can_spawn``) AND tool scope. spawn_agent is injected
+        # here rather than through ``filter_specs``, so an explicit ``tools:``
+        # allowlist that omits it would otherwise be silently bypassed: a leaf
+        # agent scoped to build-and-submit (the st-widget-builder) could still
+        # delegate, and misread its own errors as "delegate to a scoped agent",
+        # recursing into copies of itself (mobile session 8c04e341…). An ABSENT
+        # allowlist (``None``) stays unrestricted (root / ad-hoc spawns); an
+        # EMPTY one grants nothing, delegation included. That distinction is
+        # load-bearing, not pedantry: a role-bounded viewer's composed allowlist
+        # omits the spawn family precisely to disable delegation, and can compose
+        # down to empty — reading empty as "unrestricted" would hand delegation
+        # back to the principal the ceiling exists to deny.
+        #
+        # The allowlist gate applies ONLY when the scope is STRICT (a spawned
+        # leaf / wiki-qa / search run — where ``allowed_tools`` is the whole
+        # authoritative tool scope). Under a PERMISSIVE scope (the FE default),
+        # ``allowed_tools`` is ``context.mcp_tools`` — a ceiling over MCP tools
+        # only, which never lists the internal spawn_agent; built-ins stay (see
+        # the orchestrator's permissive ``filter_specs`` branch), so spawn_agent
+        # must stay too. Without this carve-out every console/Aura session that
+        # advertised MCP tools had root delegation silently disabled (session
+        # 04ea546e…: the st-widget-builder skill mandates spawn_agent, which was
+        # unreachable, so the agent violated the skill and built the widget itself).
+        spawn_in_scope = (
+            not strict_tool_scope
+            or allowed_tools is None
+            or bool({"spawn_agent", "spawn_agents"} & set(allowed_tools))
+        ) and not self._ctx.atomic  # Atomic is a hard firebreak
         self._spawn_agent_tool: Any = None
-        if agent_context.can_spawn:
+        if agent_context.can_spawn and spawn_in_scope:
             from mewbo_core.spawn_agent import SpawnAgentTool
 
             # Ref: [DeepMind-Delegation §4.7] Sub-agents inherit parent's approval
@@ -268,6 +502,7 @@ class ToolUseLoop:
                 approval_callback=approval_callback,
                 hook_manager=hook_manager,
                 project_instructions=project_instructions,
+                user_instructions=user_instructions,
                 cwd=cwd,
                 agent_registry=agent_registry,
                 session_tool_registry=session_tool_registry,
@@ -281,10 +516,14 @@ class ToolUseLoop:
         # with a session id; plugin-contributed tools are selected by EITHER
         # the agent's ``allowed_tools`` allowlist OR a capability gate (a
         # factory whose ``requires_capabilities`` ⊆ ``session_capabilities``),
-        # so a runtime-granted capability (#83-B/#84) surfaces its tools to the
+        # so a runtime-granted capability surfaces its tools to the
         # root agent without the client listing them explicitly.
         self._session_tools: list[SessionTool] = []
         if agent_context.depth == 0 and session_id is not None:
+            # Deliberately NOT ceiling-checked: ``exit_plan_mode`` is the only
+            # way out of plan mode, so withholding it from a strict scope that
+            # failed to name it would leave the run with no exit at all. It is a
+            # structural terminator, never a surface an agent wanders into.
             self._session_tools.append(
                 ExitPlanModeTool(
                     session_id=session_id,
@@ -293,15 +532,18 @@ class ToolUseLoop:
             )
             # Authoritative live todos (act mode): terminal-free, re-emits the
             # FULL statused list as ONE ``todos`` event on each call. Attached
-            # inline (not via the plugin factory) so it can carry the root
-            # ``agent_id`` the event stamps for per-agent attribution.
-            self._session_tools.append(
-                UpdateTodosTool(
-                    session_id=session_id,
-                    event_logger=agent_context.event_logger,
-                    agent_id=agent_context.agent_id,
+            # inline (not via the plugin factory) so it bypasses the plugin
+            # factory's allowlist gate — hence the explicit ceiling check here,
+            # or an AgentDef's authoritative ``tools:`` under-states what its
+            # agent actually holds.
+            if self._loop_injected_admitted("update_todos"):
+                self._session_tools.append(
+                    UpdateTodosTool(
+                        session_id=session_id,
+                        event_logger=agent_context.event_logger,
+                        agent_id=agent_context.agent_id,
+                    )
                 )
-            )
         if session_tool_registry is not None and session_id is not None:
             self._session_tools.extend(
                 session_tool_registry.build_for(
@@ -309,6 +551,17 @@ class ToolUseLoop:
                     session_id=session_id,
                     event_logger=agent_context.event_logger,
                     session_capabilities=session_capabilities,
+                    # df875 law: a PERMISSIVE allowlist (FE mcp_tools) is
+                    # only an MCP ceiling, so an unconditional tool
+                    # (schedule_trigger) still surfaces; a STRICT AgentDef scope
+                    # must name it. Mirrors the spawn_in_scope gate above.
+                    strict_tool_scope=strict_tool_scope,
+                    # Delegation privilege ceiling: the loop's effective
+                    # (already-narrowed) capability_mode gates SESSION tools too,
+                    # not just registry tools — else a read_only spawn would still
+                    # receive write-tier session actions (submit/mint/commit/arm).
+                    # Root is always "all" (no-op); a narrowed sub-agent attenuates.
+                    capability_mode=agent_context.capability_mode,
                 )
             )
         # Caller-injected session tools (e.g. the structured-response emit
@@ -316,6 +569,43 @@ class ToolUseLoop:
         # the same machinery as plugin tools.
         if extra_session_tools:
             self._session_tools.extend(extra_session_tools)
+
+        # Self-steering model control. Bound whenever the operator opts into
+        # self-steering fallback — unlike a task tool it is resilience
+        # infrastructure (peer of the automatic fallback ladder), so it is NOT
+        # ceiling-checked against ``allowed_tools``: a child pinned by its
+        # AgentDef to a model the key rejects (the live failure) must be able to
+        # switch even though that AgentDef never named the tool, and is attached
+        # at EVERY depth, not just the root. Off by default (self_steering=False)
+        # ⇒ zero extra surface, so it never widens a strict scope uninvited.
+        if session_id is not None and bool(
+            get_config_value("llm", "fallback", "self_steering", default=False)
+        ):
+            from mewbo_core.model_control import ModelControlTool
+
+            self._session_tools.append(
+                ModelControlTool(
+                    session_id=session_id,
+                    agent_id=agent_context.agent_id,
+                    depth=agent_context.depth,
+                    get_active_model=lambda: self._active_model,
+                    get_ladder=lambda: [self._ctx.model_name, *self._ctx.fallback_models],
+                    get_strategy=lambda: self._retry_strategy,
+                    has_unanswered_tool_use=self._has_dangling_tool_use,
+                    apply_switch=self._request_model_switch,
+                    # Route through ``_emit_event`` (not the raw sink) so a
+                    # deliberate switch's ``llm_fallback`` is captured by the
+                    # resilience note too, keeping it the complete switch record.
+                    event_logger=self._emit_event,
+                    get_step=lambda: self._llm_call_step,
+                    max_switches=int(
+                        get_config_value("llm", "fallback", "max_switches", default=2)
+                    ),
+                    allow_upgrade=bool(
+                        get_config_value("llm", "fallback", "allow_upgrade", default=False)
+                    ),
+                )
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -344,6 +634,11 @@ class ToolUseLoop:
         if self._spawn_agent_tool is not None:
             self._spawn_agent_tool.session_id = self._session_id
             self._spawn_agent_tool.parent_mode = self._current_mode
+            # The EFFECTIVE set, not the deferral-active subset: deferral strips
+            # schemas from the initial bind and re-fetches them through
+            # tool_search, so a child seeded from it would lose tools this agent
+            # genuinely holds. Children narrow this set; they never widen it.
+            self._spawn_agent_tool.parent_tool_specs = list(tool_specs)
         executed_steps: list[ActionStep] = []
         tool_outputs: list[str] = []
         last_error: str | None = None
@@ -363,6 +658,14 @@ class ToolUseLoop:
                 depth=self._ctx.depth,
                 model_name=self._ctx.model_name,
                 task_description=user_query[:200],
+                # A spawned child's handle is normally
+                # pre-registered (and pre-stamped) by SpawnAgentTool before its
+                # loop ever runs, so this branch is the exception (a directly
+                # constructed loop, e.g. the root). Stamping ``self._contract``
+                # here too keeps the handle self-consistent with whatever this
+                # loop was actually built with, instead of silently reading
+                # back the disabled default.
+                contract=self._contract or DelegationContract(),
             )
             await self._ctx.registry.register(handle)
         handle.status = "running"
@@ -405,6 +708,9 @@ class ToolUseLoop:
                 plan,
                 agent_tree=agent_tree,
             )
+            # Expose the live transcript so the model_control continuity-lock
+            # guardrail can inspect it (a mutable reference — it sees appends).
+            self._live_messages = messages
             tool_schemas = self._build_tool_schemas_for_mode(
                 active_specs,
                 self._current_mode,
@@ -451,9 +757,38 @@ class ToolUseLoop:
 
             turns = 0
             # One atomic resilience strategy per run — holds the retry budget,
-            # circuit breaker and policy knobs; survives every turn.
+            # circuit breaker and policy knobs; survives every turn. Retained on
+            # the instance so the model_control tool reuses THIS run's budget +
+            # circuit breaker for its own switch guardrails.
             retry_strategy = RetryStrategy.from_config()
-            doom_guard = DoomLoopGuard.from_config()
+            self._retry_strategy = retry_strategy
+            doom_guard = DoomLoopGuard.from_config(
+                extra_poll_rules=self._poll_class_rules(tool_specs)
+            )
+            # Two-gate arming, computed ONCE for the run: the write-progress
+            # signal is only meaningful for an agent that could plausibly
+            # WRITE at all — narrowed by its own capability_mode AND actually
+            # holding a write-tier tool. Anything else (read_only children, a
+            # session with no write tools bound) leaves the signal permanently
+            # inert.
+            write_capable = self._ctx.capability_mode in {"execute", "all"} and any(
+                s.capability_tier() == "write" for s in tool_specs
+            )
+            write_progress = WriteProgressSignal.from_config(write_capable=write_capable)
+            write_progress_stamped = False
+            # One-shot latch so the per-agent budget warning
+            # (distinct from the session-wide ``loop.budget_warning`` above)
+            # fires exactly once per run, not on every turn inside headroom.
+            contract_step_warned = False
+            # ``(tool_id, code)`` of the most recent blocked-class envelope
+            # error that has NOT since been cleared. "Unrecovered" is judged per
+            # tool: a later SUCCESS from the same tool means the blocked
+            # operation went through after all, and only that clears it —
+            # an unrelated tool succeeding says nothing about whether the repo
+            # ever became reachable.
+            last_blocked: tuple[str, str] | None = None
+            # Consecutive promise-as-completion refusals (see the gate below).
+            promise_nudges = 0
             while not state.done:
                 # Check cancellation.
                 if self._ctx.should_cancel is not None and self._ctx.should_cancel():
@@ -479,6 +814,38 @@ class ToolUseLoop:
                         except _queue_mod.Empty:
                             break
 
+                # Apply a deliberate model switch the model_control tool
+                # requested last turn. Delegated to the SAME escalation path a
+                # sticky fallback uses (promote active model / re-render prompt /
+                # re-derive edit tool / rebind), applied at this turn boundary so
+                # the transcript tail is untouched. Pin it on the strategy too, so
+                # ``_order_models`` keeps the chosen model at the chain head
+                # instead of a prior sticky pin reordering it back out.
+                if self._requested_switch is not None:
+                    _switch_target = self._requested_switch
+                    self._requested_switch = None
+                    retry_strategy._pinned_model = _switch_target
+                    tool_schemas, model = self._apply_model_escalation(
+                        _switch_target,
+                        messages,
+                        context=context,
+                        plan=plan,
+                        agent_tree=agent_tree,
+                        tool_schemas=tool_schemas,
+                        model=model,
+                    )
+
+                # Keep the resilience note current in the system prompt: re-render
+                # ``messages[0]`` only when the note text changed since it was last
+                # baked in, so a clean run never pays and a healing run re-renders
+                # at most once per new retry/fallback event.
+                _note = self._resilience_note.render()
+                if _note != self._active_resilience_note:
+                    self._active_resilience_note = _note
+                    messages[0] = SystemMessage(
+                        content=self._render_system_prompt(context, plan, agent_tree)
+                    )
+
                 with langfuse_trace_span(
                     f"step:{turns}",
                     metadata={
@@ -492,11 +859,18 @@ class ToolUseLoop:
                         except Exception:
                             pass
 
-                    # Graduated enforcement: warn as the budget nears, then HARD-STOP
-                    # at exhaustion so an unbounded fan-out (#62) can't run away.
+                    # Graduated enforcement: warn as the budget nears, then force
+                    # ONE wrap-up turn at exhaustion so an unbounded
+                    # fan-out can't run away — but the agent still gets to
+                    # answer instead of a bare halt.
                     if self._ctx.registry.budget_exhausted():
-                        state.done = True
-                        state.done_reason = "halted_no_progress"
+                        final_response = await self._budget_wrapup_turn(
+                            "budget_exhausted",
+                            state=state,
+                            messages=messages,
+                            tool_outputs=tool_outputs,
+                            invoke_config=invoke_config,
+                        )
                         break
                     if self._ctx.registry.budget_warning():
                         messages.append(
@@ -504,6 +878,43 @@ class ToolUseLoop:
                                 content=get_prompt_registry().render("loop.budget_warning")
                             )
                         )
+
+                    # DelegationContract. A per-agent bound
+                    # LAYERED UNDER the session budget just checked above:
+                    # checked here regardless (a spawner's ceiling applies even
+                    # when the shared pool has headroom left). Disabled
+                    # contracts (the historical default) skip this entirely.
+                    if self._contract is not None and self._contract.enabled:
+                        contract_over = False
+                        step_state = await self._ctx.registry.agent_step_state(
+                            self._ctx.agent_id
+                        )
+                        if step_state == "over":
+                            contract_over = True
+                        elif step_state == "warn" and not contract_step_warned:
+                            contract_step_warned = True
+                            messages.append(
+                                SystemMessage(
+                                    content=get_prompt_registry().render(
+                                        "loop.agent_budget_warning"
+                                    )
+                                )
+                            )
+                        if not contract_over:
+                            token_state = await self._ctx.registry.agent_token_state(
+                                self._ctx.agent_id
+                            )
+                            if token_state == "over":
+                                contract_over = True
+                        if contract_over:
+                            final_response = await self._budget_wrapup_turn(
+                                "halted_agent_budget",
+                                state=state,
+                                messages=messages,
+                                tool_outputs=tool_outputs,
+                                invoke_config=invoke_config,
+                            )
+                            break
 
                     # Heartbeat events so clients (console/CLI) can distinguish
                     # "waiting on LLM" from a silent hang.
@@ -514,10 +925,15 @@ class ToolUseLoop:
                                 "agent_id": self._ctx.agent_id,
                                 "depth": self._ctx.depth,
                                 "step": turns,
-                                "model": self._ctx.model_name,
+                                "model": self._active_model,
                             },
                         }
                     )
+                    # Arm the liveness leg for exactly the window this call is
+                    # outstanding; the ``finally`` disarms it on every exit so a
+                    # completed call can never read as a wedged one.
+                    self._llm_call_started_at = _time.monotonic()
+                    self._llm_call_step = turns
                     try:
                         response, _final_model = await self._invoke_with_resilience(
                             primary_model=model,
@@ -552,7 +968,13 @@ class ToolUseLoop:
                             try:
                                 span.update(
                                     level="ERROR",
-                                    status_message=str(exhausted.last_error)[:500],
+                                    # Same substitution as the completion string:
+                                    # ``str(TimeoutError())`` is empty, and this
+                                    # span write would otherwise carry a void
+                                    # status_message for the very failure it marks.
+                                    status_message=LlmResilienceExhausted.describe_error(
+                                        exhausted.last_error
+                                    ),
                                     metadata={
                                         "errortype": exhausted.last_error_type,
                                         "models_tried": ",".join(exhausted.models_tried),
@@ -570,10 +992,12 @@ class ToolUseLoop:
                             },
                         )
                         raise
-                    # #54 fallback ladder: if the resilience strategy escalated
+                    finally:
+                        self._llm_call_started_at = None
+                    # Fallback ladder: if the resilience strategy escalated
                     # to (and pinned) a different model, re-render the system
                     # prompt + re-derive the edit-tool variant against THAT model
-                    # so the heal is behavioural, not just a model swap (#113).
+                    # so the heal is behavioural, not just a model swap.
                     tool_schemas, model = self._apply_model_escalation(
                         _final_model,
                         messages,
@@ -663,12 +1087,91 @@ class ToolUseLoop:
                     messages.append(response)
 
                     if not response.tool_calls:
-                        # Text response — task is done.
+                        # Text response — the model claims completion.
                         content = self._extract_text_content(getattr(response, "content", ""))
+                        # Verifier gate: run the ground-truth check BEFORE
+                        # accepting the claim (only when armed and not already
+                        # green). A failure with a retry left injects the
+                        # grounded verifier output and ``continue``s — funnelling
+                        # back through the top-of-loop budget checks FIRST, so
+                        # retries are bounded by BOTH verification_max_retries AND
+                        # the step/wall budget. Exhausted retries accept the text
+                        # but flag it honestly (``verification_failed``); a pass
+                        # falls through to the normal ``completed`` accept.
+                        if self._verification_active and not self._verify_passed:
+                            state.verify_attempts += 1
+                            outcome = await self._run_verifier(
+                                step=turns, attempt=state.verify_attempts
+                            )
+                            if outcome.passed:
+                                self._verify_passed = True
+                                state.verified = True
+                            elif self._verify_retries_left > 0:
+                                self._verify_retries_left -= 1
+                                messages.append(
+                                    SystemMessage(
+                                        content=get_prompt_registry().render(
+                                            "loop.verification_failed",
+                                            output=outcome.feedback,
+                                        )
+                                    )
+                                )
+                                continue
+                            else:
+                                final_response = content
+                                tool_outputs.append(content)
+                                state.done = True
+                                state.done_reason = "verification_failed"
+                                state.verified = False
+                                break
+                        # Promise-as-completion gate (root only). A clean
+                        # terminal declared while the root's OWN background runs
+                        # are still live is a promise about future work — "I'll
+                        # check back shortly" with an unfinished probe fleet
+                        # behind it — not a completion. Refuse it here, upstream
+                        # of the orchestrator's honesty downgrade, and send the
+                        # model to await its runs. ``collect_running`` is keyed on
+                        # THIS agent so it counts only owned CHILDREN — the seam
+                        # deliberately does NOT read the session-wide ownership
+                        # index, because the root's own handle is still
+                        # ``running`` here (it is marked done only in the loop's
+                        # finally), so that index would count the root itself and
+                        # refuse every terminal. Bounded, so a model that will not
+                        # wait is eventually let through rather than burning the
+                        # whole budget spinning.
+                        if self._ctx.depth == 0 and promise_nudges < _PROMISE_GATE_MAX_NUDGES:
+                            live_owned = await self._ctx.registry.collect_running(
+                                self._ctx.agent_id
+                            )
+                            if live_owned:
+                                promise_nudges += 1
+                                messages.append(
+                                    SystemMessage(
+                                        content=get_prompt_registry().render(
+                                            "loop.agents_still_running",
+                                            count=len(live_owned),
+                                            ids=", ".join(
+                                                h.agent_id[:8] for h in live_owned
+                                            ),
+                                        )
+                                    )
+                                )
+                                continue
                         final_response = content
                         tool_outputs.append(content)
                         state.done = True
                         state.done_reason = "completed"
+                        # The accept used to be unconditional: a run whose clone
+                        # never authenticated still stamped a clean completion
+                        # because its LAST turn happened to be text. Consult the
+                        # unrecovered blocked-class error instead — it says the
+                        # goal was unreachable this run whatever the closing
+                        # prose claims. Carried as its OWN field, never as a new
+                        # done_reason: that vocabulary is a wire contract shared
+                        # with every client, and the status layer owns the
+                        # mapping from this code to a user-facing state.
+                        if last_blocked is not None:
+                            state.blocked_code = last_blocked[1]
                         break
 
                     # The model is repeating the same tool + input with no
@@ -731,6 +1234,57 @@ class ToolUseLoop:
                     # same input AND same outcome — a call whose result advances
                     # (e.g. check_agents as children finish) is healthy progress.
                     doom_guard.record_result(results)
+
+                    # Track the blocked-class condition across turns so the
+                    # completion seam can tell "finished" from "gave up".
+                    for _r in results:
+                        if _r.blocked_code:
+                            last_blocked = (_r.tool_id, _r.blocked_code)
+                        elif (
+                            _r.success
+                            and last_blocked is not None
+                            and _r.tool_id == last_blocked[0]
+                        ):
+                            last_blocked = None
+
+                    # Write-progress signal: distinct from the doom guard —
+                    # counts consecutive steps for a write-capable agent with
+                    # no WRITE-tier tool execution (read/execute/search/
+                    # unknown-tier steps only). Observe-only: crossing the
+                    # threshold always emits telemetry; the optional reminder
+                    # never names the signal or its criteria.
+                    write_progress.observe(results, specs_map)
+                    if write_progress.threshold_crossed():
+                        self._emit_event(
+                            {
+                                "type": "write_progress_signal",
+                                "payload": {
+                                    "agent_id": self._ctx.agent_id,
+                                    "depth": self._ctx.depth,
+                                    "step": turns,
+                                    "steps_since_write": write_progress.steps_since_write,
+                                    "threshold": write_progress.threshold,
+                                },
+                            }
+                        )
+                        if write_progress.reminder_enabled:
+                            messages.append(
+                                SystemMessage(
+                                    content=get_prompt_registry().render(
+                                        "loop.task_objective_reminder", goal=state.goal
+                                    )
+                                )
+                            )
+                    elif write_progress.exhausted() and not write_progress_stamped:
+                        # Go quiet after the last event — flag it once for the
+                        # parent's global eye instead of firing forever.
+                        write_progress_stamped = True
+                        _h_write_progress = await self._ctx.registry.get(self._ctx.agent_id)
+                        if _h_write_progress:
+                            _h_write_progress.progress_note = (
+                                "No write-tier tool call in the last "
+                                f"{write_progress.steps_since_write} steps."
+                            )
 
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
@@ -894,42 +1448,40 @@ class ToolUseLoop:
                             )
                         )
 
-                try:
-                    messages.append(
-                        SystemMessage(
-                            content=get_prompt_registry().render("loop.final_answer_synthesis")
-                        )
-                    )
-                    # Invoke without tool bindings to prevent further tool calls.
-                    unbound = build_chat_model(model_name=self._ctx.model_name)
-                    synthesis_timeout = float(
-                        get_config_value("agent", "llm_call_timeout", default=60.0)
-                    )
-                    synthesis: AIMessage = await asyncio.wait_for(
-                        unbound.ainvoke(messages, config=invoke_config or None),
-                        timeout=synthesis_timeout,
-                    )
-                    _usage = getattr(synthesis, "usage_metadata", None)
-                    if _usage:
-                        _h = await self._ctx.registry.get(self._ctx.agent_id)
-                        if _h:
-                            _h.input_tokens += _usage.get("input_tokens", 0)
-                            _h.output_tokens += _usage.get("output_tokens", 0)
-                    final_response = self._extract_text_content(getattr(synthesis, "content", ""))
-                except Exception:
-                    logging.warning("Final synthesis turn failed.", exc_info=True)
-
-                # Fallback: if synthesis produced nothing, build a minimal
-                # response from successful tool outputs so the user isn't
-                # left with an empty result.
-                if not final_response or not final_response.strip():
-                    successful = [o for o in tool_outputs if o and not o.startswith("ERROR")]
-                    if successful:
-                        final_response = "Partial results:\n\n" + "\n\n".join(successful[-5:])
+                final_response = await self._unbound_wrapup_invoke(
+                    prompt_key="loop.final_answer_synthesis",
+                    model_name=self._ctx.model_name,
+                    messages=messages,
+                    tool_outputs=tool_outputs,
+                    invoke_config=invoke_config,
+                )
 
             if not state.done:
                 state.done = True
                 state.done_reason = "completed"
+
+            # Forced closing summary for a CHILD that finished via store
+            # side-effects. The heaviest sub-agents did all their real work
+            # through tool writes and then stopped on empty text, so the parent
+            # — which projects ``task_result`` as the child's summary — received
+            # nothing, and a 3.3M-token probe reached its parent blank. One
+            # unbound wrap-up turn forces a compressed summary before stop.
+            # Root is exempt: its empty terminal is a user-facing turn, not a
+            # summary owed upstream. A cancel is exempt too — it is not a
+            # completion to summarize. The budget/synthesis paths already filled
+            # ``final_response``, so the empty-guard skips them (no double turn).
+            if (
+                self._ctx.depth > 0
+                and state.done_reason != "canceled"
+                and not (final_response or "").strip()
+            ):
+                final_response = await self._unbound_wrapup_invoke(
+                    prompt_key="loop.final_answer_synthesis",
+                    model_name=self._active_model,
+                    messages=messages,
+                    tool_outputs=tool_outputs,
+                    invoke_config=invoke_config,
+                )
 
             # Build TaskQueue for compatibility with CLI / API consumers.
             plan_steps = list(plan.steps) if plan and plan.steps else []
@@ -941,6 +1493,11 @@ class ToolUseLoop:
             task_queue.task_result = (final_response or "").strip()
             task_queue.last_error = last_error
             state.tool_results = tool_outputs
+            # Every OTHER terminal path (halt, budget wrap-up, verifier
+            # exhaustion, plan-mode exit) carries the same fact — a blocked run
+            # is blocked regardless of which exit it took.
+            if state.blocked_code is None and last_blocked is not None:
+                state.blocked_code = last_blocked[1]
 
         finally:
             # Close Langfuse agent span and propagation context.
@@ -990,12 +1547,139 @@ class ToolUseLoop:
     # Error-isolated task wrapper
     # ------------------------------------------------------------------
 
+    # A wait/sync tool (``check_agents``) bounds its OWN wait internally on the
+    # requested ``timeout``; the outer execution ceiling must never clip that
+    # below what the model asked for. Headroom on top of the requested wait for
+    # the post-wait agent-tree render + result collection.
+    _WAIT_TOOL_RENDER_MARGIN_S = 30.0
+
     def _get_tool_timeout(self, tool_name: str) -> float:
         """Get timeout for a tool. Uses spec.timeout, falls back to 120s."""
         spec = self._tool_registry.get_spec(tool_name) if self._tool_registry else None
         if spec:
             return spec.timeout
         return 120.0
+
+    def llm_call_stall_age(self, now: float) -> float | None:
+        """Seconds the in-flight LLM call has been outstanding, else ``None``.
+
+        Pure read over ``(_llm_call_started_at, now)`` with no clock of its own,
+        so the liveness rule is exercisable at any age without waiting for one
+        — the watchdog supplies ``time.monotonic()``, a test supplies a number.
+        """
+        started = self._llm_call_started_at
+        if started is None:
+            return None
+        return max(0.0, now - started)
+
+    def _loop_injected_admitted(self, tool_id: str) -> bool:
+        """Whether the tool ceiling admits a tool this loop injects itself.
+
+        The loop binds several tools OUTSIDE ``filter_specs`` by design — the
+        spawn family, ``activate_skill``, the agent-management tools, the
+        inline session tools. By design also meant outside the allowlist, so a
+        strictly-scoped agent whose AgentDef named five tools was in fact
+        handed those five plus everything here. That surplus is what a
+        wandering run wanders into: across the observed burner sessions the
+        winners and the burners ran the SAME model on the SAME task, and what
+        separated them was reachable tool surface, not capability.
+
+        The gate is the SAME shape as the spawn seam's (``spawn_in_scope``) and
+        obeys the same three-state law: ``None`` is unrestricted, ``[]`` grants
+        nothing, a list grants exactly its members. Crucially it fires ONLY
+        under STRICT scope — a permissive console/mobile root always sends a
+        large ``context.mcp_tools`` list that is a ceiling over MCP tools alone
+        and never names a built-in, so treating it as authoritative here would
+        strip every such session's built-ins. That is the same trap that once
+        silently broke the mobile alarm flow.
+        """
+        if not self._strict_tool_scope or self._allowed_tools is None:
+            return True
+        return tool_id in self._allowed_tools
+
+    def _poll_class_rules(self, tool_specs: list[ToolSpec]) -> list[PollClassRule]:
+        """Poll-class rules for this run, gathered from what each tool declares.
+
+        Two declaration seams, because this loop binds two populations that
+        never meet: a registry tool declares ``ToolSpec.poll`` /
+        ``poll_when_args``, and a session tool (absent from the registry
+        entirely) declares ``poll_class`` / ``poll_when_args``. Both are read
+        via ``getattr`` — ``SessionTool`` is a structural Protocol whose
+        defaults a standalone implementer does not inherit, and these are
+        optional attributes rather than contract members.
+
+        Resolving per run from declarations is what keeps core out of it: no
+        tool id appears here, so the next self-polling tool is added by
+        declaring it on that tool, in whichever package owns it. A nested run's
+        status probe answering "processing" twice in under a second is honest
+        waiting, and no repetition-based detector can tell that from a stuck
+        loop unless the tool says which call is which.
+        """
+        rules: list[PollClassRule] = []
+        for source in (*tool_specs, *self._session_tools):
+            tool_id = getattr(source, "tool_id", "")
+            if not tool_id:
+                continue
+            when_args = tuple(getattr(source, "poll_when_args", ()) or ())
+            if when_args:
+                rules.append(
+                    PollClassRule(tool_id=tool_id, when_args=frozenset(when_args))
+                )
+            # ``poll`` on a registry spec, ``poll_class`` on a session tool —
+            # either spelling means "every call to me is a poll".
+            elif getattr(source, "poll", False) or getattr(source, "poll_class", False):
+                rules.append(PollClassRule(tool_id=tool_id))
+        return rules
+
+    def _result_char_cap(self, tool_id: str) -> int:
+        """The model-facing result cap for *tool_id* (0 = uncapped).
+
+        Resolution order — session-tool declaration, then registry spec, then
+        the 2000 default. The session-tool arm is what this exists for: a
+        session tool is never registered in the stateless ``ToolRegistry``, so
+        ``get_spec`` returns ``None`` for EVERY one of them and the default
+        applied to the whole class by accident rather than by any decision. The
+        number is calibrated for unbounded shell/MCP output and is wrong for a
+        curated first-party payload: a repo-manifest scan reached the model as
+        22 of ~1,900 paths — 1.14% — while the next step of its own playbook
+        required picking files out of that manifest.
+
+        The ONE resolver behind both the model-facing truncation and the event
+        summary, so the store can never claim a cap the model did not read.
+        """
+        session_tool = next(
+            (t for t in self._session_tools if t.tool_id == tool_id), None
+        )
+        if session_tool is not None:
+            # ``SessionTool`` is a structural Protocol: a standalone implementer
+            # inherits no defaults from it, so the declaration must be read
+            # defensively rather than assumed present on the instance.
+            declared = getattr(session_tool, "max_result_chars", None)
+            if isinstance(declared, int) and not isinstance(declared, bool):
+                return declared
+            return DEFAULT_SESSION_TOOL_MAX_RESULT_CHARS
+        spec = self._tool_registry.get_spec(tool_id) if self._tool_registry else None
+        return spec.max_result_chars if spec else 2000
+
+    def _tool_execution_timeout(self, tool_name: str, tool_call: Any) -> float:
+        """The outer ``asyncio.wait_for`` ceiling for one tool call.
+
+        For a self-bounding WAIT tool (``DOOM_LOOP_EXEMPT_TOOLS`` — currently
+        ``check_agents``) the model's requested ``wait``/``timeout`` is the real
+        bound; the outer ceiling must sit ABOVE it or a legitimate long wait
+        aborts with "timed out after 120.0s" the requested 300s never reached
+        (production: three such clips). Every other tool keeps the flat ceiling.
+        """
+        ceiling = self._get_tool_timeout(tool_name)
+        if tool_name not in DOOM_LOOP_EXEMPT_TOOLS:
+            return ceiling
+        args = tool_call.get("args") if isinstance(tool_call, dict) else None
+        if not isinstance(args, dict) or not args.get("wait"):
+            return ceiling
+        requested = args.get("timeout")
+        if isinstance(requested, bool) or not isinstance(requested, (int, float)):
+            return ceiling
+        return max(ceiling, float(requested) + self._WAIT_TOOL_RENDER_MARGIN_S)
 
     def _partition_tool_calls(
         self, tool_calls: list[Any], specs_map: dict[str, ToolSpec]
@@ -1027,7 +1711,7 @@ class ToolUseLoop:
         Catches exceptions so gather does not cancel siblings.
         """
         tool_name = tool_call.get("name", "")
-        timeout = self._get_tool_timeout(tool_name)
+        timeout = self._tool_execution_timeout(tool_name, tool_call)
         # Ref: [AgentCgroup §4.2] Stamp the in-flight tool BEFORE awaiting it so
         # the watchdog can attribute a stall to the tool actually running, not
         # the last one that completed (``update_step`` only fires after this
@@ -1043,6 +1727,13 @@ class ToolUseLoop:
         except asyncio.TimeoutError:
             error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
             logging.error(error_msg)
+            # A timeout kills ``_execute_tool_call`` mid-flight, so the emit at
+            # its tail never runs and the step left NO ``tool_result`` event
+            # behind at all. The durable record then showed 100% tool success
+            # for runs with known live timeouts — the failure was not
+            # under-reported but structurally absent, and no amount of reading
+            # the store could have found it. Every exit of this method emits.
+            self._emit_timeout_or_crash_result(tool_call, error_msg)
             return ToolCallResult(
                 tool_call_id=tool_call.get("id", ""),
                 tool_id=tool_name,
@@ -1052,6 +1743,10 @@ class ToolUseLoop:
         except asyncio.CancelledError:
             raise  # Must propagate for TaskGroup cancellation.
         except Exception as exc:
+            # Same contract as the timeout branch: an exception that escaped
+            # every inner handler would otherwise return a failed result the
+            # event log has no record of.
+            self._emit_timeout_or_crash_result(tool_call, str(exc))
             return ToolCallResult(
                 tool_call_id=tool_call.get("id", ""),
                 tool_id=tool_name,
@@ -1060,6 +1755,20 @@ class ToolUseLoop:
             )
         finally:
             await self._ctx.registry.mark_tool_start(self._ctx.agent_id, None)
+
+    def _emit_timeout_or_crash_result(self, tool_call: Any, error: str) -> None:
+        """Emit the ``tool_result`` event for a call that died inside the wrapper.
+
+        Best-effort by construction: this runs on a path that is ALREADY
+        failing, so a fault while building the ActionStep must not replace the
+        tool's real error with an event-emission error.
+        """
+        try:
+            self._emit_tool_result_event(
+                self._tool_call_to_action_step(tool_call), None, error=error
+            )
+        except Exception as emit_exc:  # noqa: BLE001 — never mask the real failure
+            logging.warning("failed to emit tool_result for a failed call: {}", emit_exc)
 
     # ------------------------------------------------------------------
     # Message construction
@@ -1084,7 +1793,7 @@ class ToolUseLoop:
     ) -> str:
         """Assemble the system-prompt text for the ACTIVE model.
 
-        Extracted from ``_build_messages`` so the #54 fallback ladder can
+        Extracted from ``_build_messages`` so the fallback ladder can
         re-render it against the ESCALATED model mid-run (its per-model prompt
         overrides) without rebuilding the whole transcript — see
         ``_apply_model_escalation``. Reads ``self._active_model`` (the escalated
@@ -1117,6 +1826,18 @@ class ToolUseLoop:
                 )
             )
 
+        # Operator-authored custom instructions (rendered upstream, in the
+        # orchestrator). Sits right after the project instructions so the
+        # operator's text reads as an extension of them.
+        if self._user_instructions:
+            system_parts.append(
+                registry.render(
+                    "loop.section.user_instructions",
+                    model=model,
+                    user_instructions=self._user_instructions,
+                )
+            )
+
         # Ref: [DeepMind-Delegation §4.5] Root agent's global eye — live agent tree
         if agent_tree:
             system_parts.append(
@@ -1139,6 +1860,14 @@ class ToolUseLoop:
                     skill_instructions=self._skill_instructions,
                 )
             )
+
+        # Resilience note (error-visibility seam): the harness's own retry /
+        # fallback activity, fed back as grounded fact so the model is not blind
+        # to its own retries. Its OWN slot — never overloaded onto
+        # ``skill_instructions`` — and empty (skipped) on a clean run.
+        resilience_note = self._resilience_note.render()
+        if resilience_note:
+            system_parts.append(resilience_note)
 
         # Auto-invocable skills catalog (for LLM-driven activation).
         if self._skill_registry is not None:
@@ -1329,10 +2058,50 @@ class ToolUseLoop:
         Ref: [DeepMind-Delegation §4.4] Internal trigger: delegatee
         unresponsive → diagnose → intervene.
         """
-        stall_threshold = 120.0
+        stall_threshold = float(get_config_value("agent", "stall_threshold_s", default=120.0))
+        check_interval = float(get_config_value("agent", "stall_check_interval_s", default=30.0))
+        # Deliberately well past the retry strategy's per-attempt timeout AND
+        # its turn deadline: reaching this age means the bound that should have
+        # cancelled the call did not, which is the only case worth an alarm.
+        llm_liveness_s = float(get_config_value("agent", "llm_call_liveness_s", default=300.0))
+        # Per-agent ids already warned of their OWN wall
+        # deadline, so the 80% warning fires exactly once per agent across the
+        # whole watchdog lifetime (never re-sent on every sweep).
+        warned_wall_deadline: set[str] = set()
+        # Steps already reported as wedged, so one wedge yields one event rather
+        # than one per sweep. Re-arms naturally: the next call is a new step.
+        reported_wedged_steps: set[int] = set()
         try:
             while True:
-                await asyncio.sleep(30)
+                await asyncio.sleep(check_interval)
+
+                # LLM-call liveness. The stall sweep below cannot see this: it
+                # keys on TOOL activity, and a wedged model call has no tool in
+                # flight, so the agent looks merely quiet. Emitting makes the
+                # wedge visible while it is happening instead of leaving an
+                # ``llm_call_start`` with no end for a boot-time sweeper to find.
+                age = self.llm_call_stall_age(_time.monotonic())
+                if (
+                    age is not None
+                    and llm_liveness_s > 0
+                    and age >= llm_liveness_s
+                    and self._llm_call_step not in reported_wedged_steps
+                ):
+                    reported_wedged_steps.add(self._llm_call_step)
+                    self._emit_event(
+                        {
+                            "type": "llm_call_stalled",
+                            "payload": {
+                                "agent_id": self._ctx.agent_id,
+                                "depth": self._ctx.depth,
+                                "step": self._llm_call_step,
+                                "model": self._active_model,
+                                "age_s": round(age, 1),
+                                "threshold_s": llm_liveness_s,
+                            },
+                        }
+                    )
+
                 stalled = await self._ctx.registry.stalled_agents(threshold=stall_threshold)
                 for h in stalled:
                     await self._ctx.registry.send_message(
@@ -1361,6 +2130,26 @@ class ToolUseLoop:
                         self._ctx.message_queue.put_nowait(
                             f"[Watchdog: Agent {h.agent_id[:8]} {detail}]",
                         )
+
+                # Per-contract wall-clock deadline sweep.
+                # Mirrors the stall sweep above but keyed on an agent's OWN
+                # declared bound, never global inactivity. Two-strike by
+                # design: the 80% warn ALWAYS precedes the 100% cancel, so
+                # cancel_agent here is the ONE contract-driven kill switch in
+                # the codebase — every other agent termination is either
+                # graceful (natural completion) or parent-requested
+                # (steer_agent cancel).
+                for h, wall_state in await self._ctx.registry.over_wall_deadline_agents():
+                    if wall_state == "over":
+                        await self._ctx.registry.cancel_agent(h.agent_id)
+                        continue
+                    if h.agent_id in warned_wall_deadline:
+                        continue
+                    warned_wall_deadline.add(h.agent_id)
+                    await self._ctx.registry.send_message(
+                        h.agent_id,
+                        get_prompt_registry().render("loop.wall_deadline_warning"),
+                    )
         except asyncio.CancelledError:
             pass  # Normal shutdown path.
 
@@ -1370,7 +2159,7 @@ class ToolUseLoop:
         Routes through the prompt registry WITH the active model so a per-model
         override of a tool-guidance entry (e.g. the structured-patch discipline
         nudge on ``file.tools.file-edit``, paired with the edit-tool variant via
-        the shared model prefix — #113) actually applies. ``get_system_prompt``
+        the shared model prefix) actually applies. ``get_system_prompt``
         alone can't: a tool's ``prompt_path`` (``tools/file-edit``) maps to the
         dotted registry id ``file.tools.file-edit``, so the slash form misses the
         registry and would silently read the raw ``.txt``, dropping ``model=``.
@@ -1446,7 +2235,7 @@ class ToolUseLoop:
         if override == "search_replace_block":
             return "aider_edit_block_tool"
 
-        # Derive from the ACTIVE model identity (escalated model after a #54
+        # Derive from the ACTIVE model identity (escalated model after a
         # sticky switch, else the configured primary) so the tool VARIANT adapts
         # in lockstep with the per-model prompt on escalation.
         model_name: str | None = getattr(self, "_active_model", None) or getattr(
@@ -1468,19 +2257,6 @@ class ToolUseLoop:
         if isinstance(raw, str):
             return [entry.strip() for entry in raw.split(",") if entry.strip()]
         return []
-
-    def _plan_mode_allow_mcp(self) -> bool:
-        """Return True when MCP tools are permitted in plan mode.
-
-        Read from ``agent.plan_mode_allow_mcp``. Defaults to True (a
-        permissive default for user-configured MCP servers).
-        """
-        raw = get_config_value("agent", "plan_mode_allow_mcp", default=True)
-        if isinstance(raw, bool):
-            return raw
-        if isinstance(raw, str):
-            return raw.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(raw)
 
     # ------------------------------------------------------------------
     # LLM call resilience (retry / fallback / circuit-break / budget)
@@ -1593,7 +2369,7 @@ class ToolUseLoop:
 
         async def _invoke(model_name: str, is_fallback: bool) -> AIMessage:
             # ``primary_model`` is pre-bound to the ACTIVE model (the configured
-            # primary, or — after a #54 sticky escalation — the pinned escalated
+            # primary, or — after a sticky escalation — the pinned escalated
             # model, since ``_apply_model_escalation`` rebinds it). Key the reuse
             # off the model NAME, not ``is_fallback``: sticky escalation reorders
             # a pinned rescue model to idx 0 (so ``is_fallback`` is False) —
@@ -1624,8 +2400,16 @@ class ToolUseLoop:
             )
             return True
 
+        # Chain head is the ACTIVE model, not the frozen configured one. Once a
+        # sticky escalation has promoted ``_active_model``, re-offering
+        # ``_ctx.model_name`` puts the model that just died back at the head of
+        # every subsequent turn's chain; escalation survived that only because
+        # ``RetryStrategy._order_models`` reorders on its own pin, i.e. by
+        # accident of a second mechanism rather than by this call being right.
+        # Before any escalation the two are identical, so the ordinary path is
+        # unchanged.
         response, model_name = await strategy.run(
-            models=[self._ctx.model_name, *self._ctx.fallback_models],
+            models=[self._active_model, *self._ctx.fallback_models],
             invoke=_invoke,
             emit=self._emit_event,
             compact=_compact,
@@ -1635,6 +2419,39 @@ class ToolUseLoop:
         )
         await self._capture_usage(response)
         return response, model_name
+
+    def _request_model_switch(self, target: str) -> None:
+        """Record a deliberate model switch the ``model_control`` tool sanctioned.
+
+        Deferred, never applied inline: the loop promotes the model at the next
+        turn boundary through :meth:`_apply_model_escalation`, so the switch
+        lands exactly like a sticky fallback (transcript tail untouched) — the
+        tool-loop-continuity contract the tool already enforced at request time.
+        """
+        self._requested_switch = target
+
+    def _has_dangling_tool_use(self) -> bool:
+        """True when a PRIOR turn's ``tool_use`` is still unanswered.
+
+        The continuity-lock guardrail for ``model_control``: switching models
+        while a tool call sits unpaired would carry the dangling pair into the
+        first request on the new model. The in-flight batch (the most recent
+        ``AIMessage``'s tool_calls, whose results are being produced right now)
+        is excluded — counting it would make every switch look unsafe; only an
+        EARLIER unpaired call, the kind a compaction slice can strand, blocks a
+        switch.
+        """
+        messages = self._live_messages or []
+        answered = {
+            m.tool_call_id for m in messages if isinstance(m, ToolMessage)
+        }
+        ai_batches = [m for m in messages if isinstance(m, AIMessage) and m.tool_calls]
+        for m in ai_batches[:-1]:  # exclude the in-flight (last) batch
+            for tc in m.tool_calls:
+                tcid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tcid and tcid not in answered:
+                    return True
+        return False
 
     def _apply_model_escalation(
         self,
@@ -1647,7 +2464,7 @@ class ToolUseLoop:
         tool_schemas: list[dict[str, Any]],
         model: Any,
     ) -> tuple[list[dict[str, Any]], Any]:
-        """Promote the active model to a #54-escalated one and re-derive prompts.
+        """Promote the active model to an escalated one and re-derive prompts.
 
         No-op (returns the inputs unchanged) unless the resilience strategy ended
         the turn on a DIFFERENT model than the one currently active — i.e. a
@@ -1665,9 +2482,21 @@ class ToolUseLoop:
         if not final_model or final_model == self._active_model:
             return tool_schemas, model
         self._active_model = final_model
+        # Re-seat the spawn seam on the healed model. An un-overridden child
+        # resolves its model from the spawn tool's captured context — the model
+        # this loop just escalated AWAY from — so a self-healed parent would
+        # otherwise fan its children onto the dead one. The re-seat goes through
+        # the tool's own ``rebind_active_model`` seam: that ``AgentContext`` is
+        # frozen is the tool's business, not the loop's.
+        if self._spawn_agent_tool is not None:
+            self._spawn_agent_tool.rebind_active_model(final_model)
         messages[0] = SystemMessage(
             content=self._render_system_prompt(context, plan, agent_tree)
         )
+        # This re-render already baked in the current resilience-note slot, so
+        # keep the tracker honest — else the top-of-loop refresh re-renders once
+        # more for a note that is already present.
+        self._active_resilience_note = self._resilience_note.render()
         discovered = self._discovered_from_messages(messages)
         active_specs = self._select_active_specs(self._tool_specs_full, discovered=discovered)
         tool_schemas = self._build_tool_schemas_for_mode(active_specs, self._current_mode)
@@ -1687,6 +2516,114 @@ class ToolUseLoop:
         return tool_schemas, model
 
     # ------------------------------------------------------------------
+    # Graduated exhaustion — forced wrap-up turns
+    # ------------------------------------------------------------------
+
+    async def _unbound_wrapup_invoke(
+        self,
+        *,
+        prompt_key: str,
+        model_name: str,
+        messages: list[BaseMessage],
+        tool_outputs: list[str],
+        invoke_config: dict[str, Any],
+    ) -> str:
+        """One text-only LLM call with tools UNBOUND — never raises.
+
+        Falls back to recent tool output on failure. Shared by the
+        (currently unreachable, defensive) final-synthesis safety net and
+        :meth:`_budget_wrapup_turn`; the only difference between callers is
+        which directive gets injected and which model answers it.
+        """
+        final_response = ""
+        try:
+            messages.append(SystemMessage(content=get_prompt_registry().render(prompt_key)))
+            unbound = build_chat_model(model_name=model_name)
+            synthesis_timeout = float(get_config_value("agent", "llm_call_timeout", default=60.0))
+            synthesis: AIMessage = await asyncio.wait_for(
+                unbound.ainvoke(messages, config=invoke_config or None),
+                timeout=synthesis_timeout,
+            )
+            _usage = getattr(synthesis, "usage_metadata", None)
+            if _usage:
+                _h = await self._ctx.registry.get(self._ctx.agent_id)
+                if _h:
+                    _h.input_tokens += _usage.get("input_tokens", 0)
+                    _h.output_tokens += _usage.get("output_tokens", 0)
+            final_response = self._extract_text_content(getattr(synthesis, "content", ""))
+        except Exception:
+            logging.warning("Unbound wrap-up turn failed.", exc_info=True)
+
+        # Fallback: if the call produced nothing, build a minimal response
+        # from successful tool outputs so the caller isn't left empty-handed.
+        if not final_response or not final_response.strip():
+            successful = [o for o in tool_outputs if o and not o.startswith("ERROR")]
+            if successful:
+                final_response = "Partial results:\n\n" + "\n\n".join(successful[-5:])
+        return final_response
+
+    async def _budget_wrapup_turn(
+        self,
+        reason: str,
+        *,
+        state: OrchestrationState,
+        messages: list[BaseMessage],
+        tool_outputs: list[str],
+        invoke_config: dict[str, Any],
+    ) -> str:
+        """Force one text-only wrap-up call in place of a bare halt.
+
+        Reusable across every graduated-exhaustion caller: this wave's session
+        step budget calls it with ``reason="budget_exhausted"``; a future wave
+        routes per-agent contract exhaustion through the SAME helper with a
+        different reason (e.g. ``"halted_agent_budget"``). Runs against
+        ``self._active_model`` (the escalated model if a sticky switch pinned one — unlike
+        the legacy safety net, which intentionally keeps its pre-existing
+        ``_ctx.model_name`` wart). Deliberately skips
+        ``registry.update_step`` — this closing call must not re-trip the very
+        budget that triggered it. Sets ``state.done``/``state.done_reason``;
+        the caller's ``break`` is the only remaining step, and the (already
+        done-guarded) final-synthesis safety net is skipped as a result.
+        """
+        final_response = await self._unbound_wrapup_invoke(
+            prompt_key="loop.budget_exhausted_wrapup",
+            model_name=self._active_model,
+            messages=messages,
+            tool_outputs=tool_outputs,
+            invoke_config=invoke_config,
+        )
+        state.done = True
+        state.done_reason = reason
+        return final_response
+
+    async def _run_verifier(self, *, step: int, attempt: int) -> VerifierOutcome:
+        """Run the ground-truth completion verifier once and emit its verdict.
+
+        The model does no I/O: the injected runner performs the subprocess
+        (never raising — a timeout/OS error comes back as a failed result), the
+        spec interprets that raw result into a pass/fail ``VerifierOutcome``, and
+        this method emits the BOUNDED telemetry (``verification`` event, scalars
+        only — the grounded stdout/stderr rides only the outcome's feedback into
+        the model's own context, never onto the wire). Guarded by
+        ``self._verification_active`` at the sole call site, so the spec is
+        non-None here.
+        """
+        assert self._verification is not None  # _verification_active guards this
+        result = await self._verifier_runner.run(self._verification, cwd=self._cwd)
+        outcome = self._verification.interpret(result)
+        payload: VerificationPayload = {
+            "agent_id": self._ctx.agent_id,
+            "depth": self._ctx.depth,
+            "step": step,
+            "passed": outcome.passed,
+            "attempt": attempt,
+            "exit_code": outcome.exit_code,
+            "timed_out": outcome.timed_out,
+        }
+        self._emit_event({"type": "verification", "payload": payload})
+        return outcome
+
+    # ------------------------------------------------------------------
     # Mid-loop context compaction
     # ------------------------------------------------------------------
 
@@ -1702,7 +2639,12 @@ class ToolUseLoop:
             return False  # No LLM call yet; nothing authoritative to check.
         from mewbo_core.token_budget import get_model_max_input_tokens
 
-        max_input = get_model_max_input_tokens(self._ctx.model_name)
+        # Size the window against the ACTIVE model. Reading the frozen
+        # configured one keeps a large window after escalating DOWN to a small
+        # model, so the threshold sits above that model's real ceiling,
+        # auto-compaction never fires, and the run dies on
+        # ContextWindowExceededError instead of compacting.
+        max_input = get_model_max_input_tokens(self._active_model)
         threshold = float(get_config_value("token_budget", "auto_compact_threshold", default=0.8))
         return self._last_input_tokens >= max_input * threshold
 
@@ -1857,8 +2799,20 @@ class ToolUseLoop:
         deferred-loading is off, returns ``specs`` unchanged. The same
         function drives both the run-start bind and the per-turn re-bind
         so there is exactly one source of truth for what is bound.
+
+        ``tool_search`` reaches here having been EXEMPTED from the allowlist by
+        ``filter_specs`` (it is ``always_load``). That exemption is load-bearing
+        and stays: strip it while tools are deferred and a scoped sub-agent
+        loses its MCP schemas AND the only means to fetch them. It is also
+        justified ONLY while something is deferred — with nothing to fetch, the
+        tool is pure surface area, and it was among the top repeat callees in
+        the runs that burned a session's whole budget without answering. So a
+        STRICT scope that did not name it caps it in exactly that case.
         """
-        if not self._tool_search_enabled or not self._deferred_ids:
+        deferral_active = self._tool_search_enabled and bool(self._deferred_ids)
+        if not deferral_active and not self._loop_injected_admitted(TOOL_SEARCH_TOOL_ID):
+            specs = [s for s in specs if s.tool_id != TOOL_SEARCH_TOOL_ID]
+        if not deferral_active:
             return list(specs)
         keep: list[ToolSpec] = []
         for spec in specs:
@@ -1940,29 +2894,39 @@ class ToolUseLoop:
         In plan mode the schema is filtered to: read-only tools + the
         configured edit tool (path-scoped at the permission layer) + the
         shell tool (command-allowlisted at the permission layer, iff the
-        allowlist is non-empty) + MCP tools (iff
-        ``agent.plan_mode_allow_mcp`` is True). In act mode all specs pass
-        through.
+        allowlist is non-empty) + all MCP tools. MCP specs carry no
+        read-only signal (the wire protocol exposes no ``readOnlyHint``),
+        so Mewbo cannot classify a third-party MCP tool's effect — a mode
+        filter over user-land tools would be guesswork, not gating. In act
+        mode all specs pass through.
         """
         if mode != "plan":
             return specs_to_langchain_tools(specs)
         edit_tool_id = self._configured_edit_tool_id()
         shell_enabled = bool(self._plan_mode_shell_allowlist())
-        allow_mcp = self._plan_mode_allow_mcp()
         filtered = [
             spec
             for spec in specs
             if spec.read_only
+            or spec.kind == "mcp"
             or (spec.tool_id == edit_tool_id and self._ctx.depth > 0)
             or (shell_enabled and spec.tool_id in SHELL_TOOL_IDS)
-            or (allow_mcp and spec.kind == "mcp")
         ]
         return specs_to_langchain_tools(filtered)
 
-    def _bind_model(self, tool_schemas: list[dict[str, Any]]) -> Any:
-        """Build a chat model (for the ACTIVE model) and bind tool schemas."""
-        model = build_chat_model(model_name=self._active_model)
-        plan_mode = self._current_mode == "plan"
+    def _directly_bound_tool_schemas(self, *, plan_mode: bool) -> list[dict[str, Any]]:
+        """The schemas the loop binds DIRECTLY, outside the ``ToolRegistry``.
+
+        Three populations ``_bind_model`` appends beyond the registry specs: the
+        spawn family (gated on ``self._spawn_agent_tool`` + the plan-mode rule),
+        ``activate_skill`` (when auto-invocable skills exist and skills are on),
+        and the per-agent SESSION TOOLS (mode-filtered). This is the ONE source
+        of truth, shared by ``_bind_model`` (what gets BOUND) and the
+        ``tool_search`` supplement (what search can FIND) — so the searchable set
+        can never drift from the bound set, and a strictly-scoped agent can never
+        widen its surface via search.
+        """
+        extra: list[dict[str, Any]] = []
         # In plan mode, the root (depth=0) gets agent management tools so it
         # can spawn and monitor the plan sub-agent. Non-root plan agents get
         # no agent tools — they explore and draft only.
@@ -1970,36 +2934,58 @@ class ToolUseLoop:
         if (not plan_mode or plan_root) and self._spawn_agent_tool is not None:
             from mewbo_core.spawn_agent import SPAWN_AGENT_SCHEMA, SPAWN_AGENTS_SCHEMA
 
-            tool_schemas = [*tool_schemas, SPAWN_AGENT_SCHEMA, SPAWN_AGENTS_SCHEMA]
+            extra.extend([SPAWN_AGENT_SCHEMA, SPAWN_AGENTS_SCHEMA])
             # Ref: [DeepMind-Delegation §4.4] Root-only management tools
-            # for non-blocking agent monitoring and steering.
+            # for non-blocking agent monitoring and steering. Each is ceiling-
+            # checked on its OWN id: a delegating AgentDef that means to monitor
+            # names ``check_agents`` (every strict def in the tree does), and one
+            # that never steers should not be handed ``steer_agent`` merely for
+            # having named a spawn tool.
             if self._ctx.depth == 0:
                 from mewbo_core.spawn_agent import (
                     CHECK_AGENTS_SCHEMA,
                     STEER_AGENT_SCHEMA,
                 )
 
-                tool_schemas = [*tool_schemas, CHECK_AGENTS_SCHEMA, STEER_AGENT_SCHEMA]
+                extra.extend(
+                    schema
+                    for tool_id, schema in (
+                        ("check_agents", CHECK_AGENTS_SCHEMA),
+                        ("steer_agent", STEER_AGENT_SCHEMA),
+                    )
+                    if self._loop_injected_admitted(tool_id)
+                )
         # Inject activate_skill schema when auto-invocable skills exist — unless
         # the drive opted out (``enable_skills=False``), so a headless product
         # run never burns a step activating a host ``~/.claude`` skill.
         if (
             self._enable_skills
+            and self._loop_injected_admitted("activate_skill")
             and not plan_mode
             and self._skill_registry is not None
             and self._skill_registry.list_auto_invocable(self._session_capabilities)
         ):
             from mewbo_core.skills import ACTIVATE_SKILL_SCHEMA
 
-            tool_schemas = [*tool_schemas, ACTIVATE_SKILL_SCHEMA]
-        # Bind session-tool schemas only for tools whose ``modes`` include
-        # the current orchestration mode. Data-driven — no tool_id string
-        # match. Plugin tools missing the attribute default to act-mode.
+            extra.append(ACTIVATE_SKILL_SCHEMA)
+        # Session-tool schemas only for tools whose ``modes`` include the current
+        # orchestration mode. Data-driven — no tool_id string match. Plugin tools
+        # missing the attribute default to act-mode.
         current_mode = "plan" if plan_mode else "act"
         for session_tool in self._session_tools:
             tool_modes = getattr(session_tool, "modes", None) or DEFAULT_SESSION_TOOL_MODES
             if current_mode in tool_modes:
-                tool_schemas = [*tool_schemas, session_tool.schema]
+                extra.append(session_tool.schema)
+        return extra
+
+    def _bind_model(self, tool_schemas: list[dict[str, Any]]) -> Any:
+        """Build a chat model (for the ACTIVE model) and bind tool schemas."""
+        model = build_chat_model(model_name=self._active_model)
+        plan_mode = self._current_mode == "plan"
+        tool_schemas = [
+            *tool_schemas,
+            *self._directly_bound_tool_schemas(plan_mode=plan_mode),
+        ]
         if tool_schemas:
             return model.bind_tools(tool_schemas)
         return model
@@ -2024,7 +3010,7 @@ class ToolUseLoop:
         # applied at the common emit/return path so the step records
         # ``success=False`` and the loop's failure nudge fires (the model still
         # gets the envelope text). ``None`` for every normal result.
-        session_tool_error: str | None = None
+        session_tool_error: _SessionToolError | None = None
 
         # MCP input coercion.
         spec = self._tool_registry.get_spec(tool_id)
@@ -2136,7 +3122,33 @@ class ToolUseLoop:
                 )
             # A handled error envelope (returned, not raised) → reclassify as a
             # FAILED step while keeping the envelope text as the model output.
-            session_tool_error = _session_tool_error_envelope(result)
+            session_tool_error = _SessionToolError.parse(result)
+        elif (
+            tool_id == TOOL_SEARCH_TOOL_ID
+            and (tool_search_runner := self._tool_registry.get(tool_id)) is not None
+        ):
+            # tool_search searches the ToolRegistry, but the loop ALSO binds
+            # spawn-family / activate_skill / session-tool schemas directly —
+            # invisible to the registry and so historically unsearchable.
+            # Hand the runner the SAME directly-bound schemas as this turn's
+            # bind so those tools are findable; by construction search can only
+            # surface what is already bound, never widen a scoped agent's scope.
+            supplement = self._directly_bound_tool_schemas(
+                plan_mode=self._current_mode == "plan"
+            )
+            try:
+                result = await asyncio.to_thread(
+                    tool_search_runner.run, action_step, supplement=supplement
+                )
+            except Exception as exc:
+                logging.error("tool_search failed: {}", exc)
+                self._emit_tool_result_event(action_step, None, error=str(exc))
+                return ToolCallResult(
+                    tool_call_id=tool_call_id,
+                    tool_id=tool_id,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
         elif tool_id == "activate_skill" and self._skill_registry is not None:
             result = self._handle_activate_skill(action_step)
         else:
@@ -2152,10 +3164,20 @@ class ToolUseLoop:
             try:
                 # Prefer async execution for tools that support it (MCP tools).
                 # Falls back to to_thread for sync-only tools (aider_*, etc.).
-                if hasattr(tool, "arun"):
-                    result = await tool.arun(action_step)
-                else:
-                    result = await asyncio.to_thread(tool.run, action_step)
+                #
+                # Publish the active containment for the duration of
+                # THIS tool's run so ``resolve_safe_path`` (called deep inside the
+                # aider file/edit/shell tools, and the LSP tool) enforces the
+                # firebreak without the loop threading a live object through JSON
+                # args. A no-op when ``self._containment`` is None/inactive, so a
+                # full_access / enforcement-off run pays nothing. ``contextvars``
+                # propagate into ``asyncio.to_thread``, so the sync-tool thread
+                # sees the same active containment as this awaiting frame.
+                with active_containment(self._containment):
+                    if hasattr(tool, "arun"):
+                        result = await tool.arun(action_step)
+                    else:
+                        result = await asyncio.to_thread(tool.run, action_step)
             except Exception as exc:
                 logging.error("Tool execution failed: {}", exc)
                 self._emit_tool_result_event(action_step, None, error=str(exc))
@@ -2173,8 +3195,7 @@ class ToolUseLoop:
         if content is None:
             content = "" if result is None else str(result)
         content_str = str(content) if not isinstance(content, str) else content
-        spec = self._tool_registry.get_spec(tool_id)
-        max_chars = spec.max_result_chars if spec else 2000
+        max_chars = self._result_char_cap(tool_id)
         if isinstance(content, dict):
             # Truncate large text fields inside the dict before serializing,
             # so the JSON envelope (metadata like exit_code, duration_ms) is
@@ -2199,9 +3220,13 @@ class ToolUseLoop:
         # is configured. Without this, MCP tool responses get truncated to
         # 2000 chars in the UI even though the full content exists in memory.
         event_str = content_str
-        EVENT_MAX_CHARS = 100_000
-        if len(event_str) > EVENT_MAX_CHARS:
-            event_str = event_str[:EVENT_MAX_CHARS] + "\n[truncated — see result_file]"
+        # Floor the event cap at the model-facing cap. Without that, a tool
+        # whose declared cap exceeds the event cap would record LESS than the
+        # model read — inverting the very fidelity the paired
+        # ``result``/``result_seen`` keys exist to establish.
+        event_max_chars = max(_EVENT_SNAPSHOT_MAX_CHARS, max_chars)
+        if len(event_str) > event_max_chars:
+            event_str = event_str[:event_max_chars] + "\n[truncated — see result_file]"
 
         # Save large results to file when export dir is configured.
         result_file: str | None = None
@@ -2250,16 +3275,29 @@ class ToolUseLoop:
         # hiding the structured detail the tool chose to return.
         if session_tool_error is not None:
             self._emit_tool_result_event(
-                action_step, event_str, error=session_tool_error, result_file=result_file
+                action_step,
+                event_str,
+                error=session_tool_error.summary,
+                result_file=result_file,
+                seen=content_str,
+                permanence=session_tool_error.permanence,
             )
             return ToolCallResult(
                 tool_call_id=tool_call_id,
                 tool_id=tool_id,
                 content=content_str,
                 success=False,
+                blocked_code=(
+                    session_tool_error.code
+                    if session_tool_error.blocks_completion
+                    else None
+                ),
+                permanence=session_tool_error.permanence,
             )
 
-        self._emit_tool_result_event(action_step, event_str, result_file=result_file)
+        self._emit_tool_result_event(
+            action_step, event_str, result_file=result_file, seen=content_str
+        )
         return ToolCallResult(
             tool_call_id=tool_call_id,
             tool_id=tool_id,
@@ -2279,10 +3317,24 @@ class ToolUseLoop:
         # file/shell tools consume it via `argument.get("root")`). Unregistered
         # tools — session tools, spawn_agent, activate_skill — use strict
         # schemas that reject stray keys, so they opt out by not being here.
-        if self._cwd and isinstance(args, dict) and "root" not in args:
+        #
+        # Two regimes for the `root` injection:
+        #   * ACTIVE containment (`self._containment is not None`): the workspace
+        #     root is AUTHORITATIVE — always forced, OVERRIDING any model-supplied
+        #     `root`, so a model cannot widen its way out of the jail by naming a
+        #     sibling root. (`resolve_safe_path` then also collapses the tenant
+        #     union to the containment's allowed roots via the active-containment
+        #     context set around execution below.)
+        #   * No active containment (flag off / full_access / no cwd): today's
+        #     ADVISORY behaviour, byte-identical — inject only when the model did
+        #     not supply its own `root`.
+        if isinstance(args, dict):
             spec = self._tool_registry.get_spec(tool_id)
             if spec is not None and spec.kind != "mcp":
-                args = {**args, "root": self._cwd}
+                if self._containment is not None:
+                    args = {**args, "root": self._containment.root}
+                elif self._cwd and "root" not in args:
+                    args = {**args, "root": self._cwd}
         operation = _infer_operation(tool_id)
         return ActionStep(
             title=tool_id,
@@ -2488,9 +3540,10 @@ class ToolUseLoop:
                 }
             )
             return False
-        # User-enabled MCP tools: blanket allow under the config flag. A
-        # permissive default that trusts the user's mcp.json.
-        if self._plan_mode_allow_mcp() and spec is not None and spec.kind == "mcp":
+        # User-enabled MCP tools: unconditionally allowed. Mewbo cannot
+        # classify a third-party MCP tool's effect, so plan mode trusts the
+        # user's mcp.json rather than guessing at a mode filter.
+        if spec is not None and spec.kind == "mcp":
             return True
         # Everything else (agent tools for non-root, shell when allowlist
         # empty, MCP when flag is False, hallucinated tool names) is denied.
@@ -2532,9 +3585,23 @@ class ToolUseLoop:
         *,
         error: str | None = None,
         result_file: str | None = None,
+        seen: str | None = None,
+        permanence: str | None = None,
     ) -> None:
-        spec = self._tool_registry.get_spec(action_step.tool_id)
-        max_chars = spec.max_result_chars if spec else 2000
+        """Emit one ``tool_result`` event for a finished (or failed) tool call.
+
+        *result* is the RAW payload snapshot (event-side cap) and *seen* is the
+        string actually handed to the model after truncation. Both are recorded,
+        labeled, because they routinely differ by two orders of magnitude and
+        the store previously kept only the raw one: a trace showed a full
+        100K-character result for a call the model read 2,000 characters of, so
+        every "the model had this and ignored it" reading of a transcript was
+        unfalsifiable. *seen* is omitted when it is identical to *result*.
+
+        *permanence* carries a tool's own verdict on whether its failure can
+        ever succeed on retry (see :class:`_SessionToolError`).
+        """
+        max_chars = self._result_char_cap(action_step.tool_id)
         # `summary` is a short preview for log titles / agent-tree rendering;
         # the full payload lives in `result`, which the frontend renders in a
         # scrollable container. Keep `summary` capped at the LLM-context size
@@ -2555,6 +3622,14 @@ class ToolUseLoop:
             payload["error"] = error
         if result_file:
             payload["result_file"] = result_file
+        # What the model actually read, recorded only when it differs from the
+        # raw snapshot — so a consumer can tell a truncated read from a full one
+        # instead of inferring it from a cap it would have to re-derive.
+        if seen is not None and seen != result:
+            payload["result_seen"] = seen
+            payload["result_truncated"] = True
+        if permanence:
+            payload["permanence"] = permanence
         # Always tag with agent_id and model so the console can display
         # badges for all agents including the root.
         payload["agent_id"] = self._ctx.agent_id
@@ -2562,6 +3637,11 @@ class ToolUseLoop:
         self._emit_event({"type": "tool_result", "payload": payload})
 
     def _emit_event(self, event: Event) -> None:
+        # Capture retry/fallback events for the resilience note before they
+        # leave for the sink (no-op for every other event type). This is the ONE
+        # place both the strategy's automatic switches and the model_control
+        # tool's deliberate ones flow through, so the note sees them all.
+        self._resilience_note.record(event)
         if self._ctx.event_logger is not None:
             self._ctx.event_logger(event)
 
@@ -2589,43 +3669,113 @@ class ToolUseLoop:
 # ------------------------------------------------------------------
 
 
-def _session_tool_error_envelope(content: object) -> str | None:
-    """Return the error message if *content* is a structured-error envelope.
+# Envelope codes that mean "a human must change something outside this run" —
+# credentials, reachability, permission, quota. They are what separates a run
+# that FAILED from one that is BLOCKED: retrying, re-planning or switching
+# models cannot clear any of them, so a run that ends while one of these stands
+# unrecovered has not completed its goal no matter how clean its last turn read.
+# A tool's own verdict on whether its failure could ever succeed on retry.
+# ``permanent`` is the one that was missing: 66 consecutive failures of a single
+# tool in one session — chains of 13 inside 90 seconds — all against a
+# precondition that tool could never satisfy, because nothing in the envelope
+# could say so and neither the loop nor the model could tell futile from
+# retry-worthy.
+_ENVELOPE_PERMANENCE: frozenset[str] = frozenset({"permanent", "transient"})
+
+
+@dataclass(frozen=True)
+class _SessionToolError:
+    """A session tool's structured ``{"error": {...}}`` envelope, parsed.
 
     SessionTools across the graph plugin suites (wiki ``_err_result`` / scg
     ``err_result``) signal a HANDLED failure by RETURNING a ``MockSpeaker`` whose
     content is ``str({"error": {"code": ..., "message": ...}})`` — a *successful*
     return, so without this seam the loop recorded the step as ``success=True``
-    and the per-step failure-feedback nudge never fired (an embedding-429 rendered
-    as "✓ ok"). This pure structural check lets the loop reclassify such a return
-    as a FAILED tool result while STILL handing the model the envelope text — it
-    never imports the graph layer (the envelope shape is the only contract).
+    and the per-step failure-feedback nudge never fired (an embedding-429
+    rendered as "✓ ok"). The parse is purely structural: core never imports the
+    graph layer, so the envelope SHAPE is the entire contract.
 
-    Returns the ``"code: message"`` summary for the event's ``error`` field, or
-    ``None`` when *content* is any normal (non-error-envelope) result.
+    ``permanence`` is optional and additive — an envelope that omits it parses
+    exactly as before and reads ``None`` (unknown), so no existing tool changes.
     """
-    text = content if isinstance(content, str) else getattr(content, "content", None)
-    if not isinstance(text, str):
-        return None
-    stripped = text.strip()
-    # Cheap reject before the (bounded) literal parse: the envelope is the repr
-    # of a one-key ``{"error": …}`` dict, so it always starts with ``{'error'``.
-    if not stripped.startswith("{'error'") and not stripped.startswith('{"error"'):
-        return None
-    try:
-        parsed = ast.literal_eval(stripped)
-    except (ValueError, SyntaxError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    err = parsed.get("error")
-    if not isinstance(err, dict):
-        return None
-    code = str(err.get("code", "")).strip()
-    message = str(err.get("message", "")).strip()
-    if not code and not message:
-        return None
-    return f"{code}: {message}" if code and message else (code or message)
+
+    code: str
+    message: str
+    permanence: str | None = None
+
+    @property
+    def summary(self) -> str:
+        """The ``"code: message"`` line for the event's ``error`` field."""
+        if self.code and self.message:
+            return f"{self.code}: {self.message}"
+        return self.code or self.message
+
+    @property
+    def blocks_completion(self) -> bool:
+        """True when this error means the run is blocked, not merely failed."""
+        return self.code in BLOCKED_CODES
+
+    @classmethod
+    def parse(cls, content: object) -> _SessionToolError | None:
+        """Parse *content* as an error envelope, or ``None`` if it is not one.
+
+        The literal parse is ``ast.literal_eval``, NOT ``json.loads``: these
+        envelopes travel as ``str(dict)`` (single quotes, Python repr), so a
+        tool that reaches for ``json.dumps`` produces a payload this seam
+        silently declines to recognise — and its failure then records as a
+        success. That asymmetry is why the envelope contract says ``str(dict)``.
+        """
+        text = content if isinstance(content, str) else getattr(content, "content", None)
+        if not isinstance(text, str):
+            return None
+        stripped = text.strip()
+        # Cheap reject before the (bounded) literal parse: the envelope is the
+        # repr of a one-key ``{"error": …}`` dict, so it always starts with
+        # ``{'error'``.
+        if not stripped.startswith("{'error'") and not stripped.startswith('{"error"'):
+            return None
+        try:
+            parsed = ast.literal_eval(stripped)
+        except (ValueError, SyntaxError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        err = parsed.get("error")
+        if not isinstance(err, dict):
+            return None
+        code = str(err.get("code", "")).strip()
+        message = str(err.get("message", "")).strip()
+        if not code and not message:
+            return None
+        raw_permanence = str(err.get("permanence", "")).strip().lower()
+        return cls(
+            code=code,
+            message=message,
+            # An unrecognised value reads as "undeclared" rather than being
+            # carried through: a typo must never present as a typed verdict.
+            permanence=raw_permanence if raw_permanence in _ENVELOPE_PERMANENCE else None,
+        )
+
+
+def _session_tool_error_envelope(content: object) -> str | None:
+    """Return the ``"code: message"`` summary if *content* is an error envelope.
+
+    The string projection of :meth:`_SessionToolError.parse`.
+
+    **It has no caller inside this module, and that is deliberate — do not
+    "fix" it by deleting it or by re-wiring the dispatch seam to it.** The
+    dispatch seam needs the envelope's CODE and its permanence verdict, not
+    just a display string, so it parses the structured form directly; the
+    reclassification this name is documented for (an envelope RETURN records
+    as a FAILED step) still happens there, unchanged. This projection survives
+    because it is the name the contract is documented under across four
+    packages — ``client_tools``, ``ask_user``, ``triggers.session_tool`` and
+    the apps plugin suite all tell tool authors to satisfy *this* checker — and
+    because the suite asserts the envelope shape through it. Removing it means
+    retiring that name everywhere it is published, not just here.
+    """
+    parsed = _SessionToolError.parse(content)
+    return parsed.summary if parsed is not None else None
 
 
 def _append_lsp_feedback(content: str, file_path: str, cwd: str) -> str:

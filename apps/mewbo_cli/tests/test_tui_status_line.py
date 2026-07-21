@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the IDE-style footer StatusLine widget + its installer (epic #149).
+"""Tests for the IDE-style footer StatusLine widget + its installer.
 
 Covers (1) the regression fix — composer and Footer no longer share the bottom
 dock — and (2) the new status line facets (host · model · cwd · branch/stash ·
@@ -151,7 +151,7 @@ def test_statusline_installer_drives_live_facets() -> None:
 
 def test_statusline_installer_feeds_ctx_gauge_from_hub_live_tokens_not_cumulative() -> None:
     """The sidebar ctx gauge reads the hub's ``root_last_input_tokens()`` — the
-    LIVE context size — never the cumulative session total (issue E8: after one
+    LIVE context size — never the cumulative session total (after one
     long turn the gauge read ~100% off a 975K cumulative counter against a
     1M-context model, when the real live context was ~4%/40K tokens)."""
 

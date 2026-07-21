@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,66 @@ def _resolve_git_url(entry: str, *, default_host: str = "github.com") -> str:
         return f"https://{host}/{path.removesuffix('.git')}.git"
 
     return f"https://{default_host}/{entry.removesuffix('.git')}.git"
+
+
+def _git_checkout(repo_dir: Path, sha: str, *, name: str) -> None:
+    """Detach *repo_dir* onto the pinned *sha*.
+
+    A marketplace ``sha`` is the AUDITED commit for that plugin; installing the
+    moving branch tip instead is a supply-chain hole (and silently drifts once
+    upstream advances past the pin). Failure surfaces as ``ValueError`` rather
+    than a raw ``CalledProcessError`` so the install route's error envelope
+    names the plugin.
+    """
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "checkout", "--quiet", sha],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or b"").decode(errors="replace").strip()
+        raise ValueError(
+            f"Plugin '{name}': cannot check out pinned commit {sha!r}: {detail}"
+        ) from exc
+
+
+def _clone_git_subdir(
+    git_url: str, cache_dir: Path, *, subdir: str, sha: str, name: str
+) -> None:
+    """Clone *git_url*, pin to *sha*, and materialize *subdir* as the plugin root.
+
+    ``{source: "url", path, sha}`` is the shape "community-managed" marketplace
+    entries use to vendor a plugin that lives in a SUBDIRECTORY of a larger
+    monorepo (e.g. ``atomic-agents`` at ``claude-plugin/atomic-agents``). The
+    repo root has no ``.claude-plugin/plugin.json`` — it sits under *subdir* — so
+    cloning the root into *cache_dir* verbatim leaves the manifest one level too
+    high and every such install fails "missing a valid plugin.json". Clone into a
+    scratch dir, then copy the *subdir* subtree so *cache_dir* IS the plugin root,
+    exactly like the local ``./`` branch — component discovery and
+    ``${CLAUDE_PLUGIN_ROOT}`` need no downstream special-casing.
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        clone_root = Path(scratch) / "repo"
+        subprocess.run(
+            ["git", "clone", git_url, str(clone_root)],
+            check=True,
+            capture_output=True,
+        )
+        if sha:
+            _git_checkout(clone_root, sha, name=name)
+        src_path = (clone_root / subdir).resolve()
+        if not src_path.is_relative_to(clone_root.resolve()):
+            raise ValueError(
+                f"Plugin '{name}' source path escapes the repository: {subdir!r}"
+            )
+        if not src_path.is_dir():
+            raise RuntimeError(
+                f"Plugin '{name}' subdirectory '{subdir}' not found in {git_url}"
+            )
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+        shutil.copytree(src_path, cache_dir)
 
 
 def marketplace_dir_name(entry: str, *, default_host: str = "github.com") -> str:
@@ -696,14 +757,24 @@ def install_plugin(
             # Shared resolver: a bare ``owner/repo`` keeps the GitHub default,
             # while ``host/owner/repo`` and full URLs target any git host.
             git_url = _resolve_git_url(repo)
+        # ``path``/``sha`` are optional on ANY git source (url- or repo-typed):
+        # ``path`` vendors a plugin from a SUBDIRECTORY of a larger repo, ``sha``
+        # pins it to an audited commit. Both absent is the common case — a repo
+        # whose plugin.json sits at the root, tracking the branch tip.
+        subdir = str(source.get("path") or "").strip("/")
+        pinned_sha = str(source.get("sha") or "").strip()
         if (cache_dir / ".git").exists():
             logging.info("Plugin {} already cloned, skipping", name)
+        elif subdir:
+            _clone_git_subdir(git_url, cache_dir, subdir=subdir, sha=pinned_sha, name=name)
         else:
             subprocess.run(
                 ["git", "clone", git_url, str(cache_dir)],
                 check=True,
                 capture_output=True,
             )
+            if pinned_sha:
+                _git_checkout(cache_dir, pinned_sha, name=name)
     else:
         raise ValueError(f"Unsupported plugin source for '{name}': {source!r}")
 

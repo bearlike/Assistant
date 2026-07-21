@@ -12,7 +12,7 @@ import java.time.format.DateTimeParseException
  * `2026-07-02T03:34:42.633140+00:00`. `Instant.parse` (`ISO_INSTANT`) only accepts a literal `Z`
  * and throws on that numeric-offset form on Android's bundled `java.time` - desktop JVMs are more
  * lenient about it, which is exactly why this shipped as three separate, silently-broken copies
- * before being unified here (see data/CLAUDE.md and the final-review history on #175).
+ * before being unified here (see data/CLAUDE.md and the final-review history).
  *
  * `OffsetDateTime.parse` accepts both `Z` and a numeric offset via the same
  * `ISO_OFFSET_DATE_TIME` formatter, so it's tried first; `Instant.parse` is a fallback for a bare

@@ -27,6 +27,22 @@ facts — don't re-derive any of these:
   GPU — skip commands + account sign-in (GSF-ID registration) steps are in the `redroid-gms` block
   of `docker-compose.yml`. MindTheGapps ships its assistant app pre-set as default; no mic in
   redroid → typed/visual assistant interaction only.
+- **Both services are resource-capped, and the caps are load-bearing.** An uncapped redroid is
+  `privileged` with no cgroup limit, so it inherits the whole host: a runaway inside Android
+  (software-GPU render storm, boot loop, leaking app) swaps the workstation to death instead of
+  dying itself — this took the host down once. `memswap_limit == mem_limit` is the half that
+  actually saves you: it denies the container ANY swap, so an overrun becomes a fast in-container
+  OOM (Android's lowmemorykiller reaps it) rather than host-wide swap thrash. Caps are sized from
+  measured idle (AOSP ~1.1G / GMS ~1.6G, ~1000 PIDs each) plus headroom. Raise one only against an
+  observed in-container OOM, never "to be safe" — an unbounded container is the bug.
+- **The GMS device is a reference-capture rig, not just an overlay prop.** `adb ... uiautomator
+  dump` on Google's own surfaces yields their *resource-ids*, which name their internal component
+  architecture outright (that's how the action-card anatomy in `DESIGN.md` §6 was derived — Google
+  literally names it `assistant_robin_action_card_{entity_header,entity_contents}`). Pair it with
+  `exec-out screencap` + pixel-sampling for tone and `wm density` for the px→dp divisor. Reach for
+  this before hand-eyeballing a reference from screenshots. Note the Gemini launcher activity is a
+  thin shell that redirects into `com.google.android.googlequicksearchbox` — resolve the launch
+  intent, don't assume the package you started is the one you're now looking at.
 
 See `apps/mewbo_aura/CLAUDE.md`'s device matrix table for the Tier-1-vs-Tier-2 (physical Pixel)
 split and the build→install→verify loop itself; this file is ops-only for the container.

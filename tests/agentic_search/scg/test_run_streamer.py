@@ -1,4 +1,4 @@
-"""Tests for :class:`RunEventStreamer` — the #77 LIVE run-event projector.
+"""Tests for :class:`RunEventStreamer` — the LIVE run-event projector.
 
 The root-cause fix for "the console sits on Starting search… for the whole run":
 the streamer subscribes to the backing session's ``SessionEventBus`` and projects

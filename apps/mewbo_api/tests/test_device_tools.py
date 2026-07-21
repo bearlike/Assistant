@@ -1,4 +1,4 @@
-"""Unit tests for ``mewbo_api.device_tools`` (Gitea #179, Phase 1).
+"""Unit tests for ``mewbo_api.device_tools`` (Phase 1).
 
 Covers ``DevicePendingCalls`` registry mechanics (consumed-once resolve,
 token check, opportunistic reaping) and ``ApiDeviceToolDispatcher.dispatch``

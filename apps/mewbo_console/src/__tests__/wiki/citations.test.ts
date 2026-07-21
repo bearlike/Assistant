@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 import {
   CitationRef,
   citationDomId,
-  fileCitations,
   parseCitations,
 } from "@/components/wiki/citations";
 
@@ -84,20 +83,6 @@ describe("CitationRef.label", () => {
   });
 });
 
-describe("fileCitations (card set)", () => {
-  it("drops graph:/wiki: refs, dedups by path+range, keeps first-seen order", () => {
-    const cards = fileCitations([
-      "graph:foo::Bar",
-      "README.md#L1-9",
-      "wiki:page",
-      "src/app.ts:42",
-      "README.md#L1-9", // dup → dropped
-      "",                // empty → dropped
-    ]);
-    expect(cards.map((c) => c.path)).toEqual(["README.md", "src/app.ts"]);
-  });
-});
-
 describe("parseCitations (discriminated card set)", () => {
   it("classifies file / wiki page / graph refs by kind", () => {
     const cards = parseCitations([
@@ -120,8 +105,7 @@ describe("parseCitations (discriminated card set)", () => {
     });
   });
 
-  it("keeps the page/graph refs that fileCitations silently drops", () => {
-    expect(fileCitations(["wiki:home", "graph:x"])).toHaveLength(0);
+  it("keeps page/graph refs rather than silently dropping them", () => {
     expect(parseCitations(["wiki:home", "graph:x"]).map((c) => c.kind)).toEqual([
       "page",
       "graph",

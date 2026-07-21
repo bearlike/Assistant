@@ -65,7 +65,7 @@ class WikiSearchPagesTool(WikiSessionTool):
         # 1. Resolve runtime and QA ctx.
         ctx = self._qa_ctx()
         if ctx is None:
-            return _err_result("internal", "wiki QA ctx not found for this session")
+            return self._ungrounded_result()
 
         # 2. Parse and validate args.
         args = self._parse_args(WikiSearchPagesArgs, action_step)
@@ -79,7 +79,7 @@ class WikiSearchPagesTool(WikiSessionTool):
             retriever = HybridRetriever(store=ctx.store, embedder=embedder)
             hits = retriever.search(ctx.slug, args.query, k=args.k, sources="pages")
         except Exception as exc:  # noqa: BLE001
-            logging.warning("wiki_search_pages retrieval error: %s", exc)
+            logging.warning("wiki_search_pages retrieval error: {}", exc)
             return _err_result("internal", f"retrieval failed: {exc}")
 
         # 4. Map to wire shape.

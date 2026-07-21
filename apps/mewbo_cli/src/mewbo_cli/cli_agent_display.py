@@ -126,7 +126,7 @@ class AgentDisplayManager:
         return result
 
     # ------------------------------------------------------------------
-    # Streamed token deltas (agent_message_delta — Gitea #137)
+    # Streamed token deltas (agent_message_delta)
     # ------------------------------------------------------------------
 
     def on_token_delta(self, text: str) -> None:
@@ -247,7 +247,7 @@ class AgentDisplayManager:
 
 
 def _build_stream_panel(text: str, frame: str) -> Panel:
-    """Render the streamed-response live preview (Gitea #137).
+    """Render the streamed-response live preview.
 
     Shows the last :data:`_STREAM_TAIL_LINES` lines of the accumulated tokens
     with a leading ellipsis when clipped — the full response prints in the

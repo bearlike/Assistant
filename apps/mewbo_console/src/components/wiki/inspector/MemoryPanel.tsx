@@ -36,7 +36,9 @@ export function MemoryPanel({
   return (
     <PanelShell kindLabel="Memory" nodeKind="Memory" layer="memory" title={label || id}>
       <Section title="Kind" hidden={!entityType}>
-        <code className="font-mono">{entityType}</code>
+        <span className="px-1.5 py-px rounded-full text-2xs bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]">
+          {entityType}
+        </span>
       </Section>
 
       <Section title="Content" hidden={!snippet}>

@@ -33,12 +33,12 @@ def init_wiki(app, runtime, hook_manager=None) -> bool:
     try:
         from mewbo_graph.wiki.store import create_wiki_store, set_wiki_store
     except ImportError as exc:
-        logging.info("wiki extras not installed (%s); skipping /v1/wiki/* routes", exc)
+        logging.info("wiki extras not installed ({}); skipping /v1/wiki/* routes", exc)
         return False
     try:
         store = create_wiki_store()
     except Exception as exc:
-        logging.warning("wiki store init failed: %s; skipping routes", exc)
+        logging.warning("wiki store init failed: {}; skipping routes", exc)
         return False
     # Pin the process-wide singleton so the relocated wiki SessionTools resolve
     # the SAME store instance (down-only) instead of reaching up into the API
@@ -48,11 +48,17 @@ def init_wiki(app, runtime, hook_manager=None) -> bool:
     from .routes import register
 
     register(app, runtime, hook_manager=hook_manager)
+    # Product-wide git credential registry — lives alongside the wiki routes
+    # (same store), but mounted at /v1/git/* since wiki is only its first
+    # consumer (task/vcs-pickup flows are expected next).
+    from .git_credentials_routes import register as register_git_credentials
+
+    register_git_credentials(app, runtime)
     # Restart durability: re-drive jobs that were running when the previous
     # process died. Their sessions are gone, but credentials are persisted
     # per-slug, so the existing refresh path rebuilds them from clone.
     _run_recovery(runtime.wiki_store, runtime)
-    logging.info("wiki routes mounted at /v1/wiki/*")
+    logging.info("wiki routes mounted at /v1/wiki/* and /v1/git/credentials*")
     return True
 
 
@@ -63,4 +69,4 @@ def _run_recovery(store, runtime) -> None:
     try:
         JobRecovery.recover_interrupted(store, runtime)
     except Exception as exc:  # pragma: no cover — recovery is best-effort
-        logging.warning("wiki: startup recovery failed (%s); skipping", exc)
+        logging.warning("wiki: startup recovery failed ({}); skipping", exc)

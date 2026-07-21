@@ -51,7 +51,7 @@ def resolve_runtime() -> Any:
     ``mewbo_api.wiki.routes._runtime``: the stores live in this package and are
     fetched **down** through their process-wide singletons. ``session_store``
     rides the seam so :func:`resolve_workspace_slug` reads the transcript without
-    re-creating a store per call (the SideStage latency/leak fix). Each tool
+    re-creating a store per call (a real latency/leak fix from a past incident). Each tool
     keeps a module-level ``_resolve_runtime`` alias delegating here, so tests can
     still patch a fake store-bearing runtime per tool without touching this.
     """
@@ -65,7 +65,7 @@ class WikiJobCtx:
     """All the state a wiki indexing tool needs given a session id.
 
     ``resume_plan`` is ``None`` for a normal (from-scratch) index. On a
-    checkpoint-aware *resume* (Gitea #54), it carries the precomputed
+    checkpoint-aware *resume*, it carries the precomputed
     "what's already done" decision so a phase tool can skip an expensive,
     already-completed phase with a one-line guard. It is rebuilt cheaply per
     tool call from the persisted resume sidecar (``store.get_resume_plan``) —
@@ -79,6 +79,11 @@ class WikiJobCtx:
     clone_dir: Path
     store: WikiStoreBase  # the shared wiki store (same library, imported down)
     resume_plan: ResumePlan | None = None
+    # The commit this job indexed, resolved once from the job record. Every
+    # phase writer stamps its artifacts with it so a completed re-index can
+    # supersede the prior commit's; ``None`` for a job whose clone never
+    # resolved a sha (the artifacts are then written commit-less).
+    commit_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,126 @@ class WikiQaCtx:
     slug: str
     session_id: str
     store: WikiStoreBase  # the shared wiki store (same library, imported down)
+
+
+@dataclass(frozen=True)
+class SessionProject:
+    """The repo-identifying facts an ORDINARY session carries about its project.
+
+    Grounding a plain task session in a wiki needs a repo identity, and neither a
+    config project (name + path) nor a managed worktree records a repo URL
+    anywhere a library below the app can read — the app derives one by shelling
+    out to ``git remote``, which is an app-layer concern this package must not
+    reach up into. So identity is recovered from the session's own two durable
+    signals instead, exactly as :class:`~mewbo_core.session_provenance.SessionOrigin`
+    recovers origin: the transcript's context events and the session's tags.
+
+    ``owner_repo`` comes from a ``vcs:<owner/repo>:<kind>:<n>`` pickup tag and is
+    the precise key; ``repo`` is a bare project name and is the weak one. Both
+    are match keys against the wiki store's own slugs — the store is the
+    authority on what "indexed" means, so nothing here has to guess a host.
+    """
+
+    owner_repo: str | None = None
+    repo: str | None = None
+
+    @staticmethod
+    def session_store_of(runtime: Any) -> SessionStoreBase | None:
+        """Return the transcript store carried on *runtime*, else the singleton.
+
+        Never ``create_session_store()`` per call — that re-opened a Mongo client
+        and leaked a pool on every retrieval call. ``None`` when no session
+        backend is available at all.
+        """
+        store = getattr(runtime, "session_store", None)
+        if store is not None:
+            return store
+        try:
+            return get_session_store()
+        except Exception:  # pragma: no cover — no session backend available
+            return None
+
+    @classmethod
+    def for_session(cls, session_id: str, runtime: Any) -> SessionProject:
+        """Read *session_id*'s project facts off its transcript + tags.
+
+        The store arrives through *runtime* (the down-only seam) rather than
+        being reached for, mirroring ``ResumePlan.build(store, job)``. Every read
+        is best-effort: an unknown session or a dead backend yields an empty
+        instance, never a raise into a tool call.
+        """
+        store = cls.session_store_of(runtime)
+        if store is None:
+            return cls()
+        repo: str | None = None
+        try:
+            events = store.load_transcript(session_id)
+        except Exception:  # pragma: no cover — unknown session / backend error
+            events = []
+        for event in events:
+            if event.get("type") != "context":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            # ``repo`` (a managed worktree's PARENT project name) is preferred
+            # over ``project``, which for such a session is an opaque
+            # ``managed:<uuid>`` that names no repository. Last write wins, the
+            # same reducer ``resolve_workspace_slug`` uses.
+            candidate = payload.get("repo") or payload.get("project")
+            if isinstance(candidate, str) and candidate.strip():
+                cleaned = candidate.strip()
+                if not cleaned.startswith("managed:"):
+                    repo = cleaned
+        owner_repo: str | None = None
+        try:
+            tags = store.tags_for_session(session_id)
+        except Exception:  # pragma: no cover — backend error
+            tags = []
+        for tag in tags:
+            parts = tag.split(":")
+            if len(parts) >= 2 and parts[0] == "vcs" and "/" in parts[1]:
+                owner_repo = parts[1]
+        return cls(owner_repo=owner_repo, repo=repo)
+
+    @property
+    def label(self) -> str:
+        """A human label for this project, for an operator-facing message."""
+        return self.owner_repo or self.repo or "this session"
+
+    def resolve_slug(self, wiki_store: Any) -> str | None:
+        """Return the indexed wiki slug this project matches, or ``None``.
+
+        A wiki slug is ``host/owner/repo``, so a candidate is matched against the
+        slug's TAIL — two segments for the precise ``owner_repo`` key, one for
+        the bare ``repo`` name — and the precise key is tried first.
+
+        **An ambiguous match resolves to nothing**, never to an arbitrary winner:
+        the same repo name legitimately appears under two owners or two hosts,
+        and answering a question from the wrong repository's wiki is worse than
+        answering it from none (the rule the scip resolver already follows for
+        ambiguous descriptors).
+        """
+        try:
+            slugs = [p.slug for p in wiki_store.list_projects()]
+        except Exception:  # pragma: no cover — store unavailable
+            return None
+        for key, depth in ((self.owner_repo, 2), (self.repo, 1)):
+            if not key:
+                continue
+            wanted = key.strip("/").lower()
+            hits = {s for s in slugs if self._tail(s, depth) == wanted}
+            if len(hits) == 1:
+                return hits.pop()
+            if hits:
+                return None
+        return None
+
+    @staticmethod
+    def _tail(slug: str, depth: int) -> str:
+        """Return *slug*'s last *depth* segments, lowercased."""
+        segments = [s for s in slug.lower().split("/") if s]
+        return "/".join(segments[-depth:])
 
 
 _DEFAULT_CLONE_ROOT = "/tmp/mewbo/wiki/clones"
@@ -136,6 +261,7 @@ def resolve_job_ctx(session_id: str, runtime: Any) -> WikiJobCtx | None:
         clone_dir=_clone_dir_for(job_id),
         store=store,
         resume_plan=resume_plan,
+        commit_sha=job.commit_sha,
     )
 
 
@@ -156,12 +282,9 @@ def resolve_workspace_slug(session_id: str, runtime: Any) -> str | None:
     leaked a pool every retrieval call). Returns ``None`` if no workspace was
     scoped (a plain session).
     """
-    session_store = getattr(runtime, "session_store", None)
+    session_store = SessionProject.session_store_of(runtime)
     if session_store is None:
-        try:
-            session_store = get_session_store()
-        except Exception:  # pragma: no cover — no session backend available
-            return None
+        return None
     try:
         events = session_store.load_transcript(session_id)
     except Exception:  # pragma: no cover — unknown session / backend error
@@ -179,12 +302,22 @@ def resolve_workspace_slug(session_id: str, runtime: Any) -> str | None:
 def resolve_qa_ctx(session_id: str, runtime: Any) -> WikiQaCtx | None:
     """Return the WikiQaCtx for *session_id*, or ``None`` if not grounded.
 
-    Two-tier resolution (one resolver, so ``_base._qa_ctx`` stays unchanged):
-    a registered QA answer (``find_qa_by_session``) wins; otherwise a
-    structured-response session scoped to a workspace
-    (:func:`resolve_workspace_slug`) yields a slug-only ctx (``answer_id=None``)
-    so the retrieval tools ground in the workspace. ``None`` only when neither
-    holds (a plain, unscoped session).
+    Three-tier resolution, strongest binding first (one resolver, so
+    ``_base._qa_ctx`` stays unchanged):
+
+    1. a registered QA answer (``find_qa_by_session``);
+    2. a structured-response session scoped to a workspace
+       (:func:`resolve_workspace_slug`);
+    3. an ORDINARY task session whose own project is an indexed wiki
+       (:meth:`SessionProject.resolve_slug`).
+
+    Tiers 2 and 3 both yield a slug-only ctx (``answer_id=None``) so the
+    read/navigate tools ground while the QA-emit/event tools keep guarding on
+    ``answer_id`` — tier 3 is deliberately shape-identical to tier 2, so every
+    tool already safe under one is safe under the other. ``None`` now means only
+    that the session's project has no wiki indexed (or it has no project at all),
+    which is an EXPECTED state rather than a fault — see
+    ``WikiSessionTool._ungrounded_result``.
     """
     store = getattr(runtime, "wiki_store", None)
     if store is None:
@@ -195,6 +328,10 @@ def resolve_qa_ctx(session_id: str, runtime: Any) -> WikiQaCtx | None:
         # workspace slug on the transcript). Retrieval tools use ctx.slug; the
         # QA-emit/event tools must guard ``if ctx.answer_id is None``.
         slug = resolve_workspace_slug(session_id, runtime)
+        if slug is None:
+            # Last: an ordinary task session working IN a repo that happens to
+            # have a wiki. Nothing scopes it, so its own project is the binding.
+            slug = SessionProject.for_session(session_id, runtime).resolve_slug(store)
         if slug is None:
             return None
         return WikiQaCtx(
@@ -240,6 +377,30 @@ def emit_phase(ctx: WikiJobCtx, name: str) -> None:
         pass
 
 
+def emit_phase_once(ctx: WikiJobCtx, name: str) -> None:
+    """Advance to phase *name* only if the job is not already in it.
+
+    The seam for a phase whose work is done by a FAN-OUT rather than by one
+    boundary tool: every worker calls this, the first one moves the job, the rest
+    are no-ops — without the guard the event log would carry one ``phase`` event
+    per worker.
+
+    It replaces the alternative that was tried first: stamping the phase from the
+    tail of the PRECEDING tool. That marks a phase as started at the moment its
+    predecessor ENDED, so a run that died in the gap reported a phase whose work
+    never began at all (a job sat at ``enrich`` after being cancelled 43ms after
+    the graph build returned). A phase must be stamped by work that has actually
+    started.
+    """
+    try:
+        job = ctx.store.get_job(ctx.job_id)
+    except Exception:
+        job = None
+    if job is not None and getattr(job, "phase", None) == name:
+        return
+    emit_phase(ctx, name)
+
+
 def emit_log(ctx: WikiJobCtx, text: str, *, level: str = "info") -> None:
     """Append a free-form ``log`` event for the indexing timeline."""
     try:
@@ -280,6 +441,7 @@ def resolve_qa_clone_dir(slug: str, store: Any) -> Path | None:
 
 
 __all__ = [
+    "SessionProject",
     "WikiJobCtx",
     "WikiQaCtx",
     "get_session_store",
@@ -289,5 +451,6 @@ __all__ = [
     "resolve_workspace_slug",
     "resolve_qa_clone_dir",
     "emit_phase",
+    "emit_phase_once",
     "emit_log",
 ]

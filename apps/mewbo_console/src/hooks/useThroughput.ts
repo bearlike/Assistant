@@ -43,10 +43,10 @@ function classifyPhase(running: boolean, signal: PhaseSignal | null): string | u
 }
 
 /**
- * Live token-throughput + phase readout for the run telemetry (Gitea #174).
+ * Live token-throughput + phase readout for the run telemetry.
  * Differences the in-flight turn's streamed output over wall-clock into a
  * tok/s rate, and classifies the run phase from the tail of the polled event
- * feed — mirroring the CLI's status semantics (#173): streaming while deltas
+ * feed — mirroring the CLI's status semantics: streaming while deltas
  * land, thinking on an open LLM call, tool work between calls, stalled after a
  * quiet spell.
  *

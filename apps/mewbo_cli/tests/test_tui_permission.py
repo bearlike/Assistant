@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pilot + unit tests for PermissionService, PermissionModal, and the
-shift+tab mode cycle in MewboApp (issue #154, epic #149).
+shift+tab mode cycle in MewboApp.
 
 Pattern mirrors test_tui_app.py: asyncio.run(_run()) wrappers around
 ``app.run_test()`` Pilot sessions; plain unit tests for pure logic.

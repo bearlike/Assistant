@@ -1,0 +1,235 @@
+# demo/docker-compose.demo.yml — ephemeral, isolated demo stack.
+#
+# Every service here is DELIBERATELY separate from the root docker-compose.yml
+# stack: default bridge network (not host), no named data volumes (a clean
+# `mongo` on every `up` is what makes seeded fixtures + captured screenshots
+# reproducible), and image tags suffixed `:demo` so a build here never
+# clobbers the `ghcr.io/bearlike/*:latest` tags the deployed stack runs.
+# Never point this file at the deployed stack's ports (5125/3001/27018 are
+# taken by it) or its network.
+name: mewbo-demo
+
+services:
+  mongo:
+    image: mongo:7
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # No auth env vars (the demo network is isolated from everything else)
+    # and no volume — every `up` starts from a blank database so the seeded
+    # fixture is the ONLY state, deterministically.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  api:
+    image: mewbo-api:demo
+    pull_policy: missing
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      args:
+        BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+        WIKI_EXTRAS: "1"
+        SCIP_EXTRAS: "0"
+    restart: "no"
+    environment:
+      - MEWBO_MONGODB_URI=mongodb://mongo:27017
+      - MEWBO_MONGODB_DATABASE=${DEMO_MONGODB_DATABASE}
+      - MASTER_API_TOKEN=${DEMO_API_KEY}
+      - MEWBO_HOME=/app/data
+      # Render the fixture source catalog on GET /api/agentic_search/sources so
+      # seeded workspaces resolve their integration chips (the store's own
+      # "seed if empty" auto-seed is suppressed: our seeder fills the store
+      # before the first search request).
+      - MEWBO_AGENTIC_SEARCH_SEED=1
+    volumes:
+      - ./configs:/app/configs:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # Authed GET against GET /api/sessions — the cheapest Mongo-backed route
+    # that proves both the api process AND its Mongo connection are up,
+    # without touching the LLM proxy (which does not exist on this network;
+    # /api/models would call out and hang). curl is present on the base image
+    # (docker/Dockerfile.base installs it as a system package).
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "-H",
+          "X-Api-Key: ${DEMO_API_KEY}",
+          "http://localhost:5125/api/sessions",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "3.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+
+  console:
+    image: mewbo-console:demo
+    pull_policy: missing
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.console
+    restart: "no"
+    environment:
+      # Baked into /usr/share/nginx/html/runtime-config.js at container START
+      # by docker/console-entrypoint.sh (image entrypoint.d hook) — a plain
+      # env var, no rebuild needed. VITE_API_MODE/BASE_URL/USE_PROXY are left
+      # unset: the console talks same-origin through this nginx's own proxy
+      # (see demo/nginx-console.demo.conf), matching the deployed stack.
+      - VITE_API_KEY=${DEMO_API_KEY}
+    volumes:
+      # Override ONLY the proxy_pass targets (127.0.0.1:5125 -> api:5125) —
+      # the image's baked-in docker/nginx-console.conf assumes host networking.
+      - ./nginx-console.demo.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:${DEMO_CONSOLE_PORT:-3210}:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
+
+  # One-shot fixture loader. `docker compose --profile seed run --rm seed`
+  # (see root Makefile `demo-seed`) — never started by a bare `up`.
+  seed:
+    image: mewbo-api:demo
+    pull_policy: missing
+    profiles: ["seed"]
+    # mewbo_demo_seeder is written straight through the store contracts
+    # (SessionStoreBase et al.), not raw Mongo documents — see demo/seeder/
+    # (owned separately). /app/.venv/bin/python is the locked venv Dockerfile.api
+    # provisions via `uv sync --frozen`; PATH already puts it first, but the
+    # override is explicit since this replaces the image's gunicorn ENTRYPOINT.
+    entrypoint:
+      [
+        "/app/.venv/bin/python",
+        "-m",
+        "mewbo_demo_seeder",
+        "--bundle",
+        "/demo/seeder/bundles/console-poc.json",
+        "--wiki-bundle",
+        "/demo/seeder/bundles/wiki-poc.json",
+        "--search-bundle",
+        "/demo/seeder/bundles/search-poc.json",
+      ]
+    environment:
+      - PYTHONPATH=/demo/seeder/src
+      - DEMO_T0=${DEMO_T0}
+      - MEWBO_MONGODB_URI=mongodb://mongo:27017
+      - MEWBO_MONGODB_DATABASE=${DEMO_MONGODB_DATABASE}
+      - MEWBO_HOME=/tmp
+      # The wiki/SCG/agentic-search stores this process constructs are
+      # config-driven; the mongodb driver + fixture source catalog must be on
+      # for the seed process too (the mounted app.json points them at the demo
+      # mongo/db, matching what the api reads back).
+      - MEWBO_STORAGE_DRIVER=mongodb
+      - MEWBO_AGENTIC_SEARCH_SEED=1
+      # Post-seed notification settling (materialise + dismiss over REST) so
+      # captures never race a completion toast — see demo/seeder settle.py.
+      - DEMO_API_BASE=http://api:5125
+      - DEMO_API_KEY=${DEMO_API_KEY}
+    volumes:
+      # Mount the same api config so the config-driven wiki/scg/agentic-search
+      # stores this process builds resolve to the SAME demo database the api
+      # reads from (demo/configs/app.json → mongodb://mongo:27017 / mewbo_demo).
+      - ./configs:/app/configs:ro
+      - ./seeder:/demo/seeder:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # One-shot screenshot/recording capture. `docker compose --profile shots run
+  # --rm shots` (see root Makefile `demo-shots-web`) — never started by a bare
+  # `up`. Pinned to the EXACT @playwright/test version the console locks
+  # (apps/mewbo_console/package-lock.json), so the browser build always
+  # matches the test runner's protocol expectations.
+  # Fresh named volumes are created root-owned, but `shots` runs as the host
+  # user so screenshots land host-owned — this root one-shot hands the npm
+  # cache volume to that user before any npm process touches it.
+  shots-cache-init:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    profiles: ["shots"]
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /cache"]
+    volumes:
+      - npm-cache:/cache
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+
+  shots:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    profiles: ["shots"]
+    user: "1000:1000"
+    environment:
+      - HOME=/tmp
+      - npm_config_cache=/tmp/npm-cache
+      - DEMO_T0=${DEMO_T0}
+      - DEMO_CONSOLE_URL=http://console:3001
+      - CI=1
+    volumes:
+      # rw: captured screenshots/recordings land under docs/assets/img in the
+      # checked-out tree.
+      - ..:/work
+      - npm-cache:/tmp/npm-cache
+    working_dir: /work/apps/mewbo_console
+    command: >
+      bash -c "npm ci --no-audit --no-fund && npx playwright test --config=playwright.demo.config.ts"
+    depends_on:
+      shots-cache-init:
+        condition: service_completed_successfully
+      console:
+        condition: service_started
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+
+volumes:
+  npm-cache:

@@ -46,6 +46,7 @@ class SearchRun:
         project: str | None = None,
         tier: str | None = None,
         model: str | None = None,
+        fallback_models: tuple[str, ...] | None = None,
         source_platform: str | None = None,
     ) -> RunPayload | None:
         """Create + launch a run for *query*. Returns None if the workspace is gone.
@@ -56,10 +57,12 @@ class SearchRun:
         knob) defaults to the configured ``scg`` default and rides the record
         so the runner reads it per run; ``model`` (an explicit per-run
         override) rides the same way and wins over the tier's configured
-        model. ``source_platform`` (the originating
+        model. ``fallback_models`` is an optional per-run cross-model
+        ladder; ``None`` inherits the configured fallback policy, exactly like
+        ``model``. ``source_platform`` (the originating
         client surface — the route forwards ``request_surface()``) is passed to
         the runner so the orchestrated drive stamps ``surface:<platform>`` on the
-        Langfuse trace (#77). A synchronous runner (echo) returns the terminal
+        Langfuse trace. A synchronous runner (echo) returns the terminal
         payload and the history entry is patched here; an async runner
         (orchestrated) returns a ``running`` snapshot and its worker patches
         the history entry when it settles.
@@ -70,7 +73,7 @@ class SearchRun:
 
         run_id = _new_run_id()
         session_id = f"agentic_search:run:{run_id}"
-        # Run-grant resolution (#75): the workspace's PERSISTED virtual MCP config
+        # Run-grant resolution: the workspace's PERSISTED virtual MCP config
         # is the source of truth for what a run may reach — resolve the grant from
         # its attached server names when one exists, else fall back to the
         # workspace's raw ``sources`` against the live catalog (current behavior).
@@ -90,6 +93,7 @@ class SearchRun:
             # (the config default is Literal-typed at its definition).
             tier=cast("SearchTierLiteral", tier or ScgConfig.default_tier()),
             model=model,
+            fallback_models=fallback_models,
             created_at=now,
             started_at=now,
             source_ids=list(workspace.sources),
@@ -121,7 +125,7 @@ class SearchRun:
                 source_platform=source_platform,
             )
         except Exception as exc:  # pragma: no cover — runner is stubbed in tests
-            logging.warning("search run %s failed: %s", run_id, exc)
+            logging.warning("search run {} failed: {}", run_id, exc)
             store.append_run_event(
                 run_id, events.error(code="internal", message=str(exc))
             )
@@ -174,12 +178,44 @@ class SearchRun:
                 record.workspace_id, run_id, status="cancelled", results=0
             )
             # Real runner sessions are cancellable; echo placeholders are not.
-            if runtime is not None and not record.session_id.startswith("agentic_search:"):
+            if runtime is not None and not record.is_echo_backed:
                 try:
                     runtime.cancel(record.session_id)
                 except Exception as exc:  # pragma: no cover — best-effort
-                    logging.warning("runtime.cancel(%s) failed: %s", record.session_id, exc)
+                    logging.warning("runtime.cancel({}) failed: {}", record.session_id, exc)
         return appended
+
+    @staticmethod
+    def reconcile_after_recovery(
+        run_id: str, *, store: AgenticSearchStoreBase, runtime: Any
+    ) -> RunPayload | None:
+        """Amend a ``failed`` run whose backing session went on to complete.
+
+        The public entry point for a session-recovery caller (e.g. a
+        session-end hook, or a ``/recover`` completion path): a run this class
+        settled ``failed`` normally stays wrong forever (``_already_settled``),
+        discarding real work when the backing session was later recovered and
+        actually finished. This looks up the run and delegates to the active
+        runner's own ``reconcile_after_recovery`` when it exposes one — only
+        :class:`~mewbo_api.agentic_search.scg.orchestrated_runner.OrchestratedSearchRunner`
+        does, since the echo runner has no real backing session to recover.
+        Returns the amended payload, or ``None`` when there is nothing to
+        amend (unknown run, already non-``failed``, an echo-backed run, or the
+        session did not actually reach ``completed``). Never raises — a
+        reconciliation attempt must not surface as a caller-visible failure.
+        """
+        record = store.get_run(run_id)
+        if record is None or runtime is None or not record.is_amendable_to_completed():
+            return None
+        runner = get_search_runner()
+        reconcile = getattr(runner, "reconcile_after_recovery", None)
+        if reconcile is None:
+            return None
+        try:
+            return reconcile(record, store=store, runtime=runtime)
+        except Exception as exc:  # pragma: no cover — best-effort reconciliation
+            logging.warning("reconcile_after_recovery({}) failed: {}", run_id, exc)
+            return None
 
 
 __all__ = ["SearchRun"]

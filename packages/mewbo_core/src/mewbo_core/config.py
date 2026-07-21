@@ -20,8 +20,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -39,7 +41,16 @@ from mewbo_core.llm_resilience import (
     DEFAULT_RETRY_AFTER_CAP,
     DEFAULT_TIMEOUT,
     DEFAULT_TURN_DEADLINE,
+    DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL,
+    DEFAULT_WRITE_PROGRESS_MAX_EVENTS,
+    DEFAULT_WRITE_PROGRESS_THRESHOLD,
 )
+
+# Imported here (not redefined) so the verifier-gate default lives in ONE place
+# — ``verification.py`` owns it, config references it, same pattern as the
+# write-progress constants above. ``verification.py`` deliberately imports
+# nothing from core at module top, so this import cannot cycle.
+from mewbo_core.verification import DEFAULT_VERIFICATION_TIMEOUT
 
 _APP_CONFIG_PATH_OVERRIDE: Path | None = None
 _MCP_CONFIG_PATH_OVERRIDE: Path | None = None
@@ -65,7 +76,7 @@ def _resolve_config_path(filename: str) -> Path:
     """Find a config file by walking up from CWD, then ``MEWBO_HOME``.
 
     The first ``configs/<filename>`` found while ascending from the current
-    directory wins — so running ``mewbo`` from a subdirectory (or a parent
+    directory wins, so running ``mewbo`` from a subdirectory (or a parent
     that contains the project) still loads the project's config instead of
     silently falling back to built-in defaults. The ascent stops at the git
     root (or the filesystem root), mirroring project-instruction discovery
@@ -145,17 +156,40 @@ class RuntimeConfig(BaseModel):
         },
     )
 
-    envmode: str = Field("dev", description="Environment mode (e.g. dev, prod).", examples=["dev"])
+    envmode: str = Field(
+        "dev",
+        description=(
+            "Free-text label for this deployment (e.g. dev, staging, prod). Its "
+            "only effect is being stamped onto every Langfuse trace as the "
+            "`release` tag, so you can filter and compare traces across "
+            "environments."
+        ),
+        examples=["dev"],
+    )
     log_level: str = Field(
         "DEBUG",
         description="Logging verbosity. One of DEBUG, INFO, WARNING, ERROR, CRITICAL.",
         examples=["INFO"],
     )
     log_style: str = Field(
-        "", description="Log output style for the core engine (empty for default).", examples=[""]
+        "",
+        description=(
+            "Legacy override for the CLI's terminal log format. Only the literal "
+            "value 'dark' has any effect (dims the log line style for a dark "
+            "background); anything else uses the plain format. Takes priority "
+            "over cli_log_style when set; leave empty to use that instead."
+        ),
+        examples=[""],
     )
     cli_log_style: str = Field(
-        "dark", description="Rich console log theme for the CLI (dark or light).", examples=["dark"]
+        "dark",
+        description=(
+            "CLI terminal log format: only the literal value 'dark' has any "
+            "effect (dims the log line style for a dark background); any other "
+            "value uses the plain format. Overridden by runtime.log_style when "
+            "that's set."
+        ),
+        examples=["dark"],
     )
     preflight_enabled: bool = Field(
         False,
@@ -242,8 +276,8 @@ class RuntimeConfig(BaseModel):
 class FallbackConfig(BaseModel):
     """Opt-in cross-model fallback policy.
 
-    Disabled by default so a run never fans out to a different model — with
-    different cost, latency, output style and prompt-cache behaviour — without
+    Disabled by default so a run never fans out to a different model, with
+    different cost, latency, output style and prompt-cache behaviour, without
     an explicit opt-in. When disabled, an error that is hopeless on the current
     model (e.g. quota exhausted) halts cleanly for one-click recovery instead.
     """
@@ -264,6 +298,33 @@ class FallbackConfig(BaseModel):
         default_factory=list,
         description="Ordered fallback model IDs, tried after the primary is exhausted.",
         examples=[["gpt-5.4", "gemini-2.5-pro"]],
+    )
+    self_steering: bool = Field(
+        False,
+        description=(
+            "Allow the agent to steer its own model routing at runtime via the "
+            "model_control tool (switch down the declared fallback ladder, or up "
+            "when allow_upgrade is set). Off by default; the automatic fallback "
+            "ladder still operates regardless. Every deliberate switch is bounded "
+            "by max_switches and the existing retry budget / circuit breaker."
+        ),
+    )
+    max_switches: int = Field(
+        2,
+        ge=0,
+        description=(
+            "Maximum deliberate model switches the model_control tool may perform "
+            "in one run. 0 disables switching while leaving status/list readable."
+        ),
+    )
+    allow_upgrade: bool = Field(
+        False,
+        description=(
+            "Permit model_control switches UP the declared ladder (toward the "
+            "primary). Off by default, so self-steering is a one-way ratchet "
+            "downward — the direction that heals a failing primary without "
+            "re-provoking it."
+        ),
     )
 
 
@@ -303,7 +364,9 @@ class LLMConfig(BaseModel):
     action_plan_model: str = Field(
         "",
         description=(
-            "Model ID for action-plan generation. Falls back to default_model when empty."
+            "Model ID the orchestrator uses to generate a session's initial plan "
+            "and, when no explicit model is passed in, as that session's default "
+            "model. Falls back to default_model when empty."
         ),
         examples=["anthropic/claude-sonnet-4-6"],
     )
@@ -363,7 +426,12 @@ class LLMConfig(BaseModel):
     )
     reasoning_effort_models: list[str] = Field(
         default_factory=list,
-        description="Model name patterns that support the reasoning_effort parameter.",
+        description=(
+            "Additional model IDs (or 'prefix*' patterns) that should receive the "
+            "reasoning_effort parameter, on top of the built-in match for gpt-5, "
+            "o3, Claude, and Gemini models. Use this to opt in a model the "
+            "built-in detection doesn't recognize yet."
+        ),
     )
     structured_patch_models: list[str] = Field(
         default_factory=list,
@@ -439,7 +507,7 @@ class LLMConfig(BaseModel):
         """Return *model* if the proxy still advertises it, else *fallback*.
 
         Guards a persisted/stale model id (e.g. a wiki reindex replaying an old
-        submission) against a model the proxy has since retired — that would
+        submission) against a model the proxy has since retired, which would
         otherwise fast-fail the whole run on an invalid-model 400. Best-effort:
         if the model list can't be fetched we trust *model* (the caller's
         retry/fallback ladder is the backstop). The provider prefix is ignored
@@ -827,7 +895,7 @@ class PermissionsConfig(BaseModel):
 
 
 class CliRemoteConfig(BaseModel):
-    """Opt-in remote endpoint for the terminal CLI — CLI-scoped ONLY.
+    """Opt-in remote endpoint for the terminal CLI; CLI-scoped ONLY.
 
     Every other surface ignores this block. When ``base_url`` is set the CLI is
     still a strictly-local engine (the run loop + authoritative JSONL transcript
@@ -847,7 +915,7 @@ class CliRemoteConfig(BaseModel):
     base_url: str = Field(
         "",
         description=(
-            "Base URL of the remote Mewbo deployment — a reverse-proxy root that "
+            "Base URL of the remote Mewbo deployment, a reverse-proxy root that "
             "serves the REST API under ``/api`` and the Mewbo MCP server under "
             "``/mcp``. Empty (default) ⇒ the CLI is fully local."
         ),
@@ -940,6 +1008,206 @@ class ChatConfig(BaseModel):
         return max(parsed, 1)
 
 
+class APIAuthSessionConfig(BaseModel):
+    """Browser session/cookie settings for federated logins."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Session"})
+
+    cookie_name: str = Field(
+        "mewbo_session",
+        description="Name of the browser session cookie issued after a federated login.",
+    )
+    ttl_seconds: int = Field(
+        28800,
+        ge=1,
+        description="Lifetime of a browser session, in seconds.",
+    )
+    secret: str = Field(
+        "",
+        description=(
+            "Signing secret for the browser session cookie. Required once any "
+            "non-API-key authenticator is configured. Write-only: never returned "
+            "by the config API."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+
+
+class APIAuthScimConfig(BaseModel):
+    """SCIM 2.0 provisioning settings."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "SCIM"})
+
+    enabled: bool = Field(
+        False,
+        description="Whether the SCIM 2.0 provisioning endpoint is served.",
+    )
+    secret: str = Field(
+        "",
+        description=(
+            "Bearer secret an identity provider presents to the SCIM endpoint. "
+            "Write-only: never returned by the config API."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+
+
+class AuthenticatorEntry(BaseModel):
+    """One identity source in ``api.auth.authenticators``.
+
+    Deliberately PERMISSIVE (``extra="allow"``): the authoritative model is the
+    identity kernel's discriminated authenticator union, which sits a layer
+    above core and must never be imported down into it. Every kind-specific
+    setting therefore rides through here untyped and is re-validated STRICTLY —
+    per-kind, ``extra="forbid"`` — when the server builds its auth settings at
+    startup, which refuses to boot on an invalid entry. So this model is not a
+    second validator and must not grow into one.
+
+    What it DOES declare is the plaintext credentials, because the config API
+    redacts by SCHEMA: a field carries ``x-secret`` or its value is returned to
+    every caller holding ``config.read``. An untyped ``dict`` contributes no
+    schema, so nothing marked these and they were served in the clear. Core
+    knows these two NAMES — a stable wire contract it shares with the identity
+    kernel — without knowing which kind each belongs to or what it means, which
+    is precisely the sliver of knowledge redaction needs and no more.
+    ``kind``/``name`` stay typed so an entry is self-describing.
+    """
+
+    model_config = ConfigDict(extra="allow", json_schema_extra={"title": "Authenticator"})
+
+    name: str = Field(
+        ...,
+        description="Unique label for this identity source, used in logs and the admin UI.",
+    )
+    kind: str = Field(
+        ...,
+        description=(
+            "Which authenticator type this entry configures: `api_key`, `oidc`, "
+            "`trusted_header`, `ldap`, or `saml`. Selects which further settings "
+            "the entry must carry."
+        ),
+    )
+    client_secret: str | None = Field(
+        None,
+        description=(
+            "OIDC client secret issued by the identity provider. "
+            "Write-only: never returned by the config API."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+    bind_password: str | None = Field(
+        None,
+        description=(
+            "Password for the LDAP service account used to search the directory. "
+            "Write-only: never returned by the config API."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+
+    @model_serializer(mode="wrap")
+    def _drop_unset_credentials(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Serialize, omitting the credential fields this entry's kind lacks.
+
+        Declaring both credentials on one model means a plain dump stamps
+        ``bind_password: None`` onto an OIDC entry and ``client_secret: None``
+        onto an LDAP one. That dump is fed straight back into the strict
+        per-kind union at startup, where an unexpected key is a hard boot
+        failure — so a null here is not cosmetic noise, it would stop the
+        server. Absent and null must stay distinguishable for these two.
+        """
+        data = handler(self)
+        for credential in ("client_secret", "bind_password"):
+            if data.get(credential) is None:
+                data.pop(credential, None)
+        return data
+
+
+class APIAuthConfig(BaseModel):
+    """Identity & access management for the REST API (opt-in).
+
+    Off by default: with no ``auth`` block — or ``enabled: false`` — every
+    request resolves to the built-in full-power identity and the server behaves
+    exactly as it did before IAM existed. The union-shaped fields
+    (``authenticators``, the group mappings, ``bootstrap``) are carried here as
+    open objects and validated in full against the identity kernel's typed models
+    at server startup, which refuses to boot on an invalid block. These settings
+    are documented in full in ``docs/authentication.md``.
+    """
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Authentication"})
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Master switch for identity & access management. When off (the "
+            "default), every request resolves to the built-in full-power identity "
+            "and the server behaves exactly as it did before IAM. Turn on only "
+            "after configuring at least one authenticator."
+        ),
+    )
+    authenticators: list[AuthenticatorEntry] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of identity sources (local API keys, OIDC, trusted "
+            "reverse-proxy headers, LDAP, SAML). Each entry is an object whose "
+            "`kind` field selects the authenticator type, plus that type's own "
+            "settings. Validated in full at server startup; an invalid entry stops "
+            "the server from booting. Each authenticator type's own settings are "
+            "documented in `docs/authentication.md`."
+        ),
+    )
+    role_mappings: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Rules mapping identity-provider group names to Mewbo roles at login: "
+            "an object with an ordered `rules` list and a `default_role` applied "
+            "when no rule matches. The rule format is documented in "
+            "`docs/authentication.md`."
+        ),
+    )
+    team_mappings: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Rules mapping identity-provider group names to team slugs at login: "
+            "an object with an ordered `rules` list. The rule format is documented in "
+            "`docs/authentication.md`."
+        ),
+    )
+    bootstrap: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Cold-start admin rule: grants the admin role to the first users "
+            "matching an identity-provider group or an explicit subject allowlist, "
+            "so an administrator exists before any role has been assigned. Documented "
+            "in `docs/authentication.md`."
+        ),
+    )
+    session: APIAuthSessionConfig = Field(
+        default_factory=lambda: APIAuthSessionConfig.model_validate({}),
+        description="Browser session/cookie settings for federated logins.",
+    )
+    avatars: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Avatar-resolution policy: whether to fall back to Gravatar for users "
+            "without a profile picture, and the default image style. Documented in "
+            "`docs/authentication.md`."
+        ),
+    )
+    scim: APIAuthScimConfig = Field(
+        default_factory=lambda: APIAuthScimConfig.model_validate({}),
+        description="SCIM 2.0 provisioning settings.",
+    )
+    audit: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Auth audit-trail settings: an object with an `enabled` flag; on by "
+            "default once IAM is enabled. The events recorded are listed in "
+            "`docs/authentication.md`."
+        ),
+    )
+
+
 class APIConfig(BaseModel):
     """REST API authentication."""
 
@@ -962,7 +1230,26 @@ class APIConfig(BaseModel):
             "Allow callers to anchor sessions in an arbitrary host path via the "
             "`cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. "
             "Off by default; enable only for trusted external workspace managers "
-            "such as Grove that manage their own worktrees."
+            "that manage their own worktrees."
+        ),
+    )
+    apps_token_secret: str = Field(
+        "",
+        description=(
+            "Signing secret for Mewbo Apps render tokens — the short-lived, "
+            "app-scoped read tokens the served app frontend presents on the "
+            "read-only data/system endpoints. Set this to sign (and rotate) app "
+            "tokens independently of the master token; when left empty it falls "
+            "back to the master token, logging one startup warning."
+        ),
+        json_schema_extra={"x-secret": True},
+    )
+    auth: APIAuthConfig = Field(
+        default_factory=lambda: APIAuthConfig.model_validate({}),
+        description=(
+            "Identity & access management (opt-in; off by default). Configures "
+            "authenticators, roles, and sessions. Documented in "
+            "`docs/authentication.md`."
         ),
     )
 
@@ -975,7 +1262,15 @@ class HookEntry(BaseModel):
     type: Literal["command", "http"] = Field(
         "command", description="Hook type: 'command' (shell) or 'http' (POST to URL)."
     )
-    command: str = Field("", description="Shell command to execute (type=command).")
+    command: str = Field(
+        "",
+        description=(
+            "Shell command run via subprocess with shell=True, on the host "
+            "running the API/CLI process and with that process's own "
+            "privileges: no sandboxing, no approval prompt. Only point this "
+            "at trusted, version-controlled scripts. (type=command)"
+        ),
+    )
     url: str = Field("", description="Target URL for HTTP POST (type=http).")
     headers: dict[str, str] = Field(
         default_factory=dict, description="Extra HTTP headers (type=http)."
@@ -998,10 +1293,24 @@ class HookEntry(BaseModel):
 
 
 class HooksConfig(BaseModel):
-    """External shell hooks fired during the session lifecycle."""
+    """External shell hooks fired during the session lifecycle.
+
+    Command hooks run unsandboxed shell commands with the API/CLI process's
+    own privileges (see ``HookEntry.command``'s docstring) — a caller who can
+    PATCH this section can execute arbitrary code on the host. ``x-protected``
+    puts the whole section in the same never-read-never-written-via-API tier
+    as the other host-level settings in this file: settable only by editing
+    the config file directly, never over the network regardless of
+    credential (see ``ConfigSchemaView`` in ``apps/mewbo_api``).
+    """
 
     model_config = ConfigDict(
-        json_schema_extra={"title": "Hooks", "x-group": "integrations", "x-order": 3},
+        json_schema_extra={
+            "title": "Hooks",
+            "x-group": "integrations",
+            "x-order": 3,
+            "x-protected": True,
+        },
     )
 
     pre_tool_use: list[HookEntry] = Field(
@@ -1030,10 +1339,21 @@ class PluginsConfig(BaseModel):
 
     model_config = ConfigDict(
         validate_default=True,
-        json_schema_extra={"title": "Plugins", "x-group": "agent", "x-order": 3},
+        json_schema_extra={"title": "Plugins", "x-group": "plugins", "x-order": 1},
     )
 
-    enabled: bool = Field(True, description="Enable the plugin system.")
+    enabled: bool = Field(
+        True,
+        description=(
+            "Turn the whole plugin system on, including Mewbo's own built-in "
+            "suites such as `widget_builder`.\n\n"
+            "While this is off, no plugin contributes anything to the agent, "
+            "whether it is built in or installed from a marketplace: no agent "
+            "definitions, no skills, no hooks, no MCP tools. The "
+            "`enabled_plugins` and `marketplaces` settings below are ignored "
+            "entirely until you turn it back on."
+        ),
+    )
     enabled_plugins: list[str] = Field(
         default_factory=list,
         description=(
@@ -1146,6 +1466,159 @@ class PluginsConfig(BaseModel):
         return dirs
 
 
+class TriggersConfig(BaseModel):
+    """Reverse-invocation trigger subsystem.
+
+    The durable peer of the sub-agent hypervisor: a background watcher that
+    fires time / cron / CI / forge-PR / webhook triggers and re-invokes the
+    sessions that armed them. OFF by default (``enabled=False``), so the feature
+    is un-enableable until an operator turns it on and a stock deployment pays
+    nothing. The lower half of this section is the admission policy the
+    ``schedule_trigger`` tool + the arm route enforce (mirrors
+    ``mewbo_core.triggers.policy.TriggerPolicy`` field-for-field; ``to_policy``
+    builds one).
+    """
+
+    model_config = ConfigDict(
+        validate_default=True,
+        json_schema_extra={"title": "Triggers", "x-group": "automation", "x-order": 1},
+    )
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Turn the trigger watcher on. Nothing fires until you do.\n\n"
+            "A trigger is how Mewbo starts a session later, on its own, with nobody "
+            "watching: at a set time, on a repeating schedule, or when a CI run "
+            "finishes, a pull request changes, or a webhook calls in. The watcher is "
+            "the background loop that notices those moments and wakes the session "
+            "that asked to be woken. While it is off, the trigger routes still work, "
+            "so a session can arm a trigger and you can list, pause, or cancel it, "
+            "but no trigger ever fires. Armed triggers simply wait until you turn "
+            "the watcher on."
+        ),
+    )
+    tick_interval_seconds: float = Field(
+        5.0,
+        ge=1.0,
+        description=(
+            "How often the watcher wakes up to look at the schedule, in seconds.\n\n"
+            "On each pass it expires the triggers whose deadline has gone by and "
+            "fires the time and cron triggers that have come due. A shorter interval "
+            "wakes a session closer to the moment it asked for; a longer one costs "
+            "the server less. This is also the cadence at which the forge poll below "
+            "gets a chance to run."
+        ),
+    )
+    poll_interval_seconds: float = Field(
+        60.0,
+        ge=5.0,
+        description=(
+            "How often the watcher asks the forge about CI runs and pull requests, "
+            "in seconds.\n\n"
+            "Time and cron triggers can be judged from the clock alone, but "
+            "`ci.workflow` and `forge.pr` triggers cannot: the watcher has to call "
+            "the forge's REST API to see what changed. Those calls are rate-limited "
+            "and cost a round trip each, so they run on this deliberately coarser "
+            "cadence rather than on every pass. Raise it if you are bumping into API "
+            "limits; lower it if you want CI results picked up sooner."
+        ),
+    )
+    max_consecutive_failures: int = Field(
+        5,
+        ge=1,
+        description=(
+            "How many errors in a row one trigger may hit before it is given up "
+            "on.\n\n"
+            "When a fire or a forge poll raises, the watcher records the error on "
+            "the trigger and leaves it armed, so a passing outage never throws away "
+            "a schedule. Once a trigger has failed this many times back to back "
+            "without a single success in between, the watcher stops retrying it and "
+            "moves it to `failed`. Any success resets the count to zero."
+        ),
+    )
+    max_armed_per_session: int = Field(
+        20,
+        ge=1,
+        description=(
+            "The most triggers one session may have armed at the same time.\n\n"
+            "Triggers are armed by the agent from inside a session, so this ceiling "
+            "is what keeps a single session from filling the schedule with wakes. An "
+            "attempt to arm one past the limit is refused, and the agent is told why. "
+            "Cancelling a trigger, or letting one finish, frees the slot again."
+        ),
+    )
+    max_fires_cap: int = Field(
+        100,
+        ge=1,
+        description=(
+            "The ceiling on how many times any single trigger may fire.\n\n"
+            "A repeating trigger, a cron schedule for instance, can name its own "
+            "`max_fires` limit when it is armed. This is the ceiling on that request: "
+            "an attempt to arm a trigger asking for more is refused. A trigger that "
+            "reaches its own limit completes and stops firing."
+        ),
+    )
+    default_expiry_days: float = Field(
+        7.0,
+        gt=0.0,
+        description=(
+            "How long an armed trigger lives when it names no expiry of its own, in "
+            "days.\n\n"
+            "Every trigger expires eventually, so that a wake nobody remembers "
+            "arming cannot linger forever. When the agent arms one without setting "
+            "an expiry date, this many days from the moment of arming is stamped on "
+            "it. Once that moment passes, the watcher expires the trigger instead of "
+            "firing it."
+        ),
+    )
+    cron_min_interval_seconds: int = Field(
+        60,
+        ge=1,
+        description=(
+            "The shortest gap allowed between two fires of a cron trigger, in "
+            "seconds.\n\n"
+            "A cron expression can be written to fire far more often than a session "
+            "is worth waking, so this is the floor. When a cron trigger is armed, the "
+            "gap between its first two fires is measured, and a schedule tighter than "
+            "this is rejected there and then rather than being throttled later."
+        ),
+    )
+    webhook_payload_max_bytes: int = Field(
+        200_000,
+        ge=1,
+        description=(
+            "How much of an incoming webhook body the woken session gets to see, in "
+            "bytes.\n\n"
+            "A webhook can carry a large payload, and all of it becomes context the "
+            "session has to read. A body bigger than this is truncated rather than "
+            "rejected: the call still fires the trigger, the session receives the "
+            "first part of the body, and it is told the payload was cut short. When "
+            "a signature is configured, it is checked against the whole body before "
+            "any truncation happens."
+        ),
+    )
+
+    def to_policy(self) -> Any:
+        """Build the ``TriggerPolicy`` these fields describe.
+
+        Lazy import keeps this config module free of any dependency on the
+        triggers domain package (and sidesteps an import cycle, since the
+        trigger store reads ``get_config_value`` from here).
+        """
+        from datetime import timedelta
+
+        from mewbo_core.triggers.policy import TriggerPolicy
+
+        return TriggerPolicy(
+            max_armed_per_session=self.max_armed_per_session,
+            max_fires_cap=self.max_fires_cap,
+            default_expiry=timedelta(days=self.default_expiry_days),
+            cron_min_interval_seconds=self.cron_min_interval_seconds,
+            webhook_payload_max_bytes=self.webhook_payload_max_bytes,
+        )
+
+
 class ProjectConfig(BaseModel):
     """A project directory exposed to the REST API for session scoping."""
 
@@ -1154,8 +1627,22 @@ class ProjectConfig(BaseModel):
         json_schema_extra={"title": "Project"},
     )
 
-    path: str = Field("", description="Absolute path to the project root. Tilde (~) is expanded.")
-    description: str = Field("", description="Short human-readable description of the project.")
+    path: str = Field(
+        "",
+        description=(
+            "Absolute path to the project's root directory on the API host's "
+            "filesystem (tilde is expanded). The directory must already exist, "
+            "because Mewbo does not create it, and a session request against "
+            "this project fails if the path is missing."
+        ),
+    )
+    description: str = Field(
+        "",
+        description=(
+            "Short blurb shown next to this project's name in project pickers. "
+            "Purely informational, with no effect on behavior."
+        ),
+    )
 
     @field_validator("path", mode="before")
     @classmethod
@@ -1175,14 +1662,72 @@ class WebIdeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "Web IDE"})
 
-    enabled: bool = False
-    image: str = "codercom/code-server:latest"
-    default_lifetime_hours: int = Field(default=1, ge=1, le=24)
-    max_lifetime_hours: int = Field(default=8, ge=1, le=168)
-    cpus: float = Field(default=1.0, ge=0.1, le=16.0)
-    memory: str = Field(default="1g", pattern=r"^\d+[mgMG]$")
-    pids_limit: int = Field(default=512, ge=64, le=4096)
-    network: str = Field(default="mewbo-ide", pattern=r"^[a-zA-Z0-9_-]+$")
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Turn on the 'Open in Web IDE' feature (per-session code-server "
+            "containers via Docker). Also requires a MongoDB-backed session "
+            "store; toggling this needs an API process restart to take effect "
+            "since the /api/ide routes are registered at startup."
+        ),
+    )
+    image: str = Field(
+        default="codercom/code-server:latest",
+        description="Docker image used to launch each session's code-server container.",
+    )
+    default_lifetime_hours: int = Field(
+        default=1,
+        ge=1,
+        le=24,
+        description=(
+            "Hours a new Web IDE container stays up before it self-terminates, "
+            "unless the session extends it first."
+        ),
+    )
+    max_lifetime_hours: int = Field(
+        default=8,
+        ge=1,
+        le=168,
+        description=(
+            "Hard ceiling on a session's total Web IDE lifetime across all "
+            "extensions; a request to extend past this is rejected."
+        ),
+    )
+    cpus: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=16.0,
+        description=(
+            "CPU core limit for each Web IDE container, e.g. 1.0 = one core "
+            "(maps to Docker's --cpus / nano_cpus)."
+        ),
+    )
+    memory: str = Field(
+        default="1g",
+        pattern=r"^\d+[mgMG]$",
+        description=(
+            "Memory limit for each Web IDE container, in Docker's --memory "
+            "syntax: digits followed by m or g, e.g. '1g' or '512m'."
+        ),
+    )
+    pids_limit: int = Field(
+        default=512,
+        ge=64,
+        le=4096,
+        description=(
+            "Maximum number of processes/threads allowed inside a Web IDE "
+            "container; bounds a runaway process from exhausting the host."
+        ),
+    )
+    network: str = Field(
+        default="mewbo-ide",
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        description=(
+            "Docker network each Web IDE container joins. Must be the same "
+            "network the ide-proxy is attached to, or the proxy can't reach "
+            "the container."
+        ),
+    )
     proxy_url: str = Field(
         default="http://127.0.0.1:5126",
         description=(
@@ -1195,7 +1740,14 @@ class WebIdeConfig(BaseModel):
             "http://mewbo-ide-proxy:8080."
         ),
     )
-    state_dir: str = Field(default="/tmp/mewbo-ide")
+    state_dir: str = Field(
+        default="/tmp/mewbo-ide",
+        description=(
+            "Host directory where each Web IDE container's expiry-deadline file "
+            "is written; the container's internal watchdog reads it to "
+            "self-terminate on schedule."
+        ),
+    )
 
 
 class LSPConfig(BaseModel):
@@ -1203,7 +1755,15 @@ class LSPConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", json_schema_extra={"title": "LSP"})
 
-    enabled: bool = Field(True, description="Enable native LSP tool.")
+    enabled: bool = Field(
+        True,
+        description=(
+            "Master switch for the native LSP tool (hover/diagnostics/"
+            "go-to-definition). When off, or when the pygls dependency isn't "
+            "installed, the tool is never registered and the agent works from "
+            "grep/read alone."
+        ),
+    )
     servers: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description=(
@@ -1222,7 +1782,7 @@ class ToolSearchConfig(BaseModel):
     call and surfaced to the model by name only via
     ``<available-deferred-tools>``. The model fetches schemas it actually
     needs by calling the built-in ``tool_search`` tool. Mirrors Claude
-    Code's ``ToolSearchTool`` mechanism — saves substantial context tokens
+    Code's ``ToolSearchTool`` mechanism, saving substantial context tokens
     on sessions with many MCP servers connected.
     """
 
@@ -1235,7 +1795,7 @@ class ToolSearchConfig(BaseModel):
             "'on' always defers MCP tools and any spec with "
             "metadata.deferred=True; the model loads schemas on demand via "
             "tool_search. 'auto' defers only when the number of deferrable "
-            "tools exceeds auto_threshold — so lean / zero-MCP sessions keep "
+            "tools exceeds auto_threshold, so lean / zero-MCP sessions keep "
             "verbatim binding and pay nothing, while many-MCP sessions are "
             "spared ~240 tokens per tool every turn."
         ),
@@ -1272,7 +1832,11 @@ class RetryConfig(BaseModel):
     backoff_cap: float = Field(DEFAULT_BACKOFF_CAP, description="Maximum backoff delay in seconds.")
     retry_after_cap: float = Field(
         DEFAULT_RETRY_AFTER_CAP,
-        description="Upper bound applied to a server Retry-After before sleeping on it.",
+        description=(
+            "Upper bound in seconds applied to a server's Retry-After header "
+            "before the loop sleeps on it; caps how long one misbehaving "
+            "response can stall a run."
+        ),
     )
     turn_deadline: float = Field(
         DEFAULT_TURN_DEADLINE,
@@ -1340,6 +1904,17 @@ class AgentConfig(BaseModel):
             "Allowlist of model names sub-agents may use. Empty means all models are allowed."
         ),
     )
+    model_tiers: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Coarse model-cost tier -> concrete model id map (e.g. "
+            "{'economy': 'anthropic/claude-haiku-4-5', 'frontier': "
+            "'anthropic/claude-opus-4-6'}), resolved by a spawned agent's "
+            "DelegationContract.model_tier. An explicit spawn "
+            "model arg or an agent_type's configured model always wins; a "
+            "declared tier with no map entry is a silent no-op fallthrough."
+        ),
+    )
     max_iters: int = Field(
         30,
         deprecated=True,
@@ -1357,6 +1932,116 @@ class AgentConfig(BaseModel):
             "This field is retained for API backward compatibility but "
             "is not enforced. Safety is provided by session_step_budget, "
             "stall detection, and LLM timeouts."
+        ),
+    )
+    session_step_budget: int = Field(
+        0,
+        description=(
+            "Ceiling on total tool-execution steps across every agent in a "
+            "session (root + all sub-agents combined), enforced by the "
+            "hypervisor: a warning is injected as the budget nears, and the "
+            "run hard-stops at exhaustion. 0 = unlimited."
+        ),
+    )
+    attestation_enabled: bool = Field(
+        True,
+        description=(
+            "Record a best-effort provenance hash chain over "
+            "every spawn/terminal transition in a session's agent tree — "
+            "bounded scalars + a contract snapshot + a summary FINGERPRINT "
+            "only, never task text or raw summary content. Additive and "
+            "never fatal: a failed or absent chain degrades to the historical "
+            "no-attestation behaviour. Default ON; this is the kill switch."
+        ),
+    )
+    default_workspace_mode: str = Field(
+        "full_access",
+        description=(
+            "Root filesystem-containment tier every session starts at, "
+            "narrowed per sub-agent by spawn_agent's workspace_mode. One "
+            "of 'read_only' (reads confined to the workspace, no writes), "
+            "'workspace_write' (reads + writes confined to the workspace), or "
+            "'full_access' (no path restriction; default, historical behaviour). "
+            "Only bites when workspace_enforcement is on."
+        ),
+        examples=["full_access", "workspace_write", "read_only"],
+    )
+    workspace_enforcement: bool = Field(
+        False,
+        description=(
+            "Master switch for workspace_mode filesystem containment. "
+            "OFF by default (staged): while off, every path resolves "
+            "through the historical tenant-union allowlist regardless of an "
+            "agent's workspace_mode, so the tiers are carried + narrowed but "
+            "never enforced. Flip on to collapse each contained agent's reachable "
+            "paths to its own workspace root + Mewbo scratch."
+        ),
+    )
+    stall_threshold_s: float = Field(
+        120.0,
+        description=(
+            "Seconds of no tool-execution progress before the watchdog "
+            "flags an agent as stalled and injects an NL warning into its "
+            "message queue."
+        ),
+    )
+    stall_check_interval_s: float = Field(
+        30.0,
+        description="Seconds between watchdog stall-detection sweeps.",
+    )
+    write_progress_signal_step_threshold: int = Field(
+        DEFAULT_WRITE_PROGRESS_THRESHOLD,
+        description=(
+            "Consecutive non-write tool-execution steps before the "
+            "write-progress signal fires telemetry for a write-capable "
+            "agent. 0 disables."
+        ),
+    )
+    write_progress_signal_event_interval: int = Field(
+        DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL,
+        description=(
+            "Steps between repeat write-progress signal events once the threshold is crossed."
+        ),
+    )
+    write_progress_signal_max_events: int = Field(
+        DEFAULT_WRITE_PROGRESS_MAX_EVENTS,
+        description="Maximum write-progress signal events emitted before it goes quiet.",
+    )
+    write_progress_signal_reminder_enabled: bool = Field(
+        False,
+        description=(
+            "When the write-progress signal fires, also inject a "
+            "criterion-blind objective-restatement reminder (states the "
+            "task goal only — never the signal or its criteria). Default "
+            "off: telemetry alone is the observe-only default."
+        ),
+    )
+    verification_enabled: bool = Field(
+        False,
+        description=(
+            "Master switch for verifier-gated completion. OFF by default "
+            "(staged): while off, a spawn's verification spec is carried but "
+            "never run, so every natural completion is accepted exactly as "
+            "historically. Flip on to gate a write-capable agent's claimed "
+            "completion behind a ground-truth command check before its text "
+            "is accepted."
+        ),
+    )
+    verification_max_retries: int = Field(
+        2,
+        description=(
+            "Maximum times a failed completion verifier re-drives the agent "
+            "before its text is accepted, honestly flagged verification_failed. "
+            "Clamped to [0, 10] and bounded ALSO by the step/wall budget, "
+            "whichever is tighter. 0 = one check, no retry."
+        ),
+    )
+    verification_timeout_s: float = Field(
+        DEFAULT_VERIFICATION_TIMEOUT,
+        description=(
+            "Ceiling in seconds on a single verifier subprocess; a spawn's "
+            "per-spec timeout_s is clamped down to this at run. Clamped to "
+            "[1, 600]."
         ),
     )
     llm_call_timeout: float = Field(
@@ -1379,6 +2064,64 @@ class AgentConfig(BaseModel):
             "Backoff/budget/circuit-breaker live under agent.retry."
         ),
     )
+
+    @field_validator("llm_call_timeout", mode="before")
+    @classmethod
+    def _llm_call_timeout_env(cls, value: Any) -> Any:
+        # Deployments where a single model call legitimately runs long (slow
+        # local inference, a saturated proxy) need to lift the ceiling without
+        # editing a config file. Invalid values fall through to pydantic's own
+        # float coercion error.
+        env = os.environ.get("MEWBO_AGENT_LLM_CALL_TIMEOUT")
+        return env if env else value
+
+    @field_validator("attestation_enabled", mode="before")
+    @classmethod
+    def _normalize_attestation_enabled(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=True)
+
+    @field_validator("default_workspace_mode", mode="before")
+    @classmethod
+    def _normalize_default_workspace_mode(cls, value: Any) -> str:
+        # Unknown / malformed collapses to the widest (no-op) tier — the same
+        # unknown → widest rule the AgentContext narrowing applies, so a typo
+        # never silently CONTAINS a deployment that meant full access.
+        if value is None:
+            return "full_access"
+        normalized = str(value).strip().lower()
+        if normalized in {"read_only", "workspace_write", "full_access"}:
+            return normalized
+        return "full_access"
+
+    @field_validator("workspace_enforcement", mode="before")
+    @classmethod
+    def _normalize_workspace_enforcement(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=False)
+
+    @field_validator("verification_enabled", mode="before")
+    @classmethod
+    def _normalize_verification_enabled(cls, value: Any) -> bool:
+        return _coerce_bool(value, default=False)
+
+    @field_validator("verification_max_retries", mode="before")
+    @classmethod
+    def _clamp_verification_max_retries(cls, value: Any) -> int:
+        # Coerce-and-clamp: a malformed value collapses to the default rather
+        # than failing config load; the bound keeps a runaway retry count from
+        # starving the step/wall budget.
+        try:
+            return max(0, min(10, int(value)))
+        except (TypeError, ValueError):
+            return 2
+
+    @field_validator("verification_timeout_s", mode="before")
+    @classmethod
+    def _clamp_verification_timeout(cls, value: Any) -> float:
+        try:
+            return max(1.0, min(600.0, float(value)))
+        except (TypeError, ValueError):
+            return DEFAULT_VERIFICATION_TIMEOUT
+
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig.model_validate({}),
         description="Automatic LLM-call retry / fallback resilience knobs.",
@@ -1451,15 +2194,6 @@ class AgentConfig(BaseModel):
             "Set to an empty list to disable shell in plan mode entirely."
         ),
     )
-    plan_mode_allow_mcp: bool = Field(
-        True,
-        description=(
-            "Allow ALL user-enabled MCP tools (tools with kind='mcp') during "
-            "plan mode. Uses a permissive default and trusts "
-            "the user's mcp.json configuration. Set to false to block MCP "
-            "tools in plan mode regardless of their read-only status."
-        ),
-    )
     web_ide: WebIdeConfig | None = Field(
         default=None,
         description="Optional 'Open in Web IDE' feature config (code-server containers).",
@@ -1524,6 +2258,60 @@ class AgentConfig(BaseModel):
             return 10
         return max(parsed, 1)
 
+    @field_validator("session_step_budget", mode="before")
+    @classmethod
+    def _normalize_session_step_budget(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(parsed, 0)
+
+    @field_validator("stall_threshold_s", mode="before")
+    @classmethod
+    def _normalize_stall_threshold_s(cls, value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 120.0
+        return parsed if parsed > 0 else 120.0
+
+    @field_validator("stall_check_interval_s", mode="before")
+    @classmethod
+    def _normalize_stall_check_interval_s(cls, value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 30.0
+        return parsed if parsed > 0 else 30.0
+
+    @field_validator("write_progress_signal_step_threshold", mode="before")
+    @classmethod
+    def _normalize_write_progress_step_threshold(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_WRITE_PROGRESS_THRESHOLD
+        return max(parsed, 0)
+
+    @field_validator("write_progress_signal_event_interval", mode="before")
+    @classmethod
+    def _normalize_write_progress_event_interval(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL
+        return max(parsed, 1)
+
+    @field_validator("write_progress_signal_max_events", mode="before")
+    @classmethod
+    def _normalize_write_progress_max_events(cls, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_WRITE_PROGRESS_MAX_EVENTS
+        return max(parsed, 0)
+
     @field_validator(
         "allowed_models",
         "default_denied_tools",
@@ -1534,10 +2322,21 @@ class AgentConfig(BaseModel):
     def _normalize_string_lists(cls, value: Any) -> list[str]:
         return _coerce_list(value)
 
-    @field_validator("plan_mode_allow_mcp", mode="before")
+    @field_validator("model_tiers", mode="before")
     @classmethod
-    def _normalize_plan_mode_allow_mcp(cls, value: Any) -> bool:
-        return _coerce_bool(value, default=True)
+    def _normalize_model_tiers(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        dropped: list[Any] = []
+        for k, v in value.items():
+            if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
+                normalized[k.strip()] = v.strip()
+            else:
+                dropped.append(k)
+        if dropped:
+            _logger.warning("agent.model_tiers: dropping malformed entries %r", dropped)
+        return normalized
 
 
 class MongoDBConfig(BaseModel):
@@ -1675,6 +2474,10 @@ def _plugins_config_default() -> PluginsConfig:
     return PluginsConfig.model_validate({})
 
 
+def _triggers_config_default() -> TriggersConfig:
+    return TriggersConfig.model_validate({})
+
+
 class WikiEmbeddingConfig(BaseModel):
     """Embedding settings for the wiki indexer."""
 
@@ -1694,7 +2497,7 @@ class WikiEmbeddingConfig(BaseModel):
             "Embedding model ID routed through the LLM proxy. Must support "
             "the OpenAI ``/v1/embeddings`` shape (LiteLLM normalises Gemini "
             "and others to this shape). Pin a fast model here to speed up "
-            "indexing — embedding is per-node and runs synchronously."
+            "indexing, since embedding is per-node and runs synchronously."
         ),
         examples=["openai/gemini-embedding-001", "openai/text-embedding-3-large"],
     )
@@ -1705,7 +2508,11 @@ class WikiEmbeddingConfig(BaseModel):
     # that here to keep the surface small.
     batch_size: int = Field(
         64,
-        description="Batch size when embedding nodes in chunks.",
+        description=(
+            "Number of graph nodes embedded per API call during indexing. "
+            "Higher values index faster but send larger requests; lower it if "
+            "you hit the embedding provider's rate or payload limits."
+        ),
         examples=[32, 64, 128],
         gt=0,
     )
@@ -1732,7 +2539,13 @@ class WikiMemoryConfig(BaseModel):
     dedup_cosine: float = Field(0.6, description="Cosine floor for the LLM dedup tier.")
     fuzzy_jaccard: float = Field(0.85, description="Jaccard floor for the fuzzy dedup tier.")
     fusion_w_ppr: float = Field(
-        0.1, description="Additive memory-expansion weight (GAAMA 0.1·ppr + 1.0·sim)."
+        0.1,
+        description=(
+            "Weight applied to a code node's score when it's surfaced only by "
+            "following a memory note's anchor rather than direct text/code "
+            "search. Raise it to rank memory-anchored context higher relative "
+            "to direct hits; lower it toward 0 to favor direct hits."
+        ),
     )
     hub_degree: int = Field(50, description="Degree above which an anchor is hub-damped.")
     expansion_hops: int = Field(1, description="Structural hops to expand from an anchor.")
@@ -1818,7 +2631,7 @@ def _wiki_config_default() -> WikiConfig:
 
 
 class ScgTierModelsConfig(BaseModel):
-    """Per-tier model mapping — the tier picks the brain, not just the budget.
+    """Per-tier model mapping: the tier picks the brain, not just the budget.
 
     A tier maps to the LLM that drives the whole run (orchestrator session AND
     its probe sub-agents, which inherit the session model). An empty string
@@ -1850,7 +2663,7 @@ class ScgTraversalConfig(BaseModel):
     default_tier: Literal["fast", "auto", "deep"] = Field(
         "auto",
         description=(
-            "Default search tier — one budget knob over decomposition depth "
+            "Default search tier, one budget knob over decomposition depth "
             "and probe fan-out. Overridable per run."
         ),
     )
@@ -1895,9 +2708,20 @@ def _scg_config_default() -> ScgConfig:
 # the class, not the field). The API's ``ConfigSchemaView`` reads them.
 #
 # Class-level (``$defs/<Class>``):
-#   x-group     -> facet id ("models" | "agent" | "integrations" | "interface"
-#                  | "server"). Sections without x-group fall to an "other"
-#                  facet on the frontend (e.g. ``channels``, ``projects``).
+#   x-group     -> facet id. The union is CLOSED and mirrored, id for id, by the
+#                  console's ``FacetId`` (``apps/mewbo_console/src/components/
+#                  settings/facets.ts``):
+#
+#                      "models" | "agent" | "plugins" | "automation"
+#                      | "integrations" | "interface" | "server" | "security"
+#                      | "workspace"
+#
+#                  A section with no x-group — or with one the console doesn't
+#                  declare — is SILENTLY bucketed into the "other" fallback
+#                  facet: no error, no warning, the section simply disappears
+#                  from the facet a user would look in. So the two sides move in
+#                  ONE change, always. Keep this list in lockstep with
+#                  ``facets.ts`` when a facet is added, renamed, or removed.
 #   x-order     -> ordering within the facet (1-based).
 #   x-advanced  -> whole section is power-user-only; hidden by default.
 #
@@ -1981,7 +2805,29 @@ class AppConfig(BaseModel):
     )
     plugins: PluginsConfig = Field(
         default_factory=_plugins_config_default,
-        description="Plugin system configuration.",
+        description=(
+            "How Mewbo finds, installs, and enables plugins.\n\n"
+            "A plugin extends what the agent can do. It brings its own skills, agent "
+            "definitions, lifecycle hooks, and MCP tools, and those hooks run on this "
+            "machine, so install only what you trust. Marketplaces are the catalogs "
+            "Mewbo looks in for plugins to offer you; the list above shows what is "
+            "installed today and what is available to install."
+        ),
+    )
+    triggers: TriggersConfig = Field(
+        default_factory=_triggers_config_default,
+        description=(
+            "Ceilings on the triggers that start a session without you.\n\n"
+            "A trigger is a reverse invocation. Instead of you opening a session, a "
+            "session asks to be woken later and Mewbo wakes it, on its own, with "
+            "nobody watching. There are five kinds: `time.at` fires once at a set "
+            "moment, `time.cron` fires on a repeating schedule, `ci.workflow` fires "
+            "when a CI run finishes, `forge.pr` fires when a pull request changes, "
+            "and `webhook` fires when something outside calls in. The agent arms a "
+            "trigger from inside a session, and the triggers list above is where you "
+            "watch, pause, and cancel what it armed. The settings here are the limits "
+            "all of that has to stay inside."
+        ),
     )
     channels: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -1990,7 +2836,14 @@ class AppConfig(BaseModel):
     )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=_projects_config_default,
-        description="Named project directories exposed to the REST API for session scoping.",
+        description=(
+            "Directories you've already created, registered here by hand under "
+            'a short name; sessions reference them by that name (e.g. `"'
+            'project": "<key>"`). Distinct from Mewbo-managed ("virtual") '
+            "projects, which the API creates and owns itself and which sessions "
+            "reference as `managed:<project_id>`: entries here are never "
+            "created, modified, or deleted by Mewbo, only pointed at."
+        ),
         json_schema_extra={"x-group": "workspace", "x-order": 1},
     )
 

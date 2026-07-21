@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CompletionEngine — pure sigil-dispatched completion for the input area (#155).
+"""CompletionEngine — pure sigil-dispatched completion for the input area.
 
 One atomic, UI-free class. Given the current line ``text`` and the ``cursor``
 column it answers two questions:

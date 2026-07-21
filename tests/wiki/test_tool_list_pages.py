@@ -171,18 +171,24 @@ def test_list_pages_returns_empty_when_no_pages(tmp_path: Path) -> None:
     assert payload["pages"] == []
 
 
-# ── Test 6: no QA ctx → internal error ─────────────────────────────────────
+# ── Test 6: no wiki for this session → not_found, not internal ──────────────
 
 
-def test_list_pages_returns_error_when_no_ctx(tmp_path: Path) -> None:
-    """Session not attached to any QA answer → error with code=internal."""
+def test_list_pages_returns_ungrounded_error_when_no_ctx(tmp_path: Path) -> None:
+    """No QA answer, no workspace, no project wiki → code=not_found.
+
+    The tool is bound to ordinary sessions, so "nothing indexed here" is an
+    EXPECTED state and must not be reported as an internal fault — an agent
+    should read it once and stop rather than retry a seeming transient.
+    """
     store = _store(tmp_path)
     # Store is empty — no QA answer registered for this session.
     result = _run_list_pages(store, {}, session_id="sess-unknown")
 
     assert "error" in result.content
     payload = ast.literal_eval(result.content)
-    assert payload["error"]["code"] == "internal"
+    assert payload["error"]["code"] == "not_found"
+    assert "no wiki indexed" in payload["error"]["message"]
 
 
 # ── Test 7: validation error on unknown arg ─────────────────────────────────

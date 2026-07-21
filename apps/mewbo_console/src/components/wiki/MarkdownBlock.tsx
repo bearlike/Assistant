@@ -19,10 +19,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSlug from "rehype-slug";
-import { ChevronRight, FileText } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 import { CitationRef } from "./citations";
-import { SrcChip, buildMarkdownComponents } from "./markdownComponents";
+import { SrcChip, buildMarkdownComponents, wikiUrlTransform } from "./markdownComponents";
 import type { PageFrontmatter } from "./api/markdown";
 
 interface MarkdownBlockProps {
@@ -54,6 +54,7 @@ export function MarkdownBlock({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, rehypeSlug]}
+        urlTransform={wikiUrlTransform}
         components={components}
       >
         {body}
@@ -78,18 +79,16 @@ function Accordion({
         <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90 text-[hsl(var(--muted-foreground))]" />
         {title}
       </summary>
-      <div className="border-t border-[hsl(var(--border))] px-3.5 py-2 space-y-1">
+      {/* Same `SrcChip` the inline citations and the Sources footer use, so
+          every file reference on the page is one clickable, commit-pinned
+          badge — these rows were previously dead text. */}
+      <ul className="border-t border-[hsl(var(--border))] px-3.5 py-2.5 flex flex-wrap gap-1.5">
         {items.map((it, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-2 font-mono text-xs text-[hsl(var(--muted-foreground))] py-1"
-          >
-            <FileText className="h-3 w-3" />
-            <span className="truncate flex-1">{it.path}</span>
-            {it.lines && <span className="text-[10px]">{it.lines}</span>}
-          </div>
+          <li key={i}>
+            <SrcChip citation={CitationRef.fromSrc(it.path, it.lines)} />
+          </li>
         ))}
-      </div>
+      </ul>
     </details>
   );
 }
@@ -97,7 +96,7 @@ function Accordion({
 function SourcesBlock({ items }: { items: Array<{ path: string; lines?: string }> }) {
   return (
     <div className="my-5 px-3.5 py-2.5 rounded-md bg-[hsl(var(--muted))]/30 border border-[hsl(var(--border))]">
-      <div className="text-[10px] uppercase tracking-wide font-medium text-[hsl(var(--muted-foreground))] mb-1.5">
+      <div className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5">
         Sources
       </div>
       <ul className="flex flex-wrap gap-1.5">

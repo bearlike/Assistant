@@ -37,7 +37,7 @@ FORCE_EMIT_DIRECTIVE = get_prompt_registry().render("structured.force_emit_direc
 # Concise user query for the sharper belt-and-suspenders re-drive turn. The
 # matching re-drive system directive (``structured.redrive_directive``) is
 # rendered per-model at the call site (``_run_with_redrive``) so a per-model
-# override reaches it too (#113); it still contains FORCE_EMIT_DIRECTIVE verbatim
+# override reaches it too; it still contains FORCE_EMIT_DIRECTIVE verbatim
 # so tests/assertions that look for the base directive match either drive.
 _REDRIVE_QUERY = get_prompt_registry().render("structured.redrive_query")
 
@@ -55,10 +55,10 @@ EMIT_RESULT_TOOL_ID = "emit_result"
 STRUCTURED_OUTPUT_EVENT = "structured_output"
 # Provenance tag PREFIX stamped on every agentic ``/v1/structured`` session so
 # ``SessionOrigin``/``TraceProvenance`` classify it as ``structured`` instead of
-# falling back to ``user`` (#78). The durable tag is ``structured:run:<session_id>``
+# falling back to ``user``. The durable tag is ``structured:run:<session_id>``
 # (unique per session) — a CONSTANT tag would collide on the tag-keyed store, so
 # every run would overwrite one shared doc and all-but-the-latest run would
-# silently lose its tag and reclassify to the ``user`` fallback (#87). The id
+# silently lose its tag and reclassify to the ``user`` fallback. The id
 # segment is transparent to the parsers: ``SessionOrigin.classify`` prefix-matches
 # ``structured:`` and ``_facets_from_tags`` reads the 2nd segment (``run``) as the
 # ``session_type``. Per-run RESOLUTION is the storeless ``run_id``, not this tag.
@@ -257,7 +257,7 @@ class StructuredResponder:
     max_failures: int = DEFAULT_MAX_FAILURES
     session_tag: str | None = None
     source_platform: str | None = None
-    # Graph-first extension seam (#77 — additive, app-injected, keeps core
+    # Graph-first extension seam (additive, app-injected, keeps core
     # graph-free). ``capabilities`` overrides the default ``wiki`` advertisement
     # (a search workspace advertises ``scg``); ``context_events`` are extra
     # context writes the binding supplies (e.g. quarantined workspace
@@ -279,7 +279,7 @@ class StructuredResponder:
         (DRY). Returns ``(session_id, emit)``; the same ``emit`` instance is the
         result holder for the sync path's re-drive.
 
-        Provenance stamp (#78): an agentic structured run is tagged
+        Provenance stamp: an agentic structured run is tagged
         :data:`STRUCTURED_RUN_TAG` and its originating ``source_platform`` is
         written as a context event, so ``SessionOrigin``/``TraceProvenance``
         classify it as ``structured`` (not the ``user`` fallback) and the trace
@@ -287,7 +287,7 @@ class StructuredResponder:
         starts (the orchestrator reads them at run start). This single seam also
         covers the MCP ``structured_query`` tool, which posts to ``/v1/structured``.
 
-        Graph-first (#77): when a search workspace is bound the caller supplies
+        Graph-first: when a search workspace is bound the caller supplies
         ``capabilities=["scg"]`` + the binding's ``context_events`` (capability
         advertisement + quarantined instructions). The default ``wiki``
         capability is used only when no explicit capabilities are given, so a
@@ -296,7 +296,7 @@ class StructuredResponder:
         session_id = self.runtime.resolve_session(session_tag=self.session_tag)
         # Per-session tag (``structured:run:<id>``) — never the bare prefix, which
         # would collide on the tag-keyed store and let one run steal every other
-        # run's tag (#87). The id segment is transparent to the prefix-matching
+        # run's tag. The id segment is transparent to the prefix-matching
         # provenance parsers.
         self.runtime.tag_session(session_id, f"{STRUCTURED_RUN_TAG}:{session_id}")
         if self.source_platform:
@@ -324,7 +324,7 @@ class StructuredResponder:
             # ASYNC path works: ``GET /v1/structured/<run_id>`` reads the result
             # back via ``_load_structured_output``. Without this logger ``_emit``
             # no-ops, so a *successful* emit produces no event and the GET 422s
-            # ("model did not emit") even though the run succeeded (#40). The
+            # ("model did not emit") even though the run succeeded. The
             # sync ``run()`` path read ``emit.payload`` in-memory and so masked
             # this; the MCP/REST async path could not.
             event_logger=lambda event: self.runtime.append_event(session_id, event),
@@ -383,7 +383,7 @@ class StructuredResponder:
         if emit.payload is None and not emit.failed:
             # The model reached natural completion without calling emit_result.
             # Re-drive once with a sharper, mandatory directive — rendered for
-            # this run's model so a per-model override applies (#113).
+            # this run's model so a per-model override applies.
             redrive = get_prompt_registry().render(
                 "structured.redrive_directive", model=self.model_name
             )
@@ -401,9 +401,9 @@ class StructuredResponder:
 
         ``directive`` defaults to the force-emit directive rendered for this
         run's model so a per-model override of ``structured.force_emit_directive``
-        applies (#113); the re-drive path passes the sharper directive explicitly.
+        applies; the re-drive path passes the sharper directive explicitly.
 
-        Graph-first (#77): ``extra_instructions`` (the graph-first discipline
+        Graph-first: ``extra_instructions`` (the graph-first discipline
         playbook) is PREPENDED to the force-emit directive — both ride the one
         trusted ``skill_instructions`` slot — and the drive runs inside the
         injected ``scope_factory`` (the ``ScgScope`` source scope) so the

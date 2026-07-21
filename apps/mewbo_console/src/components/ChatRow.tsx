@@ -17,7 +17,7 @@ export function ChatRow({ timestamp, handle, bodyClassName, children }: ChatRowP
   return (
     <div className="flex items-start gap-2 px-1 py-1">
       {timestamp && (
-        <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 font-mono pt-0.5">
+        <span className="text-2xs text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0 pt-0.5">
           {formatSessionTime(timestamp)}
         </span>
       )}
@@ -40,14 +40,16 @@ interface HandleProps {
 }
 
 /**
- * Renders `<from>` or `<from → to>` with the mono/semibold styling shared
- * across chat-line renderers. Colors are passed as Tailwind classes (e.g.
- * `text-blue-400`, `text-agent-3`) so callers can pick from palette tokens
- * or agent-color-cycling.
+ * Renders `<from>` or `<from → to>` with the bracket/semibold styling shared
+ * across chat-line renderers. `from`/`to` are role words ("user", "root") or
+ * a display label, not machine text — no `font-mono` here, weight + the
+ * `<…>` bracket glyphs carry the "handle" identity. Colors are passed as
+ * Tailwind classes (e.g. `text-blue-400`, `text-agent-3`) so callers can pick
+ * from palette tokens or agent-color-cycling.
  */
 export function Handle({ from, to, fromColor, toColor }: HandleProps) {
   return (
-    <span className="text-xs font-mono font-semibold whitespace-nowrap shrink-0 inline-flex items-baseline">
+    <span className="text-xs font-medium whitespace-nowrap shrink-0 inline-flex items-baseline">
       <span className={fromColor}>&lt;{from}</span>
       {to && (
         <>

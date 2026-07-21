@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ThroughputMeter — live phase + token-throughput for one agent (issue #173).
+"""ThroughputMeter — live phase + token-throughput for one agent.
 
 One atomic class (mirrors :class:`ContextMeter`) that turns the event stream the
 :class:`~mewbo_cli.tui.agent_transcript_hub.AgentTranscriptHub` ALREADY ingests

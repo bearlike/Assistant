@@ -292,7 +292,7 @@ def test_citation_is_frozen():
 
 
 # ---------------------------------------------------------------------------
-# Test 9: Langfuse callback is attached to the model invoke (#87)
+# Test 9: Langfuse callback is attached to the model invoke
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +300,7 @@ def test_synthesize_attaches_langfuse_callback_to_invoke():
     """The synthesis ``ainvoke`` carries the Langfuse ``config`` so it EXPORTS.
 
     ``langfuse_session_context`` only PROPAGATES attributes; with no observation
-    created inside, nothing reaches Langfuse (the #87 defect: realtime synthesis
+    created inside, nothing reaches Langfuse (the defect: realtime synthesis
     traced nothing). The fix attaches the ``CallbackHandler`` at the invoke seam.
     We stub ``langfuse_invoke_config`` (the import-guarded helper) with a sentinel
     handler and assert the model invoke received it via ``config``.

@@ -50,6 +50,7 @@ vi.mock("../api/client", () => ({
   getConfig: vi.fn().mockResolvedValue({ config: {}, secrets: {} }),
   patchConfig: vi.fn().mockResolvedValue({ config: {}, secrets: {} }),
   approvePlan: vi.fn(),
+  answerQuestion: vi.fn().mockResolvedValue({ ok: true }),
   recoverSession: vi.fn(),
   forkSession: vi.fn().mockResolvedValue({ session_id: 'fork-1', forked_from: 's1', forked_at: null }),
   fetchPlanMarkdown: vi.fn(),

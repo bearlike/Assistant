@@ -9,12 +9,12 @@ import kotlinx.coroutines.launch
 
 /**
  * Turns transcript text into utterances for [com.mewbo.aura.ui.chat.ChatViewModel]'s two speech
- * affordances (Gitea #180 P3 speak-along, P4 read-aloud fidelity) - both share [SentenceChunker]'s
+ * affordances (speak-along, P4 read-aloud fidelity) - both share [SentenceChunker]'s
  * markdown-stripping and sentence-chunking instead of one speaking raw text and the other chunked
  * (the P4 bug this closes). [speakingKey] is the single source of truth for "is anything speaking
  * right now" - [com.mewbo.aura.ui.chat.ChatViewModel] mirrors it straight into
  * `ChatUiState.speakingKey`, which already gates both the per-message read-aloud glyph and the
- * sticky stop control (ui/CLAUDE.md). Moved here from `ui/chat` for Gitea #181, whose
+ * sticky stop control (ui/CLAUDE.md). Moved here from `ui/chat` because this package's
  * [AssistTurnMachine] is the SECOND call site (the overlay's in-card first-turn speak-along) - same
  * class, no fork; "all speech in `voice/`" (this package's own CLAUDE.md).
  *
@@ -82,7 +82,7 @@ internal class SpeechController(
     /**
      * Called after every transcript fold with the transcript's current LAST [ChatItem.AssistantMessage]
      * (or `null`). A Text-modality turn or a muted conversation never instantiates a chunker at all
-     * (Gitea #180 P3: "text turns stay completely silent"). [ChatItem.AssistantMessage.key] is the
+     * ("text turns stay completely silent"). [ChatItem.AssistantMessage.key] is the
      * SAME `assistant:$ts` key for the whole turn (`TranscriptReducer`); the turn closes the moment
      * [ChatItem.AssistantMessage.isStreaming] flips `false`, which flushes the trailing remainder and
      * closes the key for good via [closedKey].
@@ -109,7 +109,7 @@ internal class SpeechController(
     }
 
     /**
-     * Gitea #181 fix wave, finding 1 (cross-instance handoff replay): call ONCE, immediately after
+     * (cross-instance handoff replay): call ONCE, immediately after
      * a fresh binding's history replay and before any live delta resumes
      * ([com.mewbo.aura.ui.chat.ChatViewModel.bind]) - marks whatever text [item] already carries as
      * ALREADY SPOKEN, using the exact same "consumed" cursor [onAssistantMessage]'s own chunker
@@ -154,7 +154,7 @@ internal class SpeechController(
         enqueue(listOfNotNull(oneShot.flush()))
     }
 
-    /** Barge-in (Gitea #180 P3, <=200ms, idempotent): stops whatever's speaking and discards the
+    /** Barge-in (<=200ms, idempotent): stops whatever's speaking and discards the
      * in-flight turn's chunker for good - see [closedKey]. Safe to call with nothing active. */
     fun bargeIn() {
         synthesizer.stop()

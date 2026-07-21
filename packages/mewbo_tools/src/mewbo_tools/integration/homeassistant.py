@@ -165,30 +165,30 @@ def cache_monitor(func: Callable[Concatenate[SelfT, P], R]) -> Callable[Concaten
             "camera.",
             "climate",
             "conversation",
-            "device_tracker.kraken_raspberry_pi_5",
-            "media_player.axios",
-            "media_player.axios_2",
+            "device_tracker.mediacenter_raspberry_pi_5",
+            "media_player.example_player",
+            "media_player.example_player_2",
             "media_player.chrome",
-            "media_player.fire_tv_192_168_1_12",
+            "media_player.fire_tv_livingroom",
             "person.",
             "remote.",
             "script.higher",
             "sensor.hacs",
             "sensor.hacs",
-            "sensor.kraken_raspberry_pi_5_",
+            "sensor.mediacenter_raspberry_pi_5_",
             "sensor.sonarr_commands",
             "sensor.sun",
             "sensor.uptimekuma_",
             "stt.",
             "sun.",
             "switch.",
-            "switch.adam",
+            "switch.example_switch",
             "switch.bedroom_camera_camera_motion_detection",
             "tts.",
             "update.",
             "zone.home",
         ]
-        forbidden_substrings = ["blink_kk_bedroom"]
+        forbidden_substrings = ["example_camera_motion"]
         self.cache["sensor"] = []
         # Clean entities
         self.cache = clean_entities(self, forbidden_prefixes, forbidden_substrings)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowUpRight, ChevronDown, Sparkles } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -6,6 +6,7 @@ import rehypeHighlight from "rehype-highlight"
 import rehypeSlug from "rehype-slug"
 
 import { cn } from "@/lib/utils"
+import { cardSurface } from "@/components/ui/card-surface"
 
 import { CopyButton } from "../CopyButton"
 import { buildMarkdownComponents } from "../wiki/markdownComponents"
@@ -36,7 +37,7 @@ function SynthesisMarkdown({ source, cursor }: { source: string; cursor?: boolea
         {source}
       </ReactMarkdown>
       {cursor && (
-        <span className="inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
+        <span className="inline-block animate-pulse text-[hsl(var(--primary-text))]">▌</span>
       )}
     </div>
   )
@@ -133,6 +134,14 @@ export function AnswerCard({
   const partial = !ready && done
   const visibleBullets = ready ? answer.bullets.length : 0
 
+  // O(1) citation lookup: bullets × cites would otherwise re-`find`/`findIndex`
+  // the full results list per citation chip (O(n²) over a run's result count).
+  const resultIndex = useMemo(() => {
+    const m = new Map<string, { result: SearchResult; rank: number }>()
+    results.forEach((r, i) => m.set(r.id, { result: r, rank: i + 1 }))
+    return m
+  }, [results])
+
   const statusLabel = ready
     ? `${answer.sources_count} sources · ${(elapsedMs / 1000).toFixed(1)}s`
     : partial
@@ -142,7 +151,9 @@ export function AnswerCard({
   return (
     <section
       className={cn(
-        "relative rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-2)]",
+        "relative",
+        cardSurface({ radius: "panel", elevation: "elev-2" }),
+        "p-4",
         "before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-r before:bg-[hsl(var(--primary))]",
         !ready && !done && "before:animate-pulse"
       )}
@@ -153,8 +164,8 @@ export function AnswerCard({
           <Sparkles className="h-3.5 w-3.5" />
         </span>
         <span className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="text-sm font-semibold flex-none">Synthesis</span>
-          <span className="text-xs font-mono text-[hsl(var(--muted-foreground))] flex-none">
+          <span className="text-sm font-medium flex-none">Synthesis</span>
+          <span className="text-xs text-[hsl(var(--muted-foreground))] flex-none">
             {statusLabel}
           </span>
         </span>
@@ -182,14 +193,14 @@ export function AnswerCard({
             <SynthesisMarkdown source={answer.tldr} />
             <ul className="mt-3 space-y-2">
               {answer.bullets.slice(0, visibleBullets).map((b, i) => (
-                <li key={i} className="flex items-start gap-2 text-[14px] [text-wrap:pretty]">
+                <li key={i} className="flex items-start gap-2 text-sm [text-wrap:pretty]">
                   <span className="mt-2 inline-block h-1 w-1 rounded-full bg-[hsl(var(--muted-foreground))] flex-none" />
                   <span className="flex-1">
                     {b.text}{" "}
                     {b.cites.map((rid) => {
-                      const r = results.find((x) => x.id === rid)
-                      if (!r) return null
-                      const num = results.findIndex((x) => x.id === rid) + 1
+                      const hit = resultIndex.get(rid)
+                      if (!hit) return null
+                      const { result: r, rank: num } = hit
                       const src = sources.find((s) => s.id === r.source)
                       return (
                         <button
@@ -197,7 +208,7 @@ export function AnswerCard({
                           type="button"
                           onClick={() => onCiteClick(rid)}
                           title={r.title}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-full text-xs font-mono bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--primary))] transition-colors align-middle"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-full text-xs font-mono bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--primary-text))] transition-colors align-middle"
                         >
                           <SrcAvatar source={src} size={12} />
                           <span>{num}</span>
@@ -216,7 +227,7 @@ export function AnswerCard({
               <button
                 type="button"
                 onClick={onAsk}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.2)] transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-[hsl(var(--primary)/0.12)] text-[hsl(var(--primary-text))] hover:bg-[hsl(var(--primary)/0.2)] transition-colors"
               >
                 <Sparkles className="h-3 w-3" />
                 Ask a follow-up
@@ -239,13 +250,13 @@ function SkeletonLine({ width }: { width: string }) {
   )
 }
 
-// Map a confidence value to a semantic tier + token. We don't have a --warning
-// token; --primary is the brand clay (orange-amber) which fits "medium", and
-// --agent-3 is yellow which fits "low".
+// Map a confidence value to a semantic tier + status token: high → --success,
+// medium/low → --warning (a soft miss, still worth flagging), very-low → the
+// only genuinely destructive case.
 function confidenceTier(pct: number): { color: string; label: string } {
   if (pct >= 80) return { color: "hsl(var(--success))", label: "High confidence" }
-  if (pct >= 60) return { color: "hsl(var(--primary))", label: "Medium confidence" }
-  if (pct >= 40) return { color: "hsl(var(--agent-3))", label: "Low confidence" }
+  if (pct >= 60) return { color: "hsl(var(--warning))", label: "Medium confidence" }
+  if (pct >= 40) return { color: "hsl(var(--warning))", label: "Low confidence" }
   return { color: "hsl(var(--destructive))", label: "Low confidence" }
 }
 
@@ -265,7 +276,7 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
         style={{ background: color }}
       />
       <span>{label}</span>
-      <span className="font-mono tabular-nums text-[11px] opacity-70">{pct}%</span>
+      <span className="font-mono tabular-nums text-2xs opacity-70">{pct}%</span>
     </span>
   )
 }

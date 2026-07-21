@@ -73,28 +73,16 @@ export interface ResultInsight {
   body: string
 }
 
-export interface ResultImage {
-  alt: string
-  gradient: string
-}
-
-export interface ResultEmbed {
-  kind: "figma" | "slides"
-  title: string
-}
-
 export type ResultKind = "docs" | "code" | "threads" | "design" | "tickets" | "web"
 
 export interface SearchResult {
   id: string
   source: string
   kind: ResultKind
-  /** Deprecated decorative fake-reveal timer — arrival now comes from SSE. */
-  finish_delay_ms?: number | null
   relevance: number
   /**
    * How sure the emitting agent is this hit answers the query (0..1) —
-   * present on agent-emitted cards only (scg_results entries, #102).
+   * present on agent-emitted cards only (scg_results entries).
    */
   confidence?: number | null
   title: string
@@ -104,8 +92,6 @@ export interface SearchResult {
   timestamp: string
   insight?: ResultInsight | null
   refs?: ResultRef[]
-  image?: ResultImage | null
-  embed?: ResultEmbed | null
   /**
    * Structured per-result facts the emitting agent attached — depends on what
    * was retrieved (e.g. GitHub repo `stars`/`forks`, an issue's `state` +
@@ -375,9 +361,6 @@ export type SearchEvent =
   | RunDoneEvent
   | SearchErrorEvent
   | CancelledEvent
-
-/** Event types that terminate the stream. */
-export const TERMINAL_SEARCH_EVENTS = ["run_done", "error", "cancelled"] as const
 
 /** Map-job phase update on the map events SSE route. */
 export interface MapPhaseEvent {

@@ -62,7 +62,7 @@ class WorktreeBranchInUseError(RuntimeError):
 
 
 # Fallback only. The source of truth for "branch already checked out" is the
-# structured pre-check in ``create()`` (issue #27); this regex is a safety net
+# structured pre-check in ``create()``; this regex is a safety net
 # for any residual race. Both git wordings are matched so the net also survives
 # a newer git — git's i18n can still translate the message, which is precisely
 # why the structured pre-check, not this regex, is authoritative.
@@ -130,7 +130,7 @@ def _ensure_gitignore_entry(repo_path: Path, entry: str) -> None:
         sep = "" if existing.endswith("\n") or not existing else "\n"
         gi.write_text(f"{existing}{sep}{entry}\n")
     except Exception:  # pragma: no cover - I/O edge
-        logger.warning("Could not update .gitignore in %s", repo_path, exc_info=True)
+        logger.warning("Could not update .gitignore in {}", repo_path, exc_info=True)
 
 
 class WorktreeManager:
@@ -173,7 +173,7 @@ class WorktreeManager:
                 "refs/remotes",
             )
         except subprocess.CalledProcessError as exc:
-            logger.warning("Failed to list branches in %s: %s", repo_path, exc.stderr)
+            logger.warning("Failed to list branches in {}: {}", repo_path, exc.stderr)
             return []
 
         local: list[str] = []
@@ -244,7 +244,7 @@ class WorktreeManager:
         Reads the structured ``git worktree list`` output — which always
         includes the parent repo's own checkout — instead of parsing git's
         version- and locale-dependent stderr. This is the source of truth for
-        the "branch already checked out" condition (issue #27); the
+        the "branch already checked out" condition; the
         :data:`_BRANCH_IN_USE_RE` stderr match is only a fallback.
         """
         for wt in WorktreeManager.list_worktrees(repo_path):
@@ -291,7 +291,7 @@ class WorktreeManager:
         else:
             # Existing-branch checkout: refuse a branch already checked out
             # elsewhere from structured worktree state, not git's translatable
-            # stderr (issue #27). ``-b`` (base given) mints a *new* branch, so
+            # stderr. ``-b`` (base given) mints a *new* branch, so
             # this guard applies only to the existing-branch path.
             existing = WorktreeManager._checkout_path(str(repo), branch)
             if existing is not None:
@@ -312,7 +312,7 @@ class WorktreeManager:
                 f"git worktree add failed for branch '{branch}': {stderr}"
             ) from exc
         logger.info(
-            "Created worktree at %s for branch %s%s",
+            "Created worktree at {} for branch {}{}",
             target,
             branch,
             f" (from {base})" if base else "",
@@ -416,7 +416,7 @@ class WorktreeManager:
                 raise RuntimeError(
                     f"git worktree remove failed: {exc2.stderr.strip()}"
                 ) from exc2
-        logger.info("Removed worktree at %s", worktree_path)
+        logger.info("Removed worktree at {}", worktree_path)
 
     @staticmethod
     def prune(repo_path: str) -> None:
@@ -424,7 +424,7 @@ class WorktreeManager:
         try:
             _git(repo_path, "worktree", "prune")
         except subprocess.CalledProcessError:
-            logger.debug("worktree prune failed (non-fatal) in %s", repo_path)
+            logger.debug("worktree prune failed (non-fatal) in {}", repo_path)
 
     @staticmethod
     def delete_branch(repo_path: str, branch: str) -> bool:
@@ -436,10 +436,10 @@ class WorktreeManager:
         """
         result = _git(repo_path, "branch", "-D", branch, check=False)
         if result.returncode == 0:
-            logger.info("Deleted branch %s in %s", branch, repo_path)
+            logger.info("Deleted branch {} in {}", branch, repo_path)
             return True
         logger.debug(
-            "git branch -D %s failed in %s: %s",
+            "git branch -D {} failed in {}: {}",
             branch,
             repo_path,
             (result.stderr or "").strip(),

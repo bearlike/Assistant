@@ -12,27 +12,80 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
 from . import tools
 from .auth import AuthError, authenticate
-from .config import McpConfig
+from .config import EffectTier, McpConfig, McpToolPolicy, ToolGroup
 from .rest import RestClient, RestError
 
-_INSTRUCTIONS = (
-    "Mewbo MCP exposes a Mewbo instance to external agents. Create and steer "
-    "agent sessions, read their history at four detail tiers "
-    "(overview/turns/steps/full) so you control your own context spend, query "
-    "the Agentic Wiki, and run Mewbo Search across saved multi-source "
-    "workspaces (search → cited answer + results). Long-running tools (search, "
-    "ask_wiki, structured_query) return a run/answer id you can re-fetch with "
-    "the matching get_* tool if they time out; failures come back as a "
-    "structured {error: {code, reason, retryable}} object, never a raw "
-    "exception. Authenticate with your Mewbo API key as a Bearer token; the "
-    "same key is forwarded to the REST API."
+# A tool coroutine. The registrar returns it unchanged when the policy withholds
+# it, so the decorated name keeps its type either way.
+AnyTool = TypeVar("AnyTool", bound=Callable[..., Awaitable[Any]])
+
+# Long-running tools — each returns a run/answer handle + has a `get_*`
+# companion (gold-standard invariant 2). Every one is `ask` tier by definition
+# (that is what makes it long-running). Data, so the blurb below can't drift
+# from what is actually exposed.
+_LONG_RUNNING: tuple[tuple[str, ToolGroup], ...] = (
+    ("search", ToolGroup.SEARCH),
+    ("ask_wiki", ToolGroup.WIKI),
+    ("structured_query", ToolGroup.STRUCTURED),
 )
+
+
+def _instructions(policy: McpToolPolicy) -> str:
+    """The server blurb, honest about what this deployment actually exposes.
+
+    Gold-standard invariant 4 is *schema matches behavior*: a server that
+    withholds a group must not still advertise it, or a caller burns a turn
+    discovering a tool that isn't there. Derived from the policy for exactly
+    that reason — never a static string that silently outlives a gate.
+    """
+    parts = ["Mewbo MCP exposes a Mewbo instance to external agents."]
+    if policy.allows(ToolGroup.SESSIONS, EffectTier.DRIVE):
+        parts.append("Create and steer agent sessions.")
+    if policy.allows(ToolGroup.SESSIONS, EffectTier.READ):
+        parts.append(
+            "Read session history at four detail tiers "
+            "(overview/turns/steps/full) so you control your own context spend."
+        )
+    # The wiki sentence splits on the EFFECT axis, because that is exactly the
+    # distinction the axis exists to make: reading generated pages and walking
+    # the code graph cost nothing, asking a question starts a model run.
+    if policy.allows(ToolGroup.WIKI, EffectTier.READ):
+        parts.append(
+            "Read the Agentic Wiki's generated pages (list_wiki_pages → "
+            "read_wiki_page)."
+        )
+    if policy.allows(ToolGroup.WIKI, EffectTier.NAVIGATE):
+        parts.append("Walk a project's code graph from any node (graph_neighbors).")
+    if policy.allows(ToolGroup.WIKI, EffectTier.ASK):
+        parts.append("Ask the Agentic Wiki a question and get a cited answer.")
+    if policy.allows(ToolGroup.SEARCH, EffectTier.ASK):
+        parts.append(
+            "Run Mewbo Search across saved multi-source workspaces "
+            "(search → cited answer + results)."
+        )
+    long_running = [
+        name for name, group in _LONG_RUNNING if policy.allows(group, EffectTier.ASK)
+    ]
+    if long_running:
+        parts.append(
+            f"Long-running tools ({', '.join(long_running)}) return a run/answer id "
+            "you can re-fetch with the matching get_* tool if they time out."
+        )
+    parts.append(
+        "Failures come back as a structured {error: {code, reason, retryable}} "
+        "object, never a raw exception."
+    )
+    parts.append(
+        "Authenticate with your Mewbo API key as a Bearer token; the same key is "
+        "forwarded to the REST API."
+    )
+    return " ".join(parts)
 
 
 def _retryable(status_code: int | None) -> bool:
@@ -78,15 +131,38 @@ def _enveloped(
 
 
 def build_server(config: McpConfig | None = None) -> FastMCP:
-    """Construct and configure the FastMCP server with all tools registered."""
+    """Construct the FastMCP server, registering the tool groups the policy exposes."""
     cfg = config or McpConfig.from_env()
     mcp: FastMCP = FastMCP(
         name="mewbo-mcp",
-        instructions=_INSTRUCTIONS,
+        instructions=_instructions(cfg.tools),
         host=cfg.host,
         port=cfg.port,
         streamable_http_path="/mcp",
     )
+
+    def tool(group: ToolGroup, tier: EffectTier) -> Callable[[AnyTool], AnyTool]:
+        """Register a tool IF the policy allows its *group* AND its *tier*.
+
+        This replaces a bare ``@mcp.tool()`` and is the ONE seam. A withheld
+        tool's function is returned undecorated, so FastMCP never sees it:
+        ``Tool.from_function`` never runs, no arg-model/JSON schema is built, and
+        the tool exists in neither ``list_tools`` nor dispatch. Filtering happens
+        AT CONSTRUCTION — we never build a tool and then prune it, because a tool
+        that is never constructed cannot be forgotten about.
+
+        Requiring BOTH coordinates at every registration is the load-bearing
+        half: a new tool cannot be added without stating which subsystem it
+        belongs to and what it costs the deployment, right here, at the line its
+        author is already editing.
+        """
+
+        def register(fn: AnyTool) -> AnyTool:
+            if not cfg.tools.allows(group, tier):
+                return fn
+            return cast(AnyTool, mcp.tool()(fn))
+
+        return register
 
     def _client(ctx: Context) -> RestClient:
         """Authenticate the call and return a token-bearing REST client."""
@@ -95,7 +171,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
     # -- A. Sessions — create & control -----------------------------------
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.DRIVE)
     @_enveloped
     async def create_session(
         ctx: Context,
@@ -136,7 +212,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 idempotency_key=idempotency_key,
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.DRIVE)
     @_enveloped
     async def send_followup(ctx: Context, session_id: str, message: str) -> dict[str, Any]:
         """Send a follow-up / steering message into a session.
@@ -150,16 +226,34 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 session_id=session_id, message=message
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.DRIVE)
     @_enveloped
     async def interrupt_session(ctx: Context, session_id: str) -> dict[str, Any]:
         """Interrupt the current step of a session (graceful no-op when idle)."""
         async with _client(ctx) as client:
             return await tools.SessionTools(client).interrupt(session_id=session_id)
 
+    @tool(ToolGroup.SESSIONS, EffectTier.DRIVE)
+    @_enveloped
+    async def terminate_session(ctx: Context, session_id: str) -> dict[str, Any]:
+        """PERMANENTLY terminate a session — this is IRREVERSIBLE.
+
+        Unlike ``interrupt_session`` (which only pauses the current run so the
+        session can be steered or resumed afterward), this is a kill switch:
+        run/steer/recover/fork are blocked on this session FOREVER after the
+        call returns (its transcript stays readable). Every trigger armed on
+        the session is cancelled as part of the same operation
+        (``cancelled_triggers`` in the result). There is no un-terminate.
+        Idempotent — calling it again on an already-terminated session returns
+        the original ``terminated_at``/``cancelled_triggers`` rather than
+        erroring.
+        """
+        async with _client(ctx) as client:
+            return await tools.SessionTools(client).terminate(session_id=session_id)
+
     # -- B. Sessions — discover & read (tiered) ---------------------------
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.READ)
     @_enveloped
     async def list_sessions(
         ctx: Context,
@@ -172,14 +266,17 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
         Filters by ``project`` (repo name/identity), ``status``, or ``since`` (an
         ISO-8601 timestamp). Each row is ``{session_id, title, project, status,
-        done_reason, created_at, origin?, archived?}``.
+        done_reason, created_at, origin?, archived?, recoverable, blocked_code?,
+        failure_reason?, models_tried?}`` — the last four say WHETHER a session
+        can be retried and WHAT went wrong (the blocked/failure ones appear only
+        when the run hit them).
         """
         async with _client(ctx) as client:
             return await tools.SessionTools(client).list_sessions(
                 project=project, status=status, since=since, limit=limit
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.READ)
     @_enveloped
     async def get_session_history(
         ctx: Context,
@@ -192,9 +289,18 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
         ``level``:
         - ``overview`` — title, summary, authoritative status, turn/step counts,
-          token totals (cheapest).
+          token totals (cheapest). ``total_input_tokens`` is the summed per-turn
+          PEAK (context pressure); ``total_billed_input_tokens`` is every call's
+          input summed, which is the larger, spend-shaped number. Carries the
+          honest-outcome facets ``recoverable`` and (when the run hit one)
+          ``blocked_code`` / ``failure_reason`` / ``models_tried``.
         - ``turns`` — one row per turn: truncated user/assistant text,
-          done_reason, step count, per-turn tokens.
+          done_reason, step count, per-turn tokens, ``error`` (truncated) when
+          that turn's run failed, ``blocked_code`` when it hit a user-actionable
+          wall (``done_reason`` then reads ``"blocked"``, never a laundered
+          ``"completed"``), and ``unmet_goal_reason`` when a session-end hook
+          reported the purpose unmet despite a clean completion (``done_reason``
+          then reads ``"unmet_goal"``).
         - ``steps`` (needs ``turn``, 1-based) — per-step ``tool_id → summary``
           previews; no full results.
         - ``full`` (needs ``turn``) — full step logs (tool_input, result,
@@ -214,7 +320,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 session_id=session_id, level=level, turn=turn, step_offset=step_offset
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.SESSIONS, EffectTier.READ)
     @_enveloped
     async def get_agent_tree(ctx: Context, session_id: str) -> dict[str, Any]:
         """Return the session's sub-agent tree with per-agent lifecycle state.
@@ -227,14 +333,14 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
     # -- C. Wiki — query & ask --------------------------------------------
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.READ)
     @_enveloped
     async def list_wiki_projects(ctx: Context) -> list[Any]:
         """List the indexed Agentic Wiki projects available to query."""
         async with _client(ctx) as client:
             return await tools.WikiTools(client).list_projects()
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.READ)
     @_enveloped
     async def read_wiki_structure(
         ctx: Context,
@@ -254,14 +360,76 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 project=project, detail=detail, layer=layer, limit=limit
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.READ)
     @_enveloped
     async def read_wiki_page(ctx: Context, project: str, page_id: str) -> dict[str, Any]:
         """Return a single wiki page's markdown body, navigation, and TOC."""
         async with _client(ctx) as client:
             return await tools.WikiTools(client).read_page(project=project, page_id=page_id)
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.READ)
+    @_enveloped
+    async def list_wiki_pages(
+        ctx: Context,
+        project: str,
+        title_contains: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List a wiki project's generated pages as ``{id, title}`` rows.
+
+        The index ``read_wiki_page`` consumes — start here to see what a project's
+        wiki covers, then read the page whose title matches. ``title_contains``
+        narrows by a case-insensitive substring. Note that ``read_wiki_structure``
+        is a different thing entirely: it returns the CODE GRAPH, not a page list.
+
+        Paged rather than truncated: a response is always a complete list of rows,
+        and ``truncated: true`` plus ``nextOffset`` tell you to ask for the next
+        window instead of handing you a severed one.
+        """
+        async with _client(ctx) as client:
+            return await tools.WikiTools(client).list_pages(
+                project=project,
+                title_contains=title_contains,
+                limit=limit,
+                offset=offset,
+            )
+
+    @tool(ToolGroup.WIKI, EffectTier.NAVIGATE)
+    @_enveloped
+    async def graph_neighbors(
+        ctx: Context,
+        project: str,
+        node_id: str,
+        edge_kind: str | None = None,
+        direction: str = "any",
+        hops: int = 1,
+        limit: int = 25,
+    ) -> dict[str, Any]:
+        """Walk a project's code graph outward from one node — no model call.
+
+        Answers "what calls X", "what does X contain", "what imports X" in one
+        call instead of a dozen lookups, reading only stored edges. Find a
+        ``node_id`` with ``read_wiki_structure(detail="nodes")``.
+
+        ``direction``: ``out`` (X calls/contains/imports what) | ``in`` (what
+        calls/contains/extends X) | ``any``. ``edge_kind`` restricts to one of
+        ``CONTAINS``/``IMPORTS``/``CALLS``/``EXTENDS``/``REFERENCES``; omit for
+        all. ``hops`` is BFS depth (1-3). ``limit`` caps distinct neighbour nodes
+        (1-500). Returns ``{nodes, edges, hops_reached, truncated}``; ``truncated``
+        means ``limit`` cut the walk short, so raise it or narrow ``edge_kind``.
+        """
+        async with _client(ctx) as client:
+            return await tools.WikiTools(client).graph_neighbors(
+                project=project,
+                node_id=node_id,
+                edge_kind=edge_kind,
+                direction=direction,
+                hops=hops,
+                limit=limit,
+            )
+
+    @tool(ToolGroup.WIKI, EffectTier.ASK)
     @_enveloped
     async def submit_insight(
         ctx: Context,
@@ -293,7 +461,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 condense=condense,
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.ASK)
     @_enveloped
     async def ask_wiki(
         ctx: Context, project: str, question: str, model: str | None = None
@@ -311,7 +479,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 project=project, question=question, model=model
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.WIKI, EffectTier.READ)
     @_enveloped
     async def get_wiki_answer(
         ctx: Context, answer_id: str, detail: str = "answer"
@@ -324,7 +492,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
         async with _client(ctx) as client:
             return await tools.WikiTools(client).get_answer(answer_id=answer_id, detail=detail)
 
-    @mcp.tool()
+    @tool(ToolGroup.STRUCTURED, EffectTier.ASK)
     @_enveloped
     async def structured_query(
         ctx: Context,
@@ -352,7 +520,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 query=query, schema=schema, workspace=workspace, tools=tool_ids
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.STRUCTURED, EffectTier.READ)
     @_enveloped
     async def get_structured_run(ctx: Context, run_id: str) -> dict[str, Any]:
         """Fetch a structured run by id — resume a ``running`` ``structured_query``.
@@ -364,7 +532,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
     # -- D. Integrations / capability discovery ---------------------------
 
-    @mcp.tool()
+    @tool(ToolGroup.INTEGRATIONS, EffectTier.READ)
     @_enveloped
     async def list_integrations(
         ctx: Context,
@@ -383,7 +551,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 project=project, kind=kind, enabled=enabled
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.INTEGRATIONS, EffectTier.READ)
     @_enveloped
     async def list_projects(ctx: Context) -> dict[str, Any]:
         """List registered projects + their git identities for ``create_session``.
@@ -397,7 +565,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
 
     # -- E. Mewbo Search — multi-source workspace search ------------------
 
-    @mcp.tool()
+    @tool(ToolGroup.SEARCH, EffectTier.READ)
     @_enveloped
     async def list_search_workspaces(
         ctx: Context, query: str | None = None
@@ -413,7 +581,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
         async with _client(ctx) as client:
             return await tools.SearchTools(client).list_workspaces(query=query)
 
-    @mcp.tool()
+    @tool(ToolGroup.SEARCH, EffectTier.ASK)
     @_enveloped
     async def search(
         ctx: Context,
@@ -437,7 +605,7 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
                 query=query, workspace=workspace, project=project, detail=detail
             )
 
-    @mcp.tool()
+    @tool(ToolGroup.SEARCH, EffectTier.READ)
     @_enveloped
     async def get_search_run(
         ctx: Context, run_id: str, detail: str = "answer"
@@ -450,6 +618,41 @@ def build_server(config: McpConfig | None = None) -> FastMCP:
         """
         async with _client(ctx) as client:
             return await tools.SearchTools(client).get_run(run_id=run_id, detail=detail)
+
+    # -- H. Triggers — external manage/observe surface ---------------------
+
+    @tool(ToolGroup.TRIGGERS, EffectTier.READ)
+    @_enveloped
+    async def list_triggers(
+        ctx: Context,
+        session_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """List reverse-invocation triggers, optionally scoped, compact rows.
+
+        A trigger is a durable "wake me up" record armed by an agent from
+        inside a running session (via its own ``schedule_trigger`` tool) —
+        ``time.at``/``time.cron``/``ci.workflow``/``forge.pr``/``webhook`` —
+        that re-engages the session later. There is no create/arm tool here:
+        arming is deliberately an in-session, agent-facing capability, not a
+        general external mutation surface; this tool is the external
+        read/manage counterpart (list, then ``cancel_trigger``). Optionally
+        filter by ``session_id``, ``kind``, or ``status``
+        (``armed``/``paused``/``completed``/``failed``/``cancelled``/``expired``).
+        """
+        async with _client(ctx) as client:
+            return await tools.TriggerTools(client).list_triggers(
+                session_id=session_id, kind=kind, status=status, limit=limit
+            )
+
+    @tool(ToolGroup.TRIGGERS, EffectTier.DRIVE)
+    @_enveloped
+    async def cancel_trigger(ctx: Context, trigger_id: str) -> dict[str, Any]:
+        """Cancel a trigger by id (idempotent — repeat calls just report its status)."""
+        async with _client(ctx) as client:
+            return await tools.TriggerTools(client).cancel(trigger_id=trigger_id)
 
     return mcp
 

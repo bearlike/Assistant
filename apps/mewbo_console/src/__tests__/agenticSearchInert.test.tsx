@@ -1,5 +1,5 @@
 /**
- * Inertness + replay-vs-rerun tests for the Agentic Search surface (#80).
+ * Inertness + replay-vs-rerun tests for the Agentic Search surface.
  *
  * The landing page MUST be inert: mounting / revisiting `/search` never issues a
  * `POST /runs`. Past-query suggestions REPLAY a stored run (GET snapshot), and
@@ -13,7 +13,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 afterEach(cleanup)
 
-import AgenticSearchView from "../components/agentic_search/AgenticSearchView"
+import { AgenticSearchView } from "../components/agentic_search/AgenticSearchView"
 import * as api from "../api/agenticSearch"
 import type { RunRecord, Workspace } from "../types/agenticSearch"
 
@@ -132,7 +132,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("AgenticSearch landing inertness (#80)", () => {
+describe("AgenticSearch landing inertness", () => {
   it("never fires POST /runs on mount", async () => {
     renderView()
     // Wait for the landing page to settle (workspace hero renders).

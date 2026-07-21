@@ -6,6 +6,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { cardSurface } from "@/components/ui/card-surface"
 
 import { CopyButton } from "../CopyButton"
 import type { SearchResult, SourceCatalogEntry } from "../../types/agenticSearch"
@@ -54,6 +55,10 @@ const REL_DOT_COLORS: Record<"high" | "med" | "low", string> = {
 // How many meta chips ride the resting card; the rest fold into the expanded
 // tier behind a "+N" affordance.
 const META_VISIBLE = 6
+
+// A snippet longer than this clamps to 3 lines (`line-clamp-3`) at rest and
+// earns a More/Less toggle.
+const SNIPPET_CLAMP_CHARS = 240
 
 // Snippets carry exactly two inline highlight conventions: <mark> and <code>.
 // Parse those tokens explicitly into elements; everything else (including any
@@ -104,7 +109,7 @@ export function ResultCard({
   // anti-pattern was a no-op toggle that revealed dead fixture data).
   const insight = result.insight ?? null
   const refs = result.refs && result.refs.length > 0 ? result.refs : null
-  const longSnippet = result.snippet.length > 240
+  const longSnippet = result.snippet.length > SNIPPET_CLAMP_CHARS
   const expandable =
     overflowChips.length > 0 || insight != null || refs != null || longSnippet
 
@@ -112,9 +117,11 @@ export function ResultCard({
     <article
       id={`result-${result.id}`}
       className={cn(
-        "group rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2.5",
-        "shadow-[var(--elev-1)] transition-[box-shadow,border-color] duration-150 ease-out",
-        "hover:border-[hsl(var(--border-strong))] hover:shadow-[var(--elev-2)]",
+        "group",
+        cardSurface({ radius: "left", elevation: "elev-1" }),
+        "px-3.5 py-2.5",
+        "transition-[box-shadow,border-color] duration-150 ease-out",
+        "hover:border-[hsl(var(--border-strong))] hover:[box-shadow:var(--elev-2)]",
         highlighted &&
           "ring-2 ring-[hsl(var(--primary))] ring-inset bg-[hsl(var(--primary)/0.06)]"
       )}
@@ -128,12 +135,12 @@ export function ResultCard({
           {src?.name ?? result.source}
         </span>
         <span
-          className="flex-none px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
+          className="flex-none px-1.5 py-0.5 rounded text-2xs font-medium uppercase tracking-wide bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
         >
           {KIND_LABEL[result.kind]}
         </span>
         <span className="ml-auto flex items-center gap-2 flex-none">
-          {/* Agent-emitted cards carry the emitter's per-card confidence (#102);
+          {/* Agent-emitted cards carry the emitter's per-card confidence;
               connector-era cards have none — render nothing, never a fake 0%.
               Accessible via aria-label (the old title-only tooltip was a sweep
               anti-pattern). */}
@@ -147,7 +154,7 @@ export function ResultCard({
           )}
           {/* Relevance: an accessible labelled chip, not a title-only dot. */}
           <span
-            className="inline-flex items-center gap-1 text-[10px] font-medium"
+            className="inline-flex items-center gap-1 text-2xs font-medium"
             style={{ color: REL_DOT_COLORS[rel] }}
             aria-label={`${REL_LABEL[rel]} (${Math.round(result.relevance * 100)}%)`}
           >
@@ -162,13 +169,13 @@ export function ResultCard({
 
       {/* Title links to the target (new tab). Url-less cards (some connector
           hits) render the title as plain text — no dead "https://" link. */}
-      <h3 className="mt-1 text-[15px] font-medium leading-snug">
+      <h3 className="mt-1 text-sm font-medium leading-snug">
         {href ? (
           <a
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[hsl(var(--foreground))] hover:text-[hsl(var(--primary))] hover:underline underline-offset-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))] rounded-sm"
+            className="text-[hsl(var(--foreground))] hover:text-[hsl(var(--primary-text))] hover:underline underline-offset-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))] rounded-sm"
           >
             {result.title}
           </a>
@@ -179,15 +186,15 @@ export function ResultCard({
 
       {/* URL breadcrumb — suppressed entirely when empty (no dangling chrome). */}
       {hasUrl && (
-        <div className="mt-0.5 text-[11px] text-[hsl(var(--success))] truncate">
+        <div className="mt-0.5 text-2xs text-[hsl(var(--success))] truncate">
           {result.url}
         </div>
       )}
 
       <p
         className={cn(
-          "mt-1 text-[13.5px] leading-normal text-[hsl(var(--muted-foreground))]",
-          "[&_mark]:bg-[hsl(var(--primary)/0.18)] [&_mark]:text-[hsl(var(--primary))] [&_mark]:rounded-sm [&_mark]:px-0.5 [&_code]:font-mono [&_code]:text-[12.5px] [&_code]:bg-[hsl(var(--muted))] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded",
+          "mt-1 text-sm leading-normal text-[hsl(var(--muted-foreground))]",
+          "[&_mark]:bg-[hsl(var(--primary)/0.18)] [&_mark]:text-[hsl(var(--primary-text))] [&_mark]:rounded-sm [&_mark]:px-0.5 [&_code]:font-mono [&_code]:text-sm [&_code]:bg-[hsl(var(--muted))] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded",
           !expanded && longSnippet && "line-clamp-3"
         )}
       >
@@ -201,7 +208,7 @@ export function ResultCard({
             <MetaChipView key={c.key} chip={c} />
           ))}
           {!expanded && overflowChips.length > 0 && (
-            <span className="text-[11px] text-[hsl(var(--muted-foreground))] px-1">
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] px-1">
               +{overflowChips.length}
             </span>
           )}
@@ -220,7 +227,7 @@ export function ResultCard({
 
       {expanded && refs && (
         <div className="mt-2.5 border-l-2 border-[hsl(var(--border-strong))] pl-3 space-y-1.5">
-          <div className="text-[11px] uppercase tracking-wider font-mono text-[hsl(var(--muted-foreground))]">
+          <div className="text-2xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
             Referenced ({refs.length})
           </div>
           {refs.map((ref) => (
@@ -238,8 +245,8 @@ export function ResultCard({
       {expanded && insight && (
         <div className="mt-2.5 flex gap-2 p-3 rounded-md bg-[hsl(var(--permission)/0.08)] border border-[hsl(var(--permission)/0.25)]">
           <Sparkles className="h-4 w-4 text-[hsl(var(--permission))] flex-none mt-0.5" />
-          <div className="text-[13px]">
-            <div className="text-[11px] uppercase tracking-wider font-mono text-[hsl(var(--muted-foreground))] mb-0.5">
+          <div className="text-sm">
+            <div className="text-2xs uppercase tracking-wider text-[hsl(var(--muted-foreground))] mb-0.5">
               {insight.label}
             </div>
             <div className="leading-relaxed">{insight.body}</div>
@@ -255,7 +262,7 @@ export function ResultCard({
           <span className="truncate">{result.author}</span>
         )}
         {result.timestamp && result.timestamp.trim() && (
-          <span className="font-mono text-[11px] truncate">{result.timestamp}</span>
+          <span className="text-2xs truncate">{result.timestamp}</span>
         )}
         {expandable && (
           <button
@@ -326,7 +333,7 @@ function MetaChipView({ chip }: { chip: MetaChip }) {
     const token = STATUS_TONE_TOKEN[chip.tone ?? "neutral"]
     return (
       <span
-        className="inline-flex items-center gap-1 px-1.5 h-5 rounded text-[11px] font-medium"
+        className="inline-flex items-center gap-1 px-1.5 h-5 rounded text-2xs font-medium"
         style={{ background: `hsl(var(${token}) / 0.14)`, color: `hsl(var(${token}))` }}
         title={`${label}: ${value}`}
       >
@@ -342,14 +349,14 @@ function MetaChipView({ chip }: { chip: MetaChip }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-1.5 h-5 rounded text-[11px] font-medium",
+        "inline-flex items-center gap-1 px-1.5 h-5 rounded text-2xs font-medium",
         "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]"
       )}
       title={`${label}: ${value}`}
     >
       {Icon && <Icon className="h-3 w-3 flex-none opacity-70" />}
       {kind === "count" ? (
-        <span className="font-mono tabular-nums text-[hsl(var(--foreground))]">{value}</span>
+        <span className="tabular-nums text-[hsl(var(--foreground))]">{value}</span>
       ) : kind === "time" ? (
         <span>{value}</span>
       ) : (

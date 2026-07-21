@@ -60,7 +60,13 @@ class FakeRuntime:
         self.context_events: list[tuple[str, dict]] = []
         self.enqueued: list[tuple[str, str]] = []
         self.start_result: str | None = None  # None → mint "<sid>:r<n>"
+        self.terminated: set[str] = set()
         self._counter = 0
+        # Configurable stand-in for ``SessionRuntime.summarize_session`` — the
+        # real derivation (done_reason/blocked_code -> status) is core's own
+        # concern and is exercised in core's tests, not re-verified here; this
+        # fake only proves the hook WIRES the outcome into the reply.
+        self.outcome: dict[str, object] = {"status": "completed"}
 
     def resolve_session(self, session_tag: str | None = None, **_kw) -> str:
         sid = self.session_store.tags.get(session_tag or "")
@@ -74,12 +80,21 @@ class FakeRuntime:
     def is_running(self, session_id: str) -> bool:
         return self.running
 
+    def is_terminated(self, session_id: str) -> bool:
+        return session_id in self.terminated
+
+    def tag_session(self, session_id: str, tag: str) -> None:
+        self.session_store.tags[tag] = session_id
+
     def enqueue_message(self, session_id: str, text: str) -> bool:
         self.enqueued.append((session_id, text))
         return True
 
     def append_context_event(self, session_id: str, payload: dict) -> None:
         self.context_events.append((session_id, payload))
+
+    def summarize_session(self, session_id: str, *, events: list[dict] | None = None) -> dict:
+        return self.outcome
 
     def start_async(self, **kwargs) -> str:
         self.start_calls.append(kwargs)
@@ -363,6 +378,34 @@ def test_second_pickup_resumes_same_session(
     assert body["session_id"] == first.get_json()["session_id"]
     # Idle session → a fresh run, not a steering message.
     assert len(fake_runtime.start_calls) == 2
+
+
+def test_terminated_tag_mints_fresh_session(
+    client, auth_headers, fake_runtime, resolver_calls
+) -> None:
+    """A terminated tagged session must not dead-end a CI event.
+
+    The deterministic tag is re-pointed to a FRESH session so the pickup
+    resumes on a live one instead of bouncing forever on the dead tag.
+    """
+    first = client.post(URL, headers=auth_headers, json=_issue_body())
+    first_sid = first.get_json()["session_id"]
+
+    # The issue's session is permanently terminated between events.
+    fake_runtime.terminated.add(first_sid)
+
+    second = client.post(
+        URL, headers=auth_headers, json=_issue_body(comment="ping", comment_author="alice")
+    )
+    assert second.status_code == 200
+    body = second.get_json()
+    # A brand-new session, and treated as a fresh pickup (not a resume).
+    assert body["session_id"] != first_sid
+    assert body["resumed"] is False
+    # The tag now points at the fresh session, and a run started on it.
+    tag = "vcs:acme/widget:issue:7"
+    assert fake_runtime.session_store.tags[tag] == body["session_id"]
+    assert fake_runtime.start_calls[-1]["session_id"] == body["session_id"]
 
 
 def test_running_session_gets_steering_message(
@@ -700,6 +743,50 @@ def test_completion_hook_reports_run_error(fake_runtime, monkeypatch) -> None:
     )
     vcs_pickup._service.completion_hook("sess-1", "boom")
     assert posted[0][3] == "Session ended with an error: boom"
+
+
+def test_completion_hook_blocked_run_is_not_framed_as_success(fake_runtime, monkeypatch) -> None:
+    """A blocked pickup run must not close the issue/PR thread as if it finished."""
+    fake_runtime.session_store.transcript = _pickup_transcript()
+    fake_runtime.outcome = {"status": "blocked", "blocked_code": "repo_access"}
+    posted: list[tuple] = []
+    monkeypatch.setattr(
+        vcs_pickup._service, "post_comment", lambda *a: posted.append(a) or True
+    )
+    vcs_pickup._service.completion_hook("sess-1")
+    text = posted[0][3]
+    assert "blocked" in text.lower()
+    assert "repository access" in text
+    assert "All done." in text
+    assert not text.startswith("All done.")
+
+
+def test_completion_hook_unmet_goal_run_states_the_shortfall(fake_runtime, monkeypatch) -> None:
+    """An unmet-goal pickup run must not read as a completed handoff."""
+    fake_runtime.session_store.transcript = _pickup_transcript()
+    fake_runtime.outcome = {"status": "unmet_goal", "unmet_goal_reason": "verification failed"}
+    posted: list[tuple] = []
+    monkeypatch.setattr(
+        vcs_pickup._service, "post_comment", lambda *a: posted.append(a) or True
+    )
+    vcs_pickup._service.completion_hook("sess-1")
+    text = posted[0][3]
+    assert "goal" in text.lower()
+    assert "verification failed" in text
+    assert "All done." in text
+    assert not text.startswith("All done.")
+
+
+def test_completion_hook_completed_run_is_byte_unchanged(fake_runtime, monkeypatch) -> None:
+    """A genuinely completed pickup run's reply is untouched by the outcome check."""
+    fake_runtime.session_store.transcript = _pickup_transcript()
+    fake_runtime.outcome = {"status": "completed"}
+    posted: list[tuple] = []
+    monkeypatch.setattr(
+        vcs_pickup._service, "post_comment", lambda *a: posted.append(a) or True
+    )
+    vcs_pickup._service.completion_hook("sess-1")
+    assert posted == [("https://git.example.com/api/v1", "acme/widget", 7, "All done.")]
 
 
 @pytest.mark.parametrize("transcript", [

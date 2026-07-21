@@ -2,8 +2,9 @@
 
 Schema-constrained, tool-using, workspace-grounded synthesis over the core
 :class:`~mewbo_core.structured_response.StructuredResponder`. Mirrors the
-``agentic_search`` mount pattern: a module-global auth guard + runtime injected
-by :func:`init_structured`; the namespace is mounted at ``/v1/structured``.
+``agentic_search`` mount pattern: a module-global runtime injected by
+:func:`init_structured`; the namespace is mounted at ``/v1/structured``. Auth is
+declared ON each view with ``@guard.requires``, never injected here.
 
 The ``POST`` kicks the run off via the core async handle
 (:meth:`StructuredResponder.start_async` → a ``"<session_id>:r<seq>"`` run_id)
@@ -17,7 +18,6 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from collections.abc import Callable
 from typing import Any
 
 from flask import request
@@ -30,13 +30,14 @@ from mewbo_core.structured_response import (
 )
 from pydantic import BaseModel, Field
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.request_context import request_surface
 from mewbo_api.responses import ApiResponseKit
 from mewbo_api.structured.synthesis import SynthesisRunner
 
 
 class RunProvenance(BaseModel):
-    """Graph-first pathway/probe provenance for a structured run (#77).
+    """Graph-first pathway/probe provenance for a structured run.
 
     The additive audit trail a graph-first ``/v1/structured`` run surfaces in its
     GET payload — the story "graph consulted → probes executed → emit". Pure
@@ -56,9 +57,6 @@ class RunProvenance(BaseModel):
 
 logging = get_logger(name="api.structured.routes")
 
-AuthResult = tuple[dict, int] | None
-AuthGuard = Callable[[], AuthResult]
-
 # Bounded fast-path await: how long the POST waits for a quick completion
 # before returning ``running``. Kept short so the request never blocks a worker
 # for long — slow runs are polled via ``GET /v1/structured/<run_id>``.
@@ -73,14 +71,16 @@ _NO_RESULT_REASON = "model did not emit a structured result; retry with a simple
 
 # Terminal session statuses (from ``summarize_session``) — a terminal session
 # with no ``structured_output`` is a hard "no result" error, not "still running".
-_TERMINAL_STATUSES = frozenset({"completed", "incomplete", "failed", "canceled"})
+# ``terminated`` MUST be here: without it a hard-terminated backing
+# session (whose run can never complete) fell through to the still-running 200
+# branch, so ``GET /v1/structured/<run_id>`` polled forever. It is terminal, but
+# gets the canonical 410 Gone envelope rather than the generic 422 (see the GET
+# handler) — a deliberate kill is not an unprocessable request.
+_TERMINAL_STATUSES = frozenset(
+    {"completed", "incomplete", "failed", "canceled", "terminated"}
+)
 
 
-def _no_auth() -> AuthResult:
-    return None
-
-
-_require_api_key: AuthGuard = _no_auth
 _runtime: Any = None
 
 structured_ns = Namespace(
@@ -95,10 +95,14 @@ structured_ns = Namespace(
 kit = ApiResponseKit(structured_ns, prefix="Structured")
 
 
-def init_structured(api: object, require_api_key: AuthGuard, runtime: Any = None) -> None:
-    """Wire the namespace + capture the auth guard and the session runtime."""
-    global _require_api_key, _runtime
-    _require_api_key = require_api_key
+def init_structured(api: object, runtime: Any = None) -> None:
+    """Wire the namespace + capture the session runtime.
+
+    Authentication and authorization are NOT wired here: every view declares its
+    own requirement with ``@guard.requires``, which resolves the live
+    ``AuthKit`` through ``guard_registry`` at request time.
+    """
+    global _runtime
     _runtime = runtime
     api.add_namespace(structured_ns, path="/v1/structured")  # type: ignore[attr-defined]
 
@@ -146,7 +150,7 @@ def _provenance_from(events: list[dict[str, Any]]) -> RunProvenance | None:
     """Summarize the graph-first probe fan-out from an already-loaded transcript.
 
     Reconstructs the pathway/probe provenance for a graph-first structured run
-    (#77) from the same transcript the result is read from: which probe
+    from the same transcript the result is read from: which probe
     sub-agents ran (``sub_agent`` events) and how many ``scg_route`` calls routed
     pathways (``tool_result`` events). ADDITIVE — returns ``None`` for a
     non-graph (wiki-grounded or plain) run that fanned no probes, so the wire
@@ -347,6 +351,7 @@ class StructuredResource(Resource):
     @kit.errors(409, 422, 500)
     @kit.errors(400, 503, shape="message")
     @kit.auth_error()
+    @guard.requires("sessions.create")
     def post(self) -> tuple[dict, int]:
         """Run a structured query.
 
@@ -362,8 +367,6 @@ class StructuredResource(Resource):
         inline with status `completed` plus grounding citations — lower latency for
         cheap structured extraction.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         if _runtime is None:
             return {"message": "Structured response not initialized"}, 503
         data = request.get_json(silent=True) or {}
@@ -382,15 +385,15 @@ class StructuredResource(Resource):
         model = data.get("model") if isinstance(data.get("model"), str) else None
 
         # ``mode: "synthesis"`` selects the no-loop, single-round-trip strategy
-        # (the former /v1/structured/fast lane, folded in by #85): a synchronous
+        # (the former /v1/structured/fast lane, folded in): a synchronous
         # StructuredSynthesizer call instead of the agentic ToolUseLoop — ~1–3s,
         # retrieval-only, no tools. Anything else (incl. the default 'agentic')
         # takes the tool-using, session-backed path below.
         if isinstance(data.get("mode"), str) and data["mode"] == "synthesis":
             return self._run_synthesis(query, schema, workspace, model)
 
-        responder = self._build_responder(schema, workspace, tools, model)
         try:
+            responder = self._build_responder(schema, workspace, tools, model)
             run_id = responder.start_async(query)
         except StructuredResponseError as exc:
             return _error(422, str(exc))
@@ -454,7 +457,7 @@ class StructuredResource(Resource):
         """Build the structured responder, routing graph-first when eligible.
 
         When ``workspace`` resolves to a mapped Agentic Search workspace and SCG
-        is enabled, the run goes GRAPH-FIRST (#77): the same agentic session, but
+        is enabled, the run goes GRAPH-FIRST: the same agentic session, but
         granted the ``scg`` capability + graph traversal tools + the workspace
         source scope, driven by the ``scg-search-structured`` playbook so it
         routes → fans probes out → aggregates → emits a schema-validated object.
@@ -525,6 +528,13 @@ class StructuredResource(Resource):
                 tools=tools,
                 source_platform=surface,
             )
+        except StructuredResponseError:
+            # A genuine refusal (e.g. the caller's `tools` narrowed the grant
+            # to nothing) is NOT a "graph unavailable" failure -- silently
+            # falling back to the default path here would still start a run,
+            # just an unscoped one the caller never asked for. Let it surface
+            # as the caller's own 422 instead (see build_responder).
+            raise
         except Exception as exc:  # noqa: BLE001 — fall back to default grounding
             logging.warning("graph-first structured resolution failed: {}", exc)
             return None
@@ -574,6 +584,7 @@ class StructuredRunResource(Resource):
     @kit.errors(404, 422)
     @kit.errors(503, shape="message")
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, run_id: str) -> tuple[dict, int]:
         """Get a structured run.
 
@@ -583,13 +594,11 @@ class StructuredRunResource(Resource):
         `provenance` object summarizing the pathways routed and probes executed.
         A run that ends without a valid output returns 422 with an error envelope.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         if _runtime is None:
             return {"message": "Structured response not initialized"}, 503
         session_id = _session_id_of(run_id)
-        # Unknown run id must 404, not fall through to the phantom idle/422 branch
-        # (#40/#64). ``summarize_session`` never raises for an unknown id — it
+        # Unknown run id must 404, not fall through to the phantom idle/422 branch.
+        # ``summarize_session`` never raises for an unknown id — it
         # returns ``status:"idle"`` (∉ _TERMINAL_STATUSES) → a misleading running
         # 200 / 422. Check existence FIRST so a genuinely-unknown run is a clean
         # 404 while a real failed run still 422s and a running one stays running.
@@ -615,7 +624,7 @@ class StructuredRunResource(Resource):
                 "status": "completed",
                 "output": output,
             }
-            # Graph-first runs (#77) carry additive pathway/probe provenance: the
+            # Graph-first runs carry additive pathway/probe provenance: the
             # auditor sees graph consulted → probes executed → emit. Absent for a
             # plain/wiki run that fanned no probes.
             provenance = _provenance_from(events)
@@ -626,6 +635,15 @@ class StructuredRunResource(Resource):
         if output is not None and _is_validation_error_payload(output):
             # The emit tool gave up after the reask cap — a structured failure.
             return {"run_id": run_id, "status": status, **_error(422, _NO_RESULT_REASON)[0]}, 422
+
+        if status == "terminated":
+            # A permanently terminated backing session is an absorbing
+            # kill state, not a schema failure: its run can never produce an
+            # output, so stop the poll with the canonical 410 Gone envelope (the
+            # ONE home, ApiResponseKit) rather than the generic 422 unprocessable
+            # or the old still-running 200 that looped forever.
+            body, code = ApiResponseKit.terminated_response()
+            return {"run_id": run_id, **body}, code
 
         if status in _TERMINAL_STATUSES:
             # Terminal with no structured_output → the model never produced one.

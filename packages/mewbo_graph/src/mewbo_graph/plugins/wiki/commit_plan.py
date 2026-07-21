@@ -56,14 +56,13 @@ class WikiCommitPlanTool(WikiSessionTool):
 
         emit_phase(ctx, "plan")
 
-        # Checkpoint-aware resume (Gitea #54): reuse the plan the interrupted
+        # Checkpoint-aware resume: reuse the plan the interrupted
         # index already committed so the reused graph stays consistent with it.
         # Done-detection lives ONLY in ResumePlan (DRY); this is the one-line
-        # short-circuit. Advance to ``pages`` so the page-writers run next.
+        # short-circuit.
         rp = ctx.resume_plan
         if rp is not None and rp.should_skip("plan"):
             emit_log(ctx, f"Plan already committed ({rp.total_pages} pages) — skipped on resume")
-            emit_phase(ctx, "pages")
             return MockSpeaker(content=str({
                 "committed": rp.total_pages,
                 "skipped": "plan already committed — reused on resume",
@@ -107,8 +106,10 @@ class WikiCommitPlanTool(WikiSessionTool):
             preview = ", ".join(titles)
             more = "" if len(args.pages) <= 5 else f" (+{len(args.pages) - 5} more)"
             emit_log(ctx, f"Planned pages: {preview}{more}")
-        emit_phase(ctx, "pages")
 
+        # ``pages`` is deliberately NOT stamped here. Committing a plan is not the
+        # same event as writing one — the page-writers stamp it themselves on the
+        # first wiki_submit_page, so the phase marks work that actually started.
         return MockSpeaker(content=str({"committed": total_pages}))
 
 

@@ -17,13 +17,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -38,10 +40,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.mewbo.aura.data.model.SessionSummary
+import com.mewbo.aura.ui.chat.ChatIcons
 import com.mewbo.aura.ui.sessions.RecentsFilter
 import com.mewbo.aura.ui.sessions.SessionGrouping
 import com.mewbo.aura.ui.sessions.SessionsUiState
@@ -72,6 +77,7 @@ fun AuraDrawerContent(
     onOpenSearch: () -> Unit,
     onOpenSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenApps: () -> Unit,
     modifier: Modifier = Modifier,
     sessionsViewModel: SessionsViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
@@ -97,7 +103,7 @@ fun AuraDrawerContent(
             .orEmpty()
     }
 
-    Column(modifier = modifier.fillMaxSize().background(AuraColors.surfaceCanvas)) {
+    Column(modifier = modifier.fillMaxSize().background(AuraColors.surfaceDrawer)) {
         LazyColumn(modifier = Modifier.weight(1f)) {
             item {
                 Text(
@@ -123,6 +129,30 @@ fun AuraDrawerContent(
                     selected = false,
                     onClick = onOpenSearch,
                     leading = { Icon(Icons.Default.Search, contentDescription = null, tint = AuraColors.iconPrimary) },
+                )
+            }
+            item {
+                // Mewbo Apps (design spec §4D) — a peer nav destination to Search chats, pushed
+                // WITHOUT the drawer once opened (same "drawer only on home" pattern as Search).
+                DrawerRow(
+                    label = "Apps",
+                    selected = false,
+                    onClick = onOpenApps,
+                    leading = { Icon(Icons.Default.Apps, contentDescription = null, tint = AuraColors.iconPrimary) },
+                )
+            }
+            item {
+                // Subtle section divider (side-rail visual-polish task, 2026-07-14): separates the
+                // New chat / Search chats action rows from the Recents list below, same hairline
+                // token DESIGN.md §4 names for ALL dividers. RecentsHeader still carries its own
+                // sectionHeaderTopPad above "Recents" itself, so this stays a tight inset rather than
+                // stacking a second large gap on top of that one.
+                HorizontalDivider(
+                    color = AuraColors.outlineHairline,
+                    modifier = Modifier.padding(
+                        horizontal = AuraSpacing.screenGutter,
+                        vertical = AuraSpacing.Composer.gapTight,
+                    ),
                 )
             }
             item { RecentsHeader(filter = recentsFilter, onFilterChange = sessionsViewModel::setFilter) }
@@ -158,6 +188,13 @@ fun AuraDrawerContent(
                 }
             }
         }
+        // Subtle divider above the pinned footer (side-rail visual-polish task, 2026-07-14) — the
+        // same hairline treatment as the action-rows/Recents divider above, closing the rail's
+        // third section (Recents list vs. the settings/user-icon/username area).
+        HorizontalDivider(
+            color = AuraColors.outlineHairline,
+            modifier = Modifier.padding(horizontal = AuraSpacing.screenGutter),
+        )
         DrawerFooter(displayName = settingsState.displayName, onOpenSettings = onOpenSettings)
     }
 
@@ -185,8 +222,22 @@ fun AuraDrawerContent(
  * defaults to [RecentsFilter.MOBILE_ONLY]; the overflow menu flips to [RecentsFilter.ALL] —
  * mirroring the web console's origin-scoped session list, collapsed to a single binary toggle so
  * the rail stays uncluttered. This header is the stable anchor the date sub-dividers hang beneath.
- * ([Icons.Default.MoreVert] because only `material-icons-core` is on the classpath — no funnel
- * glyph without the multi-MB extended pack, which the app deliberately omits.)
+ *
+ * Side-rail visual-polish task, 2026-07-14: gained a leading [ChatIcons.Clock] glyph (reused
+ * verbatim — an existing house glyph, not a new hand-roll; team-lead directive: keep it), sized/
+ * tinted/spaced exactly like `SettingsScreen`'s own `SettingsSectionHeader`
+ * (`AuraSpacing.DrawerRow.iconSize`/`iconToLabelGap`, `textSecondary` — "the glyph reads as one
+ * hierarchy step below body content, same tier as the label beside it, never louder"), purely
+ * decorative (`contentDescription = null`, the "Recents" text is the accessible name). The trigger
+ * also swapped [Icons.Default.MoreVert] for [Icons.Default.FilterAlt] — a real funnel glyph reads
+ * as "filter" where a generic overflow dot-stack doesn't. `FilterAlt` lands from
+ * `material-icons-extended`, added to the dependency catalog 2026-07-14 (orchestrator, hard user
+ * directive: real Material icons only, never hand-rolled vector paths) specifically because
+ * `material-icons-core` carries no filter glyph at all — this was originally a hand-ported
+ * `filter_alt` path (verbatim official SVG data) before the dependency landed; now deleted in
+ * favor of the real library icon. `Icons.Default.*` (== `Icons.Filled.*`), matching every other
+ * icon already in this drawer (Edit/Search/Settings/Check) — not the outlined family, so the
+ * rail's icon language stays one weight.
  */
 @Composable
 private fun RecentsHeader(
@@ -205,10 +256,24 @@ private fun RecentsHeader(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = "Recents", style = AuraType.sectionHeader, modifier = Modifier.weight(1f))
+        Icon(
+            imageVector = ChatIcons.Clock,
+            contentDescription = null,
+            tint = AuraColors.textSecondary,
+            modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
+        )
+        Spacer(Modifier.width(AuraSpacing.DrawerRow.iconToLabelGap))
+        Text(
+            text = "Recents",
+            style = AuraType.sectionHeader,
+            // TalkBack heading-navigation anchor (accessibility pass, side-rail visual-polish task) -
+            // scoped to the text itself, not the whole Row, so the filter IconButton beside it keeps
+            // its own independent, unmerged semantics node.
+            modifier = Modifier.weight(1f).semantics { heading() },
+        )
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "Filter sessions", tint = AuraColors.textSecondary)
+                Icon(Icons.Default.FilterAlt, contentDescription = "Filter sessions", tint = AuraColors.textSecondary)
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 FilterMenuItem(label = "Mobile", selected = filter == RecentsFilter.MOBILE_ONLY) {

@@ -46,7 +46,7 @@ export function SrcAvatar({ source, size = 22, className }: SrcAvatarProps) {
     <span
       aria-hidden
       className={cn(
-        "inline-flex items-center justify-center font-semibold flex-none select-none",
+        "inline-flex items-center justify-center font-medium flex-none select-none",
         className
       )}
       style={{

@@ -30,7 +30,7 @@ The sub-agent has a component catalog and designs the layout itself. **Your task
 # ✓ Correct — data + purpose only
 task=(
   "Show the current AAPL stock price and recent price trend. "
-  "Data: /tmp/aapl_data.json — fields: quote.price, quote.change, "
+  "Data: /tmp/mewbo/aapl_data.json — fields: quote.price, quote.change, "
   "quote.pct_change, quote.open, quote.high, quote.low, quote.volume, "
   "daily[].date, daily[].close (30 days, newest first)."
 )
@@ -47,11 +47,11 @@ task=(
 
 ## Data hand-off
 
-Write structured data to a file before spawning — never paste raw JSON into the task string:
+Write structured data to a file before spawning — never paste raw JSON into the task string. Stage it under `/tmp/mewbo/` (or the session cwd): the file tools can only read inside `/tmp/mewbo/`, the cwd, and configured project roots, so a bare `/tmp/...` path would be unreadable by the sub-agent.
 
 ```bash
 gh search repos --json name,description,stargazerCount,language,url \
-    --limit 10 "topic:streamlit" > /tmp/mewbo_gh_results.json
+    --limit 10 "topic:streamlit" > /tmp/mewbo/gh_results.json
 ```
 
 Then pass the path and field names in the task. The sub-agent reads, transforms, and discards the rest.
@@ -65,3 +65,4 @@ The widget is already visible the moment `widget_ready` fires. Reply with one se
 - Do not write `.html`, `.css`, or Python yourself
 - Do not call `activate_skill("st-widget-builder")` — that does nothing; use `spawn_agent`
 - Do not describe the visual layout in the task — it defeats the catalog and bloats the widget
+- **Theming.** The platform auto-themes every app/widget (streamlit-facade + Streamlit config); never call `facade.theme.apply` or inject styling/CSS yourself. For custom HTML or chart colors, read the theme's CSS variables (e.g. `var(--primary)`, `var(--muted-foreground)`).

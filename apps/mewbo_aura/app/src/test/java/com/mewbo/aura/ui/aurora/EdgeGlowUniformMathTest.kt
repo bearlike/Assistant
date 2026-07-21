@@ -96,7 +96,7 @@ class EdgeGlowUniformMathTest {
         assertEquals(expected, EdgeGlowUniformMath.VISIBILITY_TRANSITION_MS)
     }
 
-    // Gitea #181 P2: the old angle-based 4-stop hue wheel (and its huePhase/RESTING_EXTENT_FRACTION
+    // the old angle-based 4-stop hue wheel (and its huePhase/RESTING_EXTENT_FRACTION
     // uniform math) is gone entirely - color is now a plain two-stop blend by the bloom's own
     // intensity (see AuroraEdgeGlow.kt's shader), which removes the whole periodic-wrong-hue bug
     // class rather than bounding it. The tests below cover what replaced it: horizontal
@@ -107,11 +107,11 @@ class EdgeGlowUniformMathTest {
         // The shader computes horizontalWeight = 1 - centerWeight * smoothstep(...), so at the far
         // corners (smoothstep saturates to 1) brightness floors at 1 - centerWeight. Strictly less
         // than 1 for every state guarantees that floor is always > 0 - never a hard vignette to zero,
-        // even for Thinking's "no corner reach" (#181 review: reads as none, isn't literally zero).
+        // even for Thinking's "no corner reach" (reads as none, isn't literally zero).
         for (state in listOf(EdgeGlowState.Hidden, EdgeGlowState.Igniting(1f), EdgeGlowState.Listening(5f), EdgeGlowState.Thinking)) {
             assertTrue("centerWeightStrength($state) must stay < 1", EdgeGlowUniformMath.centerWeightStrength(state) in 0f..<1f)
         }
-        // #181 review refinement: Thinking suppresses corners harder than Listening ("no corner
+        // Thinking suppresses corners harder than Listening ("no corner
         // reach" vs "faint reach").
         assertTrue(
             EdgeGlowUniformMath.centerWeightStrength(EdgeGlowState.Thinking) >
@@ -121,7 +121,7 @@ class EdgeGlowUniformMathTest {
 
     @Test
     fun `decay depth contracts for thinking, igniting targets listening's wide resting reach`() {
-        // #181 review refinement: idle-listening reads WIDE (measured reach into the corners),
+        // idle-listening reads WIDE (measured reach into the corners),
         // streaming/thinking contracts to hug the pill. Igniting is the entry animation immediately
         // before Listening begins, so it targets Listening's reach, not its own.
         assertEquals(AuraColors.auroraOverlayBloomDecayDepth, EdgeGlowUniformMath.decayDepthDp(EdgeGlowState.Listening(5f)))
@@ -157,5 +157,32 @@ class EdgeGlowUniformMathTest {
     fun `wave drift is disabled under reduced motion, present otherwise`() {
         assertEquals(0f, EdgeGlowUniformMath.waveSpeedHz(reducedMotion = true))
         assertTrue(EdgeGlowUniformMath.waveSpeedHz(reducedMotion = false) > 0f)
+    }
+
+    @Test
+    fun `resting is a visible, static, low-intensity pool between thinking and listening reach`() {
+        assertEquals(1f, EdgeGlowUniformMath.targetVisible(EdgeGlowState.Resting))
+        assertEquals(1f, EdgeGlowUniformMath.igniteProgress(EdgeGlowState.Resting, reducedMotion = false))
+        val t0 = EdgeGlowUniformMath.intensity(EdgeGlowState.Resting, timeSeconds = 0f, reducedMotion = false)
+        val t3 = EdgeGlowUniformMath.intensity(EdgeGlowState.Resting, timeSeconds = 3.3f, reducedMotion = false)
+        assertTrue("resting must sit below the active baseline", t0 < 1f && t0 > 0f)
+        assertEquals("resting must not breathe/oscillate", t0, t3)
+        val resting = EdgeGlowUniformMath.decayDepthDp(EdgeGlowState.Resting)
+        assertTrue(resting < EdgeGlowUniformMath.decayDepthDp(EdgeGlowState.Listening(5f)))
+        assertTrue(resting > EdgeGlowUniformMath.decayDepthDp(EdgeGlowState.Thinking))
+    }
+
+    @Test
+    fun `resting carries its own transition key`() {
+        assertEquals(4, EdgeGlowUniformMath.transitionKey(EdgeGlowState.Resting))
+    }
+
+    @Test
+    fun `perimeter floor is edge-lit in every live state and zero when hidden`() {
+        assertEquals(0f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Hidden))
+        assertEquals(0.35f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Listening(0f)))
+        assertEquals(0.30f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Resting))
+        assertEquals(0.15f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Thinking))
+        assertTrue(EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Igniting(0.5f)) > 0f)
     }
 }

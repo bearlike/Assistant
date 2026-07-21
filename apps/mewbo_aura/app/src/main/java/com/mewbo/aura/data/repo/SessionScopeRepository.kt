@@ -12,7 +12,7 @@ import kotlinx.coroutines.CancellationException
 class SessionScopeRepository @Inject constructor(
     private val api: AuraApi,
 ) {
-    // Gitea #181 fix wave, finding 2: both fetches run inside ChatViewModel's own async{} pairs
+    // both fetches run inside ChatViewModel's own async{} pairs
     // (refreshComposerScope/bind's prefetch/selectProject) - a cancelled coroutine there must
     // propagate, not resolve to null and let the caller act on a "failure" that was really a
     // cancellation. rethrowCancellation before falling back to the degrade-to-null path.
@@ -21,8 +21,8 @@ class SessionScopeRepository @Inject constructor(
             .onFailure { if (it is CancellationException) throw it }
             .getOrNull()
 
-    /** MCP tools, plus capability-gated product tools (wiki_*, scg_*, agentic_search - Gitea #182
-     * P1: `server`-grouped entries at `scope == "plugin"`). Plain core builtins (shell, edit, ...)
+    /** MCP tools, plus capability-gated product tools (wiki_*, scg_*, agentic_search -
+     * `server`-grouped entries at `scope == "plugin"`). Plain core builtins (shell, edit, ...)
      * stay excluded - they have no per-run allowlist knob and would flood the picker with entries
      * nobody can usefully toggle. The backend's own `classify_tool_scope` always resolves a
      * non-MCP core builtin to `scope == "builtin"`, so `scope == "plugin"` cleanly picks out ONLY

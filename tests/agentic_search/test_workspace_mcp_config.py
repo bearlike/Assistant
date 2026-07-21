@@ -1,4 +1,4 @@
-"""``WorkspaceMcpConfig`` — the DB-persisted virtual MCP config (#75).
+"""``WorkspaceMcpConfig`` — the DB-persisted virtual MCP config.
 
 Drives the real :class:`WorkspaceMcpConfig` façade over a real JSON
 agentic_search store (no Mongo, no LLM), the ``CredentialStore`` test stance:
@@ -32,10 +32,10 @@ _MERGED = {
     "servers": {
         "gitea": {
             "transport": "streamable_http",
-            "url": "http://mcp.example.com/mcp/Gitea-Hurricane",
+            "url": "http://mcp.example.com/mcp/Gitea",
             "headers": {"Authorization": "Bearer sk-cloud-SECRET"},
         },
-        "sidestage-postgres": {
+        "beacon-postgres": {
             "command": "uvx",
             "args": ["postgres-mcp", "--access-mode=unrestricted"],
             "env": {"DATABASE_URI": "postgresql://u:p@postgres:5432/db"},
@@ -84,9 +84,9 @@ def test_resolve_servers_lifts_transport_and_secrets() -> None:
     """The typed def carries transport/url + the secret-bearing fields."""
     [gitea] = WorkspaceMcpConfig.resolve_servers(["gitea"])
     assert gitea.transport == "streamable_http"
-    assert gitea.url.endswith("/mcp/Gitea-Hurricane")
+    assert gitea.url.endswith("/mcp/Gitea")
     assert gitea.headers == {"Authorization": "Bearer sk-cloud-SECRET"}
-    [pg] = WorkspaceMcpConfig.resolve_servers(["sidestage-postgres"])
+    [pg] = WorkspaceMcpConfig.resolve_servers(["beacon-postgres"])
     assert pg.command == "uvx"
     assert pg.env == {"DATABASE_URI": "postgresql://u:p@postgres:5432/db"}
 
@@ -96,10 +96,10 @@ def test_resolve_servers_lifts_transport_and_secrets() -> None:
 
 def test_save_load_round_trip(store: JsonAgenticSearchStore) -> None:
     """save → load returns the same selection, secrets intact AT REST."""
-    saved = WorkspaceMcpConfig.save(store, "ws-1", ["gitea", "sidestage-postgres"])
+    saved = WorkspaceMcpConfig.save(store, "ws-1", ["gitea", "beacon-postgres"])
     loaded = WorkspaceMcpConfig.load(store, "ws-1")
     assert loaded is not None
-    assert loaded.server_names() == saved.server_names() == ["gitea", "sidestage-postgres"]
+    assert loaded.server_names() == saved.server_names() == ["gitea", "beacon-postgres"]
     # The credential survives the encode/decode seam at rest (so a run can use it).
     gitea = next(s for s in loaded.servers if s.name == "gitea")
     assert gitea.headers["Authorization"] == "Bearer sk-cloud-SECRET"
@@ -108,10 +108,10 @@ def test_save_load_round_trip(store: JsonAgenticSearchStore) -> None:
 def test_save_overwrites_prior_selection(store: JsonAgenticSearchStore) -> None:
     """A second save (a workspace update) replaces the prior config in place."""
     WorkspaceMcpConfig.save(store, "ws-1", ["gitea", "internet-search"])
-    WorkspaceMcpConfig.save(store, "ws-1", ["sidestage-postgres"])
+    WorkspaceMcpConfig.save(store, "ws-1", ["beacon-postgres"])
     loaded = WorkspaceMcpConfig.load(store, "ws-1")
     assert loaded is not None
-    assert loaded.server_names() == ["sidestage-postgres"]
+    assert loaded.server_names() == ["beacon-postgres"]
 
 
 # ── redaction (the security invariant) ──────────────────────────────────────
@@ -119,7 +119,7 @@ def test_save_overwrites_prior_selection(store: JsonAgenticSearchStore) -> None:
 
 def test_redacted_masks_every_secret_value(store: JsonAgenticSearchStore) -> None:
     """The outward projection masks header/env VALUES but keeps the key shape."""
-    WorkspaceMcpConfig.save(store, "ws-1", ["gitea", "sidestage-postgres"])
+    WorkspaceMcpConfig.save(store, "ws-1", ["gitea", "beacon-postgres"])
     loaded = WorkspaceMcpConfig.load(store, "ws-1")
     assert loaded is not None
     red = loaded.redacted()
@@ -128,14 +128,14 @@ def test_redacted_masks_every_secret_value(store: JsonAgenticSearchStore) -> Non
     assert "postgresql://" not in serialized
     by_name = {s["name"]: s for s in red["servers"]}
     assert by_name["gitea"]["headers"] == {"Authorization": "***"}
-    assert by_name["sidestage-postgres"]["env"] == {"DATABASE_URI": "***"}
+    assert by_name["beacon-postgres"]["env"] == {"DATABASE_URI": "***"}
 
 
 def test_auth_scope_names_auth_without_revealing_it() -> None:
     """auth_scope surfaces WHICH auth a server carries, never the secret."""
     [gitea] = WorkspaceMcpConfig.resolve_servers(["gitea"])
     assert gitea.auth_scope() == "header:Authorization"
-    [pg] = WorkspaceMcpConfig.resolve_servers(["sidestage-postgres"])
+    [pg] = WorkspaceMcpConfig.resolve_servers(["beacon-postgres"])
     assert pg.auth_scope() == "env:DATABASE_URI"
 
 

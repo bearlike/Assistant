@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#54 fallback ladder × #113 per-model variants: escalation re-variants prompts.
+"""Fallback ladder × per-model variants: escalation re-variants prompts.
 
 When the resilience strategy escalates to (and pins) a fallback model, the loop
 must re-render its system prompt AND re-derive its edit-tool variant against the

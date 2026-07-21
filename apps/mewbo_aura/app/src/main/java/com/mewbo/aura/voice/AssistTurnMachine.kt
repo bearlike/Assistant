@@ -21,12 +21,12 @@ import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.launch
 
 /**
- * The v5 assist-overlay state machine (Gitea #181), owned by [com.mewbo.aura.voice.AuraSession].
+ * The v5 assist-overlay state machine, owned by [com.mewbo.aura.voice.AuraSession].
  * A PLAIN atomic class (state as constructor-injected attributes, behavior as methods) - not a
  * `ViewModel`, since a `VoiceInteractionSession` isn't a `ViewModelStoreOwner` host and this needs
  * to be driven with a caller-supplied [scope]/deps for unit testing anyway.
  *
- * Voice-first, first-turn-in-overlay (supersedes v4/#178's text-first, handoff-only contract - see
+ * Voice-first, first-turn-in-overlay (supersedes v4's text-first, handoff-only contract - see
  * [AssistUiState]'s KDoc): the FIRST turn of an invocation streams its response into the overlay as
  * a card ([AssistUiState.Streaming], folding [liveEvents] through [TranscriptReducer] exactly like
  * the pre-v4 machine did - recovered from `git show f7e505a:.../AssistTurnMachine.kt` for this spec,
@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
  * mocking library needed for the repo boundary at all.
  *
  * [transcriber] + [synthesizer] and the full [startListening] capture loop are UNCHANGED from v4 -
- * only the CALLER changed (Gitea #181's auto-listen lives in `AuraSession.onShow()`, right after
+ * only the CALLER changed (v5 auto-listen lives in `AuraSession.onShow()`, right after
  * [show], gated on `RECORD_AUDIO` the same way the mic tap already was - the machine itself still
  * doesn't know or care how [startListening] got invoked).
  */
@@ -51,13 +51,13 @@ class AssistTurnMachine(
     private val sessions: StateFlow<List<SessionSummary>>,
     private val createSession: suspend () -> String,
     private val sendQuery: suspend (sessionId: String, text: String) -> Unit,
-    /** [com.mewbo.aura.data.repo.RunRepository.live]'s narrow call shape (Gitea #181) - the ONE
+    /** [com.mewbo.aura.data.repo.RunRepository.live]'s narrow call shape - the ONE
      * turn that streams in-overlay ([subscribeLive]) folds this through [TranscriptReducer] itself,
      * the same accumulation [com.mewbo.aura.ui.chat.ChatViewModel] trusts, so the card reuses the
      * shared `ChatTranscript` composable rather than a second rendering path. */
     private val liveEvents: (sessionId: String) -> Flow<SessionEvent>,
     /** Fired once a turn's query has actually been dispatched - for [continueLastSession] and
-     * [expand], immediately (no query dispatched by either). [modality] (Gitea #180 P1) tags which
+     * [expand], immediately (no query dispatched by either). [modality] tags which
      * input channel originated the turn being handed off, defaulting to whatever started the FIRST
      * turn of this invocation (see [turnModality]). Client-only; the caller (`AuraSession`) is what
      * puts it on the handoff `Intent` extra - nothing about it reaches the backend. */
@@ -87,7 +87,7 @@ class AssistTurnMachine(
     private val _state = MutableStateFlow<AssistUiState>(AssistUiState.Idle)
     val state: StateFlow<AssistUiState> = _state.asStateFlow()
 
-    /** Speak-along (Gitea #181): owns its OWN [SpeechController] instance rather than sharing
+    /** Speak-along: owns its OWN [SpeechController] instance rather than sharing
      * [com.mewbo.aura.ui.chat.ChatViewModel]'s - the overlay's in-card turn and the app's chat turn
      * are never the same live turn at once (the overlay always hands off or tears down before the
      * app's own `ChatViewModel.bind` ever attaches), so there is no state to reconcile between two
@@ -104,11 +104,11 @@ class AssistTurnMachine(
 
     /** `0` before any turn has been dispatched by this invocation; flips to `1` the instant the
      * FIRST turn's query is dispatched successfully - every later [beginTurn] takes the v4
-     * dispatch-then-handoff path instead of streaming in-overlay (Gitea #181 "second interaction
+     * dispatch-then-handoff path instead of streaming in-overlay ("second interaction
      * hands off"). Reset to `0` in [dismiss]: the underlying `VoiceInteractionSession` (and this
      * SAME machine instance) survives hide->show on a real device (confirmed against AOSP
-     * `VoiceInteractionManagerServiceImpl` - `mActiveSession` is reused, `onNewSession` fires once;
-     * see the #181 investigation), so without this reset a SECOND assistant invocation would
+     * `VoiceInteractionManagerServiceImpl` - `mActiveSession` is reused, `onNewSession` fires
+     * once), so without this reset a SECOND assistant invocation would
      * silently inherit the previous invocation's turn count and skip straight to handoff on what
      * the user experiences as their first query of a brand new overlay. */
     private var turnCount = 0
@@ -120,7 +120,7 @@ class AssistTurnMachine(
     private var sessionId: String? = null
 
     /** Which [InputModality] started the FIRST turn - threads into [expand]'s `onHandoff` call and
-     * gates [speech]'s speak-along to voice-initiated turns only (Gitea #181). Reset in [dismiss]. */
+     * gates [speech]'s speak-along to voice-initiated turns only. Reset in [dismiss]. */
     private var turnModality: InputModality = InputModality.Text
 
     /** `true` once [toggleSpeak] mutes the CURRENT invocation's speak-along. Distinct from
@@ -147,9 +147,9 @@ class AssistTurnMachine(
     }
 
     /** `AuraSession.onShow()`'s entry point: the overlay becomes visible in the resting READY
-     * state. Auto-listen (Gitea #181) is the CALLER's decision, made right after this returns
+     * state. Auto-listen is the CALLER's decision, made right after this returns
      * (`RECORD_AUDIO` gate - a `VoiceInteractionSession` has no Activity to run the normal
-     * permission-request flow through, same reasoning as the pre-#181 mic tap gate) - this method
+     * permission-request flow through, same reasoning as the pre-v5 mic tap gate) - this method
      * itself never starts capture on its own. */
     fun show() {
         triggerSessionsRefreshOnce()
@@ -157,7 +157,7 @@ class AssistTurnMachine(
     }
 
     /** Voice capture entry point - called automatically right after [show] when `RECORD_AUDIO` is
-     * granted (Gitea #181 auto-listen), or reachable via an explicit mic tap same as before; the
+     * granted (auto-listen), or reachable via an explicit mic tap same as before; the
      * capture loop itself is unchanged either way. */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun startListening() {
@@ -203,6 +203,7 @@ class AssistTurnMachine(
                         is TranscriberEvent.Error -> {
                             finalized = true
                             silenceJob?.cancel()
+                            haptics.listeningEnded() // §6.13/R4: capture ended without an accepted transcript.
                             setState(readyState()) // NoMatch/Timeout/Unavailable: quiet return (§9.1).
                         }
                     }
@@ -220,7 +221,7 @@ class AssistTurnMachine(
      * [AuraSession] (the one place that actually holds a [android.content.Context]) calls this
      * instead of [startListening] - same quiet §6.12 notice a failed send already uses
      * ([AssistUiState.Error]), rather than silently doing nothing. No retry text: there's nothing
-     * queued to resend. Auto-listen itself stays silent on a denied grant (Gitea #181: the overlay
+     * queued to resend. Auto-listen itself stays silent on a denied grant (the overlay
      * simply stays [AssistUiState.Ready] text-first) - this notice is reserved for an EXPLICIT mic
      * tap, [AuraSession] is what makes that distinction, not this method. */
     fun microphonePermissionUnavailable() {
@@ -230,8 +231,13 @@ class AssistTurnMachine(
     /** Tap-equivalent cancel of an in-progress voice capture: stop, discard, back to READY - the
      * overlay stays open (see [AssistUiState.Idle]'s KDoc for why this isn't Idle). */
     fun cancelListening() {
+        // Only a genuinely-in-progress capture can be cancelled. A stray tap after the turn has
+        // already left LISTENING (an accepted Final now Sending/Streaming, or already back at Ready)
+        // must NOT fire the end-of-listening cue or reset an in-flight card to Ready.
+        if (_state.value !is AssistUiState.Listening) return
         listenJob?.cancel()
         silenceJob?.cancel()
+        haptics.listeningEnded() // §6.13/R4: capture ended without an accepted transcript.
         setState(readyState())
     }
 
@@ -276,7 +282,7 @@ class AssistTurnMachine(
         onHandoff(recent.sessionId, InputModality.Text)
     }
 
-    /** Card stop control (Gitea #181): client-side detach only, same v1 semantics as
+    /** Card stop control: client-side detach only, same v1 semantics as
      * [com.mewbo.aura.ui.chat.ChatViewModel.stop] - the backend run keeps going. Also a barge-in
      * trigger for the speak-along. A no-op outside [AssistUiState.Streaming]. */
     fun stopStreaming() {
@@ -287,7 +293,7 @@ class AssistTurnMachine(
         if (current is AssistUiState.Streaming) setState(current.copy(done = true, speaking = false))
     }
 
-    /** Card speaker control (Gitea #181): toggles [speechMuted]. Muting stops whatever's playing
+    /** Card speaker control: toggles [speechMuted]. Muting stops whatever's playing
      * and, per [SpeechController.bargeIn]'s own `closedKey` latch, permanently ends speech for the
      * REST of this message - unmuting doesn't retroactively resume mid-sentence (the same contract
      * a manual read-aloud barge-in already has elsewhere in the app); it only re-arms speech for
@@ -297,7 +303,7 @@ class AssistTurnMachine(
         if (speechMuted) speech.bargeIn()
     }
 
-    /** Expand control (Gitea #181): hand off to the app on THIS invocation's session, reachable
+    /** Expand control: hand off to the app on THIS invocation's session, reachable
      * during OR after streaming (`ChatViewModel.bind` already attaches to an already-live run
      * either way) - a no-op before the first turn's session id has resolved. Does not itself stop
      * streaming or tear down state; the caller's `onHandoff` wiring (`AuraSession`) is what
@@ -352,7 +358,7 @@ class AssistTurnMachine(
         }
     }
 
-    /** The FIRST turn's live fold (Gitea #181, pre-v4 pattern recovered for this spec): mirrors
+    /** The FIRST turn's live fold (pre-v4 pattern recovered for this spec): mirrors
      * [com.mewbo.aura.ui.chat.ChatViewModel.subscribeLive]'s own shape (fold every event through
      * [TranscriptReducer], feed the accumulating assistant message through [speech], close on
      * `completion`) but drives [AssistUiState.Streaming] instead of `ChatUiState`. */
@@ -364,7 +370,22 @@ class AssistTurnMachine(
                 liveEvents(sessionId).collect { event ->
                     reducerState = TranscriptReducer.fold(reducerState, event)
                     speech.onAssistantMessage(latestAssistantMessage(), turnModality, speechMuted)
-                    if (event is SessionEvent.Completion) finishStreaming() else setState(streamingState(done = false))
+                    // `completion` AND `stream_end` are BOTH terminal - `SessionStreamClient` really
+                    // delivers `stream_end` (after `trySend`, before its own termination flag flips),
+                    // and it commonly arrives right after `completion`; the done-already guard makes
+                    // that pair idempotent (one `finishStreaming()`/`settle` haptic, not two).
+                    val terminal = event is SessionEvent.Completion || event is SessionEvent.StreamEnd
+                    // `done` is STICKY: once a terminal event has finalized the card, NEITHER branch
+                    // may reset it. Without the guard on the `!terminal` branch too, any non-terminal
+                    // event arriving in the gap between `completion` and `stream_end` (a stray delta,
+                    // a late tool event) would fold in and reset `done` back to false - re-arming the
+                    // overlay composer and double-firing `finishStreaming()`/`settle` on the trailing
+                    // `stream_end`.
+                    val alreadyDone = (_state.value as? AssistUiState.Streaming)?.done == true
+                    when {
+                        terminal && !alreadyDone -> finishStreaming()
+                        !terminal && !alreadyDone -> setState(streamingState(done = false))
+                    }
                 }
                 // The upstream flow completed on its own (e.g. `stream_end` with no prior
                 // `completion` event) - the definitive "nothing more is ever coming" fallback,
@@ -425,6 +446,7 @@ class AssistTurnMachine(
         silenceJob = scope.launch {
             delay(SILENCE_TIMEOUT_MS)
             listenJob?.cancel()
+            haptics.listeningEnded() // §6.13/R4: capture ended without an accepted transcript.
             setState(readyState())
         }
     }

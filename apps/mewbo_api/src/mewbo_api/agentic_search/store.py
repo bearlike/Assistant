@@ -11,7 +11,7 @@ requirement):
 * **Runs** — durable :class:`RunRecord` snapshots + an append-only,
   idx-keyed event log per run (the same shape the SSE stream replays).
 * **Map jobs** — durable :class:`MapJobRecord` snapshots of an SCG indexing
-  run (spec #19 §16.2) + their own append-only, idx-keyed event log. They live
+  run (spec §16.2) + their own append-only, idx-keyed event log. They live
   here, not in the SCG structure store, so they reuse the run event-log +
   ``RunSseGenerator`` plumbing verbatim.
 
@@ -213,11 +213,20 @@ class AgenticSearchStoreBase(abc.ABC):
     def list_runs(self, workspace_id: str | None = None) -> list[RunRecord]:
         """Return runs, optionally filtered to *workspace_id*."""
 
+    @abc.abstractmethod
+    def list_recent_runs(self, limit: int) -> list[RunRecord]:
+        """Return the *limit* most recent runs across ALL workspaces, newest-first.
+
+        Backs a cross-workspace "recent searches" view. Distinct from
+        ``list_runs(workspace_id=None)`` so a backend that can push the cap to
+        its query (Mongo) never loads more than *limit* records to serve it.
+        """
+
     def append_run_event(self, run_id: str, event: dict[str, Any]) -> int:
         """Append *event* to the run event log; return the monotonic idx.
 
-        Concrete on the base so BOTH backends share the one idempotency guard
-        (issue #82): a ``result`` event whose id is already present in the run's
+        Concrete on the base so BOTH backends share the one idempotency guard:
+        a ``result`` event whose id is already present in the run's
         event log is a no-op — the existing idx is returned, nothing is written.
         This is the single honest seam where result de-duplication lives. The
         run event log IS the normalized search-event stream the SSE transport
@@ -371,7 +380,7 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
         try:
             return Workspace.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
-            logging.warning("Skipping malformed workspace at %s", path)
+            logging.warning("Skipping malformed workspace at {}", path)
             return None
 
     # -- Workspaces ---------------------------------------------------------
@@ -469,7 +478,7 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except Exception:
-            logging.warning("Skipping malformed workspace MCP config at %s", path)
+            logging.warning("Skipping malformed workspace MCP config at {}", path)
             return None
 
     def delete_workspace_mcp_config(self, workspace_id: str) -> bool:
@@ -497,7 +506,7 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
         try:
             return RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
-            logging.warning("Skipping malformed run at %s", path)
+            logging.warning("Skipping malformed run at {}", path)
             return None
 
     def update_run(self, run_id: str, **fields: Any) -> RunRecord:
@@ -527,6 +536,15 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
             if workspace_id is None or run.workspace_id == workspace_id:
                 out.append(run)
         return sorted(out, key=lambda r: r.created_at, reverse=True)
+
+    def list_recent_runs(self, limit: int) -> list[RunRecord]:
+        """Return the *limit* most recent runs across all workspaces, newest-first.
+
+        No cross-workspace index exists on this backend, so this is
+        ``list_runs`` (already sorted newest-first over every workspace)
+        truncated to *limit* — same data-source ordering, just capped.
+        """
+        return self.list_runs(workspace_id=None)[:limit]
 
     # -- Append-only JSONL event-log primitive (shared by runs + map jobs) --
 
@@ -593,7 +611,7 @@ class JsonAgenticSearchStore(AgenticSearchStoreBase):
         try:
             return MapJobRecord.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
-            logging.warning("Skipping malformed map job at %s", path)
+            logging.warning("Skipping malformed map job at {}", path)
             return None
 
     def update_map_job(self, job_id: str, **fields: Any) -> MapJobRecord:
@@ -864,6 +882,20 @@ class MongoAgenticSearchStore(AgenticSearchStoreBase):
         if workspace_id is not None:
             query["workspace_id"] = workspace_id
         cursor = self._col(self.RUNS).find(query, {"_id": 0}).sort("created_at", -1)
+        return [RunRecord.model_validate(clean_for_model(d, RunRecord)) for d in cursor]
+
+    def list_recent_runs(self, limit: int) -> list[RunRecord]:
+        """Return the *limit* most recent runs across all workspaces, newest-first.
+
+        Sorts + caps AT THE QUERY (`.sort().limit()`) so a large collection
+        never loads into memory just to be sliced in Python.
+        """
+        cursor = (
+            self._col(self.RUNS)
+            .find({}, {"_id": 0})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
         return [RunRecord.model_validate(clean_for_model(d, RunRecord)) for d in cursor]
 
     def _append_run_event_raw(self, run_id: str, event: dict[str, Any]) -> int:

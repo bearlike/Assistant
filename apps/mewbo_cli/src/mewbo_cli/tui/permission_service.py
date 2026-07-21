@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Permission service for the Mewbo TUI (issue #154, epic #149).
+"""Permission service for the Mewbo TUI.
 
 Replaces the broken blocking ``console.input`` approval with a layered
 decision chain that integrates with the Textual App's modal approval

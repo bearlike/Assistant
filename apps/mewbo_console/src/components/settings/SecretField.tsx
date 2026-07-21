@@ -27,7 +27,7 @@
 import { useEffect, useState } from "react";
 import type { WidgetProps } from "@rjsf/utils";
 import { Button } from "../ui/button";
-import { inputBase } from "./styles";
+import { inputTextCls } from "./styles";
 
 export function SecretField(props: WidgetProps) {
   const { id, value, onChange, disabled, label, options } = props;
@@ -46,7 +46,7 @@ export function SecretField(props: WidgetProps) {
     <input
       id={id}
       type="password"
-      className={inputBase}
+      className={inputTextCls}
       value={typeof value === "string" ? value : ""}
       onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
       disabled={disabled}
@@ -61,7 +61,7 @@ export function SecretField(props: WidgetProps) {
     return (
       <div className="flex items-center gap-2">
         <span
-          className="flex h-9 flex-1 items-center gap-2 rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-3 text-sm text-[hsl(var(--muted-foreground))]"
+          className="flex h-9 flex-1 items-center gap-2 rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--muted))] px-3 text-sm text-[hsl(var(--muted-foreground))]"
           aria-label={label ? `${label} is configured` : "Configured"}
         >
           <span aria-hidden="true" className="tracking-widest">

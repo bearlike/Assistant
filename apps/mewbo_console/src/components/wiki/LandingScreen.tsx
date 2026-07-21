@@ -6,14 +6,16 @@
  * Submitting the URL routes to /wiki/configure with the URL pre-loaded.
  * Clicking a project card either opens its wiki (if indexed) or routes to
  * the "Not indexed" welcome page.
+ *
+ * Card/row rendering and the search/filter derivations live in `landing/` —
+ * this file is the shell: hero, toolbar, grid, footer, and the two dialogs.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import {
   BookOpen,
   ChevronDown,
-  ChevronRight,
   FileText,
   GitBranch,
   Github,
@@ -21,31 +23,24 @@ import {
   LayoutGrid,
   List,
   Loader2,
-  RotateCcw,
   Search,
   Sparkles,
-  Trash2,
   TriangleAlert,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { cardSurface } from "@/components/ui/card-surface";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-import { BrandMark } from "./BrandMark";
-import { IndexingProgress } from "./progress";
-import { IndexedSnapshot } from "./indexedSnapshot";
-import { IndexedSnapshotCaption } from "./IndexedSnapshotCaption";
-import { RelativeTime } from "./relativeTime";
-import { RepoLink } from "./RepoLink";
+import { BrandMark } from "../BrandMark";
+import { ProductHero } from "../ProductHero";
+import { ActiveJobCard } from "./landing/ActiveJobCard";
+import { DeleteWikiDialog } from "./landing/DeleteWikiDialog";
+import { ProjectCard } from "./landing/ProjectCard";
+import { RecoverableJobRow } from "./landing/RecoverableJobRow";
+import { useLandingProjects } from "./landing/useLandingProjects";
+import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import {
   useActiveIndexingJobs,
   useDeleteProject,
@@ -54,13 +49,8 @@ import {
   useWikiProjects,
 } from "./api/hooks";
 import type { IndexingJob, Project, RecoverableJob } from "./api/types";
-import { PlatformIcon } from "./configure-wizard/PlatformIcon";
 import { buildHref } from "./router";
-import { parseSlug, slugFromRepoUrl } from "./slug";
-
-// Slug parsing is canonical: ``host/owner/repo``. Delegated to the
-// shared helper so the wizard, the landing page, and the FE in general
-// all agree on identity composition.
+import { slugFromRepoUrl } from "./slug";
 
 export function LandingScreen() {
   const [, navigate] = useLocation();
@@ -73,15 +63,14 @@ export function LandingScreen() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [settingsSlug, setSettingsSlug] = useState<string | null>(null);
   const [incompleteOpen, setIncompleteOpen] = useState(false);
 
-  // Slugs currently indexing — used to suppress the project tile if a
-  // legacy Project row exists alongside a fresh re-index for the same
-  // slug. The in-flight tile takes precedence; once the job finalises,
-  // the project tile reappears with the new Project record.
-  const activeSlugs = useMemo(
-    () => new Set((activeJobsQuery.data ?? []).map((j) => j.slug)),
-    [activeJobsQuery.data]
+  const { visible, visibleActive, visibleRecoverable } = useLandingProjects(
+    search,
+    projectsQuery.data,
+    activeJobsQuery.data,
+    recoverableJobsQuery.data,
   );
 
   const openIndexing = (job: IndexingJob) => {
@@ -107,35 +96,6 @@ export function LandingScreen() {
 
   const slug = slugFromRepoUrl(url);
   const canGenerate = Boolean(slug);
-
-  // Search matches against the full canonical slug (host/owner/repo) so
-  // users can find their repo by org, repo, or host fragment — naturally
-  // covering enterprise instances like "hurricane" or "git.example.io".
-  const visible = useMemo(() => {
-    const all = projectsQuery.data ?? [];
-    const filteredByActive = all.filter((p) => !activeSlugs.has(p.slug));
-    const q = search.trim().toLowerCase();
-    if (!q) return filteredByActive;
-    return filteredByActive.filter((p) => p.slug.toLowerCase().includes(q));
-  }, [projectsQuery.data, search, activeSlugs]);
-
-  const visibleActive = useMemo(() => {
-    const all = activeJobsQuery.data ?? [];
-    const q = search.trim().toLowerCase();
-    if (!q) return all;
-    return all.filter((j) => j.slug.toLowerCase().includes(q));
-  }, [activeJobsQuery.data, search]);
-
-  // Recoverable (failed / interrupted / cancelled-but-incomplete) jobs, minus
-  // any that are already re-indexing — the active tile takes precedence.
-  const visibleRecoverable = useMemo(() => {
-    const all = (recoverableJobsQuery.data ?? []).filter(
-      (j) => !activeSlugs.has(j.slug)
-    );
-    const q = search.trim().toLowerCase();
-    if (!q) return all;
-    return all.filter((j) => j.slug.toLowerCase().includes(q));
-  }, [recoverableJobsQuery.data, search, activeSlugs]);
 
   const onGenerate = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -165,37 +125,27 @@ export function LandingScreen() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10 min-h-full flex flex-col">
-        {/* ── Hero column ─ matches HomeView / Agentic Search rhythm so the
-            three landings read as one product family: logo stacked above
-            the title, balanced subheading, centered form. ─────────────── */}
-        <section className="mx-auto max-w-[720px] w-full flex flex-col items-center text-center pt-4 sm:pt-8 pb-2">
-          <BrandMark
-            size={56}
-            className="mb-5 text-[hsl(var(--primary))] drop-shadow-[0_0_40px_hsl(var(--primary)/0.30)]"
-          />
-          <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight mb-2.5 [text-wrap:balance]">
-            Agentic Wiki
-          </h1>
-          <p className="max-w-[480px] mb-6 text-[15px] leading-[1.5] text-[hsl(var(--muted-foreground))] [text-wrap:balance]">
-            Auto-generated documentation for code repositories. Paste a
-            repository URL below to generate a new wiki.
-          </p>
-
+      {/* Top padding is the hero's to own (`ProductHero` sets the offset every
+          landing shares), so the wrapper pads the bottom only. */}
+      <div className="max-w-[1200px] mx-auto px-4 sm:px-6 pb-6 sm:pb-10 min-h-full flex flex-col">
+        <ProductHero
+          title="Agentic Wiki"
+          subtitle="Auto-generated documentation for code repositories. Paste a repository URL below to generate a new wiki."
+        >
           <form
             onSubmit={onGenerate}
             aria-label="Generate wiki for a new repository"
             className="w-full flex items-center justify-center gap-2 flex-wrap"
           >
-            <div className="flex items-center gap-2 h-10 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] flex-1 min-w-[260px] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]/30">
+            <div className="flex items-center gap-2 h-10 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] flex-1 min-w-[260px] focus-within:border-[hsl(var(--border-strong))] focus-within:ring-2 focus-within:ring-[hsl(var(--primary))]">
               <GitBranch className="h-4 w-4 text-[hsl(var(--muted-foreground))] shrink-0" />
-              <input
+              <Input
                 type="text"
                 placeholder="https://github.com/owner/repo"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 spellCheck={false}
-                className="flex-1 bg-transparent text-sm font-mono outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+                className="flex-1 h-auto border-0 px-0 py-0 shadow-none bg-transparent font-mono placeholder:text-[hsl(var(--muted-foreground))] focus-visible:ring-0"
               />
             </div>
             <Button
@@ -209,15 +159,15 @@ export function LandingScreen() {
               Generate Wiki
             </Button>
           </form>
-        </section>
+        </ProductHero>
 
         {/* ── Indexing now (only when there are in-flight jobs) ────────── */}
         {visibleActive.length > 0 && (
           <section className="mt-8 sm:mt-10">
             <div className="flex items-center gap-2 mb-3">
               <Loader2 className="h-3.5 w-3.5 text-[hsl(var(--primary))] animate-spin" />
-              <h2 className="text-sm font-semibold tracking-tight">Indexing now</h2>
-              <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+              <h2 className="text-sm font-medium tracking-tight">Indexing now</h2>
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                 {visibleActive.length} in progress
               </span>
             </div>
@@ -227,73 +177,9 @@ export function LandingScreen() {
                 gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
               }}
             >
-              {visibleActive.map((job) => {
-                // Single source of truth: the same atomic class the
-                // indexing page uses, so the bar/label/ETA never disagree.
-                const progress = IndexingProgress.fromJob(job);
-                const pct = progress.pct;
-                const etaLabel = IndexingProgress.formatEta(progress.etaSeconds);
-                return (
-                  <article
-                    key={job.jobId}
-                    tabIndex={0}
-                    role="button"
-                    onClick={() => openIndexing(job)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") openIndexing(job);
-                    }}
-                    className={cn(
-                      "group relative rounded-xl border p-4 cursor-pointer transition-all",
-                      "hover:-translate-y-px shadow-[var(--elev-1)] hover:shadow-[var(--elev-2)]",
-                      "border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/[0.04] hover:border-[hsl(var(--primary))]/60"
-                    )}
-                  >
-                    <div className="flex items-start gap-2.5">
-                      {job.platform ? (
-                        <PlatformIcon
-                          platformId={job.platform}
-                          className="h-4 w-4 mt-0.5 text-[hsl(var(--muted-foreground))] shrink-0"
-                        />
-                      ) : (
-                        <Loader2 className="h-4 w-4 mt-0.5 text-[hsl(var(--primary))] animate-spin shrink-0" />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] truncate">
-                          <RepoLink slug={job.slug} display="short" />
-                        </h3>
-                        {parseSlug(job.slug)?.host && (
-                          <div className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate">
-                            {parseSlug(job.slug)?.host}
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--primary))] font-mono">
-                        {progress.phase}
-                      </span>
-                    </div>
-                    <div className="mt-3 h-1 rounded-full bg-[hsl(var(--muted))]/60 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary))]/70 transition-[width] duration-300"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-                      {job.platform && (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60">
-                          <PlatformIcon platformId={job.platform} className="h-2.5 w-2.5" />
-                          {job.platform}
-                        </span>
-                      )}
-                      <span className="inline-flex items-center gap-1 ml-auto font-mono tabular-nums">
-                        {`${pct}% · ${progress.label}`}
-                        {etaLabel && (
-                          <span className="opacity-70 ml-1.5">· {etaLabel}</span>
-                        )}
-                      </span>
-                    </div>
-                  </article>
-                );
-              })}
+              {visibleActive.map((job) => (
+                <ActiveJobCard key={job.jobId} job={job} onOpen={() => openIndexing(job)} />
+              ))}
             </div>
           </section>
         )}
@@ -313,75 +199,25 @@ export function LandingScreen() {
                   incompleteOpen ? "" : "-rotate-90"
                 )}
               />
-              <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />
-              <h2 className="text-sm font-semibold tracking-tight">Incomplete indexes</h2>
-              <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+              <TriangleAlert className="h-3.5 w-3.5 text-[hsl(var(--warning))]" />
+              <h2 className="text-sm font-medium tracking-tight">Incomplete indexes</h2>
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                 {visibleRecoverable.length} resumable
               </span>
             </button>
             {incompleteOpen && (
               <div className="flex flex-col gap-2">
-                {visibleRecoverable.map((job) => {
-                  const total = job.totalPages ?? 0;
-                  const done = job.recoverable.pagesDone;
-                  return (
-                    <div
-                      key={job.jobId}
-                      className="flex items-center gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3.5 py-2.5"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 text-sm font-medium text-[hsl(var(--foreground))]">
-                          <span className="truncate">
-                            <RepoLink slug={job.slug} display="short" />
-                          </span>
-                          {job.phase && (
-                            <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] font-mono shrink-0">
-                              stopped at {job.phase}
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))] flex-wrap">
-                          <span className="font-mono tabular-nums">
-                            {done}/{total || "?"} pages
-                          </span>
-                          {job.updatedAt && (
-                            <>
-                              <span className="opacity-50">·</span>
-                              <span title={RelativeTime.tooltip(job.updatedAt)}>
-                                {RelativeTime.format(job.updatedAt)}
-                              </span>
-                            </>
-                          )}
-                          {job.error && (
-                            <>
-                              <span className="opacity-50">·</span>
-                              <span className="text-amber-600 truncate">{job.error.message}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="neutral"
-                        size="sm"
-                        tone="info"
-                        disabled={resumeIndexingMutation.isPending}
-                        onClick={() => resumeJob(job)}
-                        leadingIcon={
-                          resumeIndexingMutation.isPending &&
-                          resumeIndexingMutation.variables === job.jobId ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <RotateCcw className="h-3 w-3" />
-                          )
-                        }
-                        className="shrink-0"
-                      >
-                        Resume
-                      </Button>
-                    </div>
-                  );
-                })}
+                {visibleRecoverable.map((job) => (
+                  <RecoverableJobRow
+                    key={job.jobId}
+                    job={job}
+                    resuming={
+                      resumeIndexingMutation.isPending &&
+                      resumeIndexingMutation.variables === job.jobId
+                    }
+                    onResume={() => resumeJob(job)}
+                  />
+                ))}
               </div>
             )}
           </section>
@@ -389,18 +225,18 @@ export function LandingScreen() {
 
         {/* ── Toolbar ───────────────────────────────────────────────────── */}
         <div className="mt-10 sm:mt-14 flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 h-9 px-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] flex-1 min-w-[240px]">
+          <div className={cn(cardSurface({ radius: "left" }), "flex items-center gap-2 h-9 px-3 flex-1 min-w-[240px]")}>
             <Search className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
             <Input
               type="text"
               placeholder="Search projects by name, owner, or repository…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-7 border-0 px-0 bg-transparent text-sm placeholder:text-[hsl(var(--muted-foreground))] focus-visible:ring-0"
+              className="h-7 border-0 px-0 bg-transparent placeholder:text-[hsl(var(--muted-foreground))] focus-visible:ring-0"
             />
           </div>
           <div
-            className="inline-flex items-center gap-0.5 p-0.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))]"
+            className={cn(cardSurface({ radius: "right" }), "inline-flex items-center gap-0.5 p-0.5")}
             role="tablist"
             aria-label="View mode"
           >
@@ -450,89 +286,13 @@ export function LandingScreen() {
           }
         >
           {visible.map((p) => (
-            <article
+            <ProjectCard
               key={p.slug}
-              tabIndex={0}
-              role="button"
-              onClick={() => openProject(p)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") openProject(p);
-              }}
-              className={cn(
-                "group relative rounded-xl border p-4 cursor-pointer transition-all",
-                "hover:-translate-y-px shadow-[var(--elev-1)] hover:shadow-[var(--elev-2)]",
-                p.primary
-                  ? "border-[hsl(var(--primary))]/40 bg-[hsl(var(--primary))]/[0.04] hover:border-[hsl(var(--primary))]/60"
-                  : "border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:border-[hsl(var(--border-strong))] hover:bg-[hsl(var(--accent))]/40"
-              )}
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingDelete(p.slug);
-                }}
-                aria-label="Delete this wiki"
-                title="Delete this wiki"
-                className="absolute top-2 right-2 inline-flex items-center justify-center w-6 h-6 rounded-md text-[hsl(var(--muted-foreground))] hover:text-red-500 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-
-              <div className="flex items-start gap-2.5">
-                <PlatformIcon
-                  platformId={p.source}
-                  className="h-4 w-4 mt-0.5 text-[hsl(var(--muted-foreground))] shrink-0"
-                />
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-[hsl(var(--foreground))] truncate">
-                    <RepoLink
-                      slug={p.slug}
-                      repoUrl={p.repoUrl}
-                      display="short"
-                    />
-                  </h3>
-                  {parseSlug(p.slug)?.host && (
-                    <div className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate">
-                      {parseSlug(p.slug)?.host}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <p className="mt-2 text-xs text-[hsl(var(--muted-foreground))] [text-wrap:pretty] line-clamp-2">
-                {p.desc || (
-                  <span className="italic opacity-70">No description available.</span>
-                )}
-              </p>
-
-              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60">
-                  <PlatformIcon platformId={p.source} className="h-2.5 w-2.5" />
-                  {p.source}
-                </span>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60">
-                  <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                  {p.lang}
-                </span>
-                <span className="inline-flex items-center gap-1 ml-auto">
-                  <FileText className="h-2.5 w-2.5" />
-                  {p.pages} pages
-                </span>
-              </div>
-
-              <div className="mt-2.5 pt-2.5 border-t border-[hsl(var(--border))]/70 flex items-center justify-between text-[11px] text-[hsl(var(--muted-foreground))]">
-                <IndexedSnapshotCaption
-                  snapshot={IndexedSnapshot.fromProject(p)}
-                  variant="landing"
-                  className="min-w-0 truncate"
-                />
-                <span className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity text-[hsl(var(--primary))]">
-                  Open
-                  <ChevronRight className="h-3 w-3" />
-                </span>
-              </div>
-            </article>
+              project={p}
+              onOpen={() => openProject(p)}
+              onSettings={() => setSettingsSlug(p.slug)}
+              onDelete={() => setPendingDelete(p.slug)}
+            />
           ))}
 
           {projectsQuery.data &&
@@ -550,7 +310,7 @@ export function LandingScreen() {
               (projectsQuery.data ?? []).length === 0 &&
               visibleActive.length === 0 && (
                 <div className="col-span-full flex flex-col items-center justify-center gap-2 py-16 rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card))]/40 text-center px-6">
-                  <FileText className="h-6 w-6 text-[hsl(var(--muted-foreground))]" />
+                  <FileText className="size-5 text-[hsl(var(--muted-foreground))]" />
                   <div className="text-sm font-medium">No wikis indexed yet</div>
                   <div className="text-xs text-[hsl(var(--muted-foreground))]">
                     Paste a repository URL above and click{" "}
@@ -603,66 +363,31 @@ export function LandingScreen() {
         </footer>
       </div>
 
-      <Dialog
-        open={pendingDelete !== null}
+      <DeleteWikiDialog
+        slug={pendingDelete}
+        pending={deleteProjectMutation.isPending}
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <TriangleAlert className="h-4 w-4 text-red-500" />
-              Delete this wiki?
-            </DialogTitle>
-            <DialogDescription>
-              Would you like to permanently delete this indexed repository?
-              {pendingDelete && (
-                <span className="block mt-2 font-mono text-xs text-[hsl(var(--foreground))] bg-[hsl(var(--muted))]/60 rounded px-1.5 py-0.5 w-fit">
-                  {pendingDelete}
-                </span>
-              )}
-              <span className="block mt-3 text-xs">
-                The wiki pages, diagrams, and Q&amp;A history for this
-                repository will be removed. This cannot be undone.
-              </span>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setPendingDelete(null)}
-              disabled={deleteProjectMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              disabled={deleteProjectMutation.isPending}
-              onClick={() => {
-                if (!pendingDelete) return;
-                deleteProjectMutation.mutate(pendingDelete, {
-                  onSettled: () => setPendingDelete(null),
-                });
-              }}
-              className="!bg-red-500 hover:!bg-red-500/90 !text-white"
-              leadingIcon={
-                deleteProjectMutation.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )
-              }
-            >
-              {deleteProjectMutation.isPending ? "Deleting…" : "Delete wiki"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          deleteProjectMutation.mutate(pendingDelete, {
+            onSettled: () => setPendingDelete(null),
+          });
+        }}
+      />
+
+      {/* Same dialog the in-project WikiTopBar gear opens — mounted only while
+          a card's settings are actually being edited. */}
+      {settingsSlug && (
+        <ProjectSettingsDialog
+          slug={settingsSlug}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSettingsSlug(null);
+          }}
+        />
+      )}
     </div>
   );
 }

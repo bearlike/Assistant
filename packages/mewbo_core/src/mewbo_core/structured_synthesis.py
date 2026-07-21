@@ -204,7 +204,7 @@ class StructuredSynthesizer:
         bound_model = model.bind_tools([emit_schema])
 
         # Render the force-emit directive for the resolved model so a per-model
-        # override of ``structured.force_emit_directive`` applies (#113); falls
+        # override of ``structured.force_emit_directive`` applies; falls
         # back to the base (== module-level ``FORCE_EMIT_DIRECTIVE``) otherwise.
         system_content = get_prompt_registry().render(
             "structured.force_emit_directive", model=model_name or None
@@ -219,7 +219,7 @@ class StructuredSynthesizer:
 
         # Attach the Langfuse CallbackHandler so this generation EXPORTS (the
         # surrounding ``langfuse_session_context`` only propagates attributes; with
-        # no observation created inside, nothing lands in the trace — #87). Reads
+        # no observation created inside, nothing lands in the trace). Reads
         # the contextvar session/trace the recorder opened, so the generation joins
         # the session-grouped trace. ``{}`` (no-op config) when Langfuse is off.
         invoke_config = langfuse_invoke_config(

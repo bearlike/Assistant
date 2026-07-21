@@ -1,10 +1,12 @@
 #!/bin/sh
-# 15-tea-setup.sh — Install + authenticate tea (Gitea's official CLI).
+# 15-tea-setup.sh — Authenticate tea (Gitea's official CLI).
 #
-# Mirrors the gh split: the binary ships in the image (Dockerfile.api installs
-# it next to gh) and this script owns the runtime concerns — install-if-missing
-# covers images built before tea was added, and logins are (re)derived every
-# start from tokens already mounted into the container:
+# Authentication ONLY; 12-agent-clis.sh installs the binary. The two were once
+# one script that also duplicated the download into Dockerfile.api, so the same
+# fetch existed twice and a gitea.com 503 could fail an image build.
+#
+# Logins are (re)derived every start from tokens already mounted into the
+# container:
 #
 #   channels.vcs.tokens (configs/app.json) — preferred. These are the
 #     assistant's OWN forge identities (the bot account), so tea-driven PRs
@@ -16,20 +18,6 @@
 # Runs after 05-trust-internal-ca.sh, so tea (Go, honors SSL_CERT_FILE)
 # verifies internal-CA hosts. Non-Gitea hosts fail `tea login add` and are
 # skipped with a warning — never fatal, matching the entrypoint contract.
-
-TEA_VERSION="${TEA_VERSION:-0.14.0}"
-
-if ! command -v tea >/dev/null 2>&1; then
-    _tea_arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
-    case "$_tea_arch" in x86_64) _tea_arch=amd64 ;; aarch64) _tea_arch=arm64 ;; esac
-    _tea_url="https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-${_tea_arch}"
-    if curl -fsSL "$_tea_url" -o /tmp/tea-dl && sudo install -m 0755 /tmp/tea-dl /usr/local/bin/tea; then
-        printf ' installed tea %s;' "$TEA_VERSION"
-    else
-        printf ' tea download failed (%s), skipping;' "$_tea_url" >&2
-    fi
-    rm -f /tmp/tea-dl
-fi
 
 if command -v tea >/dev/null 2>&1; then
     # host<TAB>token pairs: vcs tokens win, git-credentials fill the gaps.

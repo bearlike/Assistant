@@ -8,7 +8,7 @@ I/O (the model call, event emission, reactive compaction), so the state machine
 is testable without a live model or the loop. ``DoomLoopGuard`` is the matching
 object for no-progress detection.
 
-See Gitea issue #4 for the failure taxonomy and the rationale behind the
+See the design notes for the failure taxonomy and the rationale behind the
 defaults.
 """
 
@@ -23,9 +23,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from mewbo_core.run_error import render_exception
+
 if TYPE_CHECKING:
     from langchain_core.messages import AIMessage
 
+    from mewbo_core.tool_registry import ToolSpec
     from mewbo_core.types import LlmFallbackPayload, LlmRetryPayload
 
 # Defaults are the single source of truth — config.py imports them for the
@@ -48,11 +51,28 @@ DEFAULT_BUDGET_SUCCESS_CREDIT = 0.3
 DEFAULT_CB_THRESHOLD = 3
 DEFAULT_CB_COOLDOWN = 30.0
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
+# Consecutive non-write tool-execution steps before the write-progress signal
+# fires telemetry for a write-capable agent that keeps exploring instead of
+# acting. The event repeats every ``event_interval`` steps thereafter, up to
+# ``max_events``.
+DEFAULT_WRITE_PROGRESS_THRESHOLD = 25
+DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL = 10
+DEFAULT_WRITE_PROGRESS_MAX_EVENTS = 2
 
 # Synchronization / wait primitives are NOT progress-making work. Polling them
 # (e.g. ``check_agents`` while spawned children finish one by one) is the
 # intended epoll pattern — repeated identical calls there are healthy waiting,
 # never a doom loop. They are dropped from the doom signature entirely.
+#
+# This is only the BUILT-IN seed of the poll class, never the whole of it: any
+# tool whose documented contract is "call me again until my run settles"
+# belongs here, and a hardcoded id cannot know about one. ``DoomLoopGuard``
+# resolves its effective rules from this seed PLUS whatever a tool DECLARES
+# (``ToolSpec.poll`` / ``poll_when_args``, or a session tool's ``poll_class`` /
+# ``poll_when_args``) and whatever the operator lists in
+# ``agent.retry.poll_tools`` — see :meth:`DoomLoopGuard.from_config`. A
+# self-polling nested run whose first two probes both answer "processing" is
+# honest waiting; halting it there was a 100%-reproducible false positive.
 DOOM_LOOP_EXEMPT_TOOLS: frozenset[str] = frozenset({"check_agents"})
 
 # Provider/proxy substrings marking a condition hopeless on the *current* model
@@ -219,8 +239,37 @@ class LlmResilienceExhausted(RuntimeError):
         self.last_error_type = last_error_type
         self.reason = reason
         super().__init__(
-            f"LLM call failed on all models ({', '.join(self.models_tried)}): {last_error}"
+            f"LLM call failed on all models ({', '.join(self.models_tried)}): "
+            f"{self.describe_error(last_error)}"
         )
+
+    @staticmethod
+    def describe_error(exc: BaseException | None) -> str:
+        """Render *exc* for the exhaustion message — never as the empty string.
+
+        Several exception classes stringify to ``""`` (``TimeoutError`` is the
+        one that bites: the classifier's most common transient verdict), and
+        this seam used to preserve the void verbatim — a run's terminal failure
+        reached the store, the console and the next recovery turn as
+        ``"LLM call failed on all models (<model>): "`` with the cause erased.
+        That string is the durable forensic record after a trace ages out, so
+        the cause must survive in it.
+
+        Delegates the ``"<Type>: <msg>"`` rendering to
+        :func:`mewbo_core.run_error.render_exception`, the SAME renderer the
+        Langfuse span's ``status_message`` (``components.py:
+        _span_status_message``) uses, so the two records of one failure never
+        disagree. ``exc is None`` and an exception whose own ``__str__`` raises
+        are handled here rather than in the shared renderer — neither is a
+        genuine "exception to render": one has nothing to render, the other
+        can't even produce ``str(exc)``.
+        """
+        if exc is None:
+            return "Unknown"
+        try:
+            return render_exception(exc, limit=500)
+        except Exception:  # noqa: BLE001 — defensive: some exc __str__ raise
+            return type(exc).__name__[:500]
 
 
 @dataclass
@@ -530,6 +579,54 @@ class RetryStrategy:
         return list(models)
 
 
+@dataclass(frozen=True)
+class PollClassRule:
+    """Declares when a call to one tool is POLLING rather than progress.
+
+    A name-only exemption set is what produced the original false positive, and
+    a name-only set cannot express the shape that actually occurs: the tool that
+    self-polls is usually the SAME tool that starts the work, distinguishable
+    only by argument. ``agentic_search`` is the live case — one tool id whose
+    args require exactly one of ``query`` (start the run, returns immediately)
+    or ``run_id`` (fetch the run's state). Starting is progress; fetching is
+    waiting. Exempting the id outright would blind the guard to a genuinely
+    stuck agent re-issuing the same search forever.
+
+    ``when_args`` empty means unconditional (``check_agents``, a pure wait
+    primitive). Otherwise the call is a poll only when it carries one of the
+    named arguments. Arguments arrive as a METHOD ARG — this model reads no
+    state of its own, which is what lets a test drive every case directly.
+    """
+
+    tool_id: str
+    when_args: frozenset[str] = frozenset()
+
+    def matches(self, tool_name: str, args: Any = None) -> bool:
+        """True when *tool_name* called with *args* is a poll under this rule."""
+        if tool_name != self.tool_id:
+            return False
+        if not self.when_args:
+            return True
+        if not isinstance(args, dict):
+            return False
+        # A key present but empty (``run_id=None`` / ``""``) is not a poll: the
+        # tool schema treats it as absent, so the guard must too.
+        return any(args.get(key) not in (None, "", [], {}) for key in self.when_args)
+
+
+# The built-in rules: a pure wait primitive, exempt on every call.
+_DEFAULT_POLL_RULES: tuple[PollClassRule, ...] = tuple(
+    PollClassRule(tool_id) for tool_id in sorted(DOOM_LOOP_EXEMPT_TOOLS)
+)
+
+
+def _call_name_and_args(call: Any) -> tuple[str, Any]:
+    """Read ``(name, args)`` off a tool call in either dict or attribute form."""
+    if isinstance(call, dict):
+        return call.get("name", ""), call.get("args", {})
+    return getattr(call, "name", ""), getattr(call, "args", {})
+
+
 @dataclass
 class DoomLoopGuard:
     """Detects a model genuinely stuck — same action, same OUTCOME, no progress.
@@ -543,42 +640,96 @@ class DoomLoopGuard:
     only when the last ``threshold`` turns share an identical input **and** an
     identical result. ``threshold <= 0`` disables detection.
 
-    Synchronization/wait tools (``DOOM_LOOP_EXEMPT_TOOLS``) are dropped from both
-    signatures — polling ``check_agents`` while children run is intended epoll,
-    never a loop.
+    POLL-CLASS calls are dropped from both signatures — polling while the thing
+    waited on runs is intended epoll, never a loop. The class is RESOLVED from
+    declarations, not hardcoded (see :attr:`poll_rules` / :meth:`from_config`),
+    and it is per-CALL rather than per-tool: ``check_agents`` is merely the
+    built-in seed, and the tool that matters is exempt only on the argument
+    shape that means "fetch state", never on the one that means "start work".
     """
 
     threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
+    # Effective poll rules for THIS run. Defaults to the built-in seed so a
+    # directly-constructed guard behaves exactly as before; the loop builds it
+    # from the seed ∪ tool-declared ∪ operator-declared rules.
+    poll_rules: tuple[PollClassRule, ...] = _DEFAULT_POLL_RULES
     _signatures: list[str] = field(default_factory=list)
     _results: list[str] = field(default_factory=list)
+    # Tool ids whose CALL was a poll in the just-observed turn. Carried across
+    # the observe → record_result pair because a result carries no arguments:
+    # without it an argument-sensitive exemption could drop a call from the
+    # input signature but keep its result, leaving the two out of step.
+    _last_poll_ids: frozenset[str] = frozenset()
 
     @classmethod
-    def from_config(cls) -> DoomLoopGuard:
-        """Build a guard from ``agent.retry.doom_loop_threshold``."""
+    def from_config(
+        cls, *, extra_poll_rules: Iterable[PollClassRule] = ()
+    ) -> DoomLoopGuard:
+        """Build a guard from ``agent.retry.doom_loop_threshold``.
+
+        *extra_poll_rules* carries what the CALLER resolved for this run from
+        tool declarations. Combined with the built-in seed and the operator's
+        ``agent.retry.poll_tools`` list (names, so unconditional), which means a
+        tool whose contract is "call me again until my run settles" is
+        declarable at whichever seam owns it — and adding the next such tool
+        never requires editing this module.
+        """
         from mewbo_core.config import get_config_value
 
+        declared = get_config_value("agent", "retry", "poll_tools", default=[])
+        if isinstance(declared, str):
+            declared = [part.strip() for part in declared.split(",") if part.strip()]
+        rules: dict[tuple[str, frozenset[str]], PollClassRule] = {}
+        for rule in (
+            *_DEFAULT_POLL_RULES,
+            *(PollClassRule(str(name)) for name in (declared or [])),
+            *extra_poll_rules,
+        ):
+            rules[(rule.tool_id, rule.when_args)] = rule
         return cls(
             threshold=int(
                 get_config_value(
                     "agent", "retry", "doom_loop_threshold", default=DEFAULT_DOOM_LOOP_THRESHOLD
                 )
-            )
+            ),
+            poll_rules=tuple(rules.values()),
         )
 
     @staticmethod
-    def signature(tool_calls: Sequence[Any]) -> str:
+    def is_poll_call(
+        tool_name: str,
+        args: Any = None,
+        poll_rules: tuple[PollClassRule, ...] = _DEFAULT_POLL_RULES,
+    ) -> bool:
+        """True when this specific CALL counts as polling under *poll_rules*."""
+        return any(rule.matches(tool_name, args) for rule in poll_rules)
+
+    @staticmethod
+    def poll_call_ids(
+        tool_calls: Sequence[Any],
+        poll_rules: tuple[PollClassRule, ...] = _DEFAULT_POLL_RULES,
+    ) -> frozenset[str]:
+        """Tool ids in this batch whose call was a poll (argument-sensitive)."""
+        return frozenset(
+            name
+            for name, args in (_call_name_and_args(tc) for tc in tool_calls or [])
+            if DoomLoopGuard.is_poll_call(name, args, poll_rules)
+        )
+
+    @staticmethod
+    def signature(
+        tool_calls: Sequence[Any],
+        poll_rules: tuple[PollClassRule, ...] = _DEFAULT_POLL_RULES,
+    ) -> str:
         """Stable signature of a tool-call batch (name + sorted args, no id).
 
-        Exempt synchronization/wait tools are excluded, so a batch consisting
-        only of them yields ``""`` (never counted toward a stuck streak).
+        Poll-class CALLS are excluded, so a batch consisting only of them
+        yields ``""`` (never counted toward a stuck streak).
         """
         parts: list[str] = []
         for tc in tool_calls or []:
-            if isinstance(tc, dict):
-                tc_name, tc_args = tc.get("name", ""), tc.get("args", {})
-            else:
-                tc_name, tc_args = getattr(tc, "name", ""), getattr(tc, "args", {})
-            if tc_name in DOOM_LOOP_EXEMPT_TOOLS:
+            tc_name, tc_args = _call_name_and_args(tc)
+            if DoomLoopGuard.is_poll_call(tc_name, tc_args, poll_rules):
                 continue
             try:
                 rendered = json.dumps(tc_args, sort_keys=True, default=str)
@@ -588,17 +739,24 @@ class DoomLoopGuard:
         return "|".join(parts)
 
     @staticmethod
-    def result_signature(results: Sequence[Any]) -> str:
+    def result_signature(
+        results: Sequence[Any],
+        exclude_ids: frozenset[str] = DOOM_LOOP_EXEMPT_TOOLS,
+    ) -> str:
         """Stable signature of a tool-result batch (success + content).
 
-        Drops exempt tools' results so it stays aligned with :meth:`signature`.
-        A *changing* signature across turns means the world advanced — i.e. the
-        model is making progress even if it called the same tool.
+        Drops results for *exclude_ids* so it stays aligned with
+        :meth:`signature`. A result carries no arguments, so the caller supplies
+        the ids that were polls THIS turn (:meth:`poll_call_ids`) rather than
+        this method re-deriving them — an argument-sensitive rule cannot be
+        evaluated against a result alone. A *changing* signature across turns
+        means the world advanced — i.e. the model is making progress even if it
+        called the same tool.
         """
         parts: list[str] = []
         for r in results or []:
             tool_id = getattr(r, "tool_id", "") or ""
-            if tool_id in DOOM_LOOP_EXEMPT_TOOLS:
+            if tool_id in exclude_ids:
                 continue
             success = getattr(r, "success", True)
             content = getattr(r, "content", "") or ""
@@ -607,11 +765,12 @@ class DoomLoopGuard:
 
     def observe(self, tool_calls: Sequence[Any]) -> None:
         """Record this turn's tool-call batch (input signature, pre-execution)."""
-        self._signatures.append(self.signature(tool_calls))
+        self._last_poll_ids = self.poll_call_ids(tool_calls, self.poll_rules)
+        self._signatures.append(self.signature(tool_calls, self.poll_rules))
 
     def record_result(self, results: Sequence[Any]) -> None:
         """Record this turn's tool results (post-execution) for progress checks."""
-        self._results.append(self.result_signature(results))
+        self._results.append(self.result_signature(results, self._last_poll_ids))
 
     def is_stuck(self) -> bool:
         """True only on genuine no-progress: identical input AND identical result.
@@ -635,6 +794,121 @@ class DoomLoopGuard:
         if len(res_tail) < needed:
             return False  # not enough executed history yet — keep going
         return all(r == res_tail[0] for r in res_tail)
+
+
+@dataclass
+class WriteProgressSignal:
+    """Counts consecutive steps without a write-tier tool execution.
+
+    Distinct from :class:`DoomLoopGuard` (identical input *and* identical
+    result = stuck): this tracks privilege TIER, not repetition — a long
+    streak of read/execute/search/unknown-tier steps with no WRITE at all,
+    even when every one of them is genuinely new work. Armed only when the
+    agent could plausibly write at all (the two-gate check computed once at
+    loop construction — see ``tool_use_loop.py``); when not armed every
+    method here is inert, so a read-only or non-write session pays nothing.
+
+    Observe-only: crossing the threshold emits telemetry (a
+    ``write_progress_signal`` event) unconditionally. ``reminder_enabled``
+    additionally injects a criterion-blind objective-restatement message — it
+    never names this signal or its criteria, so it cannot teach an agent the
+    tell it is being measured against.
+
+    ``threshold <= 0`` disables detection entirely.
+    """
+
+    write_capable: bool = False
+    threshold: int = DEFAULT_WRITE_PROGRESS_THRESHOLD
+    event_interval: int = DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL
+    max_events: int = DEFAULT_WRITE_PROGRESS_MAX_EVENTS
+    reminder_enabled: bool = False
+    _nonprogress: int = 0
+    _fires: int = 0
+
+    @property
+    def steps_since_write(self) -> int:
+        """Consecutive steps observed since the last write-tier execution."""
+        return self._nonprogress
+
+    @classmethod
+    def from_config(cls, *, write_capable: bool = False) -> WriteProgressSignal:
+        """Build a signal from ``agent.write_progress_signal_*`` config.
+
+        Gated by *write_capable*.
+        """
+        from mewbo_core.config import get_config_value
+
+        return cls(
+            write_capable=write_capable,
+            threshold=int(
+                get_config_value(
+                    "agent",
+                    "write_progress_signal_step_threshold",
+                    default=DEFAULT_WRITE_PROGRESS_THRESHOLD,
+                )
+            ),
+            event_interval=int(
+                get_config_value(
+                    "agent",
+                    "write_progress_signal_event_interval",
+                    default=DEFAULT_WRITE_PROGRESS_EVENT_INTERVAL,
+                )
+            ),
+            max_events=int(
+                get_config_value(
+                    "agent",
+                    "write_progress_signal_max_events",
+                    default=DEFAULT_WRITE_PROGRESS_MAX_EVENTS,
+                )
+            ),
+            reminder_enabled=bool(
+                get_config_value(
+                    "agent", "write_progress_signal_reminder_enabled", default=False
+                )
+            ),
+        )
+
+    def observe(self, results: Sequence[Any], specs_map: dict[str, ToolSpec]) -> None:
+        """Record one step's progress verdict from its executed tool results.
+
+        A step is progress iff any executed tool's spec resolves to the
+        ``"write"`` capability tier — that resets the non-progress streak to
+        zero. Everything else (a declared read/execute/search tier, AND a
+        tool_id absent from ``specs_map`` entirely — session tools,
+        spawn_agent, activate_skill and tool_search are never registry specs)
+        falls through to the same non-progress branch: a tool this signal
+        can't look up can't be PROVEN a write, so it is never credited as one.
+        """
+        is_write = any(
+            (spec := specs_map.get(getattr(r, "tool_id", ""))) is not None
+            and spec.capability_tier() == "write"
+            for r in results
+        )
+        if is_write:
+            self._nonprogress = 0
+        else:
+            self._nonprogress += 1
+
+    def threshold_crossed(self) -> bool:
+        """True (and consumes one event slot) exactly when a fresh event is due.
+
+        Only for a write-capable agent with detection enabled and events
+        remaining; fires once the non-progress streak crosses ``threshold``
+        and again every ``event_interval`` steps after, so telemetry repeats
+        periodically instead of exactly once.
+        """
+        if not self.write_capable or self.threshold <= 0 or self._fires >= self.max_events:
+            return False
+        if self._nonprogress < self.threshold:
+            return False
+        if (self._nonprogress - self.threshold) % self.event_interval != 0:
+            return False
+        self._fires += 1
+        return True
+
+    def exhausted(self) -> bool:
+        """True once every allotted event has been spent — go quiet from here."""
+        return self._fires >= self.max_events
 
 
 def repair_tool_pairing(messages: list[Any]) -> int:

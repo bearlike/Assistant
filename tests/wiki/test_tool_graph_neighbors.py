@@ -120,11 +120,11 @@ def test_graph_neighbors_1hop_any_direction(tmp_path: Path) -> None:
     assert "f3" not in node_ids
 
 
-# ── Access-trail recording (#168) — BFS navigation is not grounding ──────────
+# ── Access-trail recording — BFS navigation is not grounding ──────────
 
 
 def test_graph_neighbors_records_only_seed_not_traversal(tmp_path: Path) -> None:
-    """A BFS records ONLY the entry node, not every hop (#168 — nav isn't grounding)."""
+    """A BFS records ONLY the entry node, not every hop (nav isn't grounding)."""
     from mewbo_graph.plugins.wiki import _base as base_mod
     from mewbo_graph.plugins.wiki.graph_neighbors import (
         WikiGraphNeighbors,
@@ -292,16 +292,16 @@ def test_graph_neighbors_resolves_via_qa_ctx(tmp_path: Path) -> None:
     assert "f1" in node_ids
 
 
-# ── Test 9: unknown session → for_session returns error (via direct call) ────
+# ── Test 9: unknown session → ungrounded, not an internal error ──────────────
 
 
-def test_graph_neighbors_for_session_unknown_returns_error(tmp_path: Path) -> None:
-    """Session with no attached job or QA → for_session returns error MockSpeaker.
+def test_graph_neighbors_for_session_unknown_is_ungrounded(tmp_path: Path) -> None:
+    """No job, no QA, no project wiki → ``for_session`` reports NOT-GROUNDED.
 
-    BUG NOTE: WikiGraphNeighborsTool.handle() checks isinstance(view, dict)
-    but for_session returns MockSpeaker (from _err_result). This means the
-    tool handle would crash on AttributeError rather than return gracefully.
-    We test for_session directly to cover the error branches.
+    ``None`` and an ``_err_result`` mean different things here: ``None`` is the
+    expected "this session has no wiki", while a ``MockSpeaker`` is reserved for
+    a genuine failure (no runtime). The tool binds to ordinary sessions now, so
+    conflating the two would make a routine miss read as a fault.
     """
     from mewbo_graph.plugins.wiki.graph_neighbors import WikiGraphNeighbors
 
@@ -311,8 +311,35 @@ def test_graph_neighbors_for_session_unknown_returns_error(tmp_path: Path) -> No
     with patch.object(WikiGraphNeighbors, "_resolve_runtime", return_value=runtime):
         result = WikiGraphNeighbors.for_session("sess-unknown-gn")
 
+    assert result is None
+
+
+def test_graph_neighbors_tool_returns_ungrounded_envelope(tmp_path: Path) -> None:
+    """The TOOL turns that ``None`` into the short ``not_found`` envelope.
+
+    The agent must be able to learn from ONE call that there is no wiki here and
+    stop, which an ``internal`` code would not tell it.
+    """
+    from mewbo_graph.plugins.wiki import graph_neighbors as gn_mod
+    from mewbo_graph.plugins.wiki.graph_neighbors import (
+        WikiGraphNeighbors,
+        WikiGraphNeighborsTool,
+    )
+
+    store = _store(tmp_path)
+    runtime = _fake_runtime(store)
+    tool = WikiGraphNeighborsTool(session_id="sess-unknown-gn2")
+    step = MagicMock(tool_input={"node_id": "n1"})
+
+    with (
+        patch.object(WikiGraphNeighbors, "_resolve_runtime", return_value=runtime),
+        patch.object(gn_mod, "_resolve_runtime", return_value=runtime, create=True),
+    ):
+        result = asyncio.run(tool.handle(step))
+
     payload = ast.literal_eval(result.content)
-    assert payload["error"]["code"] == "internal"
+    assert payload["error"]["code"] == "not_found"
+    assert "no wiki indexed" in payload["error"]["message"]
 
 
 # ── Test 10: validation error on bad hops ───────────────────────────────────

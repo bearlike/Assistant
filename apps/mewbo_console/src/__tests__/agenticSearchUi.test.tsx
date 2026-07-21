@@ -42,11 +42,15 @@ function renderLanding(
         workspace={workspaces[0]}
         workspaces={workspaces}
         sources={[]}
-        tier="auto"
-        onTierChange={vi.fn()}
-        model=""
-        onModelChange={vi.fn()}
-        onPickWorkspace={vi.fn()}
+        scope={{
+          tier: "auto",
+          onTierChange: vi.fn(),
+          model: "",
+          onModelChange: vi.fn(),
+          fallbackModels: [],
+          onFallbackModelsChange: vi.fn(),
+        }}
+        onSelectWorkspace={vi.fn()}
         onSubmit={vi.fn()}
         onOpenCreate={vi.fn()}
         onOpenConfig={overrides.onOpenConfig ?? vi.fn()}
@@ -124,7 +128,7 @@ describe("LandingPanel workspace filter", () => {
     expect(screen.getByRole("heading", { name: "Design" })).toBeInTheDocument()
   })
 
-  it("exposes a Configure (edit) affordance on EVERY workspace card (#83)", () => {
+  it("exposes a Configure (edit) affordance on EVERY workspace card", () => {
     const onOpenConfig = vi.fn()
     renderLanding(workspaces, { onOpenConfig })
     // One Configure button per card — the edit dialog is reachable everywhere,

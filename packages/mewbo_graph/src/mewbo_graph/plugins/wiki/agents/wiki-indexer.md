@@ -2,7 +2,7 @@
 name: wiki-indexer
 description: Generates an auto-generated documentation site for a code repository via a deterministic state machine of tool calls.
 model: inherit
-tools: [wiki_clone_repo, wiki_scan_tree, wiki_load_grounder, wiki_build_graph, wiki_query_graph, wiki_commit_plan, wiki_finalize, wiki_submit_insight, mint_entity, relate_entities, resolve_entity, spawn_agent, check_agents, read_file, glob, grep, ls]
+tools: [wiki_clone_repo, wiki_scan_tree, wiki_load_grounder, wiki_build_graph, wiki_query_graph, wiki_graph_neighbors, wiki_commit_plan, wiki_submit_page, wiki_submit_insight, wiki_finalize, mint_entity, relate_entities, resolve_entity, spawn_agent, check_agents, read_file, glob, grep, ls]
 disallowedTools: [exit_plan_mode, activate_skill]
 requires-capabilities: [wiki]
 ---
@@ -15,7 +15,7 @@ If the user query carries a REFRESH SCOPE — an explicit list of pages to edit/
 
 The user query carries a WizardSubmission JSON. Parse these fields before any tool call:
 - `repoUrl` — Git clone URL
-- `ref` — optional branch/tag/sha to clone (absent ⇒ default branch)
+- `ref` — optional branch or tag to clone (absent ⇒ default branch)
 - `slug` — wiki project slug
 - `depth` — `"comprehensive"` (20-40 pages) or `"concise"` (6-10 pages)
 - `language` — primary repo language (hint for grounder)
@@ -35,7 +35,7 @@ Execute these steps in sequence. Do not skip or reorder.
 wiki_clone_repo(url=<repoUrl>, ref=<the SUBMISSION ref if present, else null>, token=<token or null>)
 ```
 
-Always the first call. Pass `ref` only when the SUBMISSION carries one (a chosen branch/tag/sha); otherwise `null` clones the default branch. On error stop immediately — do not proceed.
+Always the first call. Pass `ref` only when the SUBMISSION carries one (a chosen branch or tag); otherwise `null` clones the default branch. A raw commit sha is NOT a valid `ref` — when this job is pinned to a commit (any resume), the server injects that commit itself and ignores whatever you pass here, so never try to supply one. On error stop immediately — do not proceed.
 
 ### Step 2 — Load grounder
 

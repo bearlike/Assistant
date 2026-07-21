@@ -1,10 +1,10 @@
 """Realtime token-streaming draft synthesis API.
 
 ``init_realtime`` registers ``POST /v1/draft/stream`` — the session-full,
-token-streaming, tool-light draft path (write-behind persistence, #78).
+token-streaming, tool-light draft path (write-behind persistence).
 
 The no-loop structured synthesis lane (formerly ``POST /v1/structured/fast``) now
-lives as ``mode: "synthesis"`` on ``POST /v1/structured`` (#85); this package
+lives as ``mode: "synthesis"`` on ``POST /v1/structured``; this package
 still owns the shared ``RealtimeSessionRecorder`` + ``WikiGroundingProvider`` glue
 it reuses.
 

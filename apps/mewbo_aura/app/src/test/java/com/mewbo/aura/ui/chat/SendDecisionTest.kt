@@ -71,7 +71,7 @@ class SendDecisionTest {
         assertEquals(RunPhase.Sending, SendDecision.phaseForSend(RunPhase.Error, hasActiveStream = false))
     }
 
-    // ---- modalityForSend (Gitea #180 P1) ----
+    // ---- modalityForSend ----
 
     @Test
     fun `a plain send() with no modality arg (its default, Text) tags a fresh turn Text`() {
@@ -112,7 +112,7 @@ class SendDecisionTest {
         )
     }
 
-    // ---- shouldMuteOnStopSpeaking (Gitea #180 P3/P4, #175 §7.1) ----
+    // ---- shouldMuteOnStopSpeaking (§7.1) ----
 
     @Test
     fun `stopping a live Voice-turn speak-along (Sending) latches the mute`() {

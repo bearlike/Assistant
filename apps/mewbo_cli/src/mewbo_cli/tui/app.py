@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MewboApp — the single Textual application shell (issue #150, epic #149).
+"""MewboApp — the single Textual application shell.
 
 Replaces the former four coexisting I/O stacks (Rich ``Live`` + Textual +
 prompt_toolkit + raw termios) with ONE ``textual.App`` running on one event
@@ -68,6 +68,10 @@ class EngineLike(Protocol):
         """Dispatch one line; return ``False`` to quit the app."""
         ...
 
+    def last_turn_outcome(self) -> str | None:
+        """The most recently completed query turn's honest status, or ``None``."""
+        ...
+
 
 Emit = Callable[[TranscriptItem], None]
 EmitRenderable = Callable[["RenderableType"], None]
@@ -76,13 +80,13 @@ AppInstaller = Callable[["MewboApp"], None]
 """A post-mount installer configures the *mounted* App (inject widget
 collaborators, register sidebar slots, bind keys, push screens) without
 editing this file — the extension path for the Wave-2 input/sidebar/session
-children (#155/#156/#157). Run at the tail of ``on_mount``; a failing
+children. Run at the tail of ``on_mount``; a failing
 installer degrades to a dim notice rather than breaking the App."""
 
 
 # --- foundation message renderers ----------------------------------------
 # Minimal renderers so the placeholder transcript shows real content. The
-# transcript child (#152) registers richer renderers on the SAME seam; on_mount
+# transcript child registers richer renderers on the SAME seam; on_mount
 # never clobbers a kind a child already registered.
 
 
@@ -320,8 +324,8 @@ class MewboApp(App[int]):
         """Run one dispatch turn off the UI thread; exit if the engine says so.
 
         Wave-2 hooks (resolved live so the App stays closed to those children):
-        the session controller (#157) takes a pre-turn workspace checkpoint and
-        kicks idempotent auto-titling after the turn; the input widget (#155) is
+        the session controller takes a pre-turn workspace checkpoint and
+        kicks idempotent auto-titling after the turn; the input widget is
         marked busy for the turn so follow-up Enters queue, and any queued
         message is drained and run next.
         """
@@ -334,7 +338,7 @@ class MewboApp(App[int]):
             self.call_from_thread(self._input_widget.set_busy, True)
         # Show the "working" spinner for the whole turn. The hub updates its label
         # live (thinking / running <tool>); on settle it COLLAPSES into a muted
-        # turn-summary line carrying the total elapsed (#161).
+        # turn-summary line carrying the total elapsed.
         turn_started = time.monotonic()
         if self._transcript is not None:
             self.call_from_thread(self._transcript.start_activity, "Working")
@@ -346,7 +350,9 @@ class MewboApp(App[int]):
         finally:
             if self._transcript is not None:
                 self.call_from_thread(
-                    self._transcript.finish_activity, time.monotonic() - turn_started
+                    self._transcript.finish_activity,
+                    time.monotonic() - turn_started,
+                    self._engine.last_turn_outcome(),
                 )
             if self._input_widget is not None:
                 self.call_from_thread(self._input_widget.set_busy, False)

@@ -1,4 +1,4 @@
-"""``WorkspaceSourceSync`` — virtual-config refresh + auto-map on save (#75).
+"""``WorkspaceSourceSync`` — virtual-config refresh + auto-map on save.
 
 Drives the real :class:`WorkspaceSourceSync` over a real JSON agentic_search
 store, stubbing only the I/O boundaries the issue calls out:
@@ -315,7 +315,7 @@ def test_no_automap_without_runtime(
     assert _map_recorder == []
 
 
-# ── auto re-map on tool-list drift (#81-C) ──────────────────────────────────
+# ── auto re-map on tool-list drift ──────────────────────────────────
 #
 # The live builder stub advertises a single tool ``t``; the drift check hashes
 # that live list and compares it to the ``schema_version`` stamped on the mapped
@@ -417,7 +417,7 @@ def test_drift_remap_skipped_when_already_in_flight(
     assert _map_recorder == []
 
 
-# ── NL-context enrichment is carried into the map contract (#81-B) ──────────
+# ── NL-context enrichment is carried into the map contract ──────────
 
 
 def test_workspace_nl_context_rides_the_map_input(
@@ -512,7 +512,7 @@ def test_no_nl_context_when_workspace_has_no_prose(
     assert captured and captured[0].nl_context is None
 
 
-# ── NlContextFingerprint — the prose digest (#83) ───────────────────────────
+# ── NlContextFingerprint — the prose digest ───────────────────────────
 
 
 def test_fingerprint_blank_prose_is_empty_sentinel() -> None:
@@ -543,7 +543,7 @@ def test_fingerprint_is_field_aware() -> None:
     assert a != b
 
 
-# ── re-enrich on a prose change with sources unchanged (#83) ─────────────────
+# ── re-enrich on a prose change with sources unchanged ─────────────────
 
 
 def test_prose_change_redrives_already_mapped_source(

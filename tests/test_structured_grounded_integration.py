@@ -1,11 +1,11 @@
 """Integration tests: structured-query lifecycle is healthy end-to-end.
 
-Guards four contracts that #40 and #51 silently broke because every prior test
+Guards four contracts that and silently broke because every prior test
 stubbed the seam that actually failed:
 
-    A. Grounding resolves (#51): a wiki_search_pages call in a session carrying
+    A. Grounding resolves: a wiki_search_pages call in a session carrying
        a ``structured_workspace`` event returns real hits, NOT "wiki QA ctx not found".
-    B. Emit ⇒ completed (#40 mislabel): a real ToolUseLoop driven with
+    B. Emit ⇒ completed (mislabel): a real ToolUseLoop driven with
        emit_result yields done_reason=="completed", not "awaiting_approval".
     C. Re-drive on skip: the real StructuredResponder._run_with_redrive emits
        when the first drive produces nothing but the re-drive calls emit_result.
@@ -163,7 +163,7 @@ def _runtime(wiki_store, session_store=None):
     return SimpleNamespace(wiki_store=wiki_store, session_store=session_store)
 
 
-# ── Assertion A — Grounding resolves via structured_workspace (#51) ─────────
+# ── Assertion A — Grounding resolves via structured_workspace ─────────
 
 
 def test_A_grounding_resolves_via_workspace_event(tmp_path: Path) -> None:
@@ -205,7 +205,7 @@ def test_A_grounding_resolves_via_workspace_event(tmp_path: Path) -> None:
 
     # Guard: the grounding ctx was resolved — the old "not found" error is gone.
     assert "wiki QA ctx not found" not in body, (
-        f"Bug #51 still present — ctx not resolved from structured_workspace event.\n"
+        f"Bug still present — ctx not resolved from structured_workspace event.\n"
         f"Tool result: {body!r}"
     )
     # The seeded page must appear — proves real retrieval ran, not a mock shortcut.
@@ -277,7 +277,7 @@ def test_B_emit_result_drives_done_reason_completed() -> None:
 
     assert state.done is True, "Loop must have terminated."
     assert state.done_reason == "completed", (
-        f"Bug #40 still present — done_reason is {state.done_reason!r}, expected 'completed'.\n"
+        f"Bug still present — done_reason is {state.done_reason!r}, expected 'completed'.\n"
         "EmitStructuredResponseTool.terminal_reason() must return 'completed'."
     )
 
@@ -365,7 +365,7 @@ def test_B2_ground_then_emit_yields_completed(tmp_path: Path) -> None:
 
     assert state.done is True
     assert state.done_reason == "completed", (
-        f"Bug #40 still present after grounding turn — done_reason={state.done_reason!r}."
+        f"Bug still present after grounding turn — done_reason={state.done_reason!r}."
     )
     assert emit.payload == {"name": "Ada"}
     # grounding tool result must NOT have been the ctx-not-found error
@@ -403,7 +403,7 @@ class _RunWithRedriveRuntime:
         return "sess-C"
 
     def tag_session(self, session_id: str, tag: str) -> None:
-        """Stamp the structured provenance tag (#78); no-op store for this double."""
+        """Stamp the structured provenance tag ; no-op store for this double."""
 
     def append_context_event(self, session_id: str, context: dict) -> None:
         self.context_events.append(context)
@@ -479,7 +479,7 @@ def test_C_redrive_produces_object_when_first_drive_skips_emit() -> None:
       Drive 2 (re-drive) — LLM calls emit_result → payload set.
 
     The real ``_run_with_redrive`` must detect the missing payload and fire the
-    re-drive automatically (not skip it as the async path did before #40).
+    re-drive automatically (not skip it as the async path did before).
     Asserts: two ``run_sync`` calls happened AND the final payload is the emitted object.
     """
     # Drive 1: model answers in prose (no emit_result) → payload stays None.

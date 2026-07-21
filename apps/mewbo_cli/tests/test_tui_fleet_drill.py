@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the in-place fleet drill-in (#161, epic #149).
+"""Tests for the in-place fleet drill-in.
 
 The acceptance bar: selecting a fleet agent swaps the MAIN transcript region (in
 place — not a separate screen) for that agent's transcript from the hub, with a

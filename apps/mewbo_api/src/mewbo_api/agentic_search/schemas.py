@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Bump when the wire shape changes incompatibly. Stamped onto every RunRecord +
 # emitted in the ``run_started`` event so the console can guard on it.
@@ -149,7 +149,7 @@ class Workspace(_Wire):
 
 
 # ---------------------------------------------------------------------------
-# Virtual MCP config (DB-persisted, per workspace) — #75
+# Virtual MCP config (DB-persisted, per workspace)
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +204,7 @@ class McpServerDef(BaseModel):
 
 
 class WorkspaceMcpConfigRecord(_Wire):
-    """The durable virtual MCP config for ONE workspace (#75).
+    """The durable virtual MCP config for ONE workspace.
 
     Persisted in the agentic_search store namespace (JSON file / Mongo
     collection, the :class:`CredentialStore` dual-backend pattern). ``servers``
@@ -221,7 +221,7 @@ class WorkspaceMcpConfigRecord(_Wire):
     # drove a map-time enrich. Server-internal map-lifecycle bookkeeping — the
     # NL-context sibling of ``SourceDescriptor.schema_version`` (the tool-list
     # ManifestHash). Empty until the first enrich-bearing save; a change gates an
-    # idempotent re-enrich of the workspace's mapped sources (#83). Never a
+    # idempotent re-enrich of the workspace's mapped sources. Never a
     # secret, never echoed outward.
     nl_fingerprint: str = ""
 
@@ -409,6 +409,74 @@ class RelatedPerson(_Wire):
 # ---------------------------------------------------------------------------
 
 
+class SearchRunCreateRequest(_Wire):
+    """Validated ``POST /runs`` body — the run-creation wire contract.
+
+    Closes a real gap: this endpoint used to be parsed as a raw dict with
+    ad hoc per-field ``isinstance``/membership checks and no ``extra="forbid"``
+    — exactly the "client smuggles/typos a field, gets a silent no-op" trap the
+    house Pydantic-contract law exists to close. ``tier``, ``model``,
+    ``project`` and ``fallback_models`` are independent optional overrides;
+    each absent field defers to server policy on its own (a request need not
+    set all-or-nothing).
+
+    ``model`` / ``project`` keep the established ``/v1/structured`` stance —
+    a non-string or blank value is silently ignored rather than rejected — but
+    ``fallback_models`` is a genuinely new field with no prior "ignore junk"
+    contract, so a wrong TYPE (e.g. a string instead of a list) is a real 400,
+    while an empty-after-trim list still collapses to ``None`` (inherit
+    config policy), mirroring ``backend.py:_extract_fallback_models``.
+    """
+
+    workspace_id: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    tier: SearchTierLiteral | None = None
+    model: str | None = None
+    project: str | None = None
+    # Optional per-run cross-model fallback ladder. ``None`` means
+    # "inherit the configured fallback policy" — never an empty tuple, which
+    # would mean "explicitly no fallback" (a different, unrequested contract).
+    fallback_models: tuple[str, ...] | None = None
+
+    @field_validator("query", "workspace_id", mode="before")
+    @classmethod
+    def _strip_required_text(cls, value: object) -> object:
+        """Trim a required text field so a whitespace-only value fails ``min_length``.
+
+        A blank id is a malformed request (400), not a workspace lookup miss (404).
+        """
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("model", "project", mode="before")
+    @classmethod
+    def _ignore_non_string(cls, value: object) -> str | None:
+        """Non-string or blank collapses to ``None`` — ignored, never a 400.
+
+        Matches the ``/v1/structured`` stance for these two established
+        optional overrides: a malformed value degrades to "use the default"
+        rather than rejecting the whole request.
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return value.strip()
+
+    @field_validator("fallback_models", mode="before")
+    @classmethod
+    def _normalize_fallback_models(cls, value: object) -> tuple[str, ...] | None:
+        """Coerce to a clean tuple of non-blank ids; empty-after-filter is ``None``.
+
+        A genuinely wrong type (not a list) is a real validation error — this
+        field has no prior "ignore junk" contract to preserve, and the house
+        law prefers a clean 400 over a silent no-op for a new field.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("fallback_models must be a list of model ids")
+        cleaned = tuple(str(m).strip() for m in value if str(m).strip())
+        return cleaned or None
+
+
 class RunStatsWire(_Wire):
     """Honest, derived run statistics — the "show the work" instrument block.
 
@@ -460,6 +528,12 @@ class RunPayload(_Wire):
     # (an in-flight or echo run carries no stats).
     stats: RunStatsWire | None = None
     error: str | None = None
+    # True when ``trace``/``results`` on a FAILED payload carry grounded
+    # evidence gathered before the failure rather than being empty — a
+    # failure that discards 87 successful probe calls into ``task_result=""``
+    # is the defect this marks honestly. Always False on a completed run (its
+    # trace/results are complete, not partial).
+    partial: bool = False
 
 
 class RunRecord(_Wire):
@@ -480,6 +554,11 @@ class RunRecord(_Wire):
     # Explicit per-run model override; the runner reads it at drive time
     # (``run.model or ScgConfig.model_for_tier(run.tier)``).
     model: str | None = None
+    # Optional per-run cross-model fallback ladder. ``None`` means "inherit the
+    # configured fallback policy", exactly like ``model``/``None`` above —
+    # never an empty tuple, which would mean "explicitly disable fallback".
+    # The runner reads it verbatim at drive time (``run_sync(fallback_models=…)``).
+    fallback_models: tuple[str, ...] | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: str | None = None
     completed_at: str | None = None
@@ -490,6 +569,28 @@ class RunRecord(_Wire):
     output_contract_version: str = OUTPUT_CONTRACT_VERSION
     payload: RunPayload | None = None
 
+    def is_amendable_to_completed(self) -> bool:
+        """True iff this record is the ONE state the post-recovery amend targets.
+
+        Only a terminal ``failed`` record is amendable — ``completed`` and
+        ``cancelled`` are final by construction (the cancel-vs-drive settle race
+        this store already guards against). Behavior on the model, not a
+        service-side status-string comparison scattered at each call site.
+        """
+        return self.status == "failed"
+
+    @property
+    def is_echo_backed(self) -> bool:
+        """True when ``session_id`` is the echo-runner tag placeholder, not a real session.
+
+        The echo runner never opens a real ``SessionRuntime`` session — it
+        stamps ``session_id`` with the same ``agentic_search:run:<id>`` tag
+        format the orchestrated runner uses for provenance, so there is
+        nothing to cancel or recover against. Behavior on the model, not a
+        string-prefix check duplicated at each call site.
+        """
+        return self.session_id.startswith("agentic_search:")
+
 
 # ---------------------------------------------------------------------------
 # Map-source (SCG indexing) job record
@@ -497,7 +598,7 @@ class RunRecord(_Wire):
 
 
 class MapJobRecord(_Wire):
-    """Durable record of a map-source (SCG indexing) job (spec #19 §16.2).
+    """Durable record of a map-source (SCG indexing) job (spec §16.2).
 
     The map job lives in the *agentic_search* store — NOT the SCG structure
     store — so it reuses the run-event-log + ``RunSseGenerator`` plumbing the
@@ -595,6 +696,7 @@ __all__ = [
     "RelatedPerson",
     "RunStatsWire",
     "RunPayload",
+    "SearchRunCreateRequest",
     "RunRecord",
     "utc_now_iso",
     "clean_for_model",

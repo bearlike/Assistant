@@ -5,12 +5,17 @@ from types import SimpleNamespace
 
 from mewbo_core.config import set_config_override, set_mcp_config_path
 from mewbo_core.tool_registry import (
+    _CAPABILITY_MODE_TIERS,
+    CapabilityMode,
     ToolRegistry,
     ToolSpec,
     _default_manifest_cache_path,
+    _default_registry,
     _ensure_auto_manifest,
     _sanitize_tool_id,
+    filter_specs,
     get_or_build_registry,
+    is_always_load,
     load_registry,
     reset_registry_cache,
 )
@@ -542,7 +547,7 @@ def test_auto_manifest_marks_failed_server(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ToolRegistryCache — registry reuse across runs in a session (Gitea #138)
+# ToolRegistryCache — registry reuse across runs in a session
 # ---------------------------------------------------------------------------
 
 
@@ -620,7 +625,7 @@ def test_get_or_build_registry_rebuilds_on_changed_mcp_servers(monkeypatch, tmp_
 def test_orchestrator_reuses_registry_across_runs(monkeypatch, tmp_path):
     """End-to-end: two Orchestrators (= two queries) on the same cwd share the
     cached registry; a different cwd rebuilds — proving the per-query rebuild is
-    gone (Gitea #138)."""
+    gone."""
     import mewbo_core.tool_registry as tr
     from mewbo_core.orchestrator import Orchestrator
     from mewbo_core.session_store import SessionStore
@@ -649,3 +654,155 @@ def test_orchestrator_reuses_registry_across_runs(monkeypatch, tmp_path):
     finally:
         reset_registry_cache()
         set_config_override({})
+
+
+# ---------------------------------------------------------------------------
+# capability_mode coarse privilege tier (Phase 1a)
+# ---------------------------------------------------------------------------
+
+
+def _cap_spec(
+    tool_id,
+    *,
+    read_only=False,
+    capability=None,
+    always_load=False,
+):
+    """A minimal ToolSpec with a declared privilege tier for capability tests."""
+    metadata = {"always_load": True} if always_load else {}
+    return ToolSpec(
+        tool_id=tool_id,
+        name=tool_id,
+        description="",
+        factory=lambda: None,
+        read_only=read_only,
+        capability=capability,
+        metadata=metadata,
+    )
+
+
+def test_capability_tier_resolution():
+    # Explicit declarations win.
+    assert _cap_spec("e", capability="write").capability_tier() == "write"
+    assert _cap_spec("s", capability="execute").capability_tier() == "execute"
+    assert _cap_spec("r", capability="read").capability_tier() == "read"
+    # read_only tools are read-tier by construction (fallback, no annotation).
+    assert _cap_spec("ro", read_only=True).capability_tier() == "read"
+    # Undeclared is None — safe-deny, NOT treated as read.
+    assert _cap_spec("u").capability_tier() is None
+    # An explicit capability overrides the read_only fallback if both are set.
+    assert _cap_spec("x", read_only=True, capability="write").capability_tier() == "write"
+
+
+def test_capability_mode_read_only_keeps_only_read_plus_always_load():
+    specs = [
+        _cap_spec("read_file", read_only=True),
+        _cap_spec("edit", capability="write"),
+        _cap_spec("shell", capability="execute"),
+        _cap_spec("undeclared"),
+        _cap_spec("tool_search", read_only=True, always_load=True),
+    ]
+    kept = {s.tool_id for s in filter_specs(specs, capability_mode="read_only")}
+    assert kept == {"read_file", "tool_search"}
+
+
+def test_capability_mode_read_only_excludes_undeclared_safe_deny():
+    specs = [_cap_spec("undeclared"), _cap_spec("read_file", read_only=True)]
+    kept = {s.tool_id for s in filter_specs(specs, capability_mode="read_only")}
+    assert kept == {"read_file"}  # undeclared withheld even though harmless-looking
+
+
+def test_capability_mode_execute_keeps_all_declared_drops_undeclared():
+    specs = [
+        _cap_spec("read_file", read_only=True),
+        _cap_spec("edit", capability="write"),
+        _cap_spec("shell", capability="execute"),
+        _cap_spec("undeclared"),
+    ]
+    kept = {s.tool_id for s in filter_specs(specs, capability_mode="execute")}
+    assert kept == {"read_file", "edit", "shell"}  # undeclared excluded (safe-deny)
+
+
+def test_capability_mode_all_is_noop():
+    specs = [
+        _cap_spec("read_file", read_only=True),
+        _cap_spec("edit", capability="write"),
+        _cap_spec("undeclared"),
+    ]
+    kept_all = [s.tool_id for s in filter_specs(specs, capability_mode="all")]
+    kept_default = [s.tool_id for s in filter_specs(specs)]
+    # "all" and the default (no arg) are byte-identical to no filtering.
+    assert kept_all == kept_default == [s.tool_id for s in specs]
+
+
+def test_capability_mode_unknown_mode_fails_open():
+    # An unrecognised mode skips the gate (the Literal at SpawnAgentTask is the
+    # authoritative validation) — it must not silently nuke every tool.
+    specs = [_cap_spec("edit", capability="write"), _cap_spec("undeclared")]
+    kept = {s.tool_id for s in filter_specs(specs, capability_mode="bogus")}
+    assert kept == {"edit", "undeclared"}
+
+
+def test_capability_mode_layered_under_allowlist_cannot_resurrect():
+    # An allowed_tools list cannot bring back a tool capability_mode removed.
+    specs = [_cap_spec("shell", capability="execute"), _cap_spec("read_file", read_only=True)]
+    kept = {
+        s.tool_id
+        for s in filter_specs(specs, allowed=["shell"], capability_mode="read_only")
+    }
+    assert kept == set()  # shell is allowed but read_only mode drops it; nothing left
+
+
+def test_capability_mode_deny_beats_always_load_exemption():
+    # Deny wins over the always_load exemption even under a restrictive mode.
+    specs = [
+        _cap_spec("read_file", read_only=True),
+        _cap_spec("tool_search", read_only=True, always_load=True),
+    ]
+    kept = {
+        s.tool_id
+        for s in filter_specs(specs, denied=["tool_search"], capability_mode="read_only")
+    }
+    assert kept == {"read_file"}
+
+
+def test_builtin_capability_classification():
+    tiers = {s.tool_id: s.capability_tier() for s in _default_registry().list_specs(
+        include_disabled=True
+    )}
+    assert tiers["read_file"] == "read"
+    assert tiers["aider_list_dir_tool"] == "read"
+    assert tiers["lsp_tool"] == "read"
+    assert tiers["tool_search"] == "read"
+    assert tiers["file_edit_tool"] == "write"
+    assert tiers["aider_edit_block_tool"] == "write"
+    assert tiers["aider_shell_tool"] == "execute"
+    assert tiers["home_assistant_tool"] == "execute"
+
+
+def test_capability_survives_disable():
+    reg = ToolRegistry()
+    reg.register(_cap_spec("edit", capability="write"))
+    reg.disable("edit", "boom")
+    # Disabling reconstructs the spec — the tier must carry through.
+    assert reg.get_spec("edit").capability == "write"
+
+
+def test_capability_mode_vocabulary_is_consistent_across_homes():
+    """The three homes of the mode vocabulary must agree.
+
+    ``CapabilityMode`` (the trust-boundary Literal on SpawnAgentTask) is
+    authoritative; the tier map (tool_registry) and the propagation rank
+    (agent_context) must not drift from it.
+    """
+    from typing import get_args
+
+    from mewbo_core.agent_context import AgentContext
+
+    modes = set(get_args(CapabilityMode))
+    assert modes == {"read_only", "execute", "all"}
+    # "all" has no tier entry (it means "no filtering"); the rest are covered.
+    assert set(_CAPABILITY_MODE_TIERS) == modes - {"all"}
+    assert set(AgentContext._CAPABILITY_MODE_RANK) == modes
+    # always_load helper still recognises the metadata flag used above.
+    assert is_always_load(_cap_spec("t", always_load=True)) is True

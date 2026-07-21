@@ -91,6 +91,10 @@ def _load_email_template() -> Template:
     """Load and cache the Jinja2 email wrapper template."""
     global _template_cache  # noqa: PLW0603
     if _template_cache is None:
+        # autoescape off by design: this wrapper composes an email MIME part from the
+        # already-rendered markdown->HTML body (see render_markdown_html) — the output is
+        # intentional HTML delivered over SMTP to an email client, not app-served browser
+        # HTML, so escaping would double-encode the body into visible tags.
         _template_cache = Template(_TEMPLATE_PATH.read_text())
     return _template_cache
 
@@ -205,6 +209,9 @@ class EmailAdapter:
 
     platform: str = "email"
     trigger_keyword: str = "@Mewbo"
+    # Email has no push surface (it's polled over IMAP) — the webhook route
+    # 404s this adapter before ever calling verify_request/parse_inbound below.
+    supports_webhook: bool = False
 
     def __init__(  # noqa: D107
         self,
@@ -231,14 +238,21 @@ class EmailAdapter:
         # Thread metadata for constructing reply headers
         self._thread_meta: dict[str, _ThreadMeta] = {}
 
-    # -- ChannelAdapter protocol stubs (not used for polled channels) --
+    # -- ChannelAdapter protocol stubs --
+    #
+    # ``supports_webhook = False`` above makes ``webhook_receive`` 404 before
+    # either of these runs, so neither is a real authentication/parsing path —
+    # they only satisfy the Protocol for the other callers that share it
+    # (mention gating, the completion hook). Do not treat a `True`/`None`
+    # return here as a security proof; there is no webhook to prove anything
+    # about.
 
     def verify_request(
         self,
         headers: dict[str, str],
         body: bytes,
     ) -> bool:
-        """Always True — email is polled, not pushed via webhook."""
+        """Unreachable via the webhook route.  Email is polled, not pushed."""
         return True
 
     def parse_inbound(
@@ -246,7 +260,7 @@ class EmailAdapter:
         headers: dict[str, str],
         body: bytes,
     ) -> InboundMessage | None:
-        """Not used by the IMAP poller.  Returns None."""
+        """Unreachable via the webhook route.  Not used by the IMAP poller."""
         return None
 
     # -- Email-specific parsing --
@@ -264,7 +278,7 @@ class EmailAdapter:
 
         # Access control: reject unlisted senders
         if self._allowed and sender_email not in self._allowed:
-            logger.debug("Email from %s rejected (not in allowed_senders)", sender_email)
+            logger.debug("Email from {} rejected (not in allowed_senders)", sender_email)
             return None
 
         # Access control: reject if not addressed to an allowed recipient
@@ -273,7 +287,7 @@ class EmailAdapter:
             self._allowed_recipients & {r.lower() for r in recipients}
         ):
             logger.debug(
-                "Email to %s rejected (no allowed_recipients match)",
+                "Email to {} rejected (no allowed_recipients match)",
                 recipients,
             )
             return None
@@ -338,7 +352,7 @@ class EmailAdapter:
             return mime_msg["Message-ID"]
         except Exception:
             logger.warning(
-                "Failed to send email to %s",
+                "Failed to send email to {}",
                 recipient,
                 exc_info=True,
             )
@@ -389,7 +403,7 @@ class EmailAdapter:
 
         result = self._smtp_send(msg, channel_id)
         if result:
-            logger.info("Sent email reply to %s (subject: %s)", channel_id, msg["Subject"])
+            logger.info("Sent email reply to {} (subject: {})", channel_id, msg["Subject"])
         return result
 
     # -- Send Gmail emoji reaction --
@@ -422,7 +436,7 @@ class EmailAdapter:
 
         result = self._smtp_send(msg, channel_id)
         if result:
-            logger.info("Sent %s reaction to %s", emoji, channel_id)
+            logger.info("Sent {} reaction to {}", emoji, channel_id)
         return result
 
     @property
@@ -519,7 +533,7 @@ class EmailPoller:
                     client = self._connect()
                     backoff = 5  # Reset backoff on successful connect
                     logger.info(
-                        "Email poller connected to %s:%d/%s",
+                        "Email poller connected to {}:{}/{}",
                         self._imap_host,
                         self._imap_port,
                         self._mailbox,
@@ -527,14 +541,14 @@ class EmailPoller:
 
                 uids = client.search(["UNSEEN"])
                 if uids:
-                    logger.debug("Found %d unseen emails", len(uids))
+                    logger.debug("Found {} unseen emails", len(uids))
                     fetched = client.fetch(uids, ["RFC822"])
                     for uid, data in fetched.items():
                         self._handle_email(uid, data, client)
 
             except Exception:
                 logger.warning(
-                    "Email poller error (reconnecting in %ds)",
+                    "Email poller error (reconnecting in {}s)",
                     backoff,
                     exc_info=True,
                 )
@@ -571,7 +585,7 @@ class EmailPoller:
             client.add_flags([uid], [imapclient.SEEN])
         except Exception:
             logger.warning(
-                "Failed to process email UID %s",
+                "Failed to process email UID {}",
                 uid,
                 exc_info=True,
             )

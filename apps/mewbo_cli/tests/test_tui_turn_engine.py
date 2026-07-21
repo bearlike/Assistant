@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for TurnEngine — the ported run_cli dispatch + _run_query (issue #150).
+"""Tests for TurnEngine — the ported run_cli dispatch + _run_query.
 
 TurnEngine is the App-agnostic core: it classifies a line (command / skill /
 query), runs it against an injected ``SessionRuntime``, and emits transcript
@@ -139,6 +139,77 @@ def test_handle_query_emits_user_then_assistant(
     assert "the answer" in str(assistant.payload.get("text"))
 
 
+# --- last_turn_outcome -----------------------------------------------------
+#
+# ``run_sync``'s return (``TaskQueue``) carries no ``done_reason``/
+# ``blocked_code`` — those live on the session's ``completion`` event, so
+# these tests stub ``orchestrate_session`` to append one directly (as the
+# real orchestrator does) rather than reusing ``_stub_run``, which returns a
+# bare ``TaskQueue`` with no store side effect.
+
+
+def _stub_run_with_completion(
+    monkeypatch: pytest.MonkeyPatch, h: _Harness, *, done_reason: str,
+    blocked_code: str | None = None, result: str = "ok",
+) -> None:
+    payload: dict[str, Any] = {"done": True, "done_reason": done_reason}
+    if blocked_code is not None:
+        payload["blocked_code"] = blocked_code
+
+    def fake_orchestrate(*args: Any, **kwargs: Any) -> TaskQueue:
+        h.store.append_event(h.session_id, {"type": "completion", "payload": payload})
+        tq = TaskQueue()
+        tq.task_result = result
+        return tq
+
+    monkeypatch.setattr("mewbo_core.session_runtime.orchestrate_session", fake_orchestrate)
+
+
+def test_last_turn_outcome_none_before_any_turn(tmp_path: Any) -> None:
+    assert _Harness(tmp_path).engine.last_turn_outcome() is None
+
+
+def test_last_turn_outcome_reflects_blocked_code(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``blocked_code`` completion (``done_reason`` stays ``"completed"``)
+    reports ``"blocked"``, not the false-success ``"completed"``.
+    """
+    h = _Harness(tmp_path)
+    _stub_run_with_completion(
+        monkeypatch, h, done_reason="completed", blocked_code="repo_access"
+    )
+    h.engine.handle("do the thing")
+    assert h.engine.last_turn_outcome() == "blocked"
+
+
+def test_last_turn_outcome_reflects_unmet_goal(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = _Harness(tmp_path)
+    _stub_run_with_completion(monkeypatch, h, done_reason="halted_no_progress")
+    h.engine.handle("do the thing")
+    assert h.engine.last_turn_outcome() == "unmet_goal"
+
+
+def test_last_turn_outcome_resets_on_a_command_dispatch(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command turn after a blocked query must not inherit its outcome —
+    otherwise ``/help`` right after a blocked run would settle the footer
+    spinner as blocked too.
+    """
+    h = _Harness(tmp_path)
+    _stub_run_with_completion(
+        monkeypatch, h, done_reason="completed", blocked_code="repo_access"
+    )
+    h.engine.handle("do the thing")
+    assert h.engine.last_turn_outcome() == "blocked"
+
+    h.engine.handle("/help")
+    assert h.engine.last_turn_outcome() is None
+
+
 def test_handle_empty_is_noop(tmp_path: Any) -> None:
     h = _Harness(tmp_path)
     assert h.engine.handle("   ") is True
@@ -202,6 +273,27 @@ def test_run_query_threads_permission_as_approval_callback(
     h.engine.run_query("hi")
     assert captured["approval_callback"] is h.permission
     assert captured["source_platform"] == "cli"
+
+
+def test_run_query_refuses_terminated_session(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanently terminated session never starts a run.
+
+    ``SessionRuntime.run_sync`` itself doesn't guard this, so the engine must
+    refuse before reaching it — asserted here by never stubbing
+    ``orchestrate_session``: if the guard didn't fire, the real (unstubbed)
+    orchestrator would raise instead of quietly succeeding.
+    """
+    h = _Harness(tmp_path)
+    h.runtime.terminate_session(h.session_id)
+
+    result = h.engine.run_query("hi")
+
+    assert result is None
+    assert h.kinds() == ["notice"]
+    notice = h.items[0]
+    assert "terminated" in str(notice.payload.get("text")).lower()
 
 
 def test_run_query_emits_tool_items(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

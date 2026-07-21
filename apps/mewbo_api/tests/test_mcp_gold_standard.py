@@ -1,4 +1,4 @@
-"""Route-level tests for the MCP gold-standard backend slice (Gitea #43/#44).
+"""Route-level tests for the MCP gold-standard backend slice.
 
 Covers the six fixes:
 1. Global JSON 404 handler (no raw Werkzeug HTML leak).

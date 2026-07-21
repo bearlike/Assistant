@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""make_sidebar_installer — wire #156's sidebar slots into MewboApp (epic #149).
+"""make_sidebar_installer — wire the faceted sidebar slots into MewboApp.
 
-The post-mount :data:`~mewbo_cli.tui.app.AppInstaller` for issue #156. The
+The post-mount :data:`~mewbo_cli.tui.app.AppInstaller` for the sidebar. The
 controller appends ``make_sidebar_installer(...)`` to
 ``cli_master._build_installers`` and the App runs it once at the tail of
 ``on_mount`` (already fully composed, so ``app.query_one`` works).
@@ -97,7 +97,7 @@ def make_sidebar_installer(
     statusline: StatusLineRunner | None = None,
     meter: ContextMeter | None = None,
 ) -> Callable[[MewboApp], None]:
-    """Build the post-mount installer that registers the faceted sidebar (#161).
+    """Build the post-mount installer that registers the faceted sidebar.
 
     The sidebar splits into three clearly delineated, ordered sections via the
     existing ``SidebarSlotRegistry``: **Fleet** (the selectable hypervisor fleet,
@@ -117,7 +117,7 @@ def make_sidebar_installer(
         cwd: working dir for git-branch detection (default: process cwd).
         todo_provider: DI callable returning the live :class:`TodoState`.
         queue_count_provider: DI callable returning the queued count; the
-            controller wires this to #155's ``queued_count``.
+            controller wires this to the input area's ``queued_count``.
         statusline: an explicit :class:`StatusLineRunner` (default: live-config).
         meter: an explicit :class:`ContextMeter` (default: live-config).
 
@@ -164,7 +164,7 @@ def make_sidebar_installer(
         app._drill_controller = drill
         app._context_meter = context_meter
 
-        # #173 — drive the foot activity label off the ROOT throughput meter so
+        # drive the foot activity label off the ROOT throughput meter so
         # the live phase/tok-s/stall repaint on the transcript's 10 Hz spinner
         # tick (a hung agent visibly flips to "stalled" without any new event).
         transcript = getattr(app, "_transcript", None)

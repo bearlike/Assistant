@@ -1,6 +1,6 @@
 """CatalogIngestor tests — non-git document ingestion → grounded retrieval.
 
-Proves the issue #49 acceptance at the engine layer:
+Proves the issue acceptance at the engine layer:
 
 - ingest N catalog docs → :class:`HybridRetriever` returns relevant cited hits
   over BOTH the page corpus (BM25) and the graph-node corpus (embeddings),

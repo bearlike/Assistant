@@ -32,18 +32,18 @@ type FormValues = z.infer<typeof schema>
 
 interface WorkspaceModalProps {
   open: boolean
+  onOpenChange: (open: boolean) => void
   initial: Workspace | null
   sources: SourceCatalogEntry[]
-  onClose: () => void
   onSubmit: (values: WorkspaceInput) => void
   submitting?: boolean
 }
 
 export function WorkspaceModal({
   open,
+  onOpenChange,
   initial,
   sources,
-  onClose,
   onSubmit,
   submitting,
 }: WorkspaceModalProps) {
@@ -87,8 +87,8 @@ export function WorkspaceModal({
   })
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto shadow-[var(--elev-3)]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto [box-shadow:var(--elev-3)]">
         <DialogHeader>
           <DialogTitle>{isNew ? "New workspace" : "Configure workspace"}</DialogTitle>
           <DialogDescription>
@@ -97,12 +97,12 @@ export function WorkspaceModal({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-5 mt-2">
+        <form onSubmit={submit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label htmlFor="ws-name">Name</Label>
             <Input id="ws-name" placeholder="e.g. Engineering docs" {...register("name")} />
             {errors.name && (
-              <p className="text-xs text-[hsl(var(--destructive))]">{errors.name.message}</p>
+              <p className="text-xs text-[hsl(var(--destructive-text))]">{errors.name.message}</p>
             )}
           </div>
 
@@ -118,7 +118,7 @@ export function WorkspaceModal({
           <div className="space-y-1.5">
             <div className="flex items-baseline gap-2">
               <Label>Connections</Label>
-              <span className="text-xs font-mono text-[hsl(var(--muted-foreground))]">
+              <span className="text-xs text-[hsl(var(--muted-foreground))]">
                 {enabledCount} of {sources.length} enabled
               </span>
             </div>
@@ -146,7 +146,7 @@ export function WorkspaceModal({
                       <div className="flex items-center gap-1.5 text-sm font-medium">
                         <span className="truncate">{s.name}</span>
                         {unavailable && (
-                          <span className="text-[10px] uppercase tracking-wider font-mono text-[hsl(var(--muted-foreground))]">
+                          <span className="text-2xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
                             unavailable
                           </span>
                         )}
@@ -178,13 +178,17 @@ export function WorkspaceModal({
               id="ws-instructions"
               rows={4}
               placeholder={"e.g. Prefer RFCs over chat threads.\nDe-dupe results pointing to the same feature."}
-              className="font-mono text-xs"
               {...register("instructions")}
             />
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={submitting}>

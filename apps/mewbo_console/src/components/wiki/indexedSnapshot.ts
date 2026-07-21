@@ -5,7 +5,8 @@
  * Two render surfaces consume the same instance, today:
  *
  * - Wiki-page sidebar caption: ``formatSidebar()``
- *   → "INDEXED 4 MAY · MAIN · A1B2C3D" (uppercase, absolute date)
+ *   → "Indexed 2 hours ago · main@a1b2c3d" (relative date, branch+commit
+ *     folded into ONE ref pill so the 260px rail reads as a single line)
  *
  * - Landing-card footer: ``formatLandingCard()``
  *   → "Indexed 2 hours ago · main · a1b2c3d" (lowercase, relative date)
@@ -19,17 +20,19 @@
  * else changes.
  */
 
-import { RelativeTime } from "./relativeTime";
+import { RelativeTime } from "../../utils/relativeTime";
 import type { PlatformId } from "./router";
 import type { Project } from "./api/types";
 
 interface SnapshotPill {
-  /** Visible label (uppercase or lowercase per formatter). */
+  /** Visible label. */
   label: string;
   /** Optional href — null means render as plain text. */
   href: string | null;
   /** Optional aria/title hint (full SHA, branch name). */
   title?: string;
+  /** Optional leading glyph, rendered by the caption (ref pills only). */
+  icon?: "branch";
 }
 
 interface SnapshotRender {
@@ -38,15 +41,6 @@ interface SnapshotRender {
   /** Optional branch / commit / model pills, in render order. */
   extras: SnapshotPill[];
 }
-
-const ABSOLUTE_DATE_FMT =
-  typeof Intl !== "undefined" && "DateTimeFormat" in Intl
-    ? new Intl.DateTimeFormat("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
-    : null;
 
 export class IndexedSnapshot {
   readonly indexedAt: string;
@@ -92,19 +86,7 @@ export class IndexedSnapshot {
 
   // ── Render shapes ───────────────────────────────────────────────────
 
-  /** Sidebar caption: uppercase tracking, absolute date. */
-  formatSidebar(): SnapshotRender {
-    return {
-      date: {
-        label: `INDEXED ${IndexedSnapshot._absoluteDate(this.indexedAt)}`,
-        href: null,
-        title: RelativeTime.tooltip(this.indexedAt),
-      },
-      extras: this._extras({ uppercase: true }),
-    };
-  }
-
-  /** Landing-card footer: lowercase, relative date. */
+  /** Landing-card footer: lowercase, relative date, separate branch/sha pills. */
   formatLandingCard(): SnapshotRender {
     return {
       date: {
@@ -112,8 +94,31 @@ export class IndexedSnapshot {
         href: null,
         title: RelativeTime.tooltip(this.indexedAt),
       },
-      extras: this._extras({ uppercase: false }),
+      extras: this._extras(),
     };
+  }
+
+  /** Relative "Indexed 6 days ago" phrasing, shared by every surface. */
+  indexedLabel(): string {
+    return `Indexed ${RelativeTime.format(this.indexedAt)}`;
+  }
+
+  /** Absolute timestamp for the relative label's tooltip. */
+  indexedTitle(): string {
+    return RelativeTime.tooltip(this.indexedAt);
+  }
+
+  /**
+   * Host-aware branch / commit URLs. Public because the snapshot card lays
+   * the two out as separately-styled pills rather than one formatter-produced
+   * row — the class owns URL knowledge, the component owns presentation.
+   */
+  branchUrl(): string | null {
+    return this._branchUrl();
+  }
+
+  commitUrl(): string | null {
+    return this._commitUrl();
   }
 
   /**
@@ -122,19 +127,30 @@ export class IndexedSnapshot {
    * ``repoUrl`` + ``source`` platform knowledge as {@link _branchUrl} /
    * {@link _commitUrl} so citation chips + source cards never re-derive it.
    *
-   *   github    → ``<repo>/blob/<branch>/<path>#L<a>-L<b>``
-   *   gitea     → ``<repo>/src/branch/<branch>/<path>#L<a>-L<b>``
-   *   gitlab    → ``<repo>/-/blob/<branch>/<path>#L<a>-<b>``
-   *   bitbucket → ``<repo>/src/<branch>/<path>#lines-<a>:<b>``
+   * **Pinned to the INDEXED COMMIT whenever we have one**, falling back to the
+   * branch only for legacy records that carry no sha. A cited line range is
+   * only truthful against the tree the wiki was generated from: point it at a
+   * moving branch and ``#L63-76`` lands on whatever occupies those lines
+   * today (this repo's ``main`` runs hundreds of commits past its snapshot),
+   * or 404s outright once the file is renamed away.
    *
-   * Returns ``null`` when we can't build a faithful link — no repoUrl/branch,
-   * an empty path, or an azure/generic-git host with no portable blob shape
-   * (we never mis-link rather than guess).
+   *   github    → ``<repo>/blob/<ref>/<path>#L<a>-L<b>``
+   *   gitea     → ``<repo>/src/commit/<sha>/<path>`` (branch form is
+   *               ``/src/branch/<branch>/`` — the SEGMENT differs by ref kind,
+   *               and ``/src/branch/<sha>`` 404s, so they can't be swapped)
+   *   gitlab    → ``<repo>/-/blob/<ref>/<path>#L<a>-<b>``
+   *   bitbucket → ``<repo>/src/<ref>/<path>#lines-<a>:<b>``
+   *
+   * Returns ``null`` when we can't build a faithful link — no repoUrl, no ref
+   * of either kind, an empty path, or an azure/generic-git host with no
+   * portable blob shape (we never mis-link rather than guess).
    */
   sourceUrl(path: string, startLine?: number | null, endLine?: number | null): string | null {
-    if (!this.repoUrl || !this.branch || !path) return null;
+    if (!this.repoUrl || !path) return null;
+    const sha = this.commitSha;
+    if (!sha && !this.branch) return null;
     const base = IndexedSnapshot._stripTrailingSlash(this.repoUrl);
-    const ref = encodeURIComponent(this.branch);
+    const ref = sha ?? encodeURIComponent(this.branch as string);
     const encPath = path
       .replace(/^\/+/, "")
       .split("/")
@@ -145,7 +161,9 @@ export class IndexedSnapshot {
       case "github":
         return `${base}/blob/${ref}/${encPath}${anchor}`;
       case "gitea":
-        return `${base}/src/branch/${ref}/${encPath}${anchor}`;
+        return sha
+          ? `${base}/src/commit/${sha}/${encPath}${anchor}`
+          : `${base}/src/branch/${ref}/${encPath}${anchor}`;
       case "gitlab":
         return `${base}/-/blob/${ref}/${encPath}${anchor}`;
       case "bitbucket":
@@ -158,18 +176,18 @@ export class IndexedSnapshot {
 
   // ── Private composition helpers ─────────────────────────────────────
 
-  private _extras({ uppercase }: { uppercase: boolean }): SnapshotPill[] {
+  private _extras(): SnapshotPill[] {
     const out: SnapshotPill[] = [];
     if (this.branch) {
       out.push({
-        label: uppercase ? this.branch.toUpperCase() : this.branch,
+        label: this.branch,
         href: this._branchUrl(),
         title: `Branch: ${this.branch}`,
       });
     }
     if (this.commitShort) {
       out.push({
-        label: uppercase ? this.commitShort.toUpperCase() : this.commitShort,
+        label: this.commitShort,
         href: this._commitUrl(),
         title: this.commitSha ? `Commit: ${this.commitSha}` : undefined,
       });
@@ -196,13 +214,6 @@ export class IndexedSnapshot {
   }
 
   // ── Static utilities ────────────────────────────────────────────────
-
-  private static _absoluteDate(iso: string): string {
-    if (!iso || !ABSOLUTE_DATE_FMT) return iso ?? "";
-    const t = Date.parse(iso);
-    if (!Number.isFinite(t)) return iso;
-    return ABSOLUTE_DATE_FMT.format(new Date(t));
-  }
 
   private static _stripTrailingSlash(url: string): string {
     return url.endsWith("/") ? url.slice(0, -1) : url;

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
   Bot,
   CheckCircle2,
@@ -9,17 +10,17 @@ import {
   ShieldX,
   Terminal,
   MessageSquare,
-  RotateCcw,
-  Play,
   Layers,
   RefreshCw,
   Shuffle,
   Ban,
 } from 'lucide-react';
+import { cn } from '../lib/utils';
+import { cardSurface } from './ui/card-surface';
 import { SummaryBlock } from './SummaryBlock';
 import { MarkdownContent } from './MessageBubble';
-import { Button } from './ui/button';
 import { LogEventCard, AccentColor } from './LogEventCard';
+import { RunFailedCard } from './RunFailedCard';
 import { ModelLabel } from './ModelLabel';
 import { TerminalCard } from './TerminalCard';
 import { DiffCard } from './DiffCard';
@@ -31,10 +32,32 @@ import { ChatRow, Handle } from './ChatRow';
 import { CheckAgentsCard } from './CheckAgentsCard';
 import { SpawnAgentCard } from './SpawnAgentCard';
 import { useAutoScroll } from '../hooks/useAutoScroll';
-import { EventRecord, LogEntry } from '../types';
+import {
+  EventRecord,
+  LogEntry,
+  ShellLogEntry,
+  DiffLogEntry,
+  FileReadLogEntry,
+  SystemLogEntry,
+  PlanLogEntry,
+  PermissionLogEntry,
+  AgentLogEntry,
+  AgentResultLogEntry,
+  CompletionLogEntry,
+  AgentMessageLogEntry,
+  UserSteerLogEntry,
+  CompactLogEntry,
+  CheckAgentsLogEntry,
+  RootSteerLogEntry,
+  SpawnSubmitLogEntry,
+  LlmRetryLogEntry,
+  LlmFallbackLogEntry,
+  RecoveryHaltLogEntry,
+} from '../types';
 import { formatTokens, formatSessionTime } from '../utils/time';
 import { buildLogs, extractSummaryTesting } from '../utils/logs';
 import { prettyJsonIfValid } from '../utils/json';
+import { SCROLLBAR_CLASS } from '../utils/scrollbar';
 import { AgentIdChip, Badge } from './agents';
 import {
   AGENT_COLOR_CLASSES,
@@ -59,7 +82,7 @@ function toolAccent(toolId: string): AccentColor {
   return `agent-${agentColorIndex(toolId)}` as AccentColor;
 }
 
-function renderPermission(log: LogEntry) {
+function renderPermission(log: PermissionLogEntry) {
   const decision = (log.decision || 'pending').toLowerCase();
   const accent: AccentColor = decision === 'allow' ? 'emerald' : decision === 'deny' ? 'red' : 'amber';
   const Icon = decision === 'allow' ? ShieldCheck : decision === 'deny' ? ShieldX : Shield;
@@ -69,7 +92,7 @@ function renderPermission(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<Icon className={`w-4 h-4 ${decision === 'deny' ? 'text-red-500' : 'text-permission'}`} />}
+      icon={<Icon className={`w-4 h-4 ${decision === 'deny' ? 'text-[hsl(var(--destructive))]' : 'text-permission'}`} />}
       title={log.toolId || 'tool'}
       badge={<Badge color={badgeColor}>{badgeText}</Badge>}
       timestamp={log.timestamp}
@@ -77,8 +100,8 @@ function renderPermission(log: LogEntry) {
     >
       {log.operation && (
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Operation</span>
-          <span className="text-[10px] font-mono text-[hsl(var(--foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">{log.operation}</span>
+          <span className="text-2xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Operation</span>
+          <span className="text-2xs font-mono text-[hsl(var(--foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">{log.operation}</span>
         </div>
       )}
       {log.toolInput && (
@@ -90,7 +113,7 @@ function renderPermission(log: LogEntry) {
   );
 }
 
-function renderAgent(log: LogEntry) {
+function renderAgent(log: AgentLogEntry) {
   const action = log.agentAction || 'start';
   const status = log.agentStatus || action;
   const isStart = action === 'start';
@@ -133,11 +156,11 @@ function renderAgent(log: LogEntry) {
       <div className="space-y-1">
         {log.model && (
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
               {log.model}
             </span>
             {typeof log.depth === 'number' && log.depth > 0 && (
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
                 depth {log.depth}
               </span>
             )}
@@ -153,7 +176,7 @@ function renderAgent(log: LogEntry) {
   );
 }
 
-function renderAgentResult(log: LogEntry) {
+function renderAgentResult(log: AgentResultLogEntry) {
   const status = log.agentResultStatus || 'completed';
   const accent: AccentColor =
     status === 'completed' ? 'emerald' :
@@ -170,7 +193,7 @@ function renderAgentResult(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<Bot className="w-4 h-4 text-blue-500" />}
+      icon={<Bot className="w-4 h-4 text-[hsl(var(--info))]" />}
       title="Agent result"
       badge={<Badge color={accent}>{stepsLabel ? `${badgeText} · ${stepsLabel}` : badgeText}</Badge>}
       timestamp={log.timestamp}
@@ -185,10 +208,10 @@ function renderAgentResult(log: LogEntry) {
         )}
         {log.artifacts && log.artifacts.length > 0 && (
           <div>
-            <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Artifacts</span>
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Artifacts</span>
             <div className="flex flex-wrap gap-1 mt-1">
               {log.artifacts.map((a, i) => (
-                <span key={i} className="text-[10px] font-mono text-[hsl(var(--foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
+                <span key={i} className="text-2xs font-mono text-[hsl(var(--foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded">
                   {a}
                 </span>
               ))}
@@ -197,9 +220,9 @@ function renderAgentResult(log: LogEntry) {
         )}
         {log.warnings && log.warnings.length > 0 && (
           <div>
-            <span className="text-[10px] font-medium text-amber-500 uppercase tracking-wider">Warnings</span>
+            <span className="text-2xs text-[hsl(var(--warning))] uppercase tracking-wider">Warnings</span>
             {log.warnings.map((w, i) => (
-              <p key={i} className="text-xs text-amber-500/80 mt-0.5">{w}</p>
+              <p key={i} className="text-xs text-[hsl(var(--warning)/0.8)] mt-0.5">{w}</p>
             ))}
           </div>
         )}
@@ -209,73 +232,52 @@ function renderAgentResult(log: LogEntry) {
 }
 
 function renderCompletion(
-  log: LogEntry,
-  onRetry?: () => void,
-  onContinue?: () => void,
+  log: CompletionLogEntry,
+  onRetry?: (model?: string) => void,
+  onContinue?: (model?: string) => void,
+  model?: string,
+  fallbackModels?: string[],
 ) {
-  const reason = (log.doneReason || '').toLowerCase();
-  const accent: AccentColor =
-    reason === 'completed' ? 'emerald' :
-    reason === 'error' ? 'red' :
-    reason === 'canceled' || reason === 'cancelled' ? 'muted' :
-    'amber';
+  // A failed run is one card everywhere — the conversation renders the same
+  // component. Recovery handlers arrive only for the latest failure.
+  if (log.runFailure) {
+    return (
+      <RunFailedCard
+        key={log.id}
+        failure={log.runFailure}
+        timestamp={log.timestamp}
+        model={model}
+        fallbackModels={fallbackModels}
+        onRetry={onRetry}
+        onContinue={onContinue}
+      />
+    );
+  }
 
-  const Icon = reason === 'completed' ? CheckCircle2 :
-    reason === 'error' ? AlertCircle :
-    reason === 'canceled' || reason === 'cancelled' ? XCircle :
-    AlertCircle;
+  const reason = (log.doneReason || '').toLowerCase();
+  const isCanceled = reason === 'canceled' || reason === 'cancelled';
+  const accent: AccentColor =
+    reason === 'completed' ? 'emerald' : isCanceled ? 'muted' : 'amber';
+
+  const Icon = reason === 'completed' ? CheckCircle2 : isCanceled ? XCircle : AlertCircle;
 
   const label = reason === 'completed' ? 'Run completed' :
-    reason === 'canceled' || reason === 'cancelled' ? 'Run canceled' :
-    reason === 'error' ? 'Run failed' :
-    reason === 'max_steps_reached' ? 'Task interrupted — step limit reached' :
+    isCanceled ? 'Run canceled' :
     `Run ${reason || 'ended'}`;
-
-  const isRecoverable = reason === 'error' || reason === 'max_steps_reached';
-  const showRecovery = isRecoverable && !!onRetry && !!onContinue;
 
   return (
     <LogEventCard
       key={log.id}
-      icon={<Icon className={`w-4 h-4 ${accent === 'emerald' ? 'text-emerald-500' : accent === 'red' ? 'text-red-500' : accent === 'amber' ? 'text-amber-500' : 'text-[hsl(var(--muted-foreground))]'}`} />}
+      icon={<Icon className={`w-4 h-4 ${accent === 'emerald' ? 'text-[hsl(var(--success))]' : accent === 'amber' ? 'text-[hsl(var(--warning))]' : 'text-[hsl(var(--muted-foreground))]'}`} />}
       title={label}
       badge={log.doneReason && log.doneReason !== reason ? <Badge color={accent}>{log.doneReason}</Badge> : undefined}
       timestamp={log.timestamp}
       accent={accent}
-      defaultExpanded={!!log.error || showRecovery}
-    >
-      {log.error && (
-        <p className="text-xs text-red-500 font-mono">{log.error}</p>
-      )}
-      {showRecovery && (
-        <div className="mt-2 flex gap-2">
-          <Button
-            variant="neutral"
-            size="sm"
-            tone="info"
-            leadingIcon={<RotateCcw className="w-3 h-3" />}
-            onClick={onRetry}
-            title="Re-run the last user query from where it was submitted"
-          >
-            Retry
-          </Button>
-          <Button
-            variant="neutral"
-            size="sm"
-            tone="warn"
-            leadingIcon={<Play className="w-3 h-3" />}
-            onClick={onContinue}
-            title="Resume the session and let the agent recover from where it left off"
-          >
-            Continue
-          </Button>
-        </div>
-      )}
-    </LogEventCard>
+    />
   );
 }
 
-function renderShell(log: LogEntry) {
+function renderShell(log: ShellLogEntry) {
   // Structured shell result → TerminalCard
   if (log.shellCommand) {
     return (
@@ -309,8 +311,8 @@ function renderShell(log: LogEntry) {
         <div className="space-y-0 -mx-3 -mb-2">
           {log.shellInput && (
             <div className="px-3 py-2 bg-[hsl(var(--muted))]/20">
-              <div className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Input</div>
-              <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[300px] overflow-y-auto">
+              <div className="text-2xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Input</div>
+              <pre className={`text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[300px] overflow-y-scroll ${SCROLLBAR_CLASS}`}>
                 {prettyJsonIfValid(log.shellInput)}
               </pre>
             </div>
@@ -320,15 +322,15 @@ function renderShell(log: LogEntry) {
           )}
           {log.shellOutput && (
             <div className="px-3 py-2">
-              <div className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Output</div>
-              <pre className={`text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[500px] overflow-y-auto ${hasError ? 'text-red-500/80' : 'text-[hsl(var(--foreground))] opacity-80'}`}>
+              <div className="text-2xs text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-1">Output</div>
+              <pre className={`text-xs font-mono whitespace-pre-wrap leading-relaxed max-h-[500px] overflow-y-scroll ${SCROLLBAR_CLASS} ${hasError ? 'text-[hsl(var(--code-stderr))]' : 'text-[hsl(var(--foreground))] opacity-80'}`}>
                 {prettyJsonIfValid(log.shellOutput)}
               </pre>
             </div>
           )}
         </div>
       ) : (
-        <pre className="text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[500px] overflow-y-auto">
+        <pre className={`text-xs font-mono text-[hsl(var(--foreground))] whitespace-pre-wrap leading-relaxed opacity-80 max-h-[500px] overflow-y-scroll ${SCROLLBAR_CLASS}`}>
           {prettyJsonIfValid(log.content)}
         </pre>
       )}
@@ -336,7 +338,7 @@ function renderShell(log: LogEntry) {
   );
 }
 
-function renderDiff(log: LogEntry) {
+function renderDiff(log: DiffLogEntry) {
   return (
     <DiffCard
       key={log.id}
@@ -347,7 +349,7 @@ function renderDiff(log: LogEntry) {
   );
 }
 
-function renderFileRead(log: LogEntry) {
+function renderFileRead(log: FileReadLogEntry) {
   return (
     <FileReadCard
       key={log.id}
@@ -361,7 +363,63 @@ function renderFileRead(log: LogEntry) {
   );
 }
 
-function renderReflection(log: LogEntry) {
+function renderPlan(log: PlanLogEntry) {
+  return (
+    <div
+      key={log.id}
+      className={cn(cardSurface({ radius: 'left' }), 'p-4')}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-medium text-[hsl(var(--foreground))]">
+            {log.label || 'Plan'}
+          </h3>
+          {log.version && (
+            <span className="text-2xs px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+              v{log.version}
+            </span>
+          )}
+          {log.planMode === 'diff' && (
+            <span className="text-2xs px-1.5 py-0.5 rounded bg-[hsl(var(--accent))] text-[hsl(var(--muted-foreground))]">
+              diff
+            </span>
+          )}
+        </div>
+        {log.timestamp && (
+          <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+            {formatSessionTime(log.timestamp)}
+          </span>
+        )}
+      </div>
+      <ol className="space-y-3">
+        {(log.steps || []).map((step, idx) => (
+          <li key={idx} className="flex gap-3">
+            <span className="text-xs text-[hsl(var(--muted-foreground))] mt-0.5">
+              {idx + 1}.
+            </span>
+            <div>
+              <div className="flex items-center gap-2 text-sm text-[hsl(var(--foreground))] font-medium">
+                {step.title}
+                {step.diffType && (
+                  <span className="text-2xs uppercase tracking-wide px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
+                    {step.diffType === 'added' ? 'Added' : step.diffType === 'removed' ? 'Removed' : 'Updated'}
+                  </span>
+                )}
+              </div>
+              {step.description && (
+                <div className="text-xs text-[hsl(var(--muted-foreground))] mt-1 leading-relaxed">
+                  {step.description}
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function renderReflection(log: SystemLogEntry) {
   return (
     <LogEventCard
       key={log.id}
@@ -376,7 +434,7 @@ function renderReflection(log: LogEntry) {
   );
 }
 
-function renderCompaction(log: LogEntry) {
+function renderCompaction(log: CompactLogEntry) {
   const saved = log.tokensSaved ?? 0;
   const hasSavings = saved > 0;
   const pct = hasSavings && log.tokensBefore
@@ -405,7 +463,7 @@ function renderCompaction(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<Layers className="w-4 h-4 text-blue-400" />}
+      icon={<Layers className="w-4 h-4 text-[hsl(var(--info))]" />}
       title={<span className="flex items-center gap-2">Context compacted<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /><AgentIdChip agentId={log.agentId} /></span>}
       badge={<Badge color={hasSavings ? 'blue' : 'muted'}>{badgeText}</Badge>}
       timestamp={log.timestamp}
@@ -438,7 +496,7 @@ function shortModelLabel(id?: string): string {
   return slash >= 0 ? id.slice(slash + 1) : id;
 }
 
-function renderLlmRetry(log: LogEntry) {
+function renderLlmRetry(log: LlmRetryLogEntry) {
   const model = shortModelLabel(log.model);
   const errorType = log.retryErrorType || 'error';
   const attempt = log.retryAttempt;
@@ -448,7 +506,7 @@ function renderLlmRetry(log: LogEntry) {
   return (
     <LogEventCard
       key={log.id}
-      icon={<RefreshCw className="w-4 h-4 text-amber-500" />}
+      icon={<RefreshCw className="w-4 h-4 text-[hsl(var(--warning))]" />}
       title={<span className="flex items-center gap-2">{title}<ModelLabel modelId={log.model} className={MODEL_TAG_CLASS} /></span>}
       badge={log.retryDelay != null ? <Badge color="amber">{`${log.retryDelay.toFixed(1)}s delay`}</Badge> : undefined}
       timestamp={log.timestamp}
@@ -462,15 +520,15 @@ function renderLlmRetry(log: LogEntry) {
   );
 }
 
-function renderLlmFallback(log: LogEntry) {
+function renderLlmFallback(log: LlmFallbackLogEntry) {
   const from = shortModelLabel(log.fallbackFromModel);
   const to = shortModelLabel(log.fallbackToModel);
   const reason = log.fallbackReason || 'switching model';
   return (
     <LogEventCard
       key={log.id}
-      icon={<Shuffle className="w-4 h-4 text-blue-500" />}
-      title={<span className="flex items-center gap-2 font-mono">{from} → {to}<ModelLabel modelId={log.fallbackToModel} className={MODEL_TAG_CLASS} /></span>}
+      icon={<Shuffle className="w-4 h-4 text-[hsl(var(--info))]" />}
+      title={<span className="flex items-center gap-2">{from} → {to}<ModelLabel modelId={log.fallbackToModel} className={MODEL_TAG_CLASS} /></span>}
       badge={
         <span className="flex items-center gap-1.5">
           <Badge color="blue">Fallback</Badge>
@@ -489,12 +547,12 @@ function renderLlmFallback(log: LogEntry) {
   );
 }
 
-function renderRecoveryHalt(log: LogEntry) {
+function renderRecoveryHalt(log: RecoveryHaltLogEntry) {
   const tool = log.recoveryTool || 'a tool';
   return (
     <LogEventCard
       key={log.id}
-      icon={<Ban className="w-4 h-4 text-red-500" />}
+      icon={<Ban className="w-4 h-4 text-[hsl(var(--destructive))]" />}
       title="Halted — no progress (doom loop)"
       badge={<Badge color="red">Halted</Badge>}
       timestamp={log.timestamp}
@@ -510,7 +568,7 @@ function renderRecoveryHalt(log: LogEntry) {
   );
 }
 
-function renderAgentMessage(log: LogEntry) {
+function renderAgentMessage(log: AgentMessageLogEntry) {
   const colorIdx = agentColorIndex(log.agentId || 'root');
   const agentColor = AGENT_COLOR_CLASSES[colorIdx];
   const agentName = log.detail || 'root';
@@ -519,14 +577,14 @@ function renderAgentMessage(log: LogEntry) {
       key={log.id}
       timestamp={log.timestamp}
       handle={<Handle from={agentName} fromColor={agentColor} />}
-      bodyClassName="opacity-80 [&_pre]:text-[11px] [&_p]:mb-1 [&_p:last-child]:mb-0"
+      bodyClassName="opacity-80 [&_pre]:text-2xs [&_p]:mb-1 [&_p:last-child]:mb-0"
     >
       <MarkdownContent content={log.content} />
     </ChatRow>
   );
 }
 
-function renderUserSteer(log: LogEntry) {
+function renderUserSteer(log: UserSteerLogEntry) {
   return (
     <ChatRow
       key={log.id}
@@ -538,7 +596,7 @@ function renderUserSteer(log: LogEntry) {
   );
 }
 
-function renderCheckAgents(log: LogEntry) {
+function renderCheckAgents(log: CheckAgentsLogEntry) {
   return (
     <CheckAgentsCard
       key={log.id}
@@ -553,7 +611,7 @@ function renderCheckAgents(log: LogEntry) {
   );
 }
 
-function renderSpawnSubmit(log: LogEntry) {
+function renderSpawnSubmit(log: SpawnSubmitLogEntry) {
   return (
     <SpawnAgentCard
       key={log.id}
@@ -573,7 +631,7 @@ function renderSpawnSubmit(log: LogEntry) {
   );
 }
 
-function renderRootSteer(log: LogEntry) {
+function renderRootSteer(log: RootSteerLogEntry) {
   const fullId = log.steerTargetFullId || log.steerTargetPrefix || '';
   const targetLabel = fullId
     ? `agent-${fullId.slice(0, 6)}`
@@ -591,18 +649,18 @@ function renderRootSteer(log: LogEntry) {
           <Handle
             from="root"
             to={targetLabel}
-            fromColor="text-[hsl(var(--primary))]"
+            fromColor="text-[hsl(var(--primary-text))]"
             toColor={targetColor}
           />
         }
-        bodyClassName={isCancel ? 'italic opacity-65 font-mono text-[11.5px]' : undefined}
+        bodyClassName={isCancel ? 'italic opacity-65 text-2xs' : undefined}
       >
         {isCancel ? '(cancelled)' : (log.steerMessage || log.content)}
       </ChatRow>
       {log.steerIsError && log.steerResult && (
         <ChatRow
-          handle={<Handle from="system" fromColor="text-red-400" />}
-          bodyClassName="text-red-400 font-mono text-[11.5px]"
+          handle={<Handle from="system" fromColor="text-[hsl(var(--destructive-text))]" />}
+          bodyClassName="text-[hsl(var(--code-stderr))] font-mono text-2xs"
         >
           {log.steerResult}
         </ChatRow>
@@ -628,21 +686,40 @@ export function LogsView({
   events,
   onRetry,
   onContinue,
+  model,
+  fallbackModels,
   isRunning,
   runStatus,
   isViewingLive,
   onShowLiveTrace,
 }: {
   events: EventRecord[];
-  onRetry?: () => void;
-  onContinue?: () => void;
+  onRetry?: (model?: string) => void;
+  onContinue?: (model?: string) => void;
+  /** Session model + declared fallback ladder, so the trace panel's failure
+   *  card offers the same informed recovery choice the conversation does. */
+  model?: string;
+  fallbackModels?: string[];
   isRunning?: boolean;
   runStatus?: RunStatus;
   isViewingLive?: boolean;
   onShowLiveTrace?: () => void;
 }) {
-  const logs = buildLogs(events);
-  const summaryData = extractSummaryTesting(events);
+  // events grows on every poll tick while a run is live; both parsers walk
+  // the full array, so re-deriving them on every render (not just when
+  // `events` actually changes) was the heaviest avoidable cost in this view.
+  const logs = useMemo(() => buildLogs(events), [events]);
+  // Only the newest completion may offer live recovery, and only if it failed:
+  // a session accumulates failures across turns, and a later successful run
+  // supersedes an earlier failure entirely.
+  let latestFailureId: string | undefined;
+  for (let i = logs.length - 1; i >= 0; i -= 1) {
+    const entry = logs[i];
+    if (entry.type !== 'completion') continue;
+    if (entry.runFailure) latestFailureId = entry.id;
+    break;
+  }
+  const summaryData = useMemo(() => extractSummaryTesting(events), [events]);
   const hasSummary =
     summaryData.summary.length > 0 || summaryData.testing.length > 0;
   // "No logs" empty state — only when this view is frozen (idle, or viewing
@@ -657,68 +734,23 @@ export function LogsView({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="h-full overflow-y-auto p-5 space-y-4"
+        className="h-full overflow-y-auto p-4 space-y-4"
       >
         {logs.map((log) => {
-          if (log.type === 'plan') {
-            return (
-              <div
-                key={log.id}
-                className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-[hsl(var(--foreground))]">
-                      {log.label || 'Plan'}
-                    </h3>
-                    {log.version && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
-                        v{log.version}
-                      </span>
-                    )}
-                    {log.planMode === 'diff' && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--accent))] text-[hsl(var(--muted-foreground))]">
-                        diff
-                      </span>
-                    )}
-                  </div>
-                  {log.timestamp && (
-                    <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                      {formatSessionTime(log.timestamp)}
-                    </span>
-                  )}
-                </div>
-                <ol className="space-y-3">
-                  {(log.steps || []).map((step, idx) => (
-                    <li key={idx} className="flex gap-3">
-                      <span className="text-xs font-mono text-[hsl(var(--muted-foreground))] mt-0.5">
-                        {idx + 1}.
-                      </span>
-                      <div>
-                        <div className="flex items-center gap-2 text-sm text-[hsl(var(--foreground))] font-medium">
-                          {step.title}
-                          {step.diffType && (
-                            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]">
-                              {step.diffType === 'added' ? 'Added' : step.diffType === 'removed' ? 'Removed' : 'Updated'}
-                            </span>
-                          )}
-                        </div>
-                        {step.description && (
-                          <div className="text-xs text-[hsl(var(--muted-foreground))] mt-1 leading-relaxed">
-                            {step.description}
-                          </div>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            );
-          }
+          if (log.type === 'plan') return renderPlan(log);
           if (log.type === 'permission') return renderPermission(log);
           if (log.type === 'agent') return renderAgent(log);
           if (log.type === 'agent_result') return renderAgentResult(log);
-          if (log.type === 'completion') return renderCompletion(log, onRetry, onContinue);
+          if (log.type === 'completion') {
+            const live = log.id === latestFailureId;
+            return renderCompletion(
+              log,
+              live ? onRetry : undefined,
+              live ? onContinue : undefined,
+              model,
+              fallbackModels,
+            );
+          }
           if (log.type === 'diff') return renderDiff(log);
           if (log.type === 'file_read') return renderFileRead(log);
           if (log.type === 'shell') return renderShell(log);
@@ -733,13 +765,16 @@ export function LogsView({
           if (log.type === 'recovery_halt') return renderRecoveryHalt(log);
           if (log.type === 'system') return renderReflection(log);
 
-          // Fallback for unknown types
+          // Every variant is handled above, so `log` narrows to `never` here.
+          // Kept as a defensive fallback for a log type added to buildLogs
+          // without a matching render branch (the cast reaches the base fields).
+          const unknown = log as LogEntry;
           return (
             <div
-              key={log.id}
+              key={unknown.id}
               className="text-sm text-[hsl(var(--muted-foreground))] pl-1"
             >
-              {log.content}
+              {unknown.content}
             </div>
           );
         })}

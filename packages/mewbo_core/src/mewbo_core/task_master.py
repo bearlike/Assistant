@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 import warnings
@@ -96,6 +97,7 @@ def orchestrate_session(
     should_cancel: Callable[[], bool] | None = None,
     allowed_tools: list[str] | None = None,
     strict_tool_scope: bool = False,
+    capability_mode: str = "all",
     skill_instructions: str | None = None,
     message_queue: queue.Queue[str] | None = None,
     interrupt_step: threading.Event | None = None,
@@ -108,8 +110,86 @@ def orchestrate_session(
     enable_skills: bool = True,
     attachments: list[dict] | None = None,
 ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
-    """Run the orchestration loop."""
-    return Orchestrator(
+    """Run the orchestration loop synchronously.
+
+    Thin sync wrapper over :func:`orchestrate_session_async` — mirrors
+    ``Orchestrator.run() = asyncio.run(self.arun(...))`` one layer up, so
+    there is exactly one place (here) that constructs the ``Orchestrator``
+    and forwards every kwarg for both the sync and async entry points.
+    """
+    return asyncio.run(
+        orchestrate_session_async(
+            user_query,
+            model_name=model_name,
+            fallback_models=fallback_models,
+            max_iters=max_iters,
+            initial_plan=initial_plan,
+            return_state=return_state,
+            session_id=session_id,
+            session_store=session_store,
+            tool_registry=tool_registry,
+            permission_policy=permission_policy,
+            approval_callback=approval_callback,
+            hook_manager=hook_manager,
+            mode=mode,
+            should_cancel=should_cancel,
+            allowed_tools=allowed_tools,
+            strict_tool_scope=strict_tool_scope,
+            capability_mode=capability_mode,
+            skill_instructions=skill_instructions,
+            message_queue=message_queue,
+            interrupt_step=interrupt_step,
+            cwd=cwd,
+            session_step_budget=session_step_budget,
+            user_id=user_id,
+            source_platform=source_platform,
+            invocation_id=invocation_id,
+            extra_session_tools=extra_session_tools,
+            enable_skills=enable_skills,
+            attachments=attachments,
+        )
+    )
+
+
+async def orchestrate_session_async(
+    user_query: str,
+    model_name: str | None = None,
+    fallback_models: tuple[str, ...] | None = None,
+    max_iters: int = 3,
+    initial_plan: Plan | None = None,
+    return_state: bool = False,
+    session_id: str | None = None,
+    session_store: SessionStoreBase | None = None,
+    tool_registry: ToolRegistry | None = None,
+    permission_policy: PermissionPolicy | None = None,
+    approval_callback: Callable[[ActionStep], bool] | None = None,
+    hook_manager: HookManager | None = None,
+    mode: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    allowed_tools: list[str] | None = None,
+    strict_tool_scope: bool = False,
+    capability_mode: str = "all",
+    skill_instructions: str | None = None,
+    message_queue: queue.Queue[str] | None = None,
+    interrupt_step: threading.Event | None = None,
+    cwd: str | None = None,
+    session_step_budget: int = 0,
+    user_id: str | None = None,
+    source_platform: str | None = None,
+    invocation_id: str | None = None,
+    extra_session_tools: list[SessionTool] | None = None,
+    enable_skills: bool = True,
+    attachments: list[dict] | None = None,
+) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
+    """Run the orchestration loop on an already-running event loop.
+
+    Async mirror of :func:`orchestrate_session` for environments (Pyodide's
+    WebLoop, async test harnesses) where ``asyncio.run`` cannot be used because
+    the loop is already active. Same signature and semantics as the sync entry
+    point — it awaits :meth:`Orchestrator.arun` instead of calling
+    :meth:`Orchestrator.run`, so no nested ``asyncio.run`` is created.
+    """
+    return await Orchestrator(
         model_name=model_name,
         fallback_models=fallback_models,
         session_store=session_store,
@@ -119,7 +199,7 @@ def orchestrate_session(
         hook_manager=hook_manager,
         cwd=cwd,
         session_step_budget=session_step_budget,
-    ).run(
+    ).arun(
         user_query,
         max_iters=max_iters,
         initial_plan=initial_plan,
@@ -129,6 +209,7 @@ def orchestrate_session(
         should_cancel=should_cancel,
         allowed_tools=allowed_tools,
         strict_tool_scope=strict_tool_scope,
+        capability_mode=capability_mode,
         skill_instructions=skill_instructions,
         message_queue=message_queue,
         interrupt_step=interrupt_step,
@@ -141,4 +222,4 @@ def orchestrate_session(
     )
 
 
-__all__ = ["generate_action_plan", "orchestrate_session"]
+__all__ = ["generate_action_plan", "orchestrate_session", "orchestrate_session_async"]

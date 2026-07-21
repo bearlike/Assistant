@@ -1,6 +1,6 @@
 """Tests for the map-source (SCG indexing) job record in the agentic_search store.
 
-Per spec #19 §16.2 the map job lives in the *agentic_search* store (NOT the SCG
+Per spec §16.2 the map job lives in the *agentic_search* store (NOT the SCG
 structure store), reusing the run-event-log + ``RunSseGenerator`` plumbing. These
 tests exercise the JSON backend under a tmp dir (no Mongo, no LLM, no runtime):
 

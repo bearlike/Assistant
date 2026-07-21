@@ -81,10 +81,63 @@ class SessionBindingTest {
         binding.currentId = "session-created-by-send"
         assertFalse(binding.rebindTo("session-created-by-send"))
     }
+
+    // ---- isCurrent: the guard every async session load re-checks after suspending ----
+    //
+    // The bug it closes: ONE ChatViewModel is shared across every session, so its reducer/items/
+    // title/scope are shared mutable state. A history load (bind) or a destructive rewind
+    // (retryFromMessage - a POST *and* a fetch, a much wider window) that resumes AFTER the user has
+    // opened another session would fold the OLD session's transcript into the NEW binding and point
+    // the live stream at the old session's run. ChatViewModel cancels the load on rebind, but
+    // cancellation is cooperative - it only lands at a suspension point - so this predicate, checked
+    // after each `await`, is what actually makes the write safe rather than merely usually-safe.
+
+    @Test
+    fun `a load for the still-bound session may write`() {
+        val binding = SessionBinding()
+        binding.rebindTo("session-abc")
+        assertTrue(binding.isCurrent("session-abc"))
+    }
+
+    @Test
+    fun `a load for the session we just navigated AWAY from must not write - the race`() {
+        val binding = SessionBinding()
+        binding.rebindTo("session-abc") // a retry starts here, against A...
+        binding.rebindTo("session-xyz") // ...and the user opens B while its POST is still in flight.
+        assertFalse("session A's in-flight load must not write into session B", binding.isCurrent("session-abc"))
+        assertTrue(binding.isCurrent("session-xyz"))
+    }
+
+    @Test
+    fun `switching to a fresh chat also invalidates an in-flight load`() {
+        val binding = SessionBinding()
+        binding.rebindTo("session-abc")
+        binding.rebindTo(null) // "New chat" - no session bound at all
+        assertFalse(binding.isCurrent("session-abc"))
+    }
+
+    @Test
+    fun `an A to B and back to A round trip re-validates the load - re-folding A is idempotent`() {
+        // Deliberately NOT a generation counter: we really ARE back on A, the rebind reset the
+        // reducer, and TranscriptReducer is idempotent - so a stale A-load converges on exactly the
+        // state a fresh one would. Treating this as stale would buy nothing and cost a spurious
+        // blank transcript.
+        val binding = SessionBinding()
+        binding.rebindTo("session-abc")
+        binding.rebindTo("session-xyz")
+        binding.rebindTo("session-abc")
+        assertTrue(binding.isCurrent("session-abc"))
+    }
+
+    @Test
+    fun `nothing is current before the first bind`() {
+        assertFalse(SessionBinding().isCurrent("session-abc"))
+        assertFalse("not even null, until something has actually bound", SessionBinding().isCurrent(null))
+    }
 }
 
 /**
- * Coverage for [reseedProjectForBind] (Gitea #178 W1-A: default-project seeding) - a plain pure
+ * Coverage for [reseedProjectForBind] (default-project seeding) - a plain pure
  * function, so unlike [SessionBinding] itself it needs no fixture at all, just direct calls.
  */
 class ReseedProjectForBindTest {

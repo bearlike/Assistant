@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for ``mewbo_core.client_tools`` (Gitea #179, Phase 1).
+"""Unit tests for ``mewbo_core.client_tools`` (Phase 1).
 
 Covers ``ClientToolSpec`` validation (tool_id pattern, extra-forbid,
 non-object parameters), the ``DeviceToolDispatcher`` registration seam, and

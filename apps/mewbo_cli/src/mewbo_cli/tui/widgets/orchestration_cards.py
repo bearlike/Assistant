@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dedicated transcript cards for the built-in orchestration tools (issue #161-C).
+"""Dedicated transcript cards for the built-in orchestration tools.
 
 The hypervisor tools — ``spawn_agent`` / ``spawn_agents`` (sub-agent launch),
 ``check_agents`` (fleet status), and ``tool_search`` (deferred-schema discovery)

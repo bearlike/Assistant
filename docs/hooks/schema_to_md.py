@@ -11,7 +11,8 @@ log = logging.getLogger("mkdocs.hooks.schema_to_md")
 SCHEMA_PATH = Path("configs/app.schema.json")
 OUTPUT_PATH = Path("docs/configuration.md")
 
-# Repo-file references use the `repo:` badge scheme (docs/hooks/code_refs.py);
+# Repo-file references use the `repo:` badge scheme (rewritten to badges by
+# the installed mkdocs-shadcn theme's code_refs plugin);
 # `app.json` is the user-created, gitignored config — NOT a committed artifact —
 # so it stays inline code rather than a badge that would 404 on GitHub.
 HEADER = """\
@@ -64,7 +65,18 @@ def _type_label(prop: dict, defs: dict) -> str:
 
 
 def _default_label(prop: dict) -> str:
-    """Return the default value as a code-formatted string, or empty."""
+    """Return the default value as a code-formatted string, or empty.
+
+    A field marked ``x-secret`` never renders its value, whatever the schema
+    carries. Today every secret's default happens to be the empty string, so
+    this changes almost nothing — which is exactly why it belongs here rather
+    than at a call site: the redaction has to hold for the field ADDED later
+    with a real placeholder in it. This reference is a published artifact
+    regenerated on every docs build, so a value that reaches it republishes
+    itself until someone notices.
+    """
+    if prop.get("x-secret"):
+        return ""
     if "default" not in prop:
         return ""
     val = prop["default"]
@@ -88,6 +100,94 @@ def _escape_pipe(s: str) -> str:
     return s.replace("|", "&#124;")
 
 
+# Nesting is shallow by design (the deepest config submodel sits three levels
+# below its section), so this bound only exists to keep a future schema change
+# from turning a build into a runaway walk. The cycle guard below is the real
+# protection; this is the belt to its braces.
+_MAX_NESTING_DEPTH = 4
+
+
+def _submodel(prop: dict, defs: dict) -> dict | None:
+    """Return the nested object model a property points at, if it is one.
+
+    Only a direct ``$ref`` (or a ``$ref`` inside ``anyOf``, which is how an
+    optional submodel is spelled) counts. A ``list[X]`` or ``dict[str, X]`` is
+    deliberately NOT followed: its entries vary, so there is no fixed set of
+    keys to document — the type label already says what the entries are, and
+    the schema source carries their shape.
+    """
+    if "$ref" in prop:
+        ref_def = _resolve_ref(prop["$ref"], defs)
+        return ref_def if ref_def.get("properties") else None
+    for option in prop.get("anyOf", []):
+        if "$ref" in option:
+            ref_def = _resolve_ref(option["$ref"], defs)
+            if ref_def.get("properties"):
+                return ref_def
+    return None
+
+
+def _description(prop: dict, defs: dict) -> str:
+    """The property's description, falling back to its submodel's own.
+
+    A property that is just a ``$ref`` to a submodel usually carries no
+    description of its own — the prose lives on the referenced model. Without
+    this fallback the parent row of a nested block renders with an empty
+    Description cell, which is the one row a reader needs to understand what
+    the indented keys under it are for.
+    """
+    own = prop.get("description", "").strip()
+    if own:
+        return own
+    submodel = _submodel(prop, defs)
+    return submodel.get("description", "").strip() if submodel else ""
+
+
+def _flatten_properties(
+    properties: dict,
+    defs: dict,
+    *,
+    prefix: str = "",
+    seen: frozenset[str] = frozenset(),
+    depth: int = 0,
+) -> list[tuple[str, dict]]:
+    """Flatten a model's properties, walking into nested submodels.
+
+    Returns ``(dotted_key, property)`` pairs — ``session.ttl_seconds`` rather
+    than a nested table — so a section stays one table no matter how deep its
+    model tree goes. A submodel's children follow immediately after their
+    parent row, which keeps the parent's type and description as the heading
+    for the block that belongs to it.
+
+    Without this walk the reference documents only each section's DIRECT
+    properties, so an entire subsystem configured through a submodel renders
+    as one opaque row and none of its keys appear anywhere.
+
+    ``seen`` carries the submodel titles already open on this path, so a schema
+    that ever refers back to an ancestor stops instead of recursing forever.
+    """
+    rows: list[tuple[str, dict]] = []
+    for key, prop in properties.items():
+        path = f"{prefix}{key}"
+        rows.append((path, prop))
+        submodel = _submodel(prop, defs)
+        if submodel is None or depth >= _MAX_NESTING_DEPTH:
+            continue
+        title = submodel.get("title", path)
+        if title in seen:
+            continue
+        rows.extend(
+            _flatten_properties(
+                submodel.get("properties", {}),
+                defs,
+                prefix=f"{path}.",
+                seen=seen | {title},
+                depth=depth + 1,
+            )
+        )
+    return rows
+
+
 def _render_class_section(
     section_key: str,
     class_def: dict,
@@ -108,10 +208,12 @@ def _render_class_section(
         lines.append("_No configurable properties._\n")
         return "\n".join(lines)
 
-    # Separate deprecated from active properties
+    # Separate deprecated from active properties. Nested submodel keys are
+    # flattened to dotted paths first, so they sort into the same two tables
+    # as the section's own properties.
     active: list[tuple[str, dict]] = []
     deprecated: list[tuple[str, dict]] = []
-    for key, prop in properties.items():
+    for key, prop in _flatten_properties(properties, defs):
         desc = prop.get("description", "")
         if "deprecated" in desc.lower():
             deprecated.append((key, prop))
@@ -124,7 +226,7 @@ def _render_class_section(
         for key, prop in active:
             type_str = _type_label(prop, defs)
             default_str = _default_label(prop)
-            desc = prop.get("description", "").strip()
+            desc = _description(prop, defs)
             # ⚠️ marks fields the REST API never reads back: x-protected
             # (never read, never written) and x-secret (write-only).
             if prop.get("x-protected") or prop.get("x-secret"):
@@ -141,7 +243,7 @@ def _render_class_section(
         for key, prop in deprecated:
             type_str = _type_label(prop, defs)
             default_str = _default_label(prop)
-            desc = prop.get("description", "").strip()
+            desc = _description(prop, defs)
             lines.append(
                 f"    | `{key}` | {_escape_pipe(type_str)} | {default_str} | {_escape_pipe(desc)} |"
             )

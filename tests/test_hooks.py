@@ -259,11 +259,24 @@ class TestHookEnvVars:
         env = _hook_env(step)
         assert "MEWBO_TOOL_RESULT" not in env
 
-    def test_hook_env_inherits_os_environ(self, monkeypatch):
+    def test_hook_env_scrubs_arbitrary_vars(self, monkeypatch):
+        """Arbitrary env vars (e.g. secrets) must NOT reach the hook subprocess."""
         monkeypatch.setenv("MY_CUSTOM_VAR", "hello")
+        monkeypatch.setenv("LLM_API_KEY", "sk-should-not-leak")
         step = _step("tool_d")
         env = _hook_env(step)
-        assert env["MY_CUSTOM_VAR"] == "hello"
+        assert "MY_CUSTOM_VAR" not in env
+        assert "LLM_API_KEY" not in env
+
+    def test_hook_env_keeps_allowlisted_vars(self, monkeypatch):
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("HOME", "/home/mewbo")
+        monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+        step = _step("tool_e")
+        env = _hook_env(step)
+        assert env["PATH"] == "/usr/bin"
+        assert env["HOME"] == "/home/mewbo"
+        assert env["LC_ALL"] == "en_US.UTF-8"
 
 
 class TestCommandHookPassesEnv:

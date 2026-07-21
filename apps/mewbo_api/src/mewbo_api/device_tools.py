@@ -1,4 +1,4 @@
-"""Client-declared device tools — api-side dispatch glue (Gitea #179, Phase 1).
+"""Client-declared device tools — api-side dispatch glue (Phase 1).
 
 The generic bridge lives split across two layers: ``mewbo_core.client_tools``
 owns the ``SessionTool`` (``ClientDeclaredTool``) and the down-only DI seam

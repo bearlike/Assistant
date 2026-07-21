@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for PromptHistory (issue #155, epic #149)."""
+"""Tests for PromptHistory."""
 
 from __future__ import annotations
 

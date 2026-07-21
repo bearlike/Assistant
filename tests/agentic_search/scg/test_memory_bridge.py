@@ -1,6 +1,6 @@
 """Tests for ScgMemoryBridge + ScgAnchorResolver — the learned-layer flywheel.
 
-The bridge reuses #13's memory substrate (``InsightIngestor`` +
+The bridge reuses the existing memory substrate (``InsightIngestor`` +
 ``memory_vector_search``) with ``corpus="connector"`` instead of re-implementing
 atomic-note/anchor machinery. The two correctness properties under test:
 
@@ -140,7 +140,7 @@ def test_resolver_resolves_known_source_keys(scg_store: JsonScgStore) -> None:
 
 
 def test_resolver_satisfies_structure_provider_protocol(scg_store: JsonScgStore) -> None:
-    """ScgAnchorResolver is a structural StructureProvider (the #13 seam)."""
+    """ScgAnchorResolver is a structural StructureProvider (the seam)."""
     from mewbo_graph.wiki.structure_provider import StructureProvider
 
     assert isinstance(ScgAnchorResolver(scg_store), StructureProvider)
@@ -224,7 +224,7 @@ def test_read_insights_empty_when_no_connector_notes(bridge: ScgMemoryBridge) ->
     assert bridge.read_insights(CONNECTOR_SLUG, qvec, k=5) == []
 
 
-# ── polarity + workspace attribution (#76) ───────────────────────────────────
+# ── polarity + workspace attribution ───────────────────────────────────
 
 
 def test_write_records_default_positive_polarity(bridge: ScgMemoryBridge) -> None:
@@ -272,7 +272,7 @@ def test_write_workspace_is_attribution_not_partition(bridge: ScgMemoryBridge) -
     assert "github Repo field id is bound" == note.content
 
 
-# ── capability-anchored deposits (the deployed MCP-tool-list bug, #81-A) ─────
+# ── capability-anchored deposits (the deployed MCP-tool-list bug) ─────
 #
 # The REAL seam: an MCP-tool-list source maps every tool to a ``capability``
 # node, but the resolver used to hard-code ``ScgNode.make_id(source_key,

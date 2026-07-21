@@ -21,8 +21,10 @@ from mewbo_core.llm_resilience import (
     RetryAction,
     RetryBudget,
     RetryStrategy,
+    WriteProgressSignal,
     repair_tool_pairing,
 )
+from mewbo_core.tool_registry import ToolSpec
 
 _SENTINEL = object()
 
@@ -289,6 +291,94 @@ class TestDoomLoopGuard:
         for _ in range(3):
             g.observe(tc)
         assert g.is_stuck()
+
+
+def _spec(tool_id: str, tier: str | None = None) -> ToolSpec:
+    return ToolSpec(
+        tool_id=tool_id, name=tool_id, description="", factory=lambda: None, capability=tier
+    )
+
+
+_READ_SPEC = _spec("read_tool", "read")
+_WRITE_SPEC = _spec("write_tool", "write")
+_SPECS_MAP = {"read_tool": _READ_SPEC, "write_tool": _WRITE_SPEC}
+
+
+def _result(tool_id: str) -> SimpleNamespace:
+    return SimpleNamespace(tool_id=tool_id, success=True, content="ok")
+
+
+class TestWriteProgressSignal:
+    """Telemetry event for a write-capable agent stuck on
+    non-write (read/execute/search/unknown-tier) steps. Distinct from
+    DoomLoopGuard: this is about privilege TIER, not input/result repetition."""
+
+    def test_fires_after_threshold_non_write_steps(self):
+        d = WriteProgressSignal(write_capable=True, threshold=25, event_interval=10, max_events=2)
+        for _ in range(24):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()
+        d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()
+
+    def test_refires_at_interval(self):
+        d = WriteProgressSignal(write_capable=True, threshold=25, event_interval=10, max_events=2)
+        for _ in range(25):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()  # 1st event, streak == threshold (25)
+        for _ in range(9):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()
+        d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()  # 2nd event, streak == threshold + event_interval (35)
+
+    def test_quiet_after_max_events(self):
+        d = WriteProgressSignal(write_capable=True, threshold=25, event_interval=10, max_events=2)
+        for _ in range(25):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()
+        for _ in range(10):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()  # 2nd (last) event spent
+        assert d.exhausted()
+        for _ in range(20):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()  # quiet — no events left
+
+    def test_write_resets_streak(self):
+        d = WriteProgressSignal(write_capable=True, threshold=25, event_interval=10, max_events=2)
+        for _ in range(20):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+        d.observe([_result("write_tool")], _SPECS_MAP)  # write at step 20 resets the streak
+        for _ in range(24):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()
+        d.observe([_result("read_tool")], _SPECS_MAP)
+        assert d.threshold_crossed()
+
+    def test_write_incapable_never_fires(self):
+        d = WriteProgressSignal(write_capable=False, threshold=25, event_interval=10, max_events=2)
+        for _ in range(60):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()
+
+    def test_threshold_zero_disables(self):
+        d = WriteProgressSignal(write_capable=True, threshold=0, event_interval=10, max_events=2)
+        for _ in range(100):
+            d.observe([_result("read_tool")], _SPECS_MAP)
+            assert not d.threshold_crossed()
+
+    def test_unregistered_tool_counts_as_nonprogress(self):
+        """A tool_id absent from specs_map (a session tool, spawn_agent,
+        activate_skill, tool_search — never registry specs) can't be PROVEN a
+        write, so it falls through to the same non-progress branch as a
+        declared read/execute/search tier (R1 finding)."""
+        d = WriteProgressSignal(write_capable=True, threshold=3, event_interval=10, max_events=1)
+        d.observe([_result("schedule_trigger")], _SPECS_MAP)  # not in specs_map
+        d.observe([_result("schedule_trigger")], _SPECS_MAP)
+        assert not d.threshold_crossed()
+        d.observe([_result("schedule_trigger")], _SPECS_MAP)
+        assert d.threshold_crossed()
 
 
 class TestRepairToolPairing:

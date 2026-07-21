@@ -100,8 +100,8 @@ def _seed_recipes(store: JsonScgStore) -> None:
     """Attach one ``RouteRecipe`` per capability node (anchor for routing).
 
     The router only returns recipes reachable from a vector-search seed. The
-    parser does not synthesise recipes (that is the traversal engine's job in
-    #19), so the eval seeds the obvious one-capability recipe per capability —
+    parser does not synthesise recipes (that is the traversal engine's job),
+    so the eval seeds the obvious one-capability recipe per capability —
     the minimal scaffold the cheap pre-rank needs to return a route at all.
     """
     recipes = [

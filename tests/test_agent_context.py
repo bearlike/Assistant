@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 from mewbo_core.agent_context import AgentContext, AgentDepthExceeded
-from mewbo_core.hypervisor import AgentHandle, AgentHypervisor
+from mewbo_core.hypervisor import AgentHandle, AgentHypervisor, DelegationContract
 
 # ---------------------------------------------------------------------------
 # AgentContext
@@ -94,6 +94,213 @@ class TestAgentContext:
         c2 = root.child()
         assert root.agent_id != c1.agent_id
         assert c1.agent_id != c2.agent_id
+
+
+# ---------------------------------------------------------------------------
+# capability_mode monotonic narrowing (Phase 1a)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentContextCapabilityMode:
+    def test_root_defaults_to_all(self):
+        assert AgentContext.root(model_name="m").capability_mode == "all"
+
+    def test_child_default_inherits_parent(self):
+        # An unset request (default "all") inherits the parent's ceiling.
+        root = AgentContext.root(model_name="m")
+        restricted = root.child(capability_mode="read_only")
+        assert restricted.child().capability_mode == "read_only"
+
+    def test_child_narrows_from_all(self):
+        root = AgentContext.root(model_name="m")
+        assert root.child(capability_mode="read_only").capability_mode == "read_only"
+        assert root.child(capability_mode="execute").capability_mode == "execute"
+
+    def test_child_cannot_widen_ceiling(self):
+        # A grandchild under a read_only ancestor can never climb back to all.
+        root = AgentContext.root(model_name="m")
+        child = root.child(capability_mode="read_only")
+        grandchild = child.child(capability_mode="all")
+        assert grandchild.capability_mode == "read_only"
+        # ...nor to the intermediate 'execute' tier.
+        assert child.child(capability_mode="execute").capability_mode == "read_only"
+
+    def test_child_narrows_execute_to_read_only(self):
+        root = AgentContext.root(model_name="m")
+        mid = root.child(capability_mode="execute")
+        assert mid.child(capability_mode="read_only").capability_mode == "read_only"
+
+    def test_narrower_helper_picks_more_restrictive(self):
+        n = AgentContext._narrower_capability_mode
+        assert n("all", "read_only") == "read_only"
+        assert n("read_only", "all") == "read_only"
+        assert n("execute", "read_only") == "read_only"
+        assert n("read_only", "execute") == "read_only"
+        assert n("all", "all") == "all"
+        assert n("execute", "execute") == "execute"
+
+    def test_narrower_helper_unknown_collapses_to_all(self):
+        n = AgentContext._narrower_capability_mode
+        # A garbage request neither tightens surprisingly nor loosens below parent.
+        assert n("all", "bogus") == "all"
+        assert n("read_only", "bogus") == "read_only"
+        assert n("bogus", "execute") == "execute"
+
+
+# ---------------------------------------------------------------------------
+# atomic monotonic narrowing
+# ---------------------------------------------------------------------------
+
+
+class TestAgentContextAtomic:
+    def test_root_defaults_to_open_ended(self):
+        assert AgentContext.root(model_name="m").atomic is False
+
+    def test_child_requesting_atomic_becomes_atomic(self):
+        root = AgentContext.root(model_name="m")
+        child = root.child(atomic=True)
+        assert child.atomic is True
+
+    def test_child_not_requesting_atomic_stays_open_ended(self):
+        root = AgentContext.root(model_name="m")
+        assert root.child().atomic is False
+        assert root.child(atomic=False).atomic is False
+
+    def test_atomic_narrows_monotonically(self):
+        """An atomic ancestor's descendants can never climb back to open_ended
+        — ``child()`` ORs the parent's bit with the request, it never lets a
+        grandchild's own (unset) request override it."""
+        root = AgentContext.root(model_name="m")
+        atomic_child = root.child(atomic=True)
+        # The grandchild does not itself request atomic — still stays atomic.
+        grandchild = atomic_child.child(atomic=False)
+        assert grandchild.atomic is True
+        # ...and every further descendant, no matter how deep.
+        assert grandchild.child().atomic is True
+
+
+# ---------------------------------------------------------------------------
+# DelegationContract
+# ---------------------------------------------------------------------------
+
+
+class TestDelegationContract:
+    def test_default_is_disabled_and_open_ended(self):
+        c = DelegationContract()
+        assert c.enabled is False
+        assert c.atomic is False
+
+    def test_from_value_total_never_raises(self):
+        """Every malformed shape degrades to a safe default — never raises."""
+        garbage = [
+            None,
+            "not a mapping",
+            123,
+            [],
+            {"max_steps": "not-an-int"},
+            {"max_wall_s": "not-a-float"},
+            {"max_tokens": object()},
+            {"autonomy": "bogus-tier"},
+            {"model_tier": "bogus-tier"},
+            {"step_warn_headroom": "nope"},
+            {"max_steps": -5, "max_wall_s": -1.0, "max_tokens": -1},
+            {"unknown_field": "gets dropped"},
+        ]
+        for value in garbage:
+            contract = DelegationContract.from_value(value)
+            assert isinstance(contract, DelegationContract)
+            # Negatives clamp to zero rather than going negative.
+            assert contract.max_steps >= 0
+            assert contract.max_wall_s >= 0.0
+            assert contract.max_tokens >= 0
+
+    def test_from_value_parses_valid_mapping(self):
+        contract = DelegationContract.from_value(
+            {
+                "max_steps": 10,
+                "max_wall_s": 60.0,
+                "max_tokens": 5000,
+                "autonomy": "atomic",
+                "model_tier": "economy",
+                "step_warn_headroom": 2,
+            }
+        )
+        assert contract.max_steps == 10
+        assert contract.max_wall_s == 60.0
+        assert contract.max_tokens == 5000
+        assert contract.atomic is True
+        assert contract.model_tier == "economy"
+        assert contract.step_warn_headroom == 2
+        assert contract.enabled is True
+
+    def test_step_state_graduated(self):
+        c = DelegationContract(max_steps=10, step_warn_headroom=3)
+        assert c.step_state(5) == "ok"
+        assert c.step_state(7) == "warn"
+        assert c.step_state(10) == "over"
+        assert c.step_state(11) == "over"
+
+    def test_step_state_unset_is_always_ok(self):
+        assert DelegationContract().step_state(10_000) == "ok"
+
+    def test_wall_state_graduated(self):
+        c = DelegationContract(max_wall_s=100.0)
+        assert c.wall_state(10.0) == "ok"
+        assert c.wall_state(80.0) == "warn"
+        assert c.wall_state(100.0) == "over"
+
+    def test_token_advisory_no_signal_noop(self):
+        """The token axis is advisory: absence of data (or no declared ceiling)
+        always reads ``ok``, never ``over`` — never a false failure just
+        because a proxy didn't surface usage."""
+        # No max_tokens declared at all -> ok regardless of how large total is.
+        assert DelegationContract().token_state(999_999) == "ok"
+        # max_tokens declared but total_tokens<=0 (no usage signal) -> ok.
+        c = DelegationContract(max_tokens=100)
+        assert c.token_state(0) == "ok"
+        assert c.token_state(-5) == "ok"
+        # A genuine signal past the ceiling is the one case that reads over.
+        assert c.token_state(150) == "over"
+        assert c.token_state(50) == "ok"
+
+    def test_resolve_model_override_explicit_always_wins(self):
+        c = DelegationContract(model_tier="economy")
+        assert (
+            c.resolve_model_override("caller-explicit-model", {"economy": "tier-model"}, None)
+            is None
+        )
+
+    def test_resolve_model_override_maps_tier(self):
+        c = DelegationContract(model_tier="economy")
+        assert c.resolve_model_override(None, {"economy": "tier-model"}, None) == "tier-model"
+
+    def test_resolve_model_override_no_tier_declared(self):
+        c = DelegationContract()
+        assert c.resolve_model_override(None, {"economy": "tier-model"}, None) is None
+
+    def test_resolve_model_override_unmapped_tier_falls_through(self):
+        c = DelegationContract(model_tier="frontier")
+        assert c.resolve_model_override(None, {"economy": "tier-model"}, None) is None
+
+    def test_resolve_model_override_respects_allowlist(self):
+        c = DelegationContract(model_tier="economy")
+        assert c.resolve_model_override(None, {"economy": "tier-model"}, ["other-model"]) is None
+        assert (
+            c.resolve_model_override(None, {"economy": "tier-model"}, ["tier-model"])
+            == "tier-model"
+        )
+
+    def test_snapshot_is_bounded_scalars(self):
+        c = DelegationContract(max_steps=5, autonomy="atomic")
+        snap = c.snapshot()
+        assert snap == {
+            "max_steps": 5,
+            "max_wall_s": 0.0,
+            "max_tokens": 0,
+            "autonomy": "atomic",
+            "model_tier": None,
+            "step_warn_headroom": 3,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +468,7 @@ class TestAgentHypervisor:
         asyncio.run(_test())
 
     def test_try_admit_is_race_free_under_concurrency(self):
-        """Concurrent try_admit on N slots admits EXACTLY N (the #117 contract).
+        """Concurrent try_admit on N slots admits EXACTLY N (the contract).
 
         Pins the non-blocking admission's atomicity: an unlocked semaphore's
         acquire() does not suspend, so the locked()-check + acquire() runs as
@@ -681,6 +888,9 @@ class TestAgentResultStructure:
         assert result.summary == "Found the answer"
         assert result.warnings == []
         assert result.artifacts == []
+        # Ref: Phase 1b — additive default, byte-identical to the
+        # historical untyped-summary path when the caller never declares a kind.
+        assert result.summary_kind == "generic"
 
     def test_agent_result_serialization(self):
         """AgentResult must be JSON-serializable for inter-agent passing."""
@@ -701,6 +911,25 @@ class TestAgentResultStructure:
         assert deserialized["status"] == "failed"
         assert deserialized["warnings"] == ["timeout on tool X"]
         assert deserialized["summary"] == "partial work done"
+        assert deserialized["summary_kind"] == "generic"
+
+    def test_agent_result_summary_kind_explicit(self):
+        """Ref: Phase 1b — task-typed CU shape (Ref: [CoA §3])."""
+        import json
+        from dataclasses import asdict
+
+        from mewbo_core.hypervisor import AgentResult
+
+        result = AgentResult(
+            content="output",
+            status="completed",
+            steps_used=3,
+            summary="fact A; fact B",
+            summary_kind="evidence",
+        )
+        assert result.summary_kind == "evidence"
+        deserialized = json.loads(json.dumps(asdict(result)))
+        assert deserialized["summary_kind"] == "evidence"
 
     def test_cannot_solve_status(self):
         """Ref: [Aletheia §3] Explicit failure admission as first-class outcome."""

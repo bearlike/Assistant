@@ -1,5 +1,6 @@
 package com.mewbo.aura.data.device
 
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -109,10 +110,48 @@ class DeviceToolCatalogTest {
     }
 
     @Test
-    fun `availableTools delegates to the injected checker over the static ALL list`() {
-        val catalog = DeviceToolCatalog(DevicePermissionChecker { true })
+    fun `availableTools delegates to the injected checker over the static ALL list`() = runTest {
+        val catalog = DeviceToolCatalog(DevicePermissionChecker { true }, DeviceToolGate { emptySet() })
 
         assertFalse(catalog.availableTools().isEmpty())
         assertEquals(DeviceToolCatalog.ALL.size, catalog.availableTools().size)
+    }
+
+    // --- per-tool settings toggle intersected at the SAME seam ---
+
+    @Test
+    fun `a disabled tool is dropped from filterAvailable even when its permission is granted`() {
+        val available = DeviceToolCatalog.filterAvailable(
+            DeviceToolCatalog.ALL,
+            DevicePermissionChecker { true },
+            disabledToolIds = setOf("device_get_time", "device_send_sms"),
+        )
+
+        assertTrue(available.none { it.toolId == "device_get_time" })
+        assertTrue(available.none { it.toolId == "device_send_sms" })
+        // Every OTHER tool is still present - the toggle is per-tool, not all-or-nothing.
+        assertTrue(available.any { it.toolId == "device_get_battery" })
+        assertEquals(DeviceToolCatalog.ALL.size - 2, available.size)
+    }
+
+    @Test
+    fun `an empty disabled set leaves the permission-only result unchanged`() {
+        val granted = DevicePermissionChecker { true }
+        assertEquals(
+            DeviceToolCatalog.filterAvailable(DeviceToolCatalog.ALL, granted),
+            DeviceToolCatalog.filterAvailable(DeviceToolCatalog.ALL, granted, disabledToolIds = emptySet()),
+        )
+    }
+
+    @Test
+    fun `availableTools omits a tool the gate reports disabled`() = runTest {
+        val catalog = DeviceToolCatalog(
+            DevicePermissionChecker { true },
+            DeviceToolGate { setOf("device_set_alarm") },
+        )
+
+        val ids = catalog.availableTools().map { it.toolId }
+        assertFalse("device_set_alarm" in ids)
+        assertTrue("device_set_timer" in ids)
     }
 }

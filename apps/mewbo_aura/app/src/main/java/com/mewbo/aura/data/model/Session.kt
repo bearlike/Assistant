@@ -12,6 +12,10 @@ data class SessionSummary(
     val recoverable: Boolean,
     val createdAt: String,
     val updatedAt: String,
+    /** Hard-termination signal — a permanently terminated session is a dead-end
+     * (`recoverable` is always false alongside it). See [com.mewbo.aura.data.api.SessionSummaryDto.terminated]. */
+    val terminated: Boolean = false,
+    val terminatedAt: String? = null,
 )
 
 /** Domain-facing transcript + status snapshot (mapped from `GET /api/sessions/{id}/events`). */
@@ -23,4 +27,8 @@ data class SessionHistory(
     val doneReason: String?,
     val title: String?,
     val recoverable: Boolean,
+    /** Hard-termination signal — when true, [com.mewbo.aura.ui.chat.ChatViewModel.bind]
+     * opens the session into its terminal state (composer disabled, no Retry). */
+    val terminated: Boolean = false,
+    val terminatedAt: String? = null,
 )

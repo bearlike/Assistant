@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for TodoPanel — the pinned Plan/Todo dock (#161, epic #149)."""
+"""Tests for TodoPanel — the pinned Plan/Todo dock."""
 
 from __future__ import annotations
 

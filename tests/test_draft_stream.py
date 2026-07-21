@@ -267,7 +267,7 @@ class TestDraftStreamer:
         assert collected == ["block1", "block2"]
 
     def test_langfuse_callback_attached_to_astream(self):
-        """The streamed generation carries the Langfuse ``config`` so it EXPORTS (#87).
+        """The streamed generation carries the Langfuse ``config`` so it EXPORTS.
 
         ``langfuse_session_context`` only PROPAGATES attributes; the streamed
         generation must ATTACH the ``CallbackHandler`` or nothing exports. We stub

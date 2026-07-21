@@ -7,9 +7,11 @@ import {
   EventRecord,
   NotificationItem,
   ProjectBranches,
+  QuestionAnswerItemPayload,
   QueryMode,
   SessionContext,
   SessionExport,
+  SessionSpecResponse,
   SessionSummary,
   SessionUsage,
   ShareRecord,
@@ -44,6 +46,10 @@ export type ToolSummary = {
   disabled_reason?: string;
   server?: string;
   scope?: ToolScope;
+  // Capability id (e.g. "wiki", "scg") the session must advertise for this
+  // tool to bind; `null`/absent for ungated tools. Optional/nullable-safe
+  // for the same reason `scope` is: older or cached payloads predate it.
+  requires_capability?: string | null;
 };
 
 export type SkillSummary = {
@@ -114,6 +120,33 @@ export type RecoverResponse = {
   status?: string;
 };
 
+/**
+ * 201 response from ``POST /api/sessions/<id>/fork`` — the new session's id
+ * plus provenance (which session it branched from and, when ``from_ts`` was
+ * given, the timestamp it branched at; ``null`` when the whole transcript
+ * was copied).
+ */
+export type ForkResponse = {
+  session_id: string;
+  forked_from: string;
+  forked_at: string | null;
+};
+
+/**
+ * Outcome of `answerQuestion`. `ok` on a 200. On failure `kind` classifies the
+ * HTTP status so the card settles silently when the question was resolved
+ * elsewhere (`superseded` = 404 no-longer-pending / 409 answered-first,
+ * `terminated` = 410) versus surfacing a correctable message (`invalid` = 422
+ * answers don't fit, `forbidden` = 403 bad token, `error` = anything else).
+ */
+export type AnswerQuestionResult =
+  | { ok: true }
+  | {
+      ok: false;
+      kind: "superseded" | "invalid" | "forbidden" | "terminated" | "error";
+      message: string;
+    };
+
 export type ApiClient = {
   listSessions: (includeArchived?: boolean) => Promise<SessionSummary[]>;
   createSession: (context?: SessionContext) => Promise<string>;
@@ -127,8 +160,16 @@ export type ApiClient = {
   fetchEvents: (
     sessionId: string,
     after?: string
-  ) => Promise<{ events: EventRecord[]; running: boolean }>;
+  ) => Promise<{
+    events: EventRecord[];
+    running: boolean;
+    status?: string;
+    done_reason?: string;
+    terminated?: boolean;
+    recoverable?: boolean;
+  }>;
   fetchUsage: (sessionId: string) => Promise<SessionUsage>;
+  getSessionSpec: (sessionId: string) => Promise<SessionSpecResponse>;
   archiveSession: (sessionId: string) => Promise<void>;
   unarchiveSession: (sessionId: string) => Promise<void>;
   updateSessionTitle: (
@@ -147,6 +188,11 @@ export type ApiClient = {
   sendMessage: (sessionId: string, text: string) => Promise<void>;
   interruptStep: (sessionId: string) => Promise<void>;
   approvePlan: (sessionId: string, approved: boolean) => Promise<void>;
+  answerQuestion: (
+    sessionId: string,
+    callId: string,
+    body: { call_token: string; answers: QuestionAnswerItemPayload[] },
+  ) => Promise<AnswerQuestionResult>;
   recoverSession: (
     sessionId: string,
     action: "retry" | "continue",
@@ -157,7 +203,7 @@ export type ApiClient = {
   forkSession: (
     sessionId: string,
     opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }
-  ) => Promise<{ session_id: string; forked_from: string; forked_at: string | null }>;
+  ) => Promise<ForkResponse>;
   fetchPlanMarkdown: (sessionId: string) => Promise<string>;
   listTools: (project?: string) => Promise<ToolSummary[]>;
   listSkills: (project?: string) => Promise<SkillSummary[]>;

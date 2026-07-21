@@ -1,5 +1,5 @@
 /**
- * Workspace SCG graph viewer (#79) — the search-side capability graph, rendered
+ * Workspace SCG graph viewer — the search-side capability graph, rendered
  * inside a shadcn ``Dialog`` so it overlays the search surface from a workspace
  * card / results rail entry point.
  *
@@ -15,6 +15,7 @@ import { useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cardSurface } from "@/components/ui/card-surface";
 import {
   Dialog,
   DialogContent,
@@ -44,12 +45,16 @@ import type {
 
 interface WorkspaceGraphDialogProps {
   open: boolean;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
   workspace: Workspace;
   /** Open the Sources flow to map an unmapped source (the map action lives
    *  there — we link, never rebuild it). */
   onMapSource?: () => void;
 }
+
+/** Edge sections in the node inspector list at most this many rows, folding
+ *  the rest behind a "+N more" line. */
+const MAX_EDGES_SHOWN = 14
 
 /** One edge as the inspector lists it (kind + the other endpoint). */
 interface EdgeInfo {
@@ -75,12 +80,12 @@ interface SelectedScgNode {
 
 export function WorkspaceGraphDialog({
   open,
-  onClose,
+  onOpenChange,
   workspace,
   onMapSource,
 }: WorkspaceGraphDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[min(96vw,1200px)] w-[96vw] h-[88vh] p-0 gap-0 flex flex-col overflow-hidden">
         <DialogHeader className="px-4 py-3 border-b border-[hsl(var(--border))] flex-row items-center gap-2 space-y-0">
           <DialogTitle className="text-sm font-medium truncate">
@@ -133,14 +138,20 @@ function GraphBody({
 
   const banner =
     allUnmapped ? (
-      <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))]/95 px-3 py-2 text-center text-[11px] text-[hsl(var(--muted-foreground))] shadow-[var(--elev-1)] [text-wrap:balance]">
+      <div
+        className={cn(
+          cardSurface({ radius: "right", elevation: "elev-1" }),
+          // `/95` alpha stays a bg override — cardSurface's own bg is opaque.
+          "bg-[hsl(var(--card)/0.95)] px-3 py-2 text-center text-2xs text-[hsl(var(--muted-foreground))] [text-wrap:balance]",
+        )}
+      >
         None of this workspace's sources are mapped yet — map a source to build
         its capability subgraph.
         {onMapSource && (
           <button
             type="button"
             onClick={onMapSource}
-            className="ml-1 text-[hsl(var(--primary))] hover:underline"
+            className="ml-1 text-[hsl(var(--primary-text))] hover:underline"
           >
             Open Sources
           </button>
@@ -206,13 +217,16 @@ function NodeInspector({
   onMapSource?: () => void;
 }) {
   return (
-    <aside className="w-[320px] shrink-0 border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col">
+    <aside
+      aria-label="Selected node details"
+      className="w-[320px] shrink-0 border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col"
+    >
       <header className="px-3 py-2 border-b border-[hsl(var(--border))] flex items-center gap-2">
         <span className={cn("w-2.5 h-2.5 rounded-full", SCG_KIND_DOT[node.kind])} />
-        <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+        <span className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
           {SCG_KIND_LABEL[node.kind]}
         </span>
-        <span className="text-xs font-mono truncate flex-1">{node.label}</span>
+        <span className="text-xs truncate flex-1">{node.label}</span>
         <button
           type="button"
           onClick={onClose}
@@ -262,7 +276,7 @@ function NodeInspector({
                   {node.labels.map((l) => (
                     <span
                       key={l}
-                      className="px-1.5 py-px rounded-full text-[10px] bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))] font-mono"
+                      className="px-1.5 py-px rounded-full text-2xs bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]"
                     >
                       {l}
                     </span>
@@ -271,7 +285,7 @@ function NodeInspector({
               </Field>
             )}
             <Field label="Connections">
-              <span className="font-mono">{node.degree}</span>
+              <span>{node.degree}</span>
             </Field>
             {node.outEdges.length > 0 && (
               <EdgeSection title={`Outgoing (${node.outEdges.length})`} edges={node.outEdges} />
@@ -289,7 +303,7 @@ function NodeInspector({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+      <div className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
         {label}
       </div>
       {children}
@@ -300,21 +314,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function EdgeSection({ title, edges }: { title: string; edges: EdgeInfo[] }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+      <div className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
         {title}
       </div>
       <ul className="space-y-0.5">
-        {edges.slice(0, 14).map((e, i) => (
+        {edges.slice(0, MAX_EDGES_SHOWN).map((e, i) => (
           <li key={`${e.otherId}-${i}`} className="flex items-center gap-1.5 truncate">
-            <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] shrink-0">
+            <span className="text-2xs font-mono text-[hsl(var(--muted-foreground))] shrink-0">
               {e.kind}
             </span>
-            <span className="font-mono truncate text-[11px]">{e.otherLabel || e.otherId}</span>
+            {e.otherLabel ? (
+              <span className="truncate text-2xs">{e.otherLabel}</span>
+            ) : (
+              <span className="font-mono truncate text-2xs">{e.otherId}</span>
+            )}
           </li>
         ))}
-        {edges.length > 14 && (
-          <li className="text-[10px] text-[hsl(var(--muted-foreground))]">
-            +{edges.length - 14} more
+        {edges.length > MAX_EDGES_SHOWN && (
+          <li className="text-2xs text-[hsl(var(--muted-foreground))]">
+            +{edges.length - MAX_EDGES_SHOWN} more
           </li>
         )}
       </ul>

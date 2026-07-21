@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import (
+    emit_phase_once,
     resolve_job_ctx,
     resolve_qa_ctx,
     resolve_runtime,
@@ -139,15 +140,28 @@ class _EntityBuilder:
         return EntityResolver(store=store, embedder=embedder)
 
     @staticmethod
-    def build_minter(store: Any) -> Any:
-        """Build an ``EntityMinter`` (resolve → upsert) over *store* (write path)."""
+    def build_minter(
+        store: Any, *, commit_sha: str | None = None, job_id: str | None = None
+    ) -> Any:
+        """Build an ``EntityMinter`` (resolve → upsert) over *store* (write path).
+
+        ``commit_sha``/``job_id`` come from the enrich job so minted entities are
+        attributed to the commit that indexed them; a Q&A-session mint passes
+        neither, leaving those entities commit-less (and supersede-preserved).
+        """
         from mewbo_graph.entities.minter import EntityMinter  # noqa: PLC0415
 
         embedder = _EntityBuilder._embedder()
         from mewbo_graph.entities.resolver import EntityResolver  # noqa: PLC0415
 
         resolver = EntityResolver(store=store, embedder=embedder)
-        return EntityMinter(store=store, embedder=embedder, resolver=resolver)
+        return EntityMinter(
+            store=store,
+            embedder=embedder,
+            resolver=resolver,
+            commit_sha=commit_sha,
+            job_id=job_id,
+        )
 
 
 class MintEntityTool(WikiSessionTool):
@@ -170,9 +184,24 @@ class MintEntityTool(WikiSessionTool):
         if isinstance(args, MockSpeaker):
             return args
 
+        # The ``enrich`` phase has no boundary tool of its own — it is a
+        # wiki-enricher fan-out, and minting IS the work. So the first enricher to
+        # reach this line marks the phase as started and the rest are no-ops. Its
+        # predecessor (wiki_build_graph) used to stamp it on the way out, which
+        # reported enrich as underway for a fan-out that had not spawned yet.
+        # Keyed on ``job_id`` rather than the ctx type, matching
+        # ``_record_qa_access``'s duck-typed guard: the QA agents mint entities
+        # too, and a QA ctx carries no job whose phase there would be to advance.
+        if getattr(ctx, "job_id", None):
+            emit_phase_once(ctx, "enrich")
+
         from mewbo_graph.entities.types import Entity  # noqa: PLC0415
 
-        minter = _EntityBuilder.build_minter(ctx.store)
+        minter = _EntityBuilder.build_minter(
+            ctx.store,
+            commit_sha=getattr(ctx, "commit_sha", None),
+            job_id=getattr(ctx, "job_id", None),
+        )
         extracted = Entity(
             name=args.name,
             type=args.type,
@@ -228,7 +257,12 @@ class MintEntityTool(WikiSessionTool):
                     )
                 )
         if edges:
-            ctx.store.upsert_entity_edges(ctx.slug, edges)
+            ctx.store.upsert_entity_edges(
+                ctx.slug,
+                edges,
+                commit_sha=getattr(ctx, "commit_sha", None),
+                job_id=getattr(ctx, "job_id", None),
+            )
 
 
 class ResolveEntityTool(WikiSessionTool):
@@ -298,7 +332,12 @@ class RelateEntitiesTool(WikiSessionTool):
             type=args.relation_type,
             description=args.description,
         )
-        ctx.store.upsert_entity_edges(ctx.slug, [rel])
+        ctx.store.upsert_entity_edges(
+            ctx.slug,
+            [rel],
+            commit_sha=getattr(ctx, "commit_sha", None),
+            job_id=getattr(ctx, "job_id", None),
+        )
         return MockSpeaker(
             content=json.dumps({"ok": True, "relation": rel.model_dump()})
         )

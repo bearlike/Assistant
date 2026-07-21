@@ -12,6 +12,7 @@
 
 import { readRuntimeConfig } from "../../../runtimeConfig";
 import { sseStream as genericSseStream } from "../../../api/sse";
+import { apiFetch } from "../../../api/httpBase";
 
 import type {
   CatalogDocument,
@@ -22,6 +23,9 @@ import type {
   Language,
   Platform,
   Project,
+  ProjectFreshness,
+  ProjectSettings,
+  ProjectSettingsPatch,
   QaAnswer,
   QaEvent,
   RecoverableJob,
@@ -29,6 +33,7 @@ import type {
   SourceExcerpt,
   WikiError,
   WikiPage,
+  WikiSessionLink,
   WizardSubmission,
 } from "./types";
 
@@ -62,7 +67,7 @@ async function http<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const resp = await fetch(API_BASE + path, {
+  const resp = await apiFetch(API_BASE + path, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -136,6 +141,41 @@ export async function deleteProject(slug: string): Promise<{ deleted: boolean }>
 }
 
 /**
+ * Read a project's editable indexing settings.
+ * ``GET /v1/wiki/projects/<slug>/settings``.
+ *
+ * A catalog (non-git) project comes back as the reduced ``{kind:"catalog", …}``
+ * shape. 404 when the slug is unknown.
+ */
+export async function getProjectSettings(slug: string): Promise<ProjectSettings> {
+  if (!slug) throw makeError("validation", "slug is required");
+  return http<ProjectSettings>(
+    "GET",
+    `/v1/wiki/projects/${encodeURIComponent(slug)}/settings`,
+  );
+}
+
+/**
+ * Patch a project's settings. Send ONLY the changed subset — the server
+ * forbids unknown keys and never accepts a token or a slug (identity is the
+ * URL; credentials live in the registry). Returns the updated settings.
+ *
+ * Errors: 400 validation · 403 graph-only with developer mode off ·
+ * 409 identity-changing repo edit · 404 unknown slug.
+ */
+export async function updateProject(
+  slug: string,
+  patch: ProjectSettingsPatch,
+): Promise<ProjectSettings> {
+  if (!slug) throw makeError("validation", "slug is required");
+  return http<ProjectSettings>(
+    "PATCH",
+    `/v1/wiki/projects/${encodeURIComponent(slug)}`,
+    patch,
+  );
+}
+
+/**
  * Fetch the persisted code knowledge graph for a project. ``limit`` caps
  * the node set (edges whose endpoints aren't in the surviving set are
  * dropped server-side) — the FE always passes one to bound canvas cost
@@ -178,6 +218,25 @@ export async function getSourceExcerpt(
     "GET",
     `/v1/wiki/projects/${encodeURIComponent(slug)}/source?${params.toString()}`,
   );
+}
+
+/**
+ * Resolve a Mewbo session id to the wiki project it belongs to.
+ * ``GET /v1/wiki/sessions/<sessionId>``. A wiki-origin session's context
+ * only advertises the ``wiki`` capability, never a project slug — this is
+ * the only way the console can resolve one from a bare session id (backs
+ * SessionHeader's "Open wiki" jump). 404 → `null`, never a throw.
+ */
+export async function getWikiSessionLink(sessionId: string): Promise<WikiSessionLink | null> {
+  try {
+    return await http<WikiSessionLink>(
+      "GET",
+      `/v1/wiki/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  } catch (err) {
+    if (isWikiError(err) && err.code === "not_found") return null;
+    throw err;
+  }
 }
 
 // ── Catalogue ─────────────────────────────────────────────────────────────
@@ -311,9 +370,14 @@ export async function getAnswer(answerId: string): Promise<QaAnswer> {
  * events: `meta` → `summary_ready` → (`block_open`, `block_delta*`, `block_close`)+ → terminal.
  *
  * The consumer (`useQaStream`) drives the typewriter directly from this iterator.
+ *
+ * Pass ``answerId`` to CONTINUE an existing conversation — the backend appends
+ * a turn to that answer's session (reusing its context) instead of minting a
+ * fresh answer. Omit it for a new conversation. ``undefined`` fields are
+ * dropped by ``JSON.stringify``, so the body carries ``answerId`` only when set.
  */
 export async function* streamAnswer(
-  input: { question: string; fromPageId: string; model: string; slug: string },
+  input: { question: string; fromPageId: string; model: string; slug: string; answerId?: string },
   options: { signal?: AbortSignal } = {},
 ): AsyncGenerator<QaEvent, void, unknown> {
   yield* sseStream<QaEvent>("/v1/wiki/qa", {
@@ -342,18 +406,6 @@ export async function startAnswer(input: {
     }
   }
   throw makeError("internal", "no meta event received from QA stream");
-}
-
-/**
- * Non-streaming QA — POST then return the snapshot. Kept for shareable QA
- * URLs where streaming is wasteful. New code should use `streamAnswer`.
- */
-export async function askQuestion(
-  question: string,
-  ctx: { fromPageId: string; model: string; slug: string },
-): Promise<QaAnswer> {
-  const { answerId } = await startAnswer({ question, ...ctx });
-  return getAnswer(answerId);
 }
 
 // ── Catalog (non-git workspace) ───────────────────────────────────────────
@@ -414,4 +466,21 @@ export async function listBranches(input: ListBranchesInput): Promise<ListBranch
 export async function requestWikiRefresh(slug: string): Promise<{ queued: boolean }> {
   if (!slug) throw makeError("validation", "slug is required");
   return http<{ queued: boolean }>("POST", `/v1/wiki/projects/${encodeURIComponent(slug)}/refresh`, {});
+}
+
+/**
+ * How far the indexed snapshot has drifted from remote HEAD. ``force`` busts
+ * the API's 5-min TTL cache (used by the manual "check again" affordance);
+ * ordinary card renders should omit it and let the cache serve.
+ */
+export async function getProjectFreshness(
+  slug: string,
+  force = false,
+): Promise<ProjectFreshness> {
+  if (!slug) throw makeError("validation", "slug is required");
+  const qs = force ? "?force=1" : "";
+  return http<ProjectFreshness>(
+    "GET",
+    `/v1/wiki/projects/${encodeURIComponent(slug)}/freshness${qs}`,
+  );
 }

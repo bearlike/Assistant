@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import type { RunStatus } from "./InputBar";
 import { ConversationTimeline } from "./ConversationTimeline";
@@ -9,27 +9,34 @@ import { useSessionUsage } from "../hooks/useSessionUsage";
 import { useSessionQuery } from "../hooks/useSessionQuery";
 import { useThroughput } from "../hooks/useThroughput";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { SessionSummary, SessionUsage, TurnMeta } from "../types";
+import { SessionSummary, TurnMeta } from "../types";
 import { buildTimeline, getActiveStreamText, getActiveTurn, getLastContext, turnHasWidget } from "../utils/timeline";
 import { mergeDiffFiles } from "../utils/diff";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { extractSummaryTesting } from "../utils/logs";
-import { approvePlan, forkSession } from "../api/client";
+import { answerQuestion, approvePlan } from "../api/client";
+import type { QuestionAnswerItemPayload } from "../types";
 import { useRecoverSession } from "../hooks/useRecoverSession";
+import { useForkSession } from "../hooks/useForkSession";
 import { RotateCcw, Play } from "lucide-react";
 import { Button } from "./ui/button";
-// Kept for backward-compat with App.tsx's session-header slot. The shape is
-// now the full `SessionUsage | null` from the /usage endpoint so the header
-// can render root-only context-window info and compaction count without
-// re-computing anything client-side.
-export type SessionTokenTotals = SessionUsage | null;
+import { SessionTriggersSection } from "./triggers/SessionTriggersSection";
+import { SessionHeader } from "./SessionHeader";
 
 interface SessionDetailViewProps {
   session: SessionSummary;
   onTitleUpdate?: (sessionId: string, title: string) => void;
   onSessionChange?: () => void;
   onSelectSession?: (sessionId: string) => void;
-  onTokenTotalsChange?: (totals: SessionTokenTotals) => void;
+  // Session-header obligations, re-homed from the old detail NavBar.
+  onBack: () => void;
+  onRenameTitle?: (sessionId: string, title: string) => Promise<void>;
+  onRegenerateTitle?: (sessionId: string) => Promise<string>;
+  onArchive?: (sessionId: string) => void;
+  onUnarchive?: (sessionId: string) => void;
+  onShare?: (sessionId: string) => void;
+  onExport?: (sessionId: string) => void;
+  langfuseUrl?: string | null;
 }
 
 export function SessionDetailView({
@@ -37,16 +44,25 @@ export function SessionDetailView({
   onTitleUpdate,
   onSessionChange,
   onSelectSession,
-  onTokenTotalsChange,
+  onBack,
+  onRenameTitle,
+  onRegenerateTitle,
+  onArchive,
+  onUnarchive,
+  onShare,
+  onExport,
+  langfuseUrl,
 }: SessionDetailViewProps) {
   const isMobile = useIsMobile();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [activeTab, setActiveTab] = useState<"diff" | "logs">("logs");
+  const [activeTab, setActiveTab] = useState<"diff" | "logs" | "binding">("logs");
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const {
     events,
     running,
+    status: liveStatus,
+    doneReason: liveDoneReason,
     error: eventsError,
     resume,
     reset: resetEvents,
@@ -56,22 +72,28 @@ export function SessionDetailView({
     send,
     stop,
     error: queryError,
+    terminated: queryTerminated,
     submitting
   } = useSessionQuery(session.session_id, session.context, running);
   const timeline = useMemo(() => buildTimeline(events), [events]);
-  // Forward the full session usage snapshot to the header. The backend is
-  // the source of truth — no re-summing from events — so root vs sub-agent
-  // split and compaction count stay consistent everywhere.
-  useEffect(() => {
-    onTokenTotalsChange?.(sessionUsage);
-  }, [sessionUsage, onTokenTotalsChange]);
+  // A session is permanently terminated when any of three signals says so: the
+  // `session_terminated` transcript event, the backend's session status, or a
+  // 410 caught by the composer's send/stop path. The composer disables and the
+  // recovery affordances suppress once terminated (it can never run again).
+  const isTerminated = useMemo(
+    () =>
+      queryTerminated ||
+      session.status === "terminated" ||
+      events.some((e) => e.type === "session_terminated"),
+    [queryTerminated, session.status, events],
+  );
   const sessionFiles = useMemo(
     () => mergeDiffFiles(timeline.flatMap((e) => e.turn?.files ?? [])),
     [timeline]
   );
   const liveTurn = useMemo(() => getActiveTurn(events), [events]);
   const activeTurnId = liveTurn?.id ?? null;
-  // Live assistant text streamed from the in-flight turn (Gitea #137). Empty
+  // Live assistant text streamed from the in-flight turn. Empty
   // string when no deltas have arrived (non-streaming model / legacy events),
   // so ConversationTimeline falls back to the "Working…" beat.
   const streamingText = useMemo(() => getActiveStreamText(events), [events]);
@@ -92,13 +114,13 @@ export function SessionDetailView({
   // Derive effective session context from live events. This is the SINGLE
   // most-recent context event's payload, verbatim — never merged across
   // events. See `getLastContext` for why (mirrors the backend's
-  // `_load_last_context`, Gitea #185).
+  // `_load_last_context`).
   const effectiveContext = useMemo(
     () => getLastContext(events, session.context),
     [events, session.context],
   );
   const summaryData = useMemo(() => extractSummaryTesting(events), [events]);
-  // Live throughput + phase classification (Gitea #174), differenced from the
+  // Live throughput + phase classification, differenced from the
   // in-flight turn's streamed output over the poll clock. This is the single
   // source of the run's phase label + tok/s rate that RunTelemetry renders.
   const throughput = useThroughput(events, running);
@@ -116,6 +138,10 @@ export function SessionDetailView({
     for (const ev of events) {
       if (ev.type === "user") {
         lastUserTs = ev.ts;
+        // A `user` event is a turn boundary — clear so a run of sub-agents
+        // from an earlier turn (started, never matched by a `stop`) can't go
+        // on inflating the live count on every later turn.
+        liveAgents.clear();
       } else if (ev.type === "sub_agent") {
         const p = (ev.payload ?? {}) as Record<string, unknown>;
         const id = String(p.agent_id ?? "");
@@ -148,7 +174,7 @@ export function SessionDetailView({
   // widget so the widget keeps the spotlight.
   //
   // While a run is live, prefer the in-flight turn so the trace panel fills
-  // with live logs without a click (Gitea #174) — the once-per-session guard
+  // with live logs without a click — the once-per-session guard
   // keeps it from re-opening after the user deliberately closes it.
   useEffect(() => {
     if (isMobile) return;
@@ -210,9 +236,26 @@ export function SessionDetailView({
         await approvePlan(session.session_id, approved);
       } catch (err) {
         console.error("Failed to submit plan decision", err);
+      } finally {
+        // A plan approval re-engages the loop the same way submit/stop do —
+        // without this the poll can be sitting stopped (nothing `running` at
+        // the time it last checked) and never wake up to see the new turn.
+        resume();
       }
     },
-    [session.session_id],
+    [session.session_id, resume],
+  );
+  const handleAnswerQuestion = useCallback(
+    async (callId: string, callToken: string, answers: QuestionAnswerItemPayload[]) => {
+      try {
+        return await answerQuestion(session.session_id, callId, { call_token: callToken, answers });
+      } finally {
+        // Same dead-end as plan approval: answering unblocks the loop, so
+        // wake the poll rather than leaving it parked until a manual refresh.
+        resume();
+      }
+    },
+    [session.session_id, resume],
   );
   const recover = useRecoverSession();
   // Shared post-recovery refresh for a generic (non-wiki) dispatch. A
@@ -221,16 +264,28 @@ export function SessionDetailView({
   // poll fetches the authoritative transcript from scratch (the backend
   // deletes old events on retry / stale recovery attempts on continue, so a
   // merge-based resume would show orphaned events until hard-refresh), then
-  // re-fetch the session list so the NavBar StatusBadge flips failed→running.
+  // re-fetch the session list so the SessionHeader StatusBadge flips failed→running.
   const onGenericRecover = useCallback(() => {
     resetEvents();
     onSessionChange?.();
   }, [resetEvents, onSessionChange]);
-  const triggerRecover = (action: "retry" | "continue") => {
+  // The same three-condition guard (`running` / no session id / a recovery
+  // already in flight) repeats verbatim in triggerRecover, handleRetryFrom,
+  // and handleEditAndRegenerate below — each call site otherwise builds a
+  // differently-shaped mutation payload, so a shared guard function would
+  // just move the condition without removing a real duplication. Left as-is;
+  // worth revisiting if a fourth call site appears.
+  // `model` is the deliberate pick from the failure card's picker. The header
+  // affordance has no picker and passes none, which must still resolve to the
+  // session's own model — omitting it lets the server fall back to config
+  // policy, so a recovery would silently run on a different model than the
+  // turn it is recovering.
+  const triggerRecover = (action: "retry" | "continue", model?: string) => {
     if (running || !session.session_id || recover.isPending) return;
     recover.mutate({
       sessionId: session.session_id,
       action,
+      model: model ?? effectiveContext?.model,
       onGeneric: onGenericRecover,
     });
   };
@@ -244,18 +299,21 @@ export function SessionDetailView({
       onGeneric: onGenericRecover,
     });
   };
-  const handleForkFrom = async (fromTs: string) => {
-    if (running || !session.session_id) return;
-    try {
-      const result = await forkSession(session.session_id, {
-        fromTs,
-        model: effectiveContext?.model ?? undefined,
-      });
-      onSessionChange?.();
-      onSelectSession?.(result.session_id);
-    } catch {
-      // fork failed — silently ignore, notification will surface via API
-    }
+  const fork = useForkSession();
+  // Shared by "Branch in new chat" (fromTs given) and "Fork session" (whole
+  // transcript, fromTs omitted) — one fork operation, one handler, so the
+  // two menu items can never drift apart in behavior or error handling.
+  const handleFork = (fromTs?: string) => {
+    if (running || !session.session_id || fork.isPending) return;
+    fork.mutate({
+      sessionId: session.session_id,
+      fromTs,
+      model: effectiveContext?.model,
+      onSuccess: (result) => {
+        onSessionChange?.();
+        onSelectSession?.(result.session_id);
+      },
+    });
   };
   const handleEditAndRegenerate = (fromTs: string, newText: string) => {
     if (running || !session.session_id || recover.isPending) return;
@@ -269,41 +327,31 @@ export function SessionDetailView({
     });
   };
 
-  // Surface the last recoverable failure inline in the conversation so users
-  // never have to open the Logs panel to retry. Walks backwards to find the
-  // most recent completion event; recoverable iff the run is idle and the
-  // reason is ``error`` or ``max_steps_reached``.
-  const lastRecoverableFailure = useMemo(() => {
-    if (running || submitting) return null;
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      const ev = events[i];
-      if (ev.type !== "completion") continue;
-      const payload = (ev.payload ?? {}) as {
-        done_reason?: string | null;
-        error?: string;
-        last_error?: string;
-      };
-      const reason = (payload.done_reason ?? "").toLowerCase();
-      if (reason !== "error" && reason !== "max_steps_reached") return null;
-      return {
-        reason,
-        error: payload.error ?? payload.last_error ?? "",
-      };
+  // The ONE failure card allowed to offer live Retry/Continue: the newest
+  // `run_failed` entry, and only while nothing has superseded it. A later
+  // assistant turn means the session recovered, so its failure is history —
+  // every other failure card in the transcript renders read-only.
+  const recoverableFailureId = useMemo(() => {
+    if (running || submitting || isTerminated) return undefined;
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const entry = timeline[i];
+      if (entry.role === "assistant") return undefined;
+      if (entry.role === "run_failed") return entry.id;
     }
-    return null;
-  }, [events, running, submitting]);
+    return undefined;
+  }, [timeline, running, submitting, isTerminated]);
 
   // Header-level recovery affordance, gated by the backend's authoritative
-  // ``session.recoverable`` flag. Covers the case the inline failure panel
-  // misses — a session killed mid-call with no completion event — so opening
-  // /s/<id> on a crashed session always offers recovery. When the inline
-  // panel already shows Retry/Continue (a completion event with an
-  // error/step-limit reason), this defers to it to avoid a double affordance.
+  // ``session.recoverable`` flag. Its one genuine job is the case no failure
+  // card can cover: a session killed mid-call that never wrote a completion
+  // event, so opening /s/<id> on a crashed session still offers recovery.
+  // When a live failure card is on screen this defers to it — one affordance.
   const showHeaderRecovery =
     Boolean(session.recoverable) &&
     !running &&
     !submitting &&
-    !lastRecoverableFailure;
+    !isTerminated &&
+    !recoverableFailureId;
 
   const conversationPanel = (
     <>
@@ -313,6 +361,8 @@ export function SessionDetailView({
           <AlertDescription>{errorMessage}</AlertDescription>
         </Alert>
       </div>}
+
+      {!isTerminated && <SessionTriggersSection sessionId={session.session_id} />}
 
       {showHeaderRecovery && (
         <div className="px-6 pt-4">
@@ -356,10 +406,15 @@ export function SessionDetailView({
         streamingText={streamingText}
         onShowActiveTrace={handleShowLiveTrace}
         onApprovePlan={handleApprovePlan}
+        onAnswerQuestion={handleAnswerQuestion}
         onRetryFrom={handleRetryFrom}
-        onForkFrom={handleForkFrom}
+        onForkFrom={handleFork}
+        onForkSession={() => handleFork()}
         onEditAndRegenerate={handleEditAndRegenerate}
+        onRecover={triggerRecover}
+        recoverableFailureId={recoverableFailureId}
         model={effectiveContext?.model}
+        fallbackModels={effectiveContext?.fallback_models}
         sessionUsage={sessionUsage}
         systemBlock={summaryData.summary.length || summaryData.testing.length ? {
           summary: {
@@ -367,49 +422,6 @@ export function SessionDetailView({
             testing: summaryData.testing
           }
         } : undefined} />
-
-      {lastRecoverableFailure && (
-        <div className="px-6 py-3 border-t border-[hsl(var(--border))]">
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-red-500">
-                  {lastRecoverableFailure.reason === "error"
-                    ? "Run failed"
-                    : "Task interrupted — step limit reached"}
-                </p>
-                {lastRecoverableFailure.error && (
-                  <p className="mt-1 text-xs font-mono text-red-500/80 break-words">
-                    {lastRecoverableFailure.error}
-                  </p>
-                )}
-              </div>
-              <div className="flex gap-2 shrink-0">
-                <Button
-                  variant="neutral"
-                  size="sm"
-                  tone="info"
-                  leadingIcon={<RotateCcw className="w-3 h-3" />}
-                  onClick={() => triggerRecover("retry")}
-                  title="Re-run the last user query"
-                >
-                  Retry
-                </Button>
-                <Button
-                  variant="neutral"
-                  size="sm"
-                  tone="warn"
-                  leadingIcon={<Play className="w-3 h-3" />}
-                  onClick={() => triggerRecover("continue")}
-                  title="Resume the session and let the agent recover"
-                >
-                  Continue
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="relative z-10">
         <InputBar mode="detail" sessionId={session.session_id} sessionContext={effectiveContext} onSubmit={async (query, newContext, mode, attachments) => {
@@ -419,7 +431,7 @@ export function SessionDetailView({
         }} onStop={async () => {
           await stop();
           resume();
-        }} isRunning={running} isSubmitting={submitting} error={queryError} runStatus={runStatus} />
+        }} isRunning={running} isSubmitting={submitting} error={queryError} runStatus={runStatus} terminated={isTerminated} />
       </div>
     </>
   );
@@ -441,16 +453,19 @@ export function SessionDetailView({
     sessionId: session.session_id,
     selectedTurn: selectedTurn ?? null,
     sessionFiles,
-    onRetry: !running ? () => triggerRecover("retry") : undefined,
-    onContinue: !running ? () => triggerRecover("continue") : undefined,
+    onRetry: !running ? (m?: string) => triggerRecover("retry", m) : undefined,
+    onContinue: !running ? (m?: string) => triggerRecover("continue", m) : undefined,
+    model: effectiveContext?.model,
+    fallbackModels: effectiveContext?.fallback_models,
     isRunning: running || submitting,
     runStatus,
     isViewingLive,
     onShowLiveTrace: liveTurn ? handleShowLiveTrace : undefined,
   };
 
+  let body: ReactNode;
   if (isWorkspaceOpen && effectiveMaximized) {
-    return (
+    body = (
       <div className="flex flex-col h-full overflow-hidden">
         <WorkspacePanel
           {...workspaceProps}
@@ -460,10 +475,8 @@ export function SessionDetailView({
         />
       </div>
     );
-  }
-
-  if (isWorkspaceOpen) {
-    return (
+  } else if (isWorkspaceOpen) {
+    body = (
       <PanelGroup orientation="horizontal" className="flex-1 overflow-hidden h-full bg-[hsl(var(--background))]">
         <Panel id="conversation" defaultSize="70%" minSize="25%" maxSize="75%" className="flex flex-col h-full bg-[hsl(var(--background))]">
           {conversationPanel}
@@ -481,13 +494,34 @@ export function SessionDetailView({
         </Panel>
       </PanelGroup>
     );
+  } else {
+    body = (
+      <div className="flex flex-1 overflow-hidden h-full bg-[hsl(var(--background))]">
+        <div className="flex flex-col h-full w-full max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto">
+          {conversationPanel}
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-1 overflow-hidden h-full bg-[hsl(var(--background))]">
-      <div className="flex flex-col h-full w-full max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto">
-        {conversationPanel}
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--background))]">
+      <SessionHeader
+        session={session}
+        usage={sessionUsage}
+        isTerminated={isTerminated}
+        liveStatus={liveStatus}
+        liveDoneReason={liveDoneReason}
+        onBack={onBack}
+        onRenameTitle={onRenameTitle}
+        onRegenerateTitle={onRegenerateTitle}
+        onArchive={onArchive}
+        onUnarchive={onUnarchive}
+        onShare={onShare}
+        onExport={onExport}
+        langfuseUrl={langfuseUrl}
+      />
+      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }

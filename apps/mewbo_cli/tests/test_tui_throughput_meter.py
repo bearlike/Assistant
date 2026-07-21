@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for ThroughputMeter — live phase / tok-s / TTFT / stall (#173).
+"""Tests for ThroughputMeter — live phase / tok-s / TTFT / stall.
 
 Deterministic: an explicit ``now`` is passed to every ``mark_*`` / ``snapshot``
 so no wall clock is involved. The reasoning-model predicate is injected.

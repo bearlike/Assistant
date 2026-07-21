@@ -27,7 +27,12 @@ import androidx.compose.ui.unit.dp
 import com.mewbo.aura.data.model.AttachmentSummary
 import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.data.model.ChatTodoItem
+import com.mewbo.aura.data.model.QuestionResolution
 import com.mewbo.aura.data.model.ToolCall
+import com.mewbo.aura.data.model.UiAnswer
+import com.mewbo.aura.data.model.UiQuestion
+import com.mewbo.aura.data.model.UiQuestionOption
+import com.mewbo.aura.ui.chat.toolcards.ToolCardRegistry
 import com.mewbo.aura.ui.common.TypingIndicator
 import com.mewbo.aura.ui.composer.AuraComposer
 import com.mewbo.aura.ui.composer.ComposerState
@@ -120,7 +125,7 @@ private fun ComposerShowcase(modifier: Modifier = Modifier) {
                 onSend = {}, onStop = {}, onMicTap = {}, onDictationStop = {}, onVoiceModeTap = {},
             )
         }
-        ComposerShowcaseRow("C2 Typing - wrapped multi-line draft (Gitea #178 W1-C)") {
+        ComposerShowcaseRow("C2 Typing - wrapped multi-line draft") {
             AuraComposer(
                 state = ComposerState.Typing,
                 draft = wrappedDraft,
@@ -212,7 +217,7 @@ private val GreetingPreviewHeight = 600.dp
 
 /**
  * Extra standalone component proof - see class doc for why this can't live inside the fake state.
- * [ToolCallGroupCard] (Gitea #177 W1-B) is shown twice: one instance frozen in the [isRunActive]
+ * [ToolCallGroupCard] is shown twice: one instance frozen in the [isRunActive]
  * "Using tools…" state, and one interactive instance the verify step taps through
  * collapsed -> expanded -> a row's own JSON detail open - the same [ChatUiState.items] fixture the
  * live [ChatSurface] uses would need real chat-transcript scroll to reach, which this scrollable
@@ -229,7 +234,82 @@ private fun ComponentGallery(modifier: Modifier = Modifier) {
 
         Text(text = "Tool call group - tap to expand, tap a row for its JSON", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 16.dp))
         ToolCallGroupCard(item = ToolCallGroupPreview.value, isRunActive = false, modifier = Modifier.padding(top = 4.dp))
+
+        // All three ToolCardRegistry paths in one screenshot - the registered renderer, and the two
+        // routes into the generic fallback (an id with no renderer; a registered id whose args don't
+        // parse). The fallback is the reason PromotedTools can grow without ui/ work, so it needs to
+        // be as visible here as the happy path.
+        Text(text = "Action card - device_set_alarm (registered renderer)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 16.dp))
+        ToolCardRegistry.Render(call = ToolCardPreview.alarm, modifier = Modifier.padding(top = 4.dp))
+
+        Text(text = "Action card - alarm with no message arg", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 16.dp))
+        ToolCardRegistry.Render(call = ToolCardPreview.alarmNoMessage, modifier = Modifier.padding(top = 4.dp))
+
+        Text(text = "Action card - allowlisted id with NO renderer yet (generic fallback)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 16.dp))
+        ToolCardRegistry.Render(call = ToolCardPreview.unregistered, modifier = Modifier.padding(top = 4.dp))
+
+        Text(text = "Action card - alarm with unparseable args (degrades to generic)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 16.dp))
+        ToolCardRegistry.Render(call = ToolCardPreview.alarmBadArgs, modifier = Modifier.padding(top = 4.dp))
     }
+}
+
+/** The four [ToolCardRegistry] outcomes, shared by the gallery above and [FakeChatState] below. */
+private object ToolCardPreview {
+    val alarm = alarmCall(
+        ts = "2026-07-01T10:00:11Z",
+        inputJson = """{"hour":8,"minute":0,"message":"Hit the gym"}""",
+        summary = "Handed off an 8:00 AM alarm to the clock app.",
+    )
+
+    val alarmNoMessage = alarmCall(
+        ts = "2026-07-01T10:00:12Z",
+        inputJson = """{"hour":18,"minute":45}""",
+        summary = "Handed off a 6:45 PM alarm to the clock app.",
+    )
+
+    /** A registered id whose args are the wrong SHAPE - model output is a black box, so this path
+     * is real, not theoretical. Must render the generic card, never a half-empty alarm. */
+    val alarmBadArgs = alarmCall(
+        ts = "2026-07-01T10:00:13Z",
+        inputJson = """{"hour":"tomorrow morning"}""",
+        summary = "Set an alarm.",
+    )
+
+    /**
+     * What a tool added to `PromotedTools` with no ui/ renderer YET would look like - the id is
+     * humanized into the header and the backend's summary carries the payload. This is the fixture
+     * that keeps the "add an id, get a working card for free" promise honest, so it deliberately
+     * uses a REAL catalog tool (`device_set_timer`, `DeviceToolCatalog`) that is simply not
+     * allowlisted today - an invented id would prove nothing about the next card anyone actually adds.
+     */
+    val unregistered = ToolCall(
+        toolId = "device_set_timer",
+        operation = "write",
+        inputJson = Json.parseToJsonElement("""{"seconds":600,"label":"Pasta"}"""),
+        summary = "Started a 10-minute timer.",
+        success = true,
+        detail = "ok",
+        error = null,
+        model = null,
+        ts = "2026-07-01T10:00:14Z",
+        key = "tool_result:2026-07-01T10:00:14Z:device_set_timer",
+    )
+
+    private fun alarmCall(ts: String, inputJson: String, summary: String) = ToolCall(
+        toolId = "device_set_alarm",
+        operation = "write",
+        inputJson = Json.parseToJsonElement(inputJson),
+        summary = summary,
+        success = true, // the reducer only ever promotes a SUCCESSFUL call
+        detail = "ok",
+        error = null,
+        model = null,
+        ts = ts,
+        // Derived, never hand-passed alongside a separate ts: the real key IS a function of the ts
+        // (TranscriptReducer builds "tool_result:{ts}:{toolId}"), and letting the two be supplied
+        // independently is how a fixture ends up with three distinct keys all stamped one timestamp.
+        key = "tool_result:$ts:device_set_alarm",
+    )
 }
 
 /** Same 3-call shape as [FakeChatState] (success/rich-input, failure/error, success/null-input) -
@@ -283,10 +363,12 @@ private object ToolCallGroupPreview {
 /**
  * Covers the full [ChatItem] vocabulary (task W2-A verify step) in one scripted transcript:
  * - turn 1 (completed, first) -> shows the disclaimer, NOT the action row (not the last completed turn)
- * - one [ChatItem.ToolCallGroup] (Gitea #177 W1-B) covering all three [ToolCall] shapes: success
+ * - one [ChatItem.ToolCallGroup] covering all three [ToolCall] shapes: success
  *   with rich JSON input, failure with an error, and a null-input call
  * - both [ChatItem.AgentChip] states (terminal-success + still in-progress)
  * - [ChatItem.TodoList] (Plan card)
+ * - a [ChatItem.ToolCard] (promoted `device_set_alarm` action card) as a turn's WHOLE response -
+ *   directly under its user bubble, with no assistant prose after it
  * - a `pending` [ChatItem.UserBubble] (queued-send 70% opacity, spec §6.12)
  * - turn 2 (completed, LAST completed) -> shows the action row, with [ChatUiState.speakingKey] set
  *   to it so the read-aloud active state (accentPrimary tint + surfaceIconScrim circle) is visible
@@ -346,6 +428,74 @@ private object FakeChatState {
                     ChatTodoItem(label = "Summarize both for the user", status = "pending"),
                 ),
                 ts = "2026-07-01T10:00:06Z",
+            ),
+            // A promoted tool's turn, stacked the way the reducer REALLY emits it: bubble -> card ->
+            // prose. The card does NOT replace the narration (the wire sends exactly one `assistant`
+            // per turn and the reducer never drops it, DESIGN.md §6) - this fixture must keep showing
+            // the prose, or the gallery teaches the next card's author a turn shape that does not
+            // exist. Sitting directly under a user bubble it also proves ChatTranscript's
+            // isChipFamily gap covers ChatItem.ToolCard - miss that and it renders flush at 0dp.
+            ChatItem.UserBubble(
+                text = "Set an alarm for 8am to hit the gym",
+                ts = "2026-07-01T10:00:11Z",
+                key = "user:alarm",
+            ),
+            ChatItem.ToolCard(call = ToolCardPreview.alarm, key = "toolcard:${ToolCardPreview.alarm.key}"),
+            ChatItem.AssistantMessage(
+                text = "Alarm set for 8:00 AM — the request was handed off to your clock app.",
+                isStreaming = false,
+                ts = "2026-07-01T10:00:12Z",
+                key = "assistant:alarm",
+            ),
+            // A PENDING ask-user question: a single-select with options + a free-text
+            // question, its own Submit. The interactive card the agent blocks on.
+            ChatItem.UserBubble(
+                text = "Help me wire up authentication",
+                ts = "2026-07-01T10:00:13Z",
+                key = "user:q1",
+            ),
+            ChatItem.Question(
+                callId = "q-preview-1",
+                callToken = "tok-1",
+                questions = listOf(
+                    UiQuestion(
+                        header = "Auth method",
+                        question = "Which authentication method should I wire up?",
+                        options = listOf(
+                            UiQuestionOption(label = "OAuth 2.0 (Recommended)", description = "Delegated login via an identity provider"),
+                            UiQuestionOption(label = "API keys", description = "Static per-client tokens"),
+                            UiQuestionOption(label = "Session cookies", description = null),
+                        ),
+                        multiSelect = false,
+                    ),
+                    UiQuestion(header = "Notes", question = "Anything else I should know?", options = emptyList(), multiSelect = false),
+                ),
+                resolution = null,
+                ts = "2026-07-01T10:00:14Z",
+                key = "question:q-preview-1",
+            ),
+            // A SETTLED ask-user question answered on ANOTHER surface — read-only, no error residue.
+            ChatItem.UserBubble(text = "Which database?", ts = "2026-07-01T10:00:15Z", key = "user:q2"),
+            ChatItem.Question(
+                callId = "q-preview-2",
+                callToken = "tok-2",
+                questions = listOf(
+                    UiQuestion(
+                        header = "Database",
+                        question = "Which database should I target?",
+                        options = listOf(
+                            UiQuestionOption(label = "PostgreSQL", description = null),
+                            UiQuestionOption(label = "SQLite", description = null),
+                        ),
+                        multiSelect = false,
+                    ),
+                ),
+                resolution = QuestionResolution.Answered(
+                    answers = listOf(UiAnswer(selectedIndexes = listOf(0), text = null)),
+                    answeredVia = "console",
+                ),
+                ts = "2026-07-01T10:00:16Z",
+                key = "question:q-preview-2",
             ),
             ChatItem.UserBubble(
                 text = "Can you also check flight prices?",

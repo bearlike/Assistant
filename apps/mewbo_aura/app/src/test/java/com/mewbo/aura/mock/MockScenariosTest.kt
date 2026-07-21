@@ -1,7 +1,10 @@
 package com.mewbo.aura.mock
 
+import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.data.model.SessionEvent
+import com.mewbo.aura.data.model.TranscriptReducer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The actual value of this test file (per the #181-follow-up task brief): every scripted
+ * The actual value of this test file (per the follow-up task brief): every scripted
  * [MockScenarios] frame round-trips through the REAL [SessionEvent.decode] - the same parser
  * `SessionStreamClient` uses on a genuine SSE connection. A scenario frame that silently decoded to
  * [SessionEvent.Unknown] (a typo'd `type`, a wrong `@SerialName`) would still "work" on-device (the
@@ -90,11 +93,63 @@ class MockScenariosTest {
     }
 
     @Test
-    fun `forQuery selects by keyword - error and long override the happyPath default`() {
+    fun `forQuery selects by keyword - error, long, alarm and widget override the happyPath default`() {
         assertEquals(MockScenarios.errorScenario, MockScenarios.forQuery("please trigger an ERROR"))
         assertEquals(MockScenarios.longResponse, MockScenarios.forQuery("give me a LONG reply"))
+        assertEquals(MockScenarios.alarmScenario, MockScenarios.forQuery("set an ALARM for 8am"))
+        assertEquals(MockScenarios.widgetScenario, MockScenarios.forQuery("show me a WIDGET"))
         assertEquals(MockScenarios.happyPath, MockScenarios.forQuery("hello there"))
         assertEquals(MockScenarios.happyPath, MockScenarios.forQuery(""))
+    }
+
+    /**
+     * The widget scenario is the only scripted path to the stlite WebView card -
+     * pinned end-to-end through the REAL decoder AND reducer so a wire-field or `WidgetFiles` drift
+     * fails here rather than silently rendering nothing on-device. Round-tripping the two-file bundle
+     * is exactly what catches a `files` shape the real backend never sends.
+     */
+    @Test
+    fun `widgetScenario decodes to a WidgetReady and folds to a Widget item above the narration`() {
+        val decoded = decodeAll(MockScenarios.widgetScenario)
+        decoded.forEach { event -> assertFalse("frame decoded to Unknown: $event", event is SessionEvent.Unknown) }
+
+        val items = TranscriptReducer.reduce(decoded)
+        val widget = items.filterIsInstance<ChatItem.Widget>().single()
+        assertTrue("app.py must carry the streamlit script", widget.appPy.contains("import streamlit"))
+        assertTrue("data.json must be present", widget.dataJson.isNotBlank())
+        val widgetIndex = items.indexOf(widget)
+        val replyIndex = items.indexOfFirst { it is ChatItem.AssistantMessage }
+        assertTrue("widget must render above the narration", widgetIndex < replyIndex)
+    }
+
+    /**
+     * The alarm scenario is the only scripted path to a promoted-tool action card, so it is pinned
+     * end-to-end through the REAL decoder AND the REAL reducer - not just "does it decode". This is
+     * what makes the action card verifiable without a live backend (and without spending tokens):
+     * if the promotion gate, the wire field names, or `ToolCall.success` ever drift, this fails here
+     * rather than silently rendering the generic fold on-device.
+     */
+    @Test
+    fun `alarmScenario promotes to a ToolCard and still renders above the narration`() {
+        val decoded = decodeAll(MockScenarios.alarmScenario)
+        decoded.forEach { event -> assertFalse("frame decoded to Unknown: $event", event is SessionEvent.Unknown) }
+
+        val items = TranscriptReducer.reduce(decoded)
+        val card = items.filterIsInstance<ChatItem.ToolCard>().single()
+        assertEquals("device_set_alarm", card.call.toolId)
+        assertTrue("a promoted call must have succeeded", card.call.success)
+
+        // tool_input must survive as a JSON OBJECT - a stringified input would parse to null and
+        // silently degrade the alarm to the generic fallback card (see MockScenarios.alarmScenario).
+        val args = card.call.inputJson as JsonObject
+        assertEquals("8", args["hour"]?.jsonPrimitive?.content)
+        assertEquals("0", args["minute"]?.jsonPrimitive?.content)
+
+        // Never folded into the generic group, and never below the reply (activity-precedes-narration).
+        assertTrue("promoted call must not also fold into a group", items.none { it is ChatItem.ToolCallGroup })
+        val cardIndex = items.indexOf(card)
+        val replyIndex = items.indexOfFirst { it is ChatItem.AssistantMessage }
+        assertTrue("action card must render above the narration", cardIndex < replyIndex)
     }
 
     @Test

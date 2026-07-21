@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
 
@@ -66,6 +67,8 @@ class SkillSpec:
     description: str
     source_path: str
     source: str  # "personal" or "project"
+    # Three-state: None = unrestricted, [] = grants nothing, non-empty = exactly
+    # those. Every consumer must test it with ``is None``, never truthiness.
     allowed_tools: list[str] | None = None
     disable_model_invocation: bool = False
     user_invocable: bool = True
@@ -75,6 +78,90 @@ class SkillSpec:
     body: str = ""
     mtime: float = 0.0
     requires_capabilities: tuple[str, ...] = ()
+    # Executables the skill's instructions drive. Absent ⇒ nothing to probe, so
+    # a skill that declares none is advertised exactly as before.
+    requires_binaries: tuple[str, ...] = ()
+
+
+class SkillBinaryProbe:
+    """Availability check for the executables a skill declares.
+
+    A skill advertised to a run whose backing binary is absent is not free: the
+    model selects it, follows instructions that shell out, and gets a
+    not-found error it has no way to fix — steps spent on a capability the
+    deployment does not have. The probe gates ADVERTISEMENT for exactly that
+    reason; an explicit lookup by name is left alone, so a caller who asks for a
+    skill by name still gets it and sees the real failure.
+
+    The check is a PATH lookup, not a subprocess: it has to be cheap enough to
+    sit in front of a catalog that renders on every LLM step. That per-step read
+    is what the cache absorbs.
+
+    **Cache lifetime is ONE turn, not the process.** The availability map is
+    cleared by `refresh()`, which `SkillRegistry.maybe_reload` calls once per run
+    — the same per-turn seam that already re-scans the filesystem for changed
+    skills. So the many per-step catalog renders inside a turn reuse the probe,
+    while a binary installed into a long-running server (the API runs for days)
+    is picked up on the NEXT turn rather than being cached absent until restart.
+    The negative result is therefore never cached forever. `_REPORTED` is NOT
+    cleared per turn — it dedups the "withheld, binary absent" log to once per
+    (skill, binary) for the process, which is the whole point of it; re-probing
+    a still-absent binary each turn must not re-log.
+    """
+
+    _CACHE: ClassVar[dict[str, bool]] = {}
+    # One report per (skill, binary) for the PROCESS: a permanently absent binary
+    # would otherwise log every turn, since ``refresh`` re-probes it each turn.
+    _REPORTED: ClassVar[set[tuple[str, str]]] = set()
+
+    @classmethod
+    def available(cls, binary: str) -> bool:
+        """True when *binary* resolves on PATH (or is an executable path)."""
+        cached = cls._CACHE.get(binary)
+        if cached is None:
+            cached = shutil.which(binary) is not None
+            cls._CACHE[binary] = cached
+        return cached
+
+    @classmethod
+    def missing_for(cls, skill: SkillSpec) -> tuple[str, ...]:
+        """Return the declared binaries *skill* needs that are not installed."""
+        return tuple(b for b in skill.requires_binaries if not cls.available(b))
+
+    @classmethod
+    def satisfied(cls, skill: SkillSpec) -> bool:
+        """True when every binary *skill* declares is available."""
+        missing = cls.missing_for(skill)
+        if not missing:
+            return True
+        for binary in missing:
+            key = (skill.name, binary)
+            if key not in cls._REPORTED:
+                cls._REPORTED.add(key)
+                logging.info(
+                    "Skill '{}' withheld: required binary '{}' not found on PATH",
+                    skill.name,
+                    binary,
+                )
+        return False
+
+    @classmethod
+    def refresh(cls) -> None:
+        """Drop only the availability map so the next probe re-reads PATH.
+
+        The per-turn re-check. Keeps ``_REPORTED`` so a still-absent binary that
+        is re-probed this turn does not re-log.
+        """
+        cls._CACHE.clear()
+
+    @classmethod
+    def reset_cache(cls) -> None:
+        """Hard reset of both the availability map and the log-dedup set.
+
+        For tests and a full re-probe of a changed environment.
+        """
+        cls._CACHE.clear()
+        cls._REPORTED.clear()
 
 
 # ------------------------------------------------------------------
@@ -188,12 +275,21 @@ def _parse_skill_file(
     scalar_form: str = _raw_scalar if isinstance(_raw_scalar, str) else ""
     requires_capabilities = parse_capabilities([*list_form, scalar_form])
 
+    # Binary gating — same two-key list/scalar contract, same parser.
+    _raw_bins = meta.get("requires-binaries")
+    bin_list: list = _raw_bins if isinstance(_raw_bins, list) else []
+    _raw_bin = meta.get("requires-binary")
+    bin_scalar: str = _raw_bin if isinstance(_raw_bin, str) else ""
+    requires_binaries = parse_capabilities([*bin_list, bin_scalar])
+
     return SkillSpec(
         name=name,
         description=description,
         source_path=str(path),
         source=source,
-        allowed_tools=allowed_tools or None,
+        # Three-state: an explicit ``allowed-tools: []`` stays ``[]`` (grants
+        # nothing) rather than collapsing into the unrestricted ``None``.
+        allowed_tools=allowed_tools,
         disable_model_invocation=bool(meta.get("disable-model-invocation", False)),
         user_invocable=bool(meta.get("user-invocable", True)),
         context=str(meta["context"]) if meta.get("context") else None,
@@ -202,6 +298,7 @@ def _parse_skill_file(
         body=body,
         mtime=mtime,
         requires_capabilities=requires_capabilities,
+        requires_binaries=requires_binaries,
     )
 
 
@@ -267,21 +364,32 @@ def _discover_subtree_skills(
 
     Subtree skills do **not** override personal or project-root skills.
     """
+    def _prune(parent: str, name: str) -> bool:
+        """Whether to skip *name* under *parent* during the walk.
+
+        Prunes NESTED PROJECT BOUNDARIES: a child carrying its own ``.git`` is a
+        separate repo/submodule, so descending into it would harvest an
+        unrelated project's skills (cross-project leakage — e.g. sibling repos
+        under a shared parent like ``~/Projects``). An UNREADABLE child (a
+        root-owned container data dir, a foreign mount) prunes too: a directory
+        we cannot stat is not a project of ours, and a permission error must
+        never abort the whole scan — discovery degrades, it does not crash.
+        """
+        try:
+            return (Path(parent) / name / ".git").exists()
+        except OSError:
+            return True
+
     for dirpath, dirnames, _filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root)
         depth = len(rel.parts)
-        # Prune non-project dirs (must happen before any continue). Also stop at
-        # NESTED PROJECT BOUNDARIES: a child carrying its own ``.git`` is a
-        # separate repo/submodule, so descending into it would harvest an
-        # unrelated project's skills (cross-project leakage — e.g. sibling repos
-        # under a shared parent like ``~/Projects``). Skill discovery is scoped
-        # to the current project tree + personal/global skills only.
+        # Prune non-project dirs (must happen before any continue).
         dirnames[:] = [
             d
             for d in dirnames
             if not d.startswith(".")
             and d not in ("node_modules", "__pycache__", ".venv", "venv")
-            and not (Path(dirpath) / d / ".git").exists()
+            and not _prune(dirpath, d)
         ]
         if depth > max_depth:
             dirnames.clear()
@@ -347,8 +455,18 @@ class SkillRegistry:
         return list(self._skills.values())
 
     def visible_for(self, session_capabilities: Iterable[str]) -> list[SkillSpec]:
-        """Return skills visible given the session's advertised capabilities."""
-        return filter_by_capabilities(self._skills.values(), session_capabilities)
+        """Return skills advertisable for the session.
+
+        The ONE advertisement seam — both catalogs (model-facing and
+        user-facing) resolve through it — so the two gates apply exactly once:
+        the session must have advertised the skill's capabilities, and every
+        binary the skill declares must actually be installed
+        (:class:`SkillBinaryProbe`). :meth:`get` deliberately does NOT gate on
+        the probe: naming a skill outright is a decision already made, and a
+        real error beats a skill that silently does not exist.
+        """
+        eligible = filter_by_capabilities(self._skills.values(), session_capabilities)
+        return [s for s in eligible if SkillBinaryProbe.satisfied(s)]
 
     def list_user_invocable(self, session_capabilities: Iterable[str] = ()) -> list[SkillSpec]:
         """List skills available for user slash-command invocation."""
@@ -374,6 +492,11 @@ class SkillRegistry:
 
         Returns True if any skills were reloaded.
         """
+        # Re-probe binary availability this turn: this is the once-per-run seam,
+        # so a binary installed into a long-running process is picked up on the
+        # next turn instead of being cached absent until restart. Cheaper than
+        # the filesystem re-scan below, which already runs here every turn.
+        SkillBinaryProbe.refresh()
         changed = False
         # Check existing skills for mtime changes.
         for name, spec in list(self._skills.items()):
@@ -483,6 +606,12 @@ def _preprocess_shell(body: str) -> str:
     """
 
     def _run(match: re.Match[str]) -> str:
+        # shell=True runs a command an author wrote inside a skill's !`…` block: SKILL.md
+        # is trusted, version-controlled authored content (the same authored-shell model
+        # as slash-command bash blocks), not runtime input. $ARGUMENTS is substituted into
+        # the body before this preprocessing runs, so an author who interpolates args into
+        # a !`…` block owns that composition — quoting here would break the authored-shell
+        # feature, not close a hole.
         cmd = match.group(1)
         try:
             result = subprocess.run(
@@ -536,7 +665,9 @@ def activate_skill(
 
     # Tool scoping.
     scoped_specs: list[ToolSpec] | None = None
-    if skill.allowed_tools and tool_specs is not None:
+    # ``is not None`` so a skill declaring ``allowed-tools: []`` scopes to
+    # nothing instead of falling through to the unscoped branch below.
+    if skill.allowed_tools is not None and tool_specs is not None:
         from mewbo_core.tool_registry import filter_specs
 
         scoped_specs = filter_specs(tool_specs, allowed=skill.allowed_tools)
@@ -548,6 +679,7 @@ def activate_skill(
 
 __all__ = [
     "ACTIVATE_SKILL_SCHEMA",
+    "SkillBinaryProbe",
     "SkillRegistry",
     "SkillSpec",
     "activate_skill",

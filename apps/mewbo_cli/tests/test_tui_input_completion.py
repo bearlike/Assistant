@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the pure CompletionEngine (issue #155, epic #149).
+"""Tests for the pure CompletionEngine.
 
 The engine is UI-free, so these are plain unit tests: feed (text, cursor) and a
 candidate source, assert the ranked typed candidates.
@@ -101,7 +101,7 @@ def test_file_path_segment_match():
 
 
 def test_file_path_segment_highlights_correct_segment():
-    # Regression (C1): "app" appears both inside the first component ("xapp")
+    # Regression: "app" appears both inside the first component ("xapp")
     # and as a whole second segment. The path-segment match must highlight the
     # REAL segment ("xapp/[app]/file.py" -> offsets 5..8), not the earlier
     # substring inside "x[app]".

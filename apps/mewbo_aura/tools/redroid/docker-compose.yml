@@ -1,9 +1,22 @@
+# Both services are RESOURCE-CAPPED. An uncapped redroid inherits the whole host
+# (privileged, no cgroup limit) and a runaway inside Android — SwiftShader software
+# rendering, a boot loop, a leaking app — will swap the host to death rather than die
+# itself. Caps make the container the thing that fails, not the workstation.
+# `memswap_limit == mem_limit` is the load-bearing half: it denies the container ANY
+# swap, so overrun is a fast in-container OOM (Android's lowmemorykiller reaps it)
+# instead of host-wide swap thrash, which is what actually locks up the desktop.
+# Sized from measured idle (AOSP ~1.1G / GMS ~1.6G, ~1000 PIDs each) + headroom for
+# app + software-GPU rendering. Raise a cap only against an observed OOM, never "to be safe".
 services:
   redroid:
     image: redroid/redroid:13.0.0-latest
     container_name: aura-redroid
     privileged: true            # required: binder/ashmem access
     restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g           # == mem_limit ⇒ no swap; see header
+    pids_limit: 4096            # idles ~1000; bounds a fork storm
     volumes:
       - ./data:/data            # persists app + system state across restarts
     ports:
@@ -14,7 +27,7 @@ services:
     command:
       - androidboot.redroid_width=1440
       - androidboot.redroid_height=3120
-      - androidboot.redroid_dpi=560   # Pixel-7-Pro-like geometry
+      - androidboot.redroid_dpi=560   # Pixel-like geometry
       # Android-side DNS = Docker's embedded resolver: resolves compose service
       # names (http://api:5125) AND forwards LAN names via the host's resolver.
       - androidboot.redroid_net_ndns=1
@@ -41,6 +54,10 @@ services:
     profiles: ["gms"]
     privileged: true            # required: binder/ashmem access
     restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 4g               # 1g over the AOSP cap: Play Services + the Gemini app
+    memswap_limit: 4g           # == mem_limit ⇒ no swap; see header
+    pids_limit: 4096
     volumes:
       - ./data-gms:/data        # separate state from the AOSP service
     ports:
@@ -51,7 +68,7 @@ services:
     command:
       - androidboot.redroid_width=1440
       - androidboot.redroid_height=3120
-      - androidboot.redroid_dpi=560   # Pixel-7-Pro-like geometry
+      - androidboot.redroid_dpi=560   # Pixel-like geometry
       - androidboot.redroid_net_ndns=1
       - androidboot.redroid_net_dns1=127.0.0.11
 

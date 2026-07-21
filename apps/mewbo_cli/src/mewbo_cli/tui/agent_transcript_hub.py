@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AgentTranscriptHub — the single, order-preserving transcript source (issue #161).
+"""AgentTranscriptHub — the single, order-preserving transcript source.
 
 Mewbo core emits ONE shared, agent-tagged event stream: every event carries
 ``agent_id`` / ``depth`` (and ``parent_id`` on ``sub_agent`` lifecycle events).
@@ -39,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
+from mewbo_cli.cli_notices import derive_task_outcome
 from mewbo_cli.tui.seams import TranscriptItem
 from mewbo_cli.tui.status.throughput_meter import ThroughputMeter, ThroughputState
 from mewbo_cli.tui.turn_engine import build_tool_payload
@@ -143,7 +144,7 @@ class AgentTranscript:
     # The authoritative live todo list this agent last emitted (``todos`` event);
     # None until it calls ``update_todos`` (todos are never fabricated).
     todos: TodoState | None = None
-    # Live phase / tok-s / stall meter, fed from the ingest points (#173). Set
+    # Live phase / tok-s / stall meter, fed from the ingest points. Set
     # once in ``_get`` from the hub's meter factory.
     meter: ThroughputMeter | None = None
     # internal: the currently-open text span (None when no span is streaming)
@@ -180,7 +181,7 @@ class FleetRow:
     is_root: bool
     # Live throughput snapshot (phase / tok-s / stall) for this agent, or None
     # when the agent has no meter yet. The fleet row renders a terse facet from
-    # it — chiefly a STALL, the sub-agent-hang case (#173).
+    # it — chiefly a STALL, the sub-agent-hang case.
     throughput: ThroughputState | None = None
 
     @property
@@ -744,8 +745,21 @@ class AgentTranscriptHub:
             return
         done_reason = payload.get("done_reason")
         if isinstance(done_reason, str):
-            root.status = "completed" if done_reason == "completed" else done_reason
-            if root.status in _TERMINAL_STATES and root.stopped_at is None:
+            # Honest derivation, not a passthrough: a run that hit an
+            # unrecovered repo/network/permission/quota wall still completes
+            # with ``done_reason == "completed"`` and carries the wall
+            # separately as ``blocked_code`` — reading ``done_reason`` alone
+            # rendered that as a green success. ``derive_task_outcome`` folds
+            # in ``blocked_code`` and maps halt/verification-failure reasons
+            # onto the same ``unmet_goal`` the console shows.
+            root.status = derive_task_outcome(done_reason, payload.get("blocked_code"))
+            # A completion event fires exactly once per turn's true end
+            # (including a park like ``awaiting_approval``), so it always
+            # marks this stamp — not just when the result happens to land in
+            # the hypervisor's 4-state vocabulary (``_TERMINAL_STATES``),
+            # which ``root.status`` no longer speaks now that it carries the
+            # session-status vocabulary instead.
+            if root.stopped_at is None:
                 root.stopped_at = self._clock()
         if root.open_span is None and not any(
             isinstance(e, TextSpan) for e in root.entries

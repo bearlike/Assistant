@@ -40,14 +40,57 @@ class SessionStoreBase(abc.ABC):
 
     root_dir: str  # local directory — always present (used for attachment files)
 
+    def __init__(self) -> None:
+        """Initialise the in-memory termination cache shared by every backend.
+
+        Populated by :meth:`_mark_terminated_cached` (called from each
+        backend's ``terminate_session``) and consulted by
+        :meth:`_guard_append`, so a hot-path append never pays a Mongo
+        round-trip / index-file read to learn whether its own session was
+        just terminated. Best-effort and per-process only: a session
+        terminated by a DIFFERENT process/worker is still caught by the
+        durable ``terminated_at`` stamp at every other termination-aware seam
+        (``resolve_session``, recovery) — this cache only shortcuts the
+        common same-process race between a live run and a concurrent
+        ``/terminate`` call.
+        """
+        self._terminated_cache: set[str] = set()
+        self._terminated_logged: set[str] = set()
+
+    def _mark_terminated_cached(self, session_id: str) -> None:
+        """Record *session_id* as terminated in the in-memory cache."""
+        self._terminated_cache.add(session_id)
+
+    def _guard_append(self, session_id: str) -> bool:
+        """Return True iff *session_id* may still accept an appended event.
+
+        Consults ONLY the in-memory cache (never a store round-trip) — see
+        :meth:`__init__`. Structured-logs once per session (not once per
+        dropped event) the first time an append is refused.
+        """
+        if session_id not in self._terminated_cache:
+            return True
+        if session_id not in self._terminated_logged:
+            self._terminated_logged.add(session_id)
+            logging.warning("Dropping event(s) appended to terminated session {}.", session_id)
+        return False
+
     # -- abstract primitives ------------------------------------------------
 
     @abc.abstractmethod
-    def create_session(self) -> str:
-        """Create a new session and return its identifier."""
+    def create_session(self, owner: str | None = None) -> str:
+        """Create a new session and return its identifier.
+
+        *owner* is an OPAQUE subject string, never an identity object: core sits
+        below the identity kernel in the dependency DAG and must not learn what a
+        principal is. The caller that HAS one resolves it to a string first.
+        ``None`` means unowned, which is what every session created without an
+        authenticated caller is — see :meth:`list_sessions` for what that implies
+        on the read side.
+        """
 
     @abc.abstractmethod
-    def ensure_session(self, session_id: str) -> None:
+    def ensure_session(self, session_id: str, owner: str | None = None) -> None:
         """Idempotently materialise a session RECORD for a known id.
 
         ``create_session`` mints its own uuid; some callers (the realtime
@@ -60,11 +103,46 @@ class SessionStoreBase(abc.ABC):
         This is the seam that closes that gap. It is idempotent — calling it on
         an existing session is a no-op (never resets created_at / archived state).
         ``create_session`` is implemented on top of it (mint id → materialise).
+
+        The owner stamp is SET-ONCE at materialisation, like ``created_at`` and
+        unlike ``archived_at``: a replay must not be able to re-point an existing
+        session at a different subject, which would be an ownership takeover
+        written through an idempotent no-op path.
         """
 
     @abc.abstractmethod
+    def _write_event(self, session_id: str, event: Event) -> None:
+        """Durably write *event*, unconditionally (no termination guard).
+
+        The shared primitive :meth:`append_event` (guarded) and
+        :meth:`append_terminal_event` (the termination tombstone's one
+        exemption) both write through — the actual per-backend I/O
+        (file append / Mongo insert) plus the ``_publish_appended`` fan-out.
+        """
+
     def append_event(self, session_id: str, event: Event) -> None:
-        """Append a single event record to the session transcript."""
+        """Append a single event record to the session transcript.
+
+        No-ops (after a dropped-event log, once per session) once
+        :meth:`terminate_session` has stamped this session terminated — see
+        :meth:`_guard_append`. The ONE deliberate exception is
+        :meth:`append_terminal_event`, used for the termination tombstone
+        itself.
+        """
+        if not self._guard_append(session_id):
+            return
+        self._write_event(session_id, event)
+
+    def append_terminal_event(self, session_id: str, event: Event) -> None:
+        """Append an event exempt from the termination guard.
+
+        ``SessionRuntime.terminate_session`` writes the ``session_terminated``
+        tombstone through this seam immediately after the store's own
+        ``terminate_session`` has already cached the session as terminated —
+        an ordinary :meth:`append_event` call would otherwise drop its own
+        closing event. No other caller should use this.
+        """
+        self._write_event(session_id, event)
 
     @abc.abstractmethod
     def load_transcript(self, session_id: str) -> list[EventRecord]:
@@ -87,8 +165,34 @@ class SessionStoreBase(abc.ABC):
         """Load a previously saved title, if present."""
 
     @abc.abstractmethod
-    def list_sessions(self) -> list[str]:
-        """List all session IDs."""
+    def list_sessions(self, owner: str | None = None) -> list[str]:
+        """List session IDs, optionally narrowed to what *owner* may see.
+
+        ``owner=None`` lists EVERYTHING — the historical behaviour, and what a
+        caller holding a read-all authority (or no identity at all) gets.
+
+        A non-``None`` *owner* narrows to that subject's own sessions PLUS every
+        UNOWNED one. Unowned is not a hole in the filter, it is the migration
+        semantic: sessions predating the owner stamp carry no subject, and no
+        subject can be reconstructed for them after the fact. Hiding them would
+        make a user's existing work vanish from their own list, which is a worse
+        failure than showing a pre-existing session to someone who could already
+        list it before the stamp existed. The unowned set is closed and shrinking
+        — every session created by an authenticated caller from here on is
+        stamped — so this is a fading allowance, not a permanent widening.
+
+        Filtering belongs HERE rather than at the caller: the store already walks
+        the record set, so narrowing at the route would mean loading every
+        session's metadata only to discard most of it.
+        """
+
+    @abc.abstractmethod
+    def get_owner(self, session_id: str) -> str | None:
+        """Return the owning subject, or ``None`` if the session is unowned.
+
+        The read-through sibling of the stamp ``ensure_session`` writes, mirroring
+        how ``is_archived`` reads ``archive_session``'s write.
+        """
 
     @abc.abstractmethod
     def session_dir(self, session_id: str) -> str:
@@ -126,6 +230,40 @@ class SessionStoreBase(abc.ABC):
     @abc.abstractmethod
     def is_archived(self, session_id: str) -> bool:
         """Return True if a session is archived."""
+
+    @abc.abstractmethod
+    def terminate_session(self, session_id: str) -> bool:
+        """Permanently mark a session terminated (irreversible).
+
+        Stamps ``terminated_at`` **once** — a repeat call never moves the
+        original timestamp. There is deliberately NO un-terminate primitive:
+        termination is a one-way door. Mirrors
+        ``archive_session`` but without the reverse operation.
+
+        Returns ``True`` iff THIS call was the one that newly stamped the
+        timestamp, ``False`` if the session was already terminated. This is
+        the arbitration signal ``SessionRuntime.terminate_session`` reads to
+        run its side effects (cancel + callbacks + event) exactly once even
+        under concurrent callers — the store's set-once write is the only
+        thing racing safely, so the runtime must never decide on its own
+        unlocked read.
+        """
+
+    @abc.abstractmethod
+    def get_terminated_at(self, session_id: str) -> str | None:
+        """Return the ISO ``terminated_at`` timestamp, or ``None`` if live.
+
+        The read-through sibling of :meth:`terminate_session` (mirrors how
+        ``is_archived`` reads ``archive_session``'s write).
+        """
+
+    def is_terminated(self, session_id: str) -> bool:
+        """Return True iff a session was permanently terminated.
+
+        Concrete over :meth:`get_terminated_at` so both backends share one
+        implementation — the single derivation every termination guard reads.
+        """
+        return self.get_terminated_at(session_id) is not None
 
     @abc.abstractmethod
     def truncate_after(self, session_id: str, cutoff_ts: str) -> int:
@@ -175,12 +313,40 @@ class SessionStoreBase(abc.ABC):
         """Return the session's merged context (most-recent context event wins)."""
         return self.merge_context_events(self.load_transcript(session_id))
 
-    def fork_session(self, source_session_id: str) -> str:
-        """Create a new session by copying events, summary, and title from another."""
+    def last_attestation_hash(self, session_id: str) -> str:
+        """Return the attestation chain's head to re-seed on recovery.
+
+        Concrete default over :meth:`load_transcript`: scans for the most
+        recent ``type == "attestation"`` event and returns its persisted
+        ``record_hash``, else the chain's genesis hash — mirrors the
+        ``tags_for_session`` concrete-default idiom so every backend shares
+        one scan; ``MongoSessionStore`` overrides with a targeted query.
+        """
+        from mewbo_core.attestation import GENESIS_HASH
+
+        for event in reversed(self.load_transcript(session_id)):
+            if event.get("type") != "attestation":
+                continue
+            payload = event.get("payload")
+            if isinstance(payload, dict):
+                record_hash = payload.get("record_hash")
+                if isinstance(record_hash, str) and record_hash:
+                    return record_hash
+        return GENESIS_HASH
+
+    def fork_session(self, source_session_id: str, owner: str | None = None) -> str:
+        """Create a new session by copying events, summary, and title from another.
+
+        The fork is stamped for whoever asked for it, NOT for the source's owner:
+        a fork is a new session that happens to start with a copy of a transcript.
+        Leaving it unstamped would be worse than either — an unowned fork of an
+        owned session is visible to every lister, so forking would launder a
+        session out of its owner's scope.
+        """
         events = self.load_transcript(source_session_id)
         summary = self.load_summary(source_session_id)
         title = self.load_title(source_session_id)
-        new_session_id = self.create_session()
+        new_session_id = self.create_session(owner)
         for event in events:
             self.append_event(new_session_id, event)
         if summary:
@@ -189,13 +355,15 @@ class SessionStoreBase(abc.ABC):
             self.save_title(new_session_id, title)
         return new_session_id
 
-    def fork_session_at(self, source_session_id: str, cutoff_ts: str) -> str:
+    def fork_session_at(
+        self, source_session_id: str, cutoff_ts: str, owner: str | None = None
+    ) -> str:
         """Fork a session, keeping only events with ``ts <= cutoff_ts``.
 
         Composes :meth:`fork_session` + :meth:`truncate_after` and clears the
         copied summary (which may reference events beyond the cutoff).
         """
-        new_id = self.fork_session(source_session_id)
+        new_id = self.fork_session(source_session_id, owner)
         self.truncate_after(new_id, cutoff_ts)
         self.save_summary(new_id, "")
         return new_id
@@ -272,6 +440,7 @@ class SessionStore(SessionStoreBase):
 
     def __init__(self, root_dir: str | None = None) -> None:
         """Initialize the store and ensure the root directory exists."""
+        super().__init__()
         if root_dir is None:
             root_dir = get_config_value("runtime", "session_dir", default="./data/sessions")
         self.root_dir = os.path.abspath(root_dir)
@@ -285,7 +454,7 @@ class SessionStore(SessionStoreBase):
         """Load the session index from disk or return defaults."""
         index_path = self._index_path()
         if not os.path.exists(index_path):
-            return {"tags": {}, "archived": {}}
+            return {"tags": {}, "archived": {}, "terminated": {}, "owners": {}}
         with open(index_path, encoding="utf-8") as handle:
             return json.load(handle)
 
@@ -294,20 +463,44 @@ class SessionStore(SessionStoreBase):
         with open(self._index_path(), "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
 
-    def create_session(self) -> str:
+    def create_session(self, owner: str | None = None) -> str:
         """Create a new session directory and return its identifier."""
         session_id = uuid.uuid4().hex
-        self.ensure_session(session_id)
+        self.ensure_session(session_id, owner)
         return session_id
 
-    def ensure_session(self, session_id: str) -> None:
+    def ensure_session(self, session_id: str, owner: str | None = None) -> None:
         """Idempotently create the session directory for a known id.
 
         For the filesystem driver a session "record" IS its directory (that's
         what :meth:`list_sessions` enumerates), so materialisation is a
         ``makedirs`` — ``exist_ok=True`` makes it a safe no-op on replay.
+
+        The owner lands in its own index bucket beside ``archived``/``terminated``
+        rather than in a per-session file, so the list filter costs one index read
+        instead of one stat per session.
+
+        The stamp is written ONLY when this call is the one that materialised the
+        record — the filesystem analogue of the Mongo driver's ``$setOnInsert``,
+        and the reason the directory's prior existence is checked before creating
+        it. Stamping on any call would make an ALREADY-UNOWNED session claimable
+        by whoever touched it next, and since an unowned session is visible to
+        every lister, that is not necessarily its creator. An unowned call never
+        writes at all, so a deployment with no identity configured leaves the
+        index exactly as it was.
         """
-        os.makedirs(self._paths(session_id).session_dir, exist_ok=True)
+        paths = self._paths(session_id)
+        already_materialised = os.path.isdir(paths.session_dir)
+        os.makedirs(paths.session_dir, exist_ok=True)
+        if owner is None or already_materialised:
+            return
+        index = self._load_index()
+        index.setdefault("owners", {})[session_id] = owner
+        self._save_index(index)
+
+    def get_owner(self, session_id: str) -> str | None:
+        """Return the stamped owning subject, or ``None`` if unowned."""
+        return self._load_index().get("owners", {}).get(session_id)
 
     def _paths(self, session_id: str) -> SessionPaths:
         """Build filesystem paths for a session."""
@@ -317,8 +510,8 @@ class SessionStore(SessionStoreBase):
         """Return the directory path for a session."""
         return self._paths(session_id).session_dir
 
-    def append_event(self, session_id: str, event: Event) -> None:
-        """Append a single event record to the session transcript."""
+    def _write_event(self, session_id: str, event: Event) -> None:
+        """Append a single event record to the session transcript, unconditionally."""
         paths = self._paths(session_id)
         os.makedirs(paths.session_dir, exist_ok=True)
         payload: EventRecord = {"ts": _utc_now(), **event}
@@ -390,15 +583,21 @@ class SessionStore(SessionStoreBase):
         title = data.get("title")
         return title if isinstance(title, str) and title else None
 
-    def list_sessions(self) -> list[str]:
-        """List all session IDs present in the root directory."""
+    def list_sessions(self, owner: str | None = None) -> list[str]:
+        """List session IDs in the root directory, narrowed to *owner* if given."""
         if not os.path.exists(self.root_dir):
             return []
-        return sorted(
+        session_ids = sorted(
             name
             for name in os.listdir(self.root_dir)
             if os.path.isdir(os.path.join(self.root_dir, name))
         )
+        if owner is None:
+            return session_ids
+        # One index read for the whole listing, not one per session. An id absent
+        # from the bucket is unowned and stays visible — see the base's contract.
+        owners = self._load_index().get("owners", {})
+        return [sid for sid in session_ids if owners.get(sid, owner) == owner]
 
     def tag_session(self, session_id: str, tag: str) -> None:
         """Associate a tag with a session ID for quick lookup."""
@@ -437,6 +636,27 @@ class SessionStore(SessionStoreBase):
         index = self._load_index()
         archived = index.get("archived", {})
         return session_id in archived
+
+    def terminate_session(self, session_id: str) -> bool:
+        """Stamp ``terminated_at`` in the index once (never overwrites).
+
+        Returns whether THIS call inserted the stamp — checked before the
+        write so a repeat call reports ``False`` without touching the file.
+        """
+        index = self._load_index()
+        terminated = index.setdefault("terminated", {})
+        if session_id in terminated:
+            self._mark_terminated_cached(session_id)
+            return False
+        terminated[session_id] = _utc_now()
+        self._save_index(index)
+        self._mark_terminated_cached(session_id)
+        return True
+
+    def get_terminated_at(self, session_id: str) -> str | None:
+        """Return the stored ``terminated_at`` timestamp, or ``None``."""
+        index = self._load_index()
+        return index.get("terminated", {}).get(session_id)
 
 
 # ---------------------------------------------------------------------------

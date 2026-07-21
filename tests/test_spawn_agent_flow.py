@@ -162,6 +162,22 @@ async def _spawn_non_blocking(
     return tool, ctx
 
 
+# The shape LiteLLM produced on a real 502 (mirrors tests/test_run_error.py's
+# fixture): an entire HTML document spliced into the exception message.
+# Hostname is fictional — this repository public-mirrors.
+_HTML_BODY = (
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+    "<title>502 Bad Gateway — proxy.git.example.com</title>\n"
+    "</head>\n<body>\n<h1>502 Bad Gateway</h1>\n"
+    "<p>The upstream server at internal-llm.git.example.com is unreachable.</p>\n"
+    "</body>\n</html>\n" + ("<!-- padding -->\n" * 400)
+)
+_BAD_GATEWAY_MESSAGE = (
+    "LLM call failed on all models (test-model): "
+    "litellm.BadGatewayError: BadGatewayError: OpenAIException - " + _HTML_BODY
+)
+
+
 # ---------------------------------------------------------------------------
 # _coerce_list
 # ---------------------------------------------------------------------------
@@ -430,12 +446,77 @@ class TestAgentTypeResolution:
         # Apply agent_def logic manually
         agent_def_got = agent_registry.get("scoped-agent")
         assert agent_def_got is not None
-        if agent_def_got.allowed_tools and "allowed_tools" not in args:
+        if agent_def_got.allowed_tools is not None and "allowed_tools" not in args:
             args["allowed_tools"] = agent_def_got.allowed_tools
 
         specs = tool._filter_tool_specs(args)
         ids = {s.tool_id for s in specs}
         assert ids == {"tool_a", "tool_c"}
+
+    def test_agent_def_with_an_empty_tools_list_gives_the_child_nothing(self):
+        """An AgentDef declaring ``tools: []`` must scope its child to no tools.
+
+        Unlike its siblings above, this drives the REAL ``run_async`` merge
+        rather than re-applying the production ``if`` in the test body — a copied
+        condition cannot catch a bug in the original, and the copies here were
+        still carrying the truthiness form this law replaced. Plugin-supplied
+        AgentDefs make the seam a trust boundary: a leaf declared with no tools
+        must not inherit the parent's whole spec set.
+        """
+
+        async def _test():
+            ctx = _make_root_ctx().child()  # depth=1 → blocking spawn
+            agent_registry = AgentRegistry()
+            agent_registry.register(
+                self._make_agent_def(name="toolless-agent", allowed_tools=[])
+            )
+            tool = SpawnAgentTool(
+                agent_context=ctx,
+                tool_registry=_make_registry("tool_a", "tool_b"),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+                agent_registry=agent_registry,
+            )
+
+            # Observe the real child loop; do not substitute for building it.
+            built: list = []
+            original_build_child = tool._build_child_loop
+
+            def _capturing_build_child(*args, **kwargs):
+                loop = original_build_child(*args, **kwargs)
+                built.append(loop)
+                return loop
+
+            tool._build_child_loop = _capturing_build_child
+
+            bound = MagicMock()
+            bound.ainvoke = AsyncMock(return_value=_text_response("done"))
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+
+                await tool.run_async(
+                    ActionStep(
+                        tool_id="spawn_agent",
+                        operation="set",
+                        tool_input={"task": "work", "agent_type": "toolless-agent"},
+                    )
+                )
+
+            assert built, "the spawn must have built a child loop"
+            # The child loop is always built with strict_tool_scope=True, under
+            # which the spawn gate is disabled ONLY by a non-None allowlist that
+            # omits the spawn family. So this single assertion proves the whole
+            # chain: the AgentDef's ``[]`` survived parsing, survived the merge,
+            # and reached the child as an empty list rather than as None — had it
+            # collapsed anywhere, delegation would be live here.
+            assert built[0]._spawn_agent_tool is None, (
+                "an AgentDef declaring no tools must not yield a delegating child"
+            )
+
+            await tool.await_lifecycle_managers(timeout=5.0)
+
+        asyncio.run(_test())
 
     def test_agent_type_denied_tools_applied(self):
         """agent_def.denied_tools applied when caller doesn't set denied_tools."""
@@ -506,9 +587,19 @@ class TestAdmissionControl:
 
 
 class TestModelValidationErrors:
-    """ERROR: model string returned when model not in allowed_models."""
+    """A model outside ``allowed_models`` moves the child, it does not kill it.
 
-    def test_error_model_returned_immediately(self):
+    This used to refuse the spawn outright. Refusing is the worse failure: an
+    AgentDef-pinned model the gateway will not serve then killed the child at
+    step 0 while the parent ran on healthily, and nothing upstream had ever
+    checked that model against what the deployment can actually serve. The
+    parent's own model is proven — it is what this agent is running on — so the
+    child runs there instead, and the substitution is surfaced rather than made
+    silently: a caller that pinned a model is owed the fact that it did not
+    get it.
+    """
+
+    def test_unavailable_model_falls_back_and_says_so(self):
         async def _test():
             ctx = _make_root_ctx()
             tool = _make_spawn_tool(ctx)
@@ -526,8 +617,12 @@ class TestModelValidationErrors:
                 )
                 result = await tool.run_async(step)
 
-            assert "ERROR:" in result.content
-            assert "bad-model" in result.content
+            body = json.loads(result.content)
+            # The spawn proceeds — no rejection, no ERROR payload.
+            assert body["status"] == "submitted"
+            # NO-SILENT-DROP: the refused model AND its replacement are named.
+            assert "bad-model" in body["model_fallback"]
+            assert "test-model" in body["model_fallback"]
 
         asyncio.run(_test())
 
@@ -681,6 +776,123 @@ class TestSubAgentExceptionHandling:
             assert parsed["status"] == "failed"
             assert "failed" in parsed["content"].lower() or "Synthetic" in parsed["content"]
             assert isinstance(parsed.get("warnings", []), list)
+
+        asyncio.run(_test())
+
+    def test_html_bodied_exception_yields_bounded_markup_free_result(self):
+        """A provider exception embedding an HTML error page must not leak raw
+        markup or an unbounded blob into the failed result — the exact incident
+        (a 5,887-char LiteLLM/upstream-502 page) `RunError` was built to close.
+        """
+
+        async def _test():
+            # Blocking spawn path (depth=1)
+            hv = _make_hypervisor()
+            ctx = AgentContext.root(
+                model_name="test-model",
+                max_depth=5,
+                registry=hv,
+            )
+            child_ctx = ctx.child()  # depth=1
+            tool = SpawnAgentTool(
+                agent_context=child_ctx,
+                tool_registry=_make_registry("shell_tool"),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            async def _explode(*args, **kwargs):
+                raise ValueError(_BAD_GATEWAY_MESSAGE)
+
+            bound = MagicMock()
+            bound.ainvoke = AsyncMock(side_effect=_explode)
+
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+
+                step = _step("risky work")
+                result = await tool.run_async(step)
+
+            parsed = json.loads(result.content)
+            assert parsed["status"] == "failed"
+            # Deterministic: classified from the LiteLLM error-class NAME in the
+            # message head, never from the HTML body — same rule RunError enforces.
+            expected = "Sub-agent failed: Upstream returned an HTML error page (502)"
+            assert parsed["content"] == expected
+            assert parsed["warnings"] == ["Upstream returned an HTML error page (502)"]
+            # Bounded: nowhere near the raw ~6,700-char message that triggered this fix.
+            assert len(parsed["content"]) < 200
+            # Markup-free: no HTML tag survives into a client-facing field.
+            assert "<" not in parsed["content"]
+            assert all("<" not in w for w in parsed["warnings"])
+
+        asyncio.run(_test())
+
+
+class TestNonBlockingSubAgentExceptionHandling:
+    """Root-depth (depth=0) spawn: the exception surfaces through the
+    background lifecycle manager (`_run_child_lifecycle`), a separate except
+    block from `_spawn_one`'s blocking path covered by
+    `TestSubAgentExceptionHandling` above — same bug class, one level of
+    plumbing further, so it needs its own coverage.
+    """
+
+    def test_html_bodied_exception_yields_bounded_markup_free_result(self):
+        async def _test():
+            root_q: queue.Queue[str] = queue.Queue()
+            hv = _make_hypervisor()
+            ctx = AgentContext.root(
+                model_name="test-model", max_depth=5, registry=hv, message_queue=root_q
+            )
+            root_handle = AgentHandle(
+                agent_id=ctx.agent_id,
+                parent_id=None,
+                depth=0,
+                model_name="test-model",
+                task_description="root",
+                status="running",
+                message_queue=root_q,
+            )
+            await hv.register(root_handle)
+
+            tool = SpawnAgentTool(
+                agent_context=ctx,
+                tool_registry=_make_registry("shell_tool"),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+            async def _explode(*args, **kwargs):
+                raise ValueError(_BAD_GATEWAY_MESSAGE)
+
+            bound = MagicMock()
+            bound.ainvoke = AsyncMock(side_effect=_explode)
+
+            with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
+                mock_build.return_value = MagicMock()
+                mock_build.return_value.bind_tools.return_value = bound
+
+                await tool.run_async(_step("risky root work"))
+                await tool.await_lifecycle_managers(timeout=5.0)
+
+            children = await hv.list_children(ctx.agent_id)
+            assert len(children) == 1
+            child = children[0]
+            assert child.status == "failed"
+            assert child.result is not None
+
+            expected = "Sub-agent failed: Upstream returned an HTML error page (502)"
+            assert child.result.content == expected
+            assert child.result.warnings == ["Upstream returned an HTML error page (502)"]
+            assert len(child.result.content) < 200
+            assert "<" not in child.result.content
+            assert all("<" not in w for w in child.result.warnings)
+
+            # The AgentError attached via mark_done rides the same bound value.
+            assert isinstance(child.error, AgentError)
+            assert child.error.error == "Upstream returned an HTML error page (502)"
+            assert "<" not in child.error.error
 
         asyncio.run(_test())
 
@@ -2073,8 +2285,10 @@ class TestAgentTypeToolScopingInRunAsync:
             captured_specs: list[list] = []
 
             class _CapturingTool(SpawnAgentTool):
-                def _filter_tool_specs(self, args):
-                    specs = super()._filter_tool_specs(args)
+                def _filter_tool_specs(self, args, *, capability_mode="all"):
+                    specs = super()._filter_tool_specs(
+                        args, capability_mode=capability_mode
+                    )
                     captured_specs.append(specs)
                     return specs
 
@@ -2374,8 +2588,9 @@ class TestLifecycleManagerNotificationElseBranch:
             with patch("mewbo_core.tool_use_loop.build_chat_model") as mock_build:
                 mock_build.return_value = MagicMock()
                 mock_build.return_value.bind_tools.return_value = bound
-                # New signature: (child_ctx, handle, child_specs, allowed_tools,
-                # task_desc, retry). Retry off → the cancel is never retried.
+                # Signature: (child_ctx, handle, child_specs, allowed_tools,
+                # task_desc, retry, summary_kind). Retry off → the cancel is
+                # never retried; "generic" summary_kind is the untyped default.
                 await tool._run_child_lifecycle(
                     child_ctx,
                     child_handle,
@@ -2383,6 +2598,7 @@ class TestLifecycleManagerNotificationElseBranch:
                     None,
                     "lifecycle test",
                     RetryPolicy(),
+                    "generic",
                 )
 
             # Parent should get a notification (even on cancel path)
@@ -2556,7 +2772,7 @@ class TestSubAgentEventAgentType:
 
 
 # ---------------------------------------------------------------------------
-# Batch fan-out: spawn_agents(tasks=[…])  (Gitea #117)
+# Batch fan-out: spawn_agents(tasks=[…])
 # ---------------------------------------------------------------------------
 
 
@@ -2771,7 +2987,7 @@ class TestSpawnAgentsValidation:
         assert content.startswith("ERROR")
 
     def test_per_entry_retry_field_accepted(self):
-        """A batch entry may carry the #118 `retry` policy (not extra-forbidden).
+        """A batch entry may carry the `retry` policy (not extra-forbidden).
 
         The batch `items` schema reuses the single spawn params, which now
         advertise `retry`; the SpawnAgentTask validator must accept it and
@@ -2789,7 +3005,7 @@ class TestSpawnAgentsValidation:
 
 
 class TestRootSpawnSemaphoreNoInflation:
-    """Regression (#117): a root spawn HOLDS its slot and releases exactly once."""
+    """Regression: a root spawn HOLDS its slot and releases exactly once."""
 
     def test_root_child_holds_slot_then_releases_once(self):
         async def _test():

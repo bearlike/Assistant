@@ -6,10 +6,25 @@
  * markdown components map. Renders compact, inline-scoped markdown via
  * `react-markdown` + `remark-gfm`.
  *
- * Long help is collapsed: when the text spans multiple lines or runs past
- * ~140 chars, only the first line renders inline followed by a small `?`
- * trigger that opens a shadcn `<Popover>` showing the full markdown. The
- * popover (Radix) owns click-outside / Escape / focus — no hand-rolled state.
+ * Collapse rule — three cases, decided by whether the caller gave us a
+ * natural break (`\n`), not by length alone:
+ *   1. Short, no `\n` (<= `COLLAPSE_AT` chars) — render the whole thing
+ *      inline, no popover.
+ *   2. Contains `\n` — the text before the FIRST `\n` is a real,
+ *      author-written summary line: render it inline, put the full markdown
+ *      behind a `?` `<Popover>`.
+ *   3. No `\n` but longer than `COLLAPSE_AT` — there is no author-supplied
+ *      break to summarize on. We deliberately do NOT fabricate one (no
+ *      character-count truncation, no sentence-boundary guessing — both can
+ *      slice a markdown token in half, e.g. an unbalanced `**`, and either
+ *      way the caller never told us where a safe cut is). Render NOTHING
+ *      inline and put the full markdown only in the popover, behind the
+ *      same `?` trigger. This is what keeps a long single-line description
+ *      (the `GitCredentialsView` 350-char-intro bug) from ever rendering
+ *      twice — the fix is to add `\n\n` at the paragraph you want as the
+ *      summary, not to lean on this fallback.
+ * The popover (Radix) owns click-outside / Escape / focus — no hand-rolled
+ * state.
  */
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,7 +34,7 @@ import { Button } from "../../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { helpCls } from "../styles";
 
-/** Anything longer than this (or multi-line) collapses to first-line + popover. */
+/** Threshold for the no-`\n` cases: inline-and-done below it, popover-only above it. */
 const COLLAPSE_AT = 140;
 
 /**
@@ -47,7 +62,7 @@ const mdComponents: Components = {
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="underline underline-offset-2 text-[hsl(var(--primary))]"
+      className="underline underline-offset-2 text-[hsl(var(--primary-text))]"
     >
       {children}
     </a>
@@ -79,7 +94,7 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-/** Inline row: first-line help + the `?` trigger, top-aligned. */
+/** Row: optional summary-line help + the `?` trigger, top-aligned. */
 const helpRowCls = "flex items-start gap-1";
 
 interface FieldHelpProps {
@@ -91,10 +106,10 @@ export function FieldHelp({ text, id }: FieldHelpProps) {
   const trimmed = text?.trim();
   if (!trimmed) return null;
 
-  const firstLine = trimmed.split("\n")[0];
-  const collapse = trimmed.includes("\n") || trimmed.length > COLLAPSE_AT;
+  const hasBreak = trimmed.includes("\n");
 
-  if (!collapse) {
+  // Case 1: short and no natural break — the whole text IS the summary.
+  if (!hasBreak && trimmed.length <= COLLAPSE_AT) {
     return (
       <div id={id} className={helpCls}>
         <Markdown text={trimmed} />
@@ -102,11 +117,18 @@ export function FieldHelp({ text, id }: FieldHelpProps) {
     );
   }
 
+  // Case 2: caller gave us a break — its first line is a real summary.
+  // Case 3: no break, just long — no summary to show; the inline span is
+  // omitted below so the full text renders exactly once, in the popover.
+  const summaryLine = hasBreak ? trimmed.split("\n")[0] : null;
+
   return (
     <div id={id} className={helpRowCls}>
-      <span className={helpCls}>
-        <Markdown text={firstLine} />
-      </span>
+      {summaryLine !== null && (
+        <span className={helpCls}>
+          <Markdown text={summaryLine} />
+        </span>
+      )}
       <Popover>
         <PopoverTrigger asChild>
           <Button

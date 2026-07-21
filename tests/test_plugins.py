@@ -492,7 +492,7 @@ def test_skill_registry_load_command_file_with_name(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Host-agnostic git URL resolution (issue #9)
+# Host-agnostic git URL resolution (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -560,7 +560,7 @@ def test_resolve_git_url_host_owner_repo_ignores_default_host():
 
 
 # ---------------------------------------------------------------------------
-# Collision-free marketplace cache-dir naming (issue #9)
+# Collision-free marketplace cache-dir naming (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -596,7 +596,7 @@ def test_marketplace_dir_name_is_stable():
 
 
 # ---------------------------------------------------------------------------
-# sync_marketplaces host-agnostic cloning (issue #9)
+# sync_marketplaces host-agnostic cloning (issue)
 # ---------------------------------------------------------------------------
 
 
@@ -649,7 +649,7 @@ def test_sync_marketplaces_honors_default_host(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# install_plugin shares the same resolver (issue #9)
+# install_plugin shares the same resolver (issue)
 # ---------------------------------------------------------------------------
 
 

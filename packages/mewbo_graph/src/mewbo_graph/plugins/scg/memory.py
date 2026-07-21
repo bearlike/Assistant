@@ -1,6 +1,6 @@
 """``scg_memory`` SessionTool — the learned-layer flywheel over the SCG.
 
-One tool, two operations over the shared #13 memory substrate (corpus
+One tool, two operations over the shared wiki memory substrate (corpus
 ``connector``) via :class:`ScgMemoryBridge`:
 
 * ``operation="write"`` — deposit a durable connector insight (a data-location
@@ -182,10 +182,10 @@ class ScgMemoryTool(SessionToolBase):
         agent sees whether the fact was created/merged/rejected.
 
         Polarity + attribution ride the deposit. ``polarity`` (positive vs
-        dead_end, #76) is read from the validated arg so a "this pathway returned
+        dead_end) is read from the validated arg so a "this pathway returned
         nothing" note damps future routing. Attribution is the AMBIENT
         :class:`ScgScope` workspace when one is bound (a workspace-scoped run);
-        an UNSCOPED ordinary session (CLI/console/channel, #83-B) has no bound
+        an UNSCOPED ordinary session (CLI/console/channel) has no bound
         workspace, so the deposit falls back to a ``session:<id>`` attribution
         label — reusing the same ``labels`` mechanism as ``ws:<id>`` (NO new
         field, NO partition; a cross-session read still surfaces the note). The

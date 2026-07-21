@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StatusBar — the context-window + cost gauge sidebar slot (issue #156).
+"""StatusBar — the context-window + cost gauge sidebar slot.
 
 The second sidebar slot. One compact gauge row of the two facets that belong
 *next to the agent fleet tree* — context-window pressure and session cost:

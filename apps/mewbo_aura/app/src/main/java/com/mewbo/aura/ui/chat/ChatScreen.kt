@@ -72,7 +72,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun ChatScreen(
     sessionId: String?,
-    /** Gitea #180 P1 - the assist-overlay handoff's raw `InputModality.name` string
+    /** the assist-overlay handoff's raw `InputModality.name` string
      * (`AuraNavHost`'s nav-route arg); `null` for every ordinary (non-handoff) navigation. Passed
      * straight through to [ChatViewModel.bind] as a plain `String?` - this `ui/` layer never parses
      * it into `com.mewbo.aura.voice.InputModality` itself (package layering: only the view model is
@@ -82,9 +82,25 @@ fun ChatScreen(
     onNewChat: () -> Unit,
     onNotice: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Navigate to another session — `AuraNavHost` passes the SAME lambda the drawer's own
+     * open-a-session rows use (one `navigate` block, not a second copy of it). Only the two fork
+     * actions in [MessageActionsSheet] call it: a fork lands in a BRAND-NEW session and the user is
+     * taken there. Defaults to a no-op so `ChatPreviewActivity`-style hosts keep compiling. */
+    onOpenSession: (String) -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(sessionId) { viewModel.bind(sessionId, handoffModality) }
+    // The long-pressed user message whose actions sheet is open — absence IS dismissal, the same
+    // `actionTarget: T?`-as-visibility shape `AuraDrawerContent` uses for `SessionActionsSheet`.
+    var messageActionTarget by remember { mutableStateOf<ChatItem.UserBubble?>(null) }
+    LaunchedEffect(sessionId) {
+        viewModel.bind(sessionId, handoffModality)
+        // The sheet's target belongs to the session being LEFT. This composable's `remember`ed state
+        // SURVIVES a session switch (the drawer navigates with `launchSingleTop` + `popUpTo` onto the
+        // same `chat` route, reusing this very back-stack entry - the same fact SessionBinding exists
+        // for), so without this an open sheet would keep hovering over the NEW session, still holding
+        // the old one's bubble and still able to fire actions anchored in it.
+        messageActionTarget = null
+    }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     var modelPickerOpen by remember { mutableStateOf(false) }
@@ -109,7 +125,7 @@ fun ChatScreen(
         if (uris.isNotEmpty()) viewModel.stageAttachments(uris, onNotice)
     }
 
-    // Gitea #180 P2: the OS runtime grant is the SOLE dictation gate - no in-app consent layer
+    // the OS runtime grant is the SOLE dictation gate - no in-app consent layer
     // (standing rule). Denial (first-ask or permanent) just leaves the mic tappable again with
     // nothing started - the system dialog itself handles rationale/"don't ask again".
     val context = LocalContext.current
@@ -121,7 +137,7 @@ fun ChatScreen(
     // as a shared flag (both read the one source of truth, `state.runPhase`).
     val overWash = state.runPhase == RunPhase.Sending || state.runPhase == RunPhase.Streaming
 
-    // #181 follow-up (user directive, two rounds): the landing/chat liveness glow is the BOTTOM
+    // (user directive, two rounds): the landing/chat liveness glow is the BOTTOM
     // bloom (the overlay's own AuroraEdgeGlow, reused - one shader family, no wash fork), the top
     // stays clean, and it renders HERE behind a TRANSPARENT Scaffold so the canvas + glow run
     // truly edge-to-edge under the header, status bar, and navigation bar (frameless, reference
@@ -129,23 +145,51 @@ fun ChatScreen(
     // a solid containerColor band. Same greeting/runPhase source of truth ChatSurface reads;
     // duplicated per the overWash precedent above rather than threaded.
     // User directive 2026-07-04: the resting state is a SOLID background - the ambient bottom glow is
-    // NOT permanent. It appears only briefly on a fresh invocation (this screen freshly opened / newly
-    // navigated to) for AMBIENT_INVOCATION_WINDOW_MS, then fades to Hidden; after that the glow shows
-    // ONLY while a run is Sending/Streaming (the Thinking glow, as specced). Cheap + testable: one
-    // delayed flag flip per composition entry. reducedMotion needs no branch here - AuroraEdgeGlow
-    // already snaps its visibility (no fade) and renders a static frame, so this reads as "static
-    // frame then hide" for it, and a smooth fade otherwise.
-    var ambientWindowActive by remember { mutableStateOf(true) }
+    // NOT permanent. It appears briefly on a fresh invocation (this screen freshly opened) AND is
+    // re-armed each time a run COMPLETES for AMBIENT_INVOCATION_WINDOW_MS, then fades to
+    // Hidden; the Thinking glow owns the Sending/Streaming phase and always wins over either linger.
+    // Cheap + testable: delayed flag flips, and the pure `chatGlowState` decision below. reducedMotion
+    // needs no branch here - AuroraEdgeGlow already snaps its visibility (no fade) and renders a
+    // static frame, so this reads as "static frame then hide" for it, and a smooth fade otherwise.
+    // Fresh-invocation ambient breathe (existing): active for the linger window on a truly-fresh
+    // (empty) chat screen, then fades to solid rest.
+    var freshInvocationActive by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         delay(AMBIENT_INVOCATION_WINDOW_MS)
-        ambientWindowActive = false
+        freshInvocationActive = false
     }
-    val glowState = when {
-        state.runPhase == RunPhase.Sending || state.runPhase == RunPhase.Streaming -> EdgeGlowState.Thinking
-        ambientWindowActive && state.items.isEmpty() && !state.isLoadingHistory ->
-            EdgeGlowState.Listening(0f) // brief fresh-invocation ambient breathe, then Hidden
-        else -> EdgeGlowState.Hidden
+
+    // Completion linger: re-fire the SAME bounded ambient breathe every time a run
+    // COMPLETES, so a landed response gets the "just surfaced" aurora the fresh screen does, then
+    // eases back to solid rest — the run-end glow now blooms from Thinking's contracted hug into the
+    // wider Listening pool and lingers, instead of easing straight to black. DESIGN.md §5's bounded,
+    // non-permanent-aura law holds: this RE-ARMS the linger, it does not make it persistent (a new
+    // send cancels it via the isRunInFlight branch below, and it self-clears after the window). A
+    // monotonic arm token captures each transition INTO RunPhase.Done; the timer effect keyed on it
+    // restarts the window cleanly on a re-arm and always runs to its own reset even if runPhase later
+    // settles to Idle mid-linger (a plain LaunchedEffect(runPhase) timer would be cancelled by that
+    // Done→Idle change and strand the flag set). Unlike the fresh-invocation breathe it does NOT
+    // require an empty transcript — that is the whole point: it fires because a response just landed
+    // into a non-empty transcript.
+    var completionLingerActive by remember { mutableStateOf(false) }
+    var completionArmToken by remember { mutableStateOf(0) }
+    LaunchedEffect(state.runPhase) {
+        if (state.runPhase == RunPhase.Done) completionArmToken++
     }
+    LaunchedEffect(completionArmToken) {
+        if (completionArmToken == 0) return@LaunchedEffect // no run has completed yet
+        completionLingerActive = true
+        delay(AMBIENT_INVOCATION_WINDOW_MS)
+        completionLingerActive = false
+    }
+
+    val glowState = chatGlowState(
+        runPhase = state.runPhase,
+        freshInvocationActive = freshInvocationActive,
+        completionLingerActive = completionLingerActive,
+        transcriptEmpty = state.items.isEmpty(),
+        loadingHistory = state.isLoadingHistory,
+    )
     // User directive 2026-07-04: the ACTIVE (processing/invocation) glow should read slightly
     // livelier - "speed of the Aura slightly visibly higher" - while an idle chat stays exactly as
     // tuned. Smallest mechanism: bump ONLY the wave-drift speed for the Thinking state; the ambient
@@ -212,12 +256,14 @@ fun ChatScreen(
                 },
                 onDictationStop = viewModel::stopDictation,
                 onDictationFinalConsumed = viewModel::consumeDictationFinal,
+                onUserMessageLongPress = { messageActionTarget = it },
+                onSubmitQuestionAnswer = viewModel::answerQuestion,
             )
         }
         // A plain Box, not applying `padding` itself - ChatSurface below keeps its own existing
         // `.padding(padding).fillMaxSize()`, and StopSpeakingControl applies that SAME padding
         // independently so the two land at the identical y-origin (flush under the header) without
-        // one becoming a scroll-affected child of the other (Gitea #180 P4: "scroll-independent
+        // one becoming a scroll-affected child of the other ("scroll-independent
         // overlay at the ChatScreen scaffold layer, NOT a chat row").
         Box(modifier = Modifier.fillMaxSize()) {
             ChatSurface(
@@ -239,6 +285,40 @@ fun ChatScreen(
         }
     }
 
+    // Long-press actions on one user message (retry/branch/fork). Hosted HERE, alongside the model
+    // picker and composer options, rather than inside ChatSurface: two of its three actions end in
+    // NAVIGATION (a fork opens the new session), which is a screen-level concern the host-agnostic
+    // surface has no business carrying. `running`/`sessionEnded` are read live, so the sheet's rows
+    // withdraw under it if the session's state changes while it's open.
+    messageActionTarget?.let { target ->
+        // Both fork actions are the SAME call with a different cut point (`fromTs` = this message /
+        // null = the whole transcript) and the same landing: tell the sheet whether it worked, then
+        // navigate to whatever new session came back.
+        val forkAndOpen: (String?, (Boolean) -> Unit) -> Unit = { fromTs, onResult ->
+            viewModel.forkSession(fromTs) { newSessionId ->
+                onResult(newSessionId != null)
+                newSessionId?.let(onOpenSession)
+            }
+        }
+        MessageActionsSheet(
+            message = target,
+            running = state.runPhase.isRunInFlight,
+            sessionEnded = state.sessionEnded,
+            onDismiss = { messageActionTarget = null },
+            onRetryFromHere = { onResult -> viewModel.retryFromMessage(target, onResult) },
+            onBranchInNewChat = { onResult -> forkAndOpen(target.ts, onResult) },
+            onForkSession = { onResult -> forkAndOpen(null, onResult) },
+            // The SAME clipboard idiom as the top bar's "Copy conversation" right above and the
+            // assistant action row's own Copy — LocalClipboardManager + AnnotatedString + a "Copied"
+            // notice. Synchronous, so it settles the sheet immediately.
+            onCopy = { onResult ->
+                clipboard.setText(AnnotatedString(target.text))
+                onNotice("Copied")
+                onResult(true)
+            },
+        )
+    }
+
     if (modelPickerOpen) {
         ModelPickerSheet(
             models = state.models,
@@ -255,7 +335,7 @@ fun ChatScreen(
         val models = state.models
         ComposerOptionsSheet(
             scope = state.composerScope,
-            // Gitea #185 P5: freeze Project/Tools ONLY while a turn is actively in flight (the backend
+            // freeze Project/Tools ONLY while a turn is actively in flight (the backend
             // re-resolves both from the running query's own body), NOT for the whole life of a created
             // session — an idle session's scope stays editable for the next turn (mirrors the freely
             // re-pickable ModelPickerSheet above).
@@ -272,6 +352,28 @@ fun ChatScreen(
             onRefresh = { viewModel.refreshComposerScope(onNotice) },
         )
     }
+}
+
+/**
+ * Pure bottom-glow state decision for [ChatScreen] (extracted for unit-testability of the
+ * completion re-arm). A live run always wins → [EdgeGlowState.Thinking]. Otherwise the ambient
+ * [EdgeGlowState.Listening] breathe shows when EITHER the fresh-invocation window is still open on a
+ * still-empty transcript (the pre-existing "app just opened" linger, gated on an empty transcript so
+ * a resumed conversation doesn't re-breathe) OR a run has just completed and its bounded linger is
+ * armed (this second arm deliberately does NOT require an empty transcript: it fires precisely
+ * because a response landed into a non-empty one). Everything else is solid rest ([EdgeGlowState.Hidden]).
+ */
+internal fun chatGlowState(
+    runPhase: RunPhase,
+    freshInvocationActive: Boolean,
+    completionLingerActive: Boolean,
+    transcriptEmpty: Boolean,
+    loadingHistory: Boolean,
+): EdgeGlowState = when {
+    runPhase == RunPhase.Sending || runPhase == RunPhase.Streaming -> EdgeGlowState.Thinking
+    (freshInvocationActive && transcriptEmpty && !loadingHistory) || completionLingerActive ->
+        EdgeGlowState.Listening(0f)
+    else -> EdgeGlowState.Hidden
 }
 
 /** `packages/mewbo_core/src/mewbo_core/attachments.py`'s `DOCUMENT_MIME_TYPES` - the Files picker
@@ -300,8 +402,13 @@ private const val IN_APP_GLOW_ACTIVE_SPEED_SCALE = 1.35f
 
 /** How long the ambient bottom glow lingers on a fresh chat-screen invocation before fading to
  * Hidden (user directive 2026-07-04: resting state is a solid background - ambient glow only briefly
- * on fresh invocation, then only while running). A behavioral tuning constant. */
-private const val AMBIENT_INVOCATION_WINDOW_MS = 10_000L
+ * on fresh invocation, then only while running). A behavioral tuning constant.
+ *
+ * User directive 2026-07-14: the glow dimmed too quickly on a fresh session/screen — lengthened to
+ * AT LEAST 3× the prior 10s window (10s → 30s), so the invocation aurora lingers noticeably before
+ * settling to the solid resting state. Still only the FRESH-invocation ambient breathe; a live run's
+ * Thinking glow and the ≥3s run-end ease-off are unaffected. */
+private const val AMBIENT_INVOCATION_WINDOW_MS = 30_000L
 
 private val DOCUMENT_MIME_TYPES = arrayOf(
     "application/pdf",
@@ -447,12 +554,12 @@ private val ChevronSize = 20.dp
 private val TopBarVerticalPadding = 8.dp
 
 /**
- * Gitea #180 P4 two-widget pattern's SECOND widget - a sticky control pinned flush under the
+ * two-widget pattern's SECOND widget - a sticky control pinned flush under the
  * header, distinct from the per-message [ReadAloudButton] row control (which keeps its own
  * existing states unchanged). Visible only while [ChatUiState.speakingKey] is non-null, whether
  * that's a P3 speak-along or a P4 manual read-aloud - [ChatViewModel.stopSpeaking] doesn't
  * distinguish the two either, so neither does this control. Tokens only, no new one needed: the
- * reference app's capture (2026-07-03, #180 P0 comment) measured this at exactly a 48dp square
+ * reference app's capture (2026-07-03 comment) measured this at exactly a 48dp square
  * touch target with a 16dp right margin - already [AuraSpacing.ActionRow.cellSize] and
  * [AuraSpacing.Composer.horizontalMargin] verbatim. The appear/disappear crossfade reuses the M8
  * "flat fade" token ([AuraMotion.reducedBlockFadeMs]) rather than [AuraMotion.actionRowFadeMs]'s own

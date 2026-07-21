@@ -16,6 +16,8 @@
  * directly in the consumer's reducer.
  */
 
+import { apiFetch } from "./httpBase";
+
 /** Parse a `fetch` Response body as an SSE stream, yielding typed events. */
 export async function* parseSseStream<T>(
   resp: Response,
@@ -80,7 +82,7 @@ export async function* sseStream<T>(
   const sep = path.includes("?") ? "&" : "?";
   const keyParam = apiKey ? `${sep}api_key=${encodeURIComponent(apiKey)}` : "";
   const url = base + path + keyParam;
-  const resp = await fetch(url, {
+  const resp = await apiFetch(url, {
     method,
     headers: {
       Accept: "text/event-stream",

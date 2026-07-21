@@ -1,7 +1,7 @@
 # Widgets
 
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-console-07-widgets.png" alt="A stock ticker and a repository card widget rendered inline in the Mewbo console" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../../assets/img/mewbo-console-07-widgets.png" alt="A trending-repositories widget rendered as a card grid inline in the Mewbo console" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 Ask Mewbo to visualize a result and an interactive widget appears inline in the conversation, right where the answer landed. There are no separate tabs and no external tools. The widget renders through [`StliteWidgetPanel`](repo:apps/mewbo_console/src/components/StliteWidgetPanel.tsx), mounted in the timeline by [`WidgetCard`](repo:apps/mewbo_console/src/components/WidgetCard.tsx).

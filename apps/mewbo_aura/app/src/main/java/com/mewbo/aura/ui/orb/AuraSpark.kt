@@ -223,7 +223,7 @@ fun AuraSpark(
 @Composable
 private fun ReducedMotionSpark(modifier: Modifier, size: Dp) {
     val shader = remember { RuntimeShader(SPARK_SHADER_SRC) }
-    // Gitea #181 fix wave, finding 4: the lifecycle-gated clock every other shader consumer in
+    // the lifecycle-gated clock every other shader consumer in
     // this family uses, not a second ungated rememberInfiniteTransition() - see
     // reducedMotionBreatheAlpha's own KDoc.
     val timeSeconds = rememberShaderTimeSeconds()

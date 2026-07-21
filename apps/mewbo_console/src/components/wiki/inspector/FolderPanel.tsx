@@ -40,7 +40,7 @@ export function FolderPanel({
       </Section>
 
       <Section title="Contents">
-        <div className="flex flex-wrap gap-3 text-[11px] text-[hsl(var(--muted-foreground))]">
+        <div className="flex flex-wrap gap-3 text-2xs text-[hsl(var(--muted-foreground))]">
           <Count n={subfolders.length} label="subfolders" />
           <Count n={files.length} label="files" />
           <Count n={symbols.length} label="symbols" />
@@ -52,7 +52,7 @@ export function FolderPanel({
           variant="neutral"
           size="sm"
           onClick={() => onNavigate(id)}
-          className="w-full gap-1.5 h-7 text-[11px]"
+          className="w-full gap-1.5 h-7 text-2xs"
         >
           <FolderOpen className="h-3.5 w-3.5" />
           Enter folder
@@ -80,7 +80,7 @@ export function FolderPanel({
 function Count({ n, label }: { n: number; label: string }) {
   return (
     <span>
-      <span className="font-mono text-[hsl(var(--foreground))]">{n}</span> {label}
+      <span className="text-[hsl(var(--foreground))]">{n}</span> {label}
     </span>
   );
 }

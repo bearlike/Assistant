@@ -41,7 +41,7 @@ class AttachmentRepository @Inject constructor(
      * against a non-vision model eagerly (`AuraApi.uploadAttachments`'s doc). */
     suspend fun upload(sessionId: String, staged: List<StagedAttachment>, model: String?): List<AttachmentRecordDto> {
         if (staged.isEmpty()) return emptyList()
-        // Gitea #181 fix wave, finding 5: toPart throws instead of returning null on a revoked/
+        // toPart throws instead of returning null on a revoked/
         // stale SAF grant - mapNotNull used to silently drop that attachment, so upload() could
         // return successfully having sent fewer attachments than the user picked, with no signal
         // to anyone. Letting the exception propagate routes it through ChatViewModel.send()'s

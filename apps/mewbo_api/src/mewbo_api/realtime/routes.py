@@ -6,7 +6,7 @@ Token-streaming path: the
 ending with an additive terminal ``done`` frame carrying the backing
 ``session_id`` (also sent up front in the ``X-Mewbo-Session`` header).
 
-**Session-full with write-behind (#78).** The draft path was sessionless by
+**Session-full with write-behind.** The draft path was sessionless by
 design; that was reclassified as a defect. It now mints a real session, runs the
 LLM inside its Langfuse trace, and persists the single-turn transcript via
 :class:`~mewbo_api.realtime.recorder.RealtimeSessionRecorder` AFTER the last token
@@ -14,14 +14,15 @@ LLM inside its Langfuse trace, and persists the single-turn transcript via
 unchanged except for the additive ``session_id`` (terminal ``done`` frame +
 ``X-Mewbo-Session`` header).
 
-Auth mirrors ``mewbo_api.structured.routes.init_structured``:
-``require_api_key`` is injected by the controller in ``backend.py``.
+Auth is declared ON the view with ``@guard.requires`` and resolved against the
+live ``AuthKit`` through ``guard_registry`` at request time — no guard is
+injected by ``init_realtime``.
 
 The namespace is mounted at ``/v1/draft`` (``draft_ns``) → ``/v1/draft/stream``.
 
 The no-loop, retrieval-only structured synthesis lane (formerly the sibling
 ``POST /v1/structured/fast``) now lives as ``mode: "synthesis"`` ON the agentic
-``POST /v1/structured`` endpoint (#85) — see ``mewbo_api.structured.synthesis``,
+``POST /v1/structured`` endpoint — see ``mewbo_api.structured.synthesis``,
 which reuses the shared :class:`RealtimeSessionRecorder` + ``WikiGroundingProvider``
 glue this package owns.
 """
@@ -29,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
 from typing import Any
 
 from flask import Response, request, stream_with_context
@@ -38,43 +38,37 @@ from mewbo_core.common import get_logger
 from mewbo_core.draft_stream import DraftStreamer
 from mewbo_core.structured_synthesis import _format_citations
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.realtime.recorder import RealtimeSessionRecorder
 from mewbo_api.request_context import request_surface
 from mewbo_api.responses import ApiResponseKit
 
 logging = get_logger(name="api.realtime.routes")
 
-AuthResult = tuple[dict, int] | None
-AuthGuard = Callable[[], AuthResult]
-
-
-def _no_auth() -> AuthResult:
-    return None
-
-
-_require_api_key: AuthGuard = _no_auth
 _runtime: Any = None
 
 
-def init_realtime(api: object, require_api_key: AuthGuard, runtime: Any = None) -> None:
+def init_realtime(api: object, runtime: Any = None) -> None:
     """Wire the ``/v1/draft/stream`` endpoint.
 
     Args:
         api: The :class:`flask_restx.Api` instance (same object passed to
             ``init_structured``).
-        require_api_key: Auth guard injected by the controller; ``None`` return
-            means "authorised".
         runtime: Session runtime (session store seam). Used to session-back the
-            stream with write-behind persistence (#78); ``None`` degrades
+            stream with write-behind persistence; ``None`` degrades
             gracefully to trace-only (no transcript persisted).
+
+    Authentication and authorization are NOT wired here: the view declares its
+    own requirement with ``@guard.requires``, which resolves the live
+    ``AuthKit`` through ``guard_registry`` at request time. Injecting a guard
+    here as well would be a second, silently-unused path to the same decision.
 
     This is the ONE line the controller must add in ``backend.py``::
 
         from mewbo_api.realtime import init_realtime
-        init_realtime(api, require_api_key, runtime)
+        init_realtime(api, runtime)
     """
-    global _require_api_key, _runtime
-    _require_api_key = require_api_key
+    global _runtime
     _runtime = runtime
     api.add_namespace(draft_ns, path="/v1/draft")  # type: ignore[attr-defined]
 
@@ -164,6 +158,7 @@ class DraftStreamResource(Resource):
     )
     @kit.errors(400, shape="message")
     @kit.auth_error()
+    @guard.requires("sessions.create")
     def post(self) -> Response:
         """Stream a draft answer.
 
@@ -176,9 +171,6 @@ class DraftStreamResource(Resource):
         `model` field accepts any configured LiteLLM model id; a non-string
         value is ignored.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth  # type: ignore[return-value]
-
         data = request.get_json(silent=True) or {}
         query = data.get("query")
         if not query or not isinstance(query, str):
@@ -204,7 +196,7 @@ class DraftStreamResource(Resource):
 
         streamer = DraftStreamer(model_name=model_override)
 
-        # Session-back the stream (#78): mint a session, stream inside its Langfuse
+        # Session-back the stream: mint a session, stream inside its Langfuse
         # trace, persist write-behind from the generator tail (after the last
         # token is yielded) so TTFT never pays for a store write.
         recorder = RealtimeSessionRecorder.for_draft(

@@ -32,8 +32,8 @@ internal object SendDecision {
         if (hasActiveStream && currentPhase == RunPhase.Streaming) RunPhase.Streaming else RunPhase.Sending
 
     /**
-     * The [InputModality] that should tag [ChatUiState.activeTurnModality] after this send
-     * (Gitea #180 P1): a fresh (non-steering) send always (re)tags the turn it's opening with
+     * The [InputModality] that should tag [ChatUiState.activeTurnModality] after this send:
+     * a fresh (non-steering) send always (re)tags the turn it's opening with
      * [requested] - including the finalized [current] modality being replaced once a prior turn is
      * genuinely done, so a Voice tag never lingers past its own turn. A steer into an
      * already-Sending/Streaming run leaves [current] untouched - the steer's own modality (always
@@ -44,8 +44,8 @@ internal object SendDecision {
         if (isSteering) current else requested
 
     /**
-     * Gitea #180 P3: whether tapping the sticky stop-speaking control should latch the per-
-     * conversation mute (#175 §7.1) - `true` only while the tap actually interrupts THIS turn's own
+     * whether tapping the sticky stop-speaking control should latch the per-
+     * conversation mute (§7.1) - `true` only while the tap actually interrupts THIS turn's own
      * live voice-modality speech-along, i.e. a voice-tagged turn still genuinely Sending/Streaming.
      * A stop tapped once that turn has already gone Idle/Done/Error (e.g. stopping an unrelated
      * manual read-aloud of an older message afterward) must not mute a turn that isn't live

@@ -321,7 +321,7 @@ def test_emits_echo_protocol_sequence(store, monkeypatch):
 
 
 def test_agent_done_carries_evidence_and_marks_dead_ends(store, monkeypatch):
-    """``agent_done`` projects the probe's evidence + flags dead-ends (#86).
+    """``agent_done`` projects the probe's evidence + flags dead-ends.
 
     The probe's ``EVIDENCE (pathway: …)`` / ``NO DATA …`` block rides
     ``agent_done.result`` so the console's per-lane response panel shows what it
@@ -354,7 +354,7 @@ def test_agent_done_carries_evidence_and_marks_dead_ends(store, monkeypatch):
 def test_synthesis_confidence_and_sources_from_probes(store, monkeypatch):
     """Confidence/sources_count derive from data-bearing probes, not a fixture.
 
-    Regression (#86): ``_settle`` left both at the schema defaults, so every live
+    Regression: ``_settle`` left both at the schema defaults, so every live
     run rendered ``0%`` / ``0 sources`` next to a real cited answer. They now come
     from the trace: 1 of 2 probes returned evidence ⇒ confidence 0.5, 1 source.
     """
@@ -408,7 +408,7 @@ def test_advertises_scg_capability_and_seeds_tier(store, monkeypatch):
 
     caps = [c for _, c in runtime.context_events if "client_capabilities" in c]
     assert caps and caps[0]["client_capabilities"] == ["scg"]
-    # #77 provenance fix: a search RUN is tagged ``agentic_search:run:<id>`` (NOT
+    # provenance fix: a search RUN is tagged ``agentic_search:run:<id>`` (NOT
     # the old ``agentic_search:scg:`` which TraceProvenance mislabelled scg_map —
     # ``scg:map:`` is the MAPPER's tag, a run is not a map).
     assert runtime.resolved_tag == "agentic_search:run:run-1"
@@ -517,7 +517,7 @@ def test_allowed_tools_union_scope(store, monkeypatch):
 
 
 def test_drive_binds_workspace_source_scope(store, monkeypatch):
-    """The drive binds the workspace SCG source scope (#75) around ``run_sync``.
+    """The drive binds the workspace SCG source scope around ``run_sync``.
 
     ``scg_route`` (the plugin tool → ``ScgRouter``) reads the ambient
     :class:`ScgScope`, so the runner must bind the workspace's sources for the
@@ -643,6 +643,42 @@ def test_cancelled_maps_to_run_done_cancelled(store, monkeypatch):
     assert types[-1] == "run_done"
     assert "answer_ready" not in types
     # The run_done event carries the cancelled status.
+    done = [e for e in store.load_run_events("run-1") if e.get("type") == "run_done"][0]
+    assert done["status"] == "cancelled"
+
+
+def test_terminated_backing_session_maps_to_cancelled(store, monkeypatch):
+    """A hard-terminated backing session settles ``cancelled``, not failed.
+
+    ``summarize_session`` derives ``status="terminated"`` for a killed session;
+    a deliberate kill is not a run failure, so ``_run_status`` maps it to
+    ``cancelled`` (a neutral terminal, never a red agent_error). The terminal
+    event is ``run_done`` with the cancelled status, and no synthesis runs.
+    """
+    _enable_scg(monkeypatch)
+
+    class Terminated(FakeRuntime):
+        def summarize_session(self, session_id, **_):
+            return {
+                "session_id": session_id,
+                "status": "terminated",
+                "done_reason": None,
+                "running": False,
+            }
+
+    transcript = [
+        _sub_agent("probe-a", "start", detail="probe github"),
+        _completion("", done_reason="canceled"),
+    ]
+    OrchestratedSearchRunner().start(
+        _run(store), _ws(), store=store, runtime=Terminated(transcript)
+    )
+
+    record = store.get_run("run-1")
+    assert record.status == "cancelled"
+    types = _event_types(store, "run-1")
+    assert types[-1] == "run_done"
+    assert "answer_ready" not in types
     done = [e for e in store.load_run_events("run-1") if e.get("type") == "run_done"][0]
     assert done["status"] == "cancelled"
 

@@ -43,6 +43,17 @@ Any NEW test file for a class with this same "infinite background collector by d
 reach for this exact idiom rather than reinventing it — `AssistTurnMachineTest.kt` is the reference
 implementation.
 
+## Testing a `ViewModel` (only `viewModelScope` launches) — plain `setMain`, NOT `machineScope()`
+
+`viewModelScope` dispatches on `Dispatchers.Main`, so a `@HiltViewModel` test drives it by installing
+the test scheduler AS Main: `Dispatchers.setMain(StandardTestDispatcher())` in `@Before` (+ `resetMain()`
+in `@After`), and `runTest(dispatcher)` per test so `advanceUntilIdle()` runs the VM's `init`/`refresh()`
+launches on that ONE shared scheduler. The `machineScope()` idiom above is NOT needed here — it exists
+only for a class with an infinite `init`-block collector that would otherwise trip `runTest`'s leak check
+(`AssistTurnMachine`). A `ViewModel` whose coroutines all COMPLETE (a one-shot `refresh()` that ends when
+the fetch returns) has no such collector, so the plain MainDispatcher idiom suffices. `SessionsViewModelTest`
+ is the reference implementation; its KDoc states the distinction explicitly.
+
 ## `ScriptedTranscriber`: one script per `listen()` call, never a shared replay-from-zero or a shared consumption cursor
 
 A `Transcriber` test double must model the real `SpeechRecognizer` contract: its event stream ENDS
@@ -117,7 +128,7 @@ offset via `ISO_OFFSET_DATE_TIME`) FIRST, falling back to `Instant.parse` only f
 no-offset instant string. Every ts-comparison call site (`TranscriptReducer`'s echo window,
 `ui/sessions/RelativeTime`, `AssistTurnMachine.recentSessionOrNull`) goes through this ONE function —
 this shipped as three separately-and-silently-broken copies before being unified (`data/CLAUDE.md`,
-`#175`). Never reintroduce a second, local `Instant.parse` call anywhere in this codebase; route
+` `). Never reintroduce a second, local `Instant.parse` call anywhere in this codebase; route
 through `Timestamps.parseInstantOrNull` even in a test fixture, so a JVM-only test can't mask a
 real device-only failure mode the way a bare `Instant.parse` naively would.
 

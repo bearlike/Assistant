@@ -25,7 +25,7 @@ import okio.Pipe
 import okio.buffer
 
 /**
- * Debug-only, OkHttp-layer scripted backend (Gitea #181 follow-up: on-device overlay/gate testing
+ * Debug-only, OkHttp-layer scripted backend (on-device overlay/gate testing
  * was firing a real LLM query on every assist-gesture invocation - real cost, multiplying with
  * auto-listen). Contributed to the app-wide `OkHttpClient` via Hilt's `Set<Interceptor>`
  * multibinding ([com.mewbo.aura.di.DataModule.provideOkHttpClient]) rather than a `chain.proceed()`
@@ -109,6 +109,7 @@ class MockBackendInterceptor @Inject constructor(
 
     private fun handleQuery(request: Request, sessionId: String): Response {
         val queryText = extractField(request, "query")
+        if (queryText.contains("terminate", ignoreCase = true)) return terminatedResponse(request)
         mockSessionStore.startTurn(sessionId, queryText)
         return jsonResponse(
             request,
@@ -124,6 +125,7 @@ class MockBackendInterceptor @Inject constructor(
 
     private fun handleSteer(request: Request, sessionId: String): Response {
         val text = extractField(request, "text")
+        if (text.contains("terminate", ignoreCase = true)) return terminatedResponse(request)
         mockSessionStore.startTurn(sessionId, text)
         return jsonResponse(
             request,
@@ -287,6 +289,25 @@ class MockBackendInterceptor @Inject constructor(
                         put("enabled", true)
                     },
                 )
+            }
+        },
+    )
+
+    /** The permanently-terminated 410: a mutation on a terminated session returns the
+     * structured envelope `{"error":{"code","reason","retryable"}}` the real backend's
+     * `ApiResponseKit.terminated_response()` sends verbatim. Keyword-triggered ("terminate" in the
+     * query/steer text) so the chat surface's terminal state - composer disabled, no Retry - is
+     * reachable on-device with no live backend and zero tokens. `code:"session_terminated"` +
+     * `retryable:false` are exactly what `RunRepository.errorFor` keys on to raise a
+     * `SessionTerminatedException`. */
+    private fun terminatedResponse(request: Request): Response = jsonResponse(
+        request,
+        410,
+        buildJsonObject {
+            putJsonObject("error") {
+                put("code", "session_terminated")
+                put("reason", "Session is permanently terminated")
+                put("retryable", false)
             }
         },
     )

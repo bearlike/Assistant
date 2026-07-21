@@ -923,12 +923,12 @@ def test_get_job_snapshot_hydrates_platform(client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WikiQaSession step-budget ceiling (#62)
+# WikiQaSession step-budget ceiling
 # ---------------------------------------------------------------------------
 
 
 class TestWikiQaSessionStepBudget:
-    """#62: the QA fan-out is started with a HARD session-wide step ceiling so an
+    """the QA fan-out is started with a HARD session-wide step ceiling so an
     unbounded probe fan-out can't run away (~1.1M tokens / 110 steps observed)."""
 
     def test_start_passes_session_step_budget(self, runtime_stub) -> None:

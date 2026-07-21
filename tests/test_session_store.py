@@ -97,6 +97,67 @@ def test_session_store_archive_roundtrip(tmp_path):
     assert store.is_archived(session_id) is False
 
 
+def test_session_store_terminate_roundtrip(tmp_path):
+    """Terminate persists a stable timestamp; set-once and irreversible."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    assert store.is_terminated(session_id) is False
+    assert store.get_terminated_at(session_id) is None
+
+    assert store.terminate_session(session_id) is True
+    first = store.get_terminated_at(session_id)
+    assert first is not None
+    assert store.is_terminated(session_id) is True
+
+    # Set-once: a repeat terminate never moves the original timestamp, and
+    # reports False — the arbitration signal SessionRuntime gates side
+    # effects on (concurrency fix).
+    assert store.terminate_session(session_id) is False
+    assert store.get_terminated_at(session_id) == first
+
+    # Survives a fresh store instance (durable in index.json).
+    reopened = SessionStore(root_dir=str(tmp_path))
+    assert reopened.is_terminated(session_id) is True
+    assert reopened.get_terminated_at(session_id) == first
+
+
+def test_append_event_dropped_after_terminate(tmp_path):
+    """An append after terminate() is dropped (no-op), logged once, never raises."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "before"}})
+
+    store.terminate_session(session_id)
+
+    with patch("mewbo_core.session_store.logging") as mock_logging:
+        store.append_event(session_id, {"type": "user", "payload": {"text": "after-1"}})
+        store.append_event(session_id, {"type": "user", "payload": {"text": "after-2"}})
+        # Two dropped appends, one structured-log call.
+        assert mock_logging.warning.call_count == 1
+
+    events = store.load_transcript(session_id)
+    assert len(events) == 1
+    assert events[0]["payload"]["text"] == "before"
+
+
+def test_append_event_written_before_terminate(tmp_path):
+    """Events written before termination are unaffected by the guard."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
+    assert len(store.load_transcript(session_id)) == 1
+
+
+def test_session_store_terminate_isolated(tmp_path):
+    """Terminating one session never marks a sibling terminated."""
+    store = SessionStore(root_dir=str(tmp_path))
+    a = store.create_session()
+    b = store.create_session()
+    store.terminate_session(a)
+    assert store.is_terminated(a) is True
+    assert store.is_terminated(b) is False
+
+
 def test_create_session_store_default_json(tmp_path):
     """Factory returns SessionStore (json) when no driver is configured."""
     with patch("mewbo_core.session_store.get_config_value", return_value="json"):
@@ -164,6 +225,58 @@ def test_fork_session_at(tmp_path):
     # Source session is unmodified
     assert len(store.load_transcript(session_id)) == 4
     assert store.load_summary(session_id) == "full session summary"
+
+
+def test_last_attestation_hash_defaults_genesis(tmp_path):
+    """No attestation events yet -> genesis hash."""
+    from mewbo_core.attestation import GENESIS_HASH
+
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    assert store.last_attestation_hash(session_id) == GENESIS_HASH
+
+
+def test_last_attestation_hash_reads_most_recent_record(tmp_path):
+    """Scans for the LAST attestation event's record_hash, ignoring other events."""
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hi"}})
+    store.append_event(
+        session_id, {"type": "attestation", "payload": {"record_hash": "hash-one"}}
+    )
+    store.append_event(session_id, {"type": "assistant", "payload": {"text": "hi back"}})
+    store.append_event(
+        session_id, {"type": "attestation", "payload": {"record_hash": "hash-two"}}
+    )
+    assert store.last_attestation_hash(session_id) == "hash-two"
+
+
+def test_last_attestation_hash_reseeds_chain_continuously(tmp_path):
+    """A chain re-seeded from a pre-existing tail links continuously (recovery)."""
+    from mewbo_core.attestation import AttestationChain
+
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(
+        session_id, {"type": "attestation", "payload": {"record_hash": "prior-tail-hash"}}
+    )
+
+    seed = store.last_attestation_hash(session_id)
+    assert seed == "prior-tail-hash"
+
+    events: list = []
+    chain = AttestationChain(session_id=session_id, head=seed)
+    chain.record_spawn(
+        events.append,
+        agent_id="a1",
+        parent_id=None,
+        depth=1,
+        agent_type=None,
+        model="test-model",
+        capability_mode="all",
+        contract=None,
+    )
+    assert events[0]["payload"]["prev_hash"] == seed
 
 
 def test_session_store_title_roundtrip(tmp_path):

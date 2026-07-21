@@ -2,6 +2,7 @@ package com.mewbo.aura.ui.overlay
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -28,12 +29,21 @@ import kotlinx.coroutines.flow.first
  * `@AndroidEntryPoint`-inject directly (unlike `AuraSession`, which needs the `EntryPoint` escape
  * hatch) and supplies its own `LifecycleOwner`/`SavedStateRegistryOwner` for free.
  *
- * v5 (Gitea #181): mirrors `AuraSession.onShow()` - `machine.show()` then, unless the `autoListen`
+ * v5: mirrors `AuraSession.onShow()` - `machine.show()` then, unless the `autoListen`
  * intent extra is explicitly `false`, `machine.startListening()` right after (default ON, per the
  * spec - there's no `RECORD_AUDIO` gate to mirror here at all: [VoiceBackends][com.mewbo.aura.voice.VoiceBackends]
  * auto-selects `FakeTranscriber` on redroid, which never touches the real microphone API, so
- * auto-listen is always safe to fire). Passing `-e autoListen false` (adb) lands on the
- * non-auto-listen `Ready` state instead, for verifying that path without deleting/re-adding code.
+ * auto-listen is always safe to fire). Launch recipe to land on the non-auto-listen `Ready` state
+ * instead, for verifying that path without deleting/re-adding code - canonical form, a genuine
+ * boolean extra:
+ * ```
+ * adb shell am start -n com.mewbo.aura/.ui.overlay.AssistOverlayPreviewActivity --ez autoListen false
+ * ```
+ * `-e autoListen false` (a STRING extra) also works: the read below is string-tolerant, matching
+ * `MainActivity`'s `mockBackend`/seed-extra pattern - `Bundle.getBoolean` on a String extra logs a
+ * ClassCastException and silently returns its default (`true`), which is why an earlier cut of this
+ * read made `-e autoListen false` a silent no-op (baseline finding, harness-only - never a product
+ * bug).
  * [SessionRepository]/[RunRepository] are the REAL production repos (only the voice backends are
  * faked), so a real send here really streams/hands off against a real backend session.
  */
@@ -54,6 +64,9 @@ class AssistOverlayPreviewActivity : ComponentActivity() {
         // an opaque grey band directly over AuroraEdgeGlow's bottom bloom (where the D-3 clay
         // ignition stop and the docked orb both live) - see LivenessShowcaseActivity's identical fix.
         window.isNavigationBarContrastEnforced = false
+        // Parity with AuraSession.onShow's keep-screen-on fix - a real Activity window tears its own
+        // flags down with the window on finish()/onDestroy, so no explicit clear is needed here.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val machine = AssistTurnMachine(
             transcriber = transcriber,
@@ -106,13 +119,28 @@ class AssistOverlayPreviewActivity : ComponentActivity() {
         )
         haptics.invocation() // §7.0 t=0, mirroring AuraSession.onShow's real invocation timing.
         machine.show()
-        // Gitea #181 auto-listen, default ON (see class KDoc) - `-e autoListen false` opts out.
-        if (intent.getBooleanExtra("autoListen", true)) {
+        // auto-listen, default ON (see class KDoc) - `--ez autoListen false` opts out.
+        // adb `-e` extras arrive as STRINGS - Bundle.getBoolean logs a ClassCastException and
+        // returns the default (true), so `-e autoListen false` silently never worked. Same
+        // string-tolerant read MainActivity's seed extras use.
+        val autoListen = when (val raw = intent.extras?.get("autoListen")) {
+            is Boolean -> raw
+            is String -> !raw.equals("false", ignoreCase = true)
+            else -> true
+        }
+        if (autoListen) {
             machine.startListening()
         }
 
         setContent {
-            AuraTheme {
+            // [R4 2026-07-10] This host called AuraTheme() bare (defaulted reducedMotion = false),
+            // silently dropping the in-app SettingsStore toggle - the OS "Remove animations" signal
+            // still applied (it's OR-ed inside AuraTheme itself), but a user who only set the
+            // in-app toggle saw no effect here. Same fix AuraSession.onCreateContentView() already
+            // applies for the real session host - this activity can collect SettingsStore directly
+            // (it's @AndroidEntryPoint-injected, no EntryPoint escape hatch needed).
+            val reducedMotion by settingsStore.reducedMotion.collectAsState(initial = false)
+            AuraTheme(reducedMotion = reducedMotion) {
                 val state by machine.state.collectAsState()
                 AssistOverlayScreen(
                     state = state,

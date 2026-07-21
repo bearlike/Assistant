@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for make_sidebar_installer + cmd_context (issue #161, epic #149).
+"""Tests for make_sidebar_installer + cmd_context.
 
 Drives the installer against a real ``MewboApp`` (imported read-only) to prove
 the three faceted sidebar sections (Fleet · Plan · Context) appear and the
@@ -240,12 +240,12 @@ def test_todo_provider_feeds_the_plan_dock() -> None:
 
 
 # ---------------------------------------------------------------------------
-# statusLine payload — live fields (I1) + non-blocking offload (C1)
+# statusLine payload — live fields + non-blocking offload
 # ---------------------------------------------------------------------------
 
 
 def test_statusline_payload_carries_live_fields() -> None:
-    """The statusLine state carries real token/context/cost, not zeros (I1)."""
+    """The statusLine state carries real token/context/cost, not zeros."""
     runtime = SimpleNamespace(
         load_events=lambda sid: [
             {"payload": {"usage": {"input_tokens": 600, "output_tokens": 400}}},

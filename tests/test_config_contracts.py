@@ -560,16 +560,141 @@ class TestAgentConfigValidators:
     def test_sub_agent_max_steps_invalid_defaults(self):
         assert AgentConfig.model_validate({"sub_agent_max_steps": "bad"}).sub_agent_max_steps == 10
 
+    def test_session_step_budget_defaults_unlimited(self):
+        assert AgentConfig.model_validate({}).session_step_budget == 0
+
+    def test_session_step_budget_round_trips(self):
+        assert AgentConfig.model_validate({"session_step_budget": 5}).session_step_budget == 5
+
+    def test_session_step_budget_clamped_to_at_least_zero(self):
+        assert AgentConfig.model_validate({"session_step_budget": -3}).session_step_budget == 0
+
+    def test_session_step_budget_invalid_defaults(self):
+        assert AgentConfig.model_validate({"session_step_budget": "bad"}).session_step_budget == 0
+
+    def test_stall_threshold_s_round_trips(self):
+        assert AgentConfig.model_validate({"stall_threshold_s": 45.0}).stall_threshold_s == 45.0
+
+    def test_stall_threshold_s_non_positive_defaults(self):
+        assert AgentConfig.model_validate({"stall_threshold_s": 0}).stall_threshold_s == 120.0
+
+    def test_stall_threshold_s_invalid_defaults(self):
+        assert AgentConfig.model_validate({"stall_threshold_s": "bad"}).stall_threshold_s == 120.0
+
+    def test_stall_check_interval_s_round_trips(self):
+        assert (
+            AgentConfig.model_validate({"stall_check_interval_s": 10.0}).stall_check_interval_s
+            == 10.0
+        )
+
+    def test_stall_check_interval_s_non_positive_defaults(self):
+        assert (
+            AgentConfig.model_validate({"stall_check_interval_s": -1}).stall_check_interval_s
+            == 30.0
+        )
+
+    def test_attestation_enabled_defaults_true(self):
+        """The kill switch defaults ON."""
+        assert AgentConfig.model_validate({}).attestation_enabled is True
+
+    def test_attestation_enabled_coerces_truthy_falsy_strings(self):
+        ac_false = AgentConfig.model_validate({"attestation_enabled": "false"})
+        ac_off = AgentConfig.model_validate({"attestation_enabled": "off"})
+        ac_yes = AgentConfig.model_validate({"attestation_enabled": "yes"})
+        assert ac_false.attestation_enabled is False
+        assert ac_off.attestation_enabled is False
+        assert ac_yes.attestation_enabled is True
+
+    def test_attestation_enabled_invalid_defaults_true(self):
+        ac = AgentConfig.model_validate({"attestation_enabled": "not-a-bool"})
+        assert ac.attestation_enabled is True
+
+    def test_stall_check_interval_s_invalid_defaults(self):
+        assert (
+            AgentConfig.model_validate({"stall_check_interval_s": "bad"}).stall_check_interval_s
+            == 30.0
+        )
+
     def test_allowed_models_coercion_from_csv(self):
         ac = AgentConfig.model_validate({"allowed_models": "gpt-5,claude-4"})
         assert "gpt-5" in ac.allowed_models
 
-    def test_plan_mode_allow_mcp_coercion(self):
+    # -- write-progress-signal knobs ------------------------------
+
+    def test_write_progress_signal_step_threshold_defaults(self):
+        assert AgentConfig.model_validate({}).write_progress_signal_step_threshold == 25
+
+    def test_write_progress_signal_step_threshold_round_trips(self):
         assert (
-            AgentConfig.model_validate({"plan_mode_allow_mcp": "yes"}).plan_mode_allow_mcp is True
+            AgentConfig.model_validate(
+                {"write_progress_signal_step_threshold": 10}
+            ).write_progress_signal_step_threshold
+            == 10
         )
+
+    def test_write_progress_signal_step_threshold_clamped_to_at_least_zero(self):
         assert (
-            AgentConfig.model_validate({"plan_mode_allow_mcp": "no"}).plan_mode_allow_mcp is False
+            AgentConfig.model_validate(
+                {"write_progress_signal_step_threshold": -3}
+            ).write_progress_signal_step_threshold
+            == 0
+        )
+
+    def test_write_progress_signal_step_threshold_invalid_defaults(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_step_threshold": "bad"}
+            ).write_progress_signal_step_threshold
+            == 25
+        )
+
+    def test_write_progress_signal_event_interval_defaults(self):
+        assert AgentConfig.model_validate({}).write_progress_signal_event_interval == 10
+
+    def test_write_progress_signal_event_interval_clamped_to_at_least_one(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_event_interval": 0}
+            ).write_progress_signal_event_interval
+            == 1
+        )
+
+    def test_write_progress_signal_event_interval_invalid_defaults(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_event_interval": "bad"}
+            ).write_progress_signal_event_interval
+            == 10
+        )
+
+    def test_write_progress_signal_max_events_defaults(self):
+        assert AgentConfig.model_validate({}).write_progress_signal_max_events == 2
+
+    def test_write_progress_signal_max_events_clamped_to_at_least_zero(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_max_events": -1}
+            ).write_progress_signal_max_events
+            == 0
+        )
+
+    def test_write_progress_signal_max_events_invalid_defaults(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_max_events": "bad"}
+            ).write_progress_signal_max_events
+            == 2
+        )
+
+    def test_write_progress_signal_reminder_enabled_defaults_false(self):
+        assert AgentConfig.model_validate({}).write_progress_signal_reminder_enabled is False
+
+    def test_write_progress_signal_reminder_enabled_round_trips(self):
+        assert (
+            AgentConfig.model_validate(
+                {"write_progress_signal_reminder_enabled": True}
+            ).write_progress_signal_reminder_enabled
+            is True
         )
 
 
@@ -911,7 +1036,7 @@ class TestNestedSubConfigDefaults:
         assert ac.lsp.enabled is True
 
     def test_agent_tool_search_auto_by_default(self):
-        # #131: deferred-schema loading ships on as adaptive 'auto' — defers
+        # Deferred-schema loading ships on as adaptive 'auto' — defers
         # only above the threshold, so lean sessions keep verbatim binding.
         ac = AgentConfig.model_validate({})
         assert ac.tool_search.mode == "auto"

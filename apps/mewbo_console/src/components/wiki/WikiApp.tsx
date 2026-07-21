@@ -4,7 +4,8 @@
  * the rest of the App.tsx routing tree so the section can evolve in its
  * own namespace.
  *
- * Default export so App.tsx can lazy-import it.
+ * Named export, lazy-imported by App.tsx via the `.then` default-unwrap
+ * (the console standardized on named-only exports).
  */
 
 import { useEffect } from "react";
@@ -17,8 +18,9 @@ import { QAScreen } from "./QAScreen";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { WikiScreen } from "./WikiScreen";
 import { useWikiRoute } from "./router";
+import { DEFAULT_WIKI_SLUG } from "./slug";
 
-export default function WikiApp() {
+export function WikiApp() {
   const route = useWikiRoute();
 
   // Wiki section likes its own document title scheme.
@@ -56,7 +58,7 @@ export default function WikiApp() {
     case "welcome":
       return (
         <WelcomeScreen
-          slug={route.slug ?? "bearlike/Assistant"}
+          slug={route.slug ?? DEFAULT_WIKI_SLUG}
           platform={route.platform}
         />
       );

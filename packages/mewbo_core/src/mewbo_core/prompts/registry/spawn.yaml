@@ -1,4 +1,4 @@
-# Sub-agent task-assembly fragments (Gitea #89, phase 1 — VERBATIM extraction).
+# Sub-agent task-assembly fragments (VERBATIM extraction).
 #
 # Migrated from spawn_agent.py: the `acceptance_criteria` suffix appended to a
 # delegated task, and the agent-body prepend that frames a registered AgentDef's

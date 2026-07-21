@@ -22,8 +22,6 @@ not by spawning a ``wiki-indexer`` playbook.
 from __future__ import annotations
 
 import datetime
-import shutil
-import subprocess
 from typing import TYPE_CHECKING
 
 from mewbo_core.common import get_logger
@@ -32,16 +30,13 @@ from mewbo_graph.plugins.wiki._ctx import WikiJobCtx, emit_log, emit_phase
 from mewbo_graph.plugins.wiki.build_graph import build_graph_core
 from mewbo_graph.plugins.wiki.clone import (
     _git_rev_parse,
-    _inject_token,
-    _is_private_host,
-    _ssh_env_for,
-    build_clone_command,
+    clone_with_fallback,
 )
 from mewbo_graph.plugins.wiki.finalize import (
     _detect_grounder,
-    _fetch_description,
     _graph_is_populated,
     _host_from_url,
+    _resolve_project_desc,
     _supersede_stale_jobs,
 )
 from mewbo_graph.plugins.wiki.scan import WikiScanArgs, _collect_files
@@ -109,55 +104,32 @@ class GraphOnlyIndexer:
     def _clone(self) -> None:
         """Shallow-clone the repo into ``ctx.clone_dir`` and stamp git metadata.
 
-        Reuses the ``clone`` tool's credential-injection + SSH-env + rev-parse
-        helpers verbatim — only the LLM-arg branch is dropped (the submission
-        carries the URL; the durable credential is resolved the same way the tool
-        does, minus the never-persisted ``args.token`` fast path).
+        Delegates to the SAME :func:`clone_with_fallback` the ``wiki_clone_repo``
+        tool uses (credential chain: submission token → durable repo/host store →
+        ambient git credential → anonymous; per-attempt dir reset; helper-disable
+        + prompt-off env; secret redaction) — no duplicated resolution/SSH logic.
         """
         ctx = self._ctx
-        url = self._submission.repo_url or ""
+        sub = self._submission
+        url = sub.repo_url or ""
         if not url:
             raise _GraphOnlyError("validation", "graph-only index requires a repo URL")
 
-        from mewbo_graph.wiki.credentials import CredentialStore  # noqa: PLC0415
-        from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
-
-        effective_token = self._submission.token or CloneTokenCache.peek(ctx.job_id)
-        ssh_key: str | None = None
-        if not effective_token:
-            cred = CredentialStore.load(ctx.store, ctx.slug)
-            if cred is not None and cred.kind == "token":
-                effective_token = cred.value
-            elif cred is not None and cred.kind == "ssh_key":
-                ssh_key = cred.value
-        clone_url = _inject_token(url, effective_token)
-
         clone_dir = ctx.clone_dir
-        if clone_dir.exists():
-            shutil.rmtree(clone_dir, ignore_errors=True)
-        clone_dir.mkdir(parents=True, exist_ok=True)
-
         emit_phase(ctx, "clone")
         emit_log(ctx, f"Cloning {url} (graph-only)…")
 
-        cmd = build_clone_command(
-            clone_url, clone_dir, ref=self._submission.ref, private_host=_is_private_host(url),
+        outcome = clone_with_fallback(
+            url,
+            clone_dir,
+            ref=sub.ref,
+            store=ctx.store,
+            slug=ctx.slug,
+            arg_token=sub.token,
+            on_log=lambda text, *, level="info": emit_log(ctx, text, level=level),
         )
-
-        run_env, key_path = _ssh_env_for(ssh_key)
-        try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=300, env=run_env)
-        except subprocess.TimeoutExpired as exc:
-            raise _GraphOnlyError("repo_access", "git clone timed out after 300s") from exc
-        finally:
-            if key_path is not None:
-                key_path.unlink(missing_ok=True)
-
-        if proc.returncode != 0:
-            err_msg = (proc.stderr or b"").decode(errors="ignore").strip() or "git clone failed"
-            for secret in filter(None, [effective_token, ssh_key]):
-                err_msg = err_msg.replace(secret, "<redacted>")
-            raise _GraphOnlyError("repo_access", err_msg)
+        if not outcome.ok:
+            raise _GraphOnlyError("repo_access", outcome.stderr)
 
         total = self._count_files(clone_dir)
         head = _git_rev_parse(clone_dir, ["HEAD"]) or ""
@@ -238,13 +210,11 @@ class GraphOnlyIndexer:
         but with NO landing-page validation (there are no pages) and stamps
         ``graph_only=True`` + a synthetic landing id pointing at the graph view.
         """
-        from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
         from mewbo_graph.wiki.types import Project  # noqa: PLC0415
 
         ctx = self._ctx
         sub = self._submission
         repo_url = sub.repo_url or ""
-        token = CloneTokenCache.peek(ctx.job_id) or sub.token or None
         source = sub.platform
         lang = sub.language or "en"
 
@@ -257,11 +227,24 @@ class GraphOnlyIndexer:
                 "produced no nodes",
             )
 
-        desc = _fetch_description(repo_url=repo_url, platform=source, token=token, slug=ctx.slug)
-        if not desc:
-            existing = ctx.store.get_project(ctx.slug)
-            if existing is not None and existing.desc:
-                desc = existing.desc
+        # Shared read-preserve seam (user override → platform fetch → previous
+        # record) — the same one ``wiki_finalize`` uses, so an edited description
+        # survives a reindex on BOTH paths.
+        desc = _resolve_project_desc(ctx.store, ctx.slug, repo_url=repo_url, platform=source)
+
+        # A graph-only project has ZERO pages by definition. When a slug is FLIPPED
+        # to graph-only, the pages from its prior
+        # documented index would otherwise survive in the store as orphans: the
+        # Project is stamped ``graph_only=True``, so the doc-read seam
+        # (``get_page`` → ``DocumentationUnavailableError``) makes every one of them
+        # unreachable — dead rows that a later flip BACK would then mix with freshly
+        # generated ones (the slug-drift duplication ``prune_pages`` exists to kill).
+        # ``wiki_finalize`` prunes to its committed plan for exactly this reason; the
+        # graph-only plan is empty, so prune to nothing. A no-op on the common path
+        # (a project onboarded graph-only from the start has no pages to drop).
+        dropped = ctx.store.prune_pages(ctx.slug, keep=())
+        if dropped:
+            emit_log(ctx, f"Dropped {dropped} page(s) — this project is now graph-only")
 
         job = ctx.store.get_job(ctx.job_id)
         branch = (job.branch if job else None) or None
@@ -297,6 +280,14 @@ class GraphOnlyIndexer:
         )
         _supersede_stale_jobs(ctx)
 
+        # Reap prior-commit graph artifacts, exactly as ``wiki_finalize`` does:
+        # a graph-only re-index at a new commit must not union with the old one.
+        if commit_sha:
+            try:
+                ctx.store.supersede_graph_artifacts(ctx.slug, keep_commit_sha=commit_sha)
+            except Exception as exc:  # pragma: no cover — best-effort cleanup
+                logging.info("graph-only finalize: supersede failed ({})", exc)
+
         emit_phase(ctx, "finalize")
         emit_log(ctx, "Graph-only wiki ready: AST graph built, no documentation pages")
         ctx.store.append_job_event(ctx.job_id, {
@@ -304,7 +295,6 @@ class GraphOnlyIndexer:
             "landingPageId": _GRAPH_ONLY_LANDING_ID,
             "pageCount": 0,
         })
-        CloneTokenCache.forget(ctx.job_id)
 
     # ── helpers ─────────────────────────────────────────────────────────
 

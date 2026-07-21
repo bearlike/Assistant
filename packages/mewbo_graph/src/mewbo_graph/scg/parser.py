@@ -112,7 +112,7 @@ class ScgParser:
         descriptor is persisted (with its tool-list :class:`ManifestHash` stamped
         on ``schema_version``) so later ``link_sources`` / re-maps can find it and
         the workspace-save drift check can compare the live surface against the
-        mapped one (#81-C).
+        mapped one.
         """
         graph = self._registry.build(descriptor)
         graph.recipes.extend(self._default_recipes(graph))
@@ -215,7 +215,7 @@ class ScgParser:
         try:
             rows = self._embedder.embed_nodes(items)
         except Exception as exc:  # noqa: BLE001 — embedding is best-effort
-            logging.warning("SCG node embedding skipped: %s", exc)
+            logging.warning("SCG node embedding skipped: {}", exc)
             return
         model = getattr(self._embedder, "model", "")
         self._store.upsert_embeddings(

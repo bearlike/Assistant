@@ -1,0 +1,29 @@
+{
+  "name": "mewbo-apps-builder",
+  "description": "app-builder + app-repair agents and the submit_app / app_data session tools for the Mewbo Apps sub-product.",
+  "version": "0.1.0",
+  "author": "Mewbo",
+  "requires-capabilities": ["apps"],
+  "session_tools": [
+    {
+      "tool_id": "submit_app",
+      "module": "mewbo_api.apps.plugin.submit_app",
+      "class": "SubmitAppTool"
+    },
+    {
+      "tool_id": "app_data",
+      "module": "mewbo_api.apps.plugin.app_data",
+      "class": "AppDataTool"
+    },
+    {
+      "tool_id": "run_pipeline",
+      "module": "mewbo_api.apps.plugin.run_pipeline",
+      "class": "RunPipelineTool"
+    },
+    {
+      "tool_id": "get_app",
+      "module": "mewbo_api.apps.plugin.get_app",
+      "class": "GetAppTool"
+    }
+  ]
+}

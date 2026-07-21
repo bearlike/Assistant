@@ -59,6 +59,15 @@ vi.mock("../../api/client", () => ({
   listApiKeys: vi.fn().mockResolvedValue([]),
   createApiKey: vi.fn(),
   revokeApiKey: vi.fn(),
+  // PluginsPane (lazy, Plugins facet) calls these. Opening a facet mounts its
+  // registered panes as well as its schema sections, so a pane's client calls
+  // must resolve even when the test only asserts on the schema side — an
+  // unmocked export throws out of the lazy chunk and takes the whole tree with
+  // it (empty <body>), which reads as a confusing "element not found".
+  listPlugins: vi.fn().mockResolvedValue([]),
+  listMarketplacePlugins: vi.fn().mockResolvedValue([]),
+  installPlugin: vi.fn(),
+  uninstallPlugin: vi.fn(),
 }));
 
 const getConfigSchema = vi.mocked(client.getConfigSchema);
@@ -130,35 +139,70 @@ beforeEach(() => {
   getConfig.mockResolvedValue({ config, secrets });
   patchConfig.mockResolvedValue({ config, secrets });
   listApiKeys.mockResolvedValue([]);
+  // The active facet is `?facet=` (wouter's default browser-location router),
+  // read but no longer WRITTEN by this shell — the NavRail's own Settings
+  // zone (`nav-rail/settingsSection.tsx`) owns facet selection now. jsdom
+  // shares ONE window.location across the whole file, so without this reset a
+  // test that lands on a specific facet via `window.history.replaceState`
+  // would deep-link the NEXT test into that same facet — the tests would
+  // only pass in order.
+  window.history.replaceState({}, "", "/settings");
 });
 
-/** Wait for the shell to finish loading (first facet heading rendered). */
+/** Render on the default (first-visible) facet and wait for it to mount. */
 async function renderSettings() {
   render(<SettingsView />);
-  // "Models & Inference" is the default facet; its nav button proves the model
-  // built from the real schema and the shell mounted.
-  await screen.findByRole("button", { name: "Models & Inference" });
+  // "Language Model" is the llm section's humanized title, the first section
+  // on the default "models" facet; its presence proves the model built from
+  // the real schema and RJSF sliced the section without throwing.
+  await screen.findByRole("heading", { name: "Language Model" });
+}
+
+/**
+ * Render landed directly on one facet via `?facet=` — replaces the old
+ * "render on default, then click the nav button" pattern. Clicking a facet is
+ * no longer this component's job: the URL is the only interface left between
+ * a facet picker (the NavRail) and this shell.
+ */
+async function renderOnFacet(facetId: string) {
+  window.history.replaceState({}, "", `/settings?facet=${facetId}`);
+  render(<SettingsView />);
 }
 
 describe("SettingsView against the real backend schema", () => {
-  // 1 — the facet nav renders every facet that has sections (by accessible name)
-  test("renders the expected facet navigation from the real schema", async () => {
-    await renderSettings();
-    const nav = screen.getByRole("navigation", { name: "Settings" });
-    for (const name of [
-      "Models & Inference",
-      "Agent & Tools",
-      "Integrations",
-      "Interface",
-      "Server & Storage",
-      "Security & Access",
+  // 1 — every facet that has sections actually renders ITS OWN content when
+  // selected via `?facet=`, rather than silently falling back to the default
+  // facet. This is the guard against the silent-`other`-bucket trap (was: a
+  // nav-button-existence check against this shell's own now-removed facet
+  // nav; the NavRail's Settings zone has the equivalent "does every facet get
+  // a row" coverage in its own test file).
+  test("renders every schema-driven facet's own heading when selected via ?facet=", async () => {
+    const facets: Array<[id: string, title: string]> = [
+      ["models", "Models & Inference"],
+      ["agent", "Agent & Tools"],
+      // Automation facet — TriggersConfig carries `x-group: automation`, so the
+      // facet renders from the real schema. If `facets.ts` ever loses the
+      // "automation" id, SettingsModel silently buckets Triggers into "Other"
+      // and the fallback facet's heading would render instead, failing this.
+      ["automation", "Automation"],
+      ["integrations", "Integrations"],
+      ["interface", "Interface"],
+      ["server", "Server & Storage"],
+      ["security", "Security & Access"],
       // Workspace facet (projects + wiki) — sections come from the schema, so it
       // renders even though the fixture config seeds no projects/wiki values.
-      "Workspace",
-    ]) {
+      ["workspace", "Workspace"],
+    ];
+    for (const [facetId, title] of facets) {
+      await renderOnFacet(facetId);
+      // `getAllByRole` rather than `getBy*`: a facet whose pane's own card
+      // shares its title (Plugins does this, tested separately below) would
+      // otherwise match two headings and throw. Any match proves the facet
+      // resolved to itself instead of the fallback.
       expect(
-        within(nav).getByRole("button", { name })
-      ).toBeInTheDocument();
+        (await screen.findAllByRole("heading", { name: title })).length
+      ).toBeGreaterThan(0);
+      cleanup();
     }
   });
 
@@ -179,19 +223,26 @@ describe("SettingsView against the real backend schema", () => {
     expect(document.querySelectorAll("input").length).toBeGreaterThan(0);
   });
 
-  // 3 — Agent & Tools renders the plugins section + the generic array editor:
-  // the marketplaces `list[str]` now routes through the console-themed
+  // 3 — Plugins renders the plugins section + the generic array editor: the
+  // marketplaces `list[str]` now routes through the console-themed
   // ArrayFieldTemplate (RepositoriesField is deleted). The seeded marketplace
   // entry appears in an editable input and a working "Add" control is present.
-  test("Agent & Tools facet renders the plugins marketplaces array editor", async () => {
-    await renderSettings();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Agent & Tools" })
-    );
+  //
+  // Plugins is its own top-level facet: `PluginsPane` and `PluginsConfig`'s
+  // `x-group` moved off `agent` together, per the "a pane sits in the facet
+  // that owns its settings" rule. This test drives the REAL schema, so it is
+  // also the guard against the silent-`other`-bucket trap — if `x-group` and
+  // `FacetId` ever fall out of lockstep, this section vanishes and this fails.
+  test("Plugins facet renders the plugins marketplaces array editor", async () => {
+    await renderOnFacet("plugins");
 
-    // The plugins section card — humanized schema title is "Plugins".
+    // The plugins section card — humanized schema title is "Plugins". Queried
+    // as the labelled REGION, not the heading: the facet's own <h2> now carries
+    // the same accessible name ("Plugins" is both the facet title and the
+    // section title), so a heading query matches two elements and throws. Only
+    // the SettingsCard is a region.
     expect(
-      await screen.findByRole("heading", { name: "Plugins" })
+      await screen.findByRole("region", { name: "Plugins" })
     ).toBeInTheDocument();
 
     // The seeded marketplace value is rendered in an editable input by the
@@ -208,7 +259,7 @@ describe("SettingsView against the real backend schema", () => {
     expect(addButtons.length).toBeGreaterThan(0);
     const inputsBefore = document.querySelectorAll("input").length;
     await userEvent.click(addButtons[0]);
-    await screen.findByRole("heading", { name: "Plugins" });
+    await screen.findByRole("region", { name: "Plugins" });
     expect(document.querySelectorAll("input").length).toBeGreaterThan(
       inputsBefore
     );
@@ -232,10 +283,7 @@ describe("SettingsView against the real backend schema", () => {
   // 5 — Security & Access renders the secrets summary AND mounts the lazy
   // ApiKeysView (Suspense → use findBy*).
   test("Security & Access renders the secrets summary and ApiKeysView", async () => {
-    await renderSettings();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Security & Access" })
-    );
+    await renderOnFacet("security");
 
     // Secrets summary: configured vs not-configured rendered from the is-set map.
     const summary = await screen.findByRole("region", {
@@ -271,6 +319,37 @@ describe("SettingsView against the real backend schema", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "New key label" })
+    ).toBeInTheDocument();
+  });
+
+  // 6 — `?facet=` deep-linking. Landing with a facet in the URL selects it
+  // (instead of the default first facet) — a pane deep-link such as
+  // `/settings?facet=automation&session=<id>` depends on this. This shell no
+  // longer WRITES `?facet=` itself (the NavRail's Settings zone does, and
+  // covers "a facet switch preserves an unrelated param" in its own test
+  // file), so the only thing left to prove here is that this shell doesn't
+  // clobber a param it doesn't own.
+  test("?facet= selects the facet on mount and leaves an unrelated param alone", async () => {
+    window.history.replaceState({}, "", "/settings?facet=security&session=abc123");
+    render(<SettingsView />);
+
+    // Landed directly on Security (a pane-only facet).
+    expect(
+      await screen.findByRole("region", { name: "Configured secrets" })
+    ).toBeInTheDocument();
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("facet")).toBe("security");
+    expect(params.get("session")).toBe("abc123");
+  });
+
+  // 7 — an unknown `?facet=` falls back to the first visible facet rather than
+  // rendering an empty pane.
+  test("an unknown ?facet= falls back to the first facet", async () => {
+    window.history.replaceState({}, "", "/settings?facet=nonsense");
+    render(<SettingsView />);
+    expect(
+      await screen.findByRole("heading", { name: "Language Model" })
     ).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-# Session-title generation prompt (Gitea #89, phase 1 — VERBATIM extraction).
+# Session-title generation prompt (VERBATIM extraction).
 #
 # Migrated from title_generator.py: TITLE_SYSTEM_PROMPT, the system message for
 # the one-shot 3-7 word title model call. Static (no `variables`) so it passes

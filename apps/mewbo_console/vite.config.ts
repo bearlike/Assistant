@@ -80,7 +80,11 @@ export default defineConfig(({ mode }) => {
           // demand. They all carry the deterministic `stlite-` prefix
           // assigned by `chunkFileNames` below, so one pattern stays correct
           // across stlite upgrades and bundler chunking changes.
-          globIgnores: ["**/runtime-config.js", "**/stlite-*.js"],
+          // pyodide.asm.js is a .js file and would otherwise match globPatterns
+          // above; the vendored runtime must stay network-only (nginx owns its
+          // caching — see apps/mewbo_console/CLAUDE.md → "Self-hosted Pyodide
+          // runtime"), not get swept into the SW precache.
+          globIgnores: ["**/runtime-config.js", "**/stlite-*.js", "**/pyodide/**"],
           navigateFallback: "index.html",
           // `/ide/` is proxied to per-session code-server containers (see
           // docker/nginx-reverse-proxy.conf + docker/nginx-ide-proxy.conf).
@@ -88,7 +92,20 @@ export default defineConfig(({ mode }) => {
           // claim the navigation and serve index.html, leaving the user on the
           // Mewbo shell instead of Coder. Note the trailing slash: this must
           // NOT match `/ide-loader/:sessionId`, which *is* a SPA route.
-          navigateFallbackDenylist: [/^\/api/, /^\/runtime-config\.js$/, /^\/ide\//],
+          // `/widget-host/` is the separate relative-base build (see
+          // vite.widget-host.config.ts), and `AppFrame` loads it in an iframe.
+          // An iframe load IS a navigation request (`request.mode ===
+          // "navigate"`), so without this entry the NavigationRoute claims it
+          // and serves the precached `index.html` — the console would render
+          // recursively inside its own app frame, with no error anywhere, and
+          // only once a service worker is active (so it survives dev and a
+          // hard-reloaded first visit, then appears on the second load).
+          navigateFallbackDenylist: [
+            /^\/api/,
+            /^\/runtime-config\.js$/,
+            /^\/ide\//,
+            /^\/widget-host\//,
+          ],
           cleanupOutdatedCaches: true,
           // Activate a new SW and take over all clients immediately on install.
           // Paired with `registerType: "prompt"` + UpdatePrompt: the user still

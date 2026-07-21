@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rich sigil-dispatched input for the Mewbo TUI (issue #155, epic #149).
+"""Rich sigil-dispatched input for the Mewbo TUI.
 
 This package owns the input-area behaviour layered onto the foundation
 :class:`~mewbo_cli.tui.widgets.input_area.InputArea`:

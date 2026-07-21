@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Base64
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -17,8 +18,8 @@ android {
         applicationId = "com.mewbo.aura"
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 9
+        versionName = "0.0.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -152,11 +153,86 @@ val seedEnterpriseCa by tasks.registering {
 tasks.matching { it.name.startsWith("merge") && it.name.contains("Enterprise") && it.name.endsWith("Resources") }
     .configureEach { dependsOn(seedEnterpriseCa) }
 
+// Widget-host assets: the offline stlite widget renderer is a self-contained web
+// bundle the CONSOLE builds (apps/mewbo_console/dist/widget-host/ — a relocatable base:'./' build,
+// vendored Pyodide included). Aura serves it from a WebView via WebViewAssetLoader, so it has to
+// live in the APK's assets. Rather than check ~26 MB of Pyodide blobs into git (the console's own
+// dist/ is gitignored for the same reason), this copies the built bundle into a build/-scoped
+// generated dir (gitignored, never committed). Wired as a GENERATED asset source via the AGP Variant
+// API below — one task PER VARIANT — which auto-declares the task dependency for EVERY consumer
+// (merge/lint/package); a plain sourceSets.srcDir + manual dependsOn missed lint and tripped
+// Gradle's implicit-dependency validation. `sourceFiles` (optional) tracks the console dist for
+// up-to-date-ness while tolerating its absence at configuration time.
+//
+// Missing-dist behavior is VARIANT-SPLIT ([failIfMissing]): a RELEASE variant FAILS HARD (the flag
+// defaults ON + advertises `stlite`, so a release with no bundle would ship broken widget cards to
+// every user — the advertise-what-you-can't-service trap at the build level; mirrors seedEnterpriseCa's
+// "never silently ship a broken build" posture). A DEBUG variant only WARNS, so dev iteration on a
+// machine that hasn't built the console isn't blocked (the widget card would show its load-error state).
+abstract class SyncWidgetHostAssets : DefaultTask() {
+    @get:InputFiles
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val sourceDir: DirectoryProperty
+
+    @get:Input
+    abstract val failIfMissing: Property<Boolean>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val fs: FileSystemOperations
+
+    @TaskAction
+    fun sync() {
+        val src = sourceDir.get().asFile
+        if (!src.isDirectory) {
+            val message =
+                "widget-host bundle not found at $src — the stlite widget renderer needs the " +
+                    "console's built bundle. Build it first:\n" +
+                    "  (cd ../../mewbo_console && npm run build)   # also emits dist/widget-host/\n" +
+                    "It carries the offline stlite renderer + vendored Pyodide the widget WebView serves."
+            if (failIfMissing.get()) throw GradleException(message)
+            // Debug: don't block dev iteration — the card just shows its load-error state.
+            logger.warn("syncWidgetHostAssets: $message\n(debug build — the widget renderer will be ABSENT from this APK.)")
+            return
+        }
+        // Sync INTO a `widget-host/` subdir of the generated assets root, so the page resolves at
+        // assets/widget-host/widget-host.html (the relocatable base the console build emits).
+        fs.sync {
+            from(src)
+            into(outputDir.get().dir("widget-host"))
+        }
+    }
+}
+val widgetHostSourceDir = layout.projectDirectory.dir("../../mewbo_console/dist/widget-host")
+androidComponents {
+    onVariants { variant ->
+        val isRelease = variant.buildType == "release"
+        val syncTask = tasks.register<SyncWidgetHostAssets>(
+            "syncWidgetHostAssets${variant.name.replaceFirstChar { it.uppercaseChar() }}",
+        ) {
+            group = "build setup"
+            description = "Copy the console's built widget-host bundle into ${variant.name}'s assets."
+            sourceDir.set(widgetHostSourceDir)
+            sourceFiles.from(fileTree(widgetHostSourceDir)) // empty (not an error) when the dist is absent
+            failIfMissing.set(isRelease) // release fails hard; debug only warns
+            // outputDir is wired + located by AGP's addGeneratedSourceDirectory below (under build/, gitignored).
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(syncTask) { it.outputDir }
+    }
+}
+
 dependencies {
     // Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.material3)
     implementation(libs.material.icons.core)
+    implementation(libs.material.icons.extended)
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
@@ -194,12 +270,15 @@ dependencies {
     // Settings / storage
     implementation(libs.datastore.preferences)
 
+    // WebView asset loading — the offline stlite widget host
+    implementation(libs.androidx.webkit)
+
     // Test
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     // android.net.Uri's real methods throw ("not mocked") under the plain-JVM android.jar stub
     // (no Robolectric in this module) - mockito-core mocks it instead, needed by
-    // StagedAttachmentsReducerTest (Gitea #177 W2).
+    // StagedAttachmentsReducerTest.
     testImplementation("org.mockito:mockito-core:5.14.2")
 }

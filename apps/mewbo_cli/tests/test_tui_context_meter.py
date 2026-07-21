@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for ContextMeter — tokens → context-% and tokens → cost (issue #156)."""
+"""Tests for ContextMeter — tokens → context-% and tokens → cost."""
 
 from __future__ import annotations
 

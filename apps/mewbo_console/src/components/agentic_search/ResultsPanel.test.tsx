@@ -1,5 +1,5 @@
 /**
- * ResultsPanel top-band tests (#96).
+ * ResultsPanel top-band tests.
  *
  * The results page top section was "crap": the query repeated inside the input
  * AND as an italic subtext echo, and the stats line always read
@@ -104,14 +104,18 @@ function renderPanel(
         done={over.done ?? true}
         answerReady={false}
         isLoading={false}
-        tier={over.tier ?? "auto"}
-        onTierChange={vi.fn()}
-        model=""
-        onModelChange={vi.fn()}
+        scope={{
+          tier: over.tier ?? "auto",
+          onTierChange: vi.fn(),
+          model: "",
+          onModelChange: vi.fn(),
+          fallbackModels: [],
+          onFallbackModelsChange: vi.fn(),
+        }}
         onRun={vi.fn()}
         onDeeper={over.onDeeper}
         onCancel={over.onCancel}
-        onPickWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onOpenCreate={vi.fn()}
         onOpenConfig={vi.fn()}
       />
@@ -207,7 +211,7 @@ describe("ResultsPanel — coordinator trace lane", () => {
   })
 })
 
-describe("ResultCard — agent-emitted per-card confidence (#102)", () => {
+describe("ResultCard — agent-emitted per-card confidence", () => {
   it("renders the emitter's confidence % when present, and never a fake 0%", () => {
     renderPanel(
       makeRun({

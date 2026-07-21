@@ -1,5 +1,6 @@
 package com.mewbo.aura.voice
 
+import com.mewbo.aura.data.device.AssistOverlayPresence
 import com.mewbo.aura.data.device.DevicePermissionChecker
 import com.mewbo.aura.data.repo.RunRepository
 import com.mewbo.aura.data.repo.SessionRepository
@@ -25,8 +26,13 @@ interface AssistEntryPoint {
     fun settingsStore(): SettingsStore
     fun haptics(): AuraHaptics
 
-    /** Gitea #180 P5's mic-tap gate reuses `DeviceModule`'s existing `Context.checkSelfPermission`
-     * seam (#179) rather than a second one - `RECORD_AUDIO` is checked the same way `device_*`
+    /** 's mic-tap gate reuses `DeviceModule`'s existing `Context.checkSelfPermission`
+     * seam rather than a second one - `RECORD_AUDIO` is checked the same way `device_*`
      * tools already check theirs. */
     fun devicePermissionChecker(): DevicePermissionChecker
+
+    /** [AuraSession] is the only writer: it flips this while its window is on screen so the
+     * `device_*` activity-launch guard knows the app currently HAS a visible, user-initiated window
+     * even though its process importance says otherwise (`canStartActivityNow`). */
+    fun assistOverlayPresence(): AssistOverlayPresence
 }

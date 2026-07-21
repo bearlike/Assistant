@@ -121,7 +121,7 @@ class WikiEmitAnswerTool(WikiSessionTool):
 
         # 6. Re-scheme bare wiki-page citations on the sources block BEFORE it
         #    lands on the log — one seam fixes both the live stream and the
-        #    reconciled snapshot (#70).
+        #    reconciled snapshot.
         from mewbo_graph.wiki.qa import QaFinalizer  # noqa: PLC0415
 
         validated[-1] = QaFinalizer.tag_page_citations(validated[-1], ctx.store, ctx.slug)

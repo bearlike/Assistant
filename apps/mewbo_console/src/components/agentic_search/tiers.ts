@@ -6,7 +6,7 @@ import type { SearchTier } from "../../types/agenticSearch"
 // the budget's real currency (depth × probes), not vague speed adjectives.
 //
 // Shared by the SearchBar budget pill and the SearchScopeControl scope pill
-// (#101) — one definition so the two surfaces can never drift. Lives in a
+// — one definition so the two surfaces can never drift. Lives in a
 // non-component module so re-exporting it doesn't trip react-refresh.
 export const TIERS: { id: SearchTier; name: string; hint: string }[] = [
   { id: "fast", name: "Fast", hint: "shallow · few probes" },

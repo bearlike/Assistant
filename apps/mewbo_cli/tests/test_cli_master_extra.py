@@ -24,11 +24,13 @@ from mewbo_cli.cli_master import (
     _render_preflight_warnings,
     _render_results_with_registry,
     _render_tool_payload,
+    _response_panel_chrome,
     _run_query,
     _should_force_preview,
     _verbosity_to_level,
 )
 from mewbo_cli.cli_notices import (
+    derive_task_outcome as _derive_task_outcome,
     fmt_tokens as _fmt_tokens,
     maybe_print_recovery_hint as _maybe_print_recovery_hint,
     model_basename as _model_basename,
@@ -362,13 +364,21 @@ def test_render_results_mcp_spec_label():
 
 
 def _store_with_user_turn(tmp_path, done_reason: str | None = None) -> tuple:
-    """Helper: create a store+session with a user event and optional completion."""
+    """Helper: create a store+session with a user event and optional completion.
+
+    ``done: True`` mirrors a real completion payload (the orchestrator always
+    stamps both fields together) — it matters here because
+    ``summarize_session``'s fallback for a reason absent from its table
+    (``"completed"`` itself is deliberately not a table key) trusts ``done``,
+    not the reason string.
+    """
     store = SessionStore(root_dir=str(tmp_path))
     session_id = store.create_session()
     store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
     if done_reason is not None:
         store.append_event(
-            session_id, {"type": "completion", "payload": {"done_reason": done_reason}}
+            session_id,
+            {"type": "completion", "payload": {"done": True, "done_reason": done_reason}},
         )
     return store, session_id
 
@@ -438,6 +448,20 @@ def test_maybe_print_recovery_hint_suppressed_when_halt_printed(tmp_path):
     assert console.export_text().strip() == ""
 
 
+def test_maybe_print_recovery_hint_suppressed_when_terminated(tmp_path):
+    """No false 'can be recovered' hint for a permanently terminated session.
+
+    A terminated session's last completion can still read a recoverable
+    ``done_reason`` (e.g. "canceled") — the authoritative ``terminated`` flag
+    must win over the done_reason heuristic.
+    """
+    store, session_id = _store_with_user_turn(tmp_path, "canceled")
+    store.terminate_session(session_id)
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    assert console.export_text().strip() == ""
+
+
 def test_maybe_print_recovery_hint_no_user_turn_no_hint(tmp_path):
     """No hint when session has a completion but no prior user turn."""
     store = SessionStore(root_dir=str(tmp_path))
@@ -448,6 +472,116 @@ def test_maybe_print_recovery_hint_no_user_turn_no_hint(tmp_path):
     console = Console(record=True)
     _maybe_print_recovery_hint(console, store, session_id)
     assert console.export_text().strip() == ""
+
+
+def test_maybe_print_recovery_hint_blocked_code(tmp_path):
+    """A ``blocked_code`` run offers the hint even though ``done_reason`` stays
+    ``"completed"`` — the false-success gap the old hand-copied
+    ``RECOVERABLE_DONE_REASONS`` allowlist never covered because it only ever
+    read ``done_reason``.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "user", "payload": {"text": "hello"}})
+    store.append_event(
+        session_id,
+        {
+            "type": "completion",
+            "payload": {"done": True, "done_reason": "completed", "blocked_code": "repo_access"},
+        },
+    )
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    output = console.export_text()
+    assert "/continue" in output
+    assert "/retry" in output
+
+
+def test_maybe_print_recovery_hint_verification_failed(tmp_path):
+    """``verification_failed`` maps onto ``unmet_goal`` and is recoverable too."""
+    store, session_id = _store_with_user_turn(tmp_path, "verification_failed")
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    output = console.export_text()
+    assert "/continue" in output
+    assert "/retry" in output
+
+
+def test_maybe_print_recovery_hint_unmet_goal(tmp_path):
+    """A directly-stamped ``unmet_goal`` done_reason is recoverable."""
+    store, session_id = _store_with_user_turn(tmp_path, "unmet_goal")
+    console = Console(record=True)
+    _maybe_print_recovery_hint(console, store, session_id)
+    output = console.export_text()
+    assert "/continue" in output
+    assert "/retry" in output
+
+
+# ---------------------------------------------------------------------------
+# derive_task_outcome
+# ---------------------------------------------------------------------------
+
+
+def test_derive_task_outcome_completed_is_completed():
+    assert _derive_task_outcome("completed", None) == "completed"
+
+
+def test_derive_task_outcome_blocked_code_outranks_completed_done_reason():
+    """A ``blocked_code`` completion never reads as a clean success.
+
+    The loop leaves ``done_reason`` at ``"completed"`` for a run that hit an
+    unrecovered wall, carrying the wall separately as ``blocked_code`` — this
+    is the exact shape that used to render green everywhere it was checked.
+    """
+    assert _derive_task_outcome("completed", "repo_access") == "blocked"
+    assert _derive_task_outcome("completed", "network") == "blocked"
+
+
+def test_derive_task_outcome_unrecognized_blocked_code_is_ignored():
+    """A code outside the closed set never widens the status vocabulary."""
+    assert _derive_task_outcome("completed", "not_a_real_code") == "completed"
+
+
+def test_derive_task_outcome_halt_and_verification_map_to_unmet_goal():
+    assert _derive_task_outcome("halted_no_progress", None) == "unmet_goal"
+    assert _derive_task_outcome("verification_failed", None) == "unmet_goal"
+    assert _derive_task_outcome("unmet_goal", None) == "unmet_goal"
+
+
+def test_derive_task_outcome_error_maps_to_failed():
+    assert _derive_task_outcome("error", None) == "failed"
+
+
+def test_derive_task_outcome_unnamed_reason_is_trusted_as_is():
+    assert _derive_task_outcome("some_new_reason", None) == "some_new_reason"
+
+
+# ---------------------------------------------------------------------------
+# _response_panel_chrome — the plain-fallback Response panel's honest chrome
+# ---------------------------------------------------------------------------
+
+
+def test_response_panel_chrome_completed_keeps_green_success():
+    title, border = _response_panel_chrome("completed")
+    assert border == "bold green"
+    assert "Response" in title
+
+
+def test_response_panel_chrome_blocked_is_not_green():
+    _title, border = _response_panel_chrome("blocked")
+    assert border != "bold green"
+    assert "green" not in border
+
+
+def test_response_panel_chrome_unmet_goal_is_not_green():
+    title, border = _response_panel_chrome("unmet_goal")
+    assert border != "bold green"
+    assert "Goal not met" in title
+
+
+def test_response_panel_chrome_failed_is_not_green():
+    _title, border = _response_panel_chrome("failed")
+    assert border == "red"
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +1005,34 @@ def test_run_query_plan_mode_approved_runs_act(monkeypatch, tmp_path):
     assert "act" in run_sync_calls
 
 
+def test_run_query_refuses_terminated_session(monkeypatch, tmp_path):
+    """A permanently terminated session never starts a run.
+
+    ``orchestrate_session`` is deliberately left unstubbed: if the guard
+    didn't fire, the real call would raise instead of quietly succeeding.
+    """
+    store = SessionStore(root_dir=str(tmp_path))
+    runtime = SessionRuntime(session_store=store)
+    session_id = store.create_session()
+    store.terminate_session(session_id)
+    state = CliState(session_id=session_id, show_plan=False, mode="act")
+    console = Console(record=True)
+    reg = _make_tool_registry()
+
+    _run_query(
+        console,
+        store,
+        runtime,
+        state,
+        reg,
+        "hello",
+        _make_args(),
+        prompt_func=None,
+    )
+    output = console.export_text().lower()
+    assert "terminated" in output
+
+
 def test_run_query_no_pending_plan(monkeypatch, tmp_path):
     """Non-plan-mode query: no plan approval flow triggered."""
     store = SessionStore(root_dir=str(tmp_path))
@@ -939,6 +1101,42 @@ def test_run_cli_no_fallback_flag(monkeypatch, tmp_path):
     monkeypatch.setattr("mewbo_cli.cli_master.load_registry", lambda: ToolRegistry())
     result = run_cli(args)
     assert result == 0
+
+
+def test_run_cli_fork_from_terminated_session_friendly_error(tmp_path):
+    """--fork from a permanently terminated session exits cleanly.
+
+    ``resolve_session`` raises ``SessionTerminatedError`` for a terminated
+    fork source; ``run_cli`` must catch it and print a one-line error instead
+    of letting the traceback propagate out of the CLI entry point.
+    """
+    from mewbo_cli.cli_master import run_cli
+
+    set_mcp_config_path(str(tmp_path / "mcp.json"))
+    store = SessionStore(root_dir=str(tmp_path))
+    terminated_id = store.create_session()
+    store.terminate_session(terminated_id)
+
+    args = types.SimpleNamespace(
+        query="hi",
+        model=None,
+        max_iters=1,
+        show_plan=False,
+        no_color=True,
+        session=None,
+        tag=None,
+        fork=terminated_id,
+        session_dir=str(tmp_path),
+        history_file=str(tmp_path / "history"),
+        auto_approve=True,
+        verbose=0,
+        config=None,
+        fallback_models=None,
+        no_fallback=False,
+    )
+
+    result = run_cli(args)
+    assert result == 1
 
 
 def test_run_cli_fallback_models_comma_split(monkeypatch, tmp_path):
@@ -1193,7 +1391,7 @@ def test_run_cli_empty_input_skipped(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# App-path console-log gating (#160 — no log bleed onto the Textual alt-screen)
+# App-path console-log gating (no log bleed onto the Textual alt-screen)
 # ---------------------------------------------------------------------------
 
 

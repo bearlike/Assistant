@@ -36,7 +36,7 @@ export function ScrollToBottom({ onClick, label = 'Jump to bottom', isRunning = 
         'hover:-translate-y-0.5 hover:opacity-100',
         'hover:bg-[hsl(var(--primary))] hover:text-[hsl(var(--primary-foreground))]',
         'hover:border-[hsl(var(--primary))]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/45',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]',
         'animate-in fade-in slide-in-from-bottom-2 duration-200',
       ].join(' ')}
     >

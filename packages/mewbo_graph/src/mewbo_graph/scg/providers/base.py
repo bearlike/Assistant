@@ -1,6 +1,6 @@
 """The information→graph parser SEAM — one provider per source *type*.
 
-There is no tree-sitter to lean on here: connectors aren't code (that is #13's
+There is no tree-sitter to lean on here: connectors aren't code (that is the wiki layer's
 AST trick). The SCG instead parses each source's *self-description* — an OpenAPI
 doc, an MCP tool list, a GraphQL SDL, a SQL schema — into the shared
 :class:`~mewbo_graph.scg.types.StructureGraph`. The seam is an
@@ -9,7 +9,7 @@ RML-style declarative shell (R2RML/RML, LDOW'14): one
 ``descriptor.source_type``. **A new source type = one class + one register
 call, zero core edits.**
 
-NOTE — distinct from #13's ``StructureProvider``. That Protocol (wiki memory
+NOTE — distinct from the wiki layer's ``StructureProvider``. That Protocol (wiki memory
 layer) resolves *between* an ``entity_key`` and a code node. This
 ``SourceStructureProvider`` *builds* a connector's capability subgraph from a
 raw descriptor. They share a name root and nothing else.

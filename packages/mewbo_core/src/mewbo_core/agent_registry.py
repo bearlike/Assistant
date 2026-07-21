@@ -93,6 +93,8 @@ class AgentDef:
     source_path: str  # absolute path to the .md file
     source: str  # "plugin:<plugin-name>" or "project" or "personal"
     body: str  # markdown body (becomes agent's system prompt)
+    # Three-state: None = unrestricted, [] = grants nothing, non-empty = exactly
+    # those. Every consumer must test it with ``is None``, never truthiness.
     allowed_tools: list[str] | None = None
     denied_tools: list[str] | None = None
     model: str | None = None  # "inherit" becomes None
@@ -199,7 +201,12 @@ def parse_agent_file(path: Path, source: str) -> AgentDef | None:
         source_path=str(path),
         source=source,
         body=body,
-        allowed_tools=allowed_tools or None,
+        # ``allowed_tools`` is three-state and an explicit ``tools: []`` is
+        # PRESERVED as ``[]`` — an AgentDef declaring no tools must not parse
+        # into the unrestricted state. ``denied_tools`` keeps ``or None``
+        # deliberately: deny is purely subtractive, so an empty denylist and no
+        # denylist are the same set, and there is no third state to lose.
+        allowed_tools=allowed_tools,
         denied_tools=denied_tools or None,
         model=model,
         requires_capabilities=requires_capabilities,

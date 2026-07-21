@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SidebarView — ordered slot container wired to the sidebar-slot seam.
 
-Placeholder for issue #150 (epic #149). Child #156 fills the sidebar by
+Placeholder for the foundation shell. A later installer fills the sidebar by
 registering slot factories on the same
 :class:`~mewbo_cli.tui.seams.SidebarSlotRegistry` without touching this widget.
 """
@@ -17,7 +17,7 @@ from mewbo_cli.tui.seams import SidebarSlotRegistry
 
 
 class SidebarSection(VerticalScroll):
-    """A titled sidebar facet: a bold header rule over one body widget (#161).
+    """A titled sidebar facet: a bold header rule over one body widget.
 
     Phase 4 splits the cramped sidebar into clearly delineated sections (Fleet ·
     Plan · Context). Each registered slot wraps its widget in one of these so the

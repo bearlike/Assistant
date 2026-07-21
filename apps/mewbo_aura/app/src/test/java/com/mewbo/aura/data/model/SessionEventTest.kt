@@ -155,6 +155,67 @@ class SessionEventTest {
     }
 
     @Test
+    fun `user_question round-trips its question group and single-use token`() {
+        val event = SessionEvent.decode(
+            json,
+            """
+            {"type":"user_question","ts":"2026-07-17T00:00:00.000000+00:00","payload":{
+                "call_id":"q-1","call_token":"tok-1","questions":[
+                    {"header":"Auth method","question":"Which auth?","options":[
+                        {"label":"OAuth","description":"Recommended"},{"label":"API key","description":null}
+                    ],"multi_select":false},
+                    {"header":"Notes","question":"Anything else?","options":[]}
+                ]
+            }}
+            """.trimIndent(),
+        )
+        val q = event as SessionEvent.UserQuestion
+        assertEquals("q-1", q.payload.callId)
+        assertEquals("tok-1", q.payload.callToken)
+        assertEquals(2, q.payload.questions.size)
+        assertEquals("Auth method", q.payload.questions[0].header)
+        assertEquals("OAuth", q.payload.questions[0].options[0].label)
+        assertEquals("Recommended", q.payload.questions[0].options[0].description)
+        assertEquals(false, q.payload.questions[0].multiSelect)
+        // The second question has an empty options list ⇒ a free-text question (options default []).
+        assertTrue(q.payload.questions[1].options.isEmpty())
+    }
+
+    @Test
+    fun `user_question_answered round-trips answers and answered_via`() {
+        val event = SessionEvent.decode(
+            json,
+            """
+            {"type":"user_question_answered","ts":"2026-07-17T00:00:01.000000+00:00","payload":{
+                "call_id":"q-1","outcome":"answered","answered_via":"console","answers":[
+                    {"selected_indexes":[0],"text":null},{"selected_indexes":null,"text":"looks good"}
+                ]
+            }}
+            """.trimIndent(),
+        )
+        val answered = event as SessionEvent.UserQuestionAnswered
+        assertEquals("q-1", answered.payload.callId)
+        assertEquals("answered", answered.payload.outcome)
+        assertEquals("console", answered.payload.answeredVia)
+        val answers = answered.payload.answers!!
+        assertEquals(listOf(0), answers[0].selectedIndexes)
+        assertEquals("looks good", answers[1].text)
+    }
+
+    @Test
+    fun `user_question_answered tolerates a bare dismissal outcome with no answers`() {
+        // declined/interrupted/cancelled carry no answers; a new unknown outcome must decode too.
+        val event = SessionEvent.decode(
+            json,
+            """{"type":"user_question_answered","ts":"t","payload":{"call_id":"q-2","outcome":"interrupted"}}""",
+        )
+        val answered = event as SessionEvent.UserQuestionAnswered
+        assertEquals("interrupted", answered.payload.outcome)
+        assertEquals(null, answered.payload.answers)
+        assertEquals(null, answered.payload.answeredVia)
+    }
+
+    @Test
     fun `stream_end has no ts on the wire and still decodes`() {
         val event = SessionEvent.decode(json, """{"type":"stream_end"}""")
         assertTrue(event is SessionEvent.StreamEnd)
@@ -335,5 +396,46 @@ class SessionEventTest {
     fun `lastContextMcpTools is null when the session has no context event at all`() {
         val events = listOf(SessionEvent.decode(json, """{"type":"user","ts":"t1","payload":{"text":"hi"}}"""))
         assertEquals(null, SessionEvent.lastContextMcpTools(events))
+    }
+
+    // --- widget_ready ---
+
+    @Test
+    fun `widget_ready round-trips with both files, requirements and summary`() {
+        val event = SessionEvent.decode(
+            json,
+            """{"type":"widget_ready","ts":"2026-07-14T01:00:00.000000+00:00","payload":{"widget_id":"w1","session_id":"s1",""" +
+                """"files":{"app.py":"import streamlit as st","data.json":"{\"n\":1}"},"requirements":["pandas"],"summary":"A chart"}}""",
+        )
+        val widget = event as SessionEvent.WidgetReady
+        assertEquals("w1", widget.payload.widgetId)
+        assertEquals("s1", widget.payload.sessionId)
+        assertEquals("import streamlit as st", widget.payload.files.appPy)
+        assertEquals("""{"n":1}""", widget.payload.files.dataJson)
+        assertEquals(listOf("pandas"), widget.payload.requirements)
+        assertEquals("A chart", widget.payload.summary)
+    }
+
+    @Test
+    fun `widget_ready with no requirements or summary decodes with defaults`() {
+        val event = SessionEvent.decode(
+            json,
+            """{"type":"widget_ready","ts":"t1","payload":{"widget_id":"w1","session_id":"s1","files":{"app.py":"x","data.json":"{}"}}}""",
+        )
+        val widget = event as SessionEvent.WidgetReady
+        assertTrue(widget.payload.requirements.isEmpty())
+        assertEquals(null, widget.payload.summary)
+    }
+
+    @Test
+    fun `a widget_ready missing a required file degrades to Unknown rather than a half-formed widget`() {
+        // files.data.json absent → WidgetFiles can't decode → falls through the resilient net to
+        // Unknown (dropped by the reducer), never a widget rendered with an empty script/data.
+        val event = SessionEvent.decode(
+            json,
+            """{"type":"widget_ready","ts":"t1","payload":{"widget_id":"w1","session_id":"s1","files":{"app.py":"x"}}}""",
+        )
+        val unknown = event as SessionEvent.Unknown
+        assertEquals("widget_ready", unknown.type)
     }
 }

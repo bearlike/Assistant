@@ -15,7 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
  * at session creation. `mcp_tools` is omitted entirely when the caller hasn't narrowed anything
  * (task brief) so the backend's own default - bind every tool - stays in effect.
  *
- * `device_tools` (Gitea #179) follows the SAME resend law as `model`/`project`/`mcp_tools`, but
+ * `device_tools` follows the SAME resend law as `model`/`project`/`mcp_tools`, but
  * ONLY [RunRepository.sendQuery] passes it - `device_tools` isn't part of session-creation's own
  * context (task brief scopes it to "re-enumerated FRESH on every `/query`" specifically), so
  * [deviceTools] defaults to `null`/omitted for [SessionRepository.createSession]'s call site.

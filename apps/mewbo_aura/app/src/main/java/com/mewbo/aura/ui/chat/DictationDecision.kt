@@ -34,7 +34,7 @@ internal object DictationDecision {
     /** `SpeechRecognizer#onRmsChanged`'s dBFS-ish range (empirically ~[-2, 10] - matching
      * `FakeTranscriber`'s own script) linearly mapped onto `RmsWaveform`'s expected 0f..1f
      * amplitude - the "voice/-layer concern" its own KDoc calls out as deliberately out of
-     * ui/composer's job (Gitea #180 P2). */
+     * ui/composer's job. */
     private const val MinRmsDb = -2f
     private const val MaxRmsDb = 10f
     private fun normalizeRms(db: Float): Float = ((db - MinRmsDb) / (MaxRmsDb - MinRmsDb)).coerceIn(0f, 1f)

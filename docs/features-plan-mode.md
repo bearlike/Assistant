@@ -74,7 +74,7 @@ Plan mode enforces a **shell allowlist** so the exploration phase stays read-onl
 
 The default allowlist covers the usual read-only tools. This includes `ls`, `cat`, `grep`, `rg`, `find`, `git status`, `git log`, `git diff`, `git show`, and similar commands. Prefix matches are word-boundary safe: `"git log"` matches `"git log --oneline"` but not `"git logger"`. Customise the list via `agent.plan_mode_shell_allowlist`, or set it to `[]` to block shell access in plan mode entirely.
 
-MCP tools are permitted during exploration by default; toggle `agent.plan_mode_allow_mcp` if you want to block them too.
+MCP tools are always permitted during exploration: Mewbo cannot classify a third-party MCP tool's effect, so plan mode does not attempt to mode-filter them.
 
 ---
 
@@ -109,7 +109,6 @@ Use `/continue` when partial work succeeded and only the tail failed. A retry fr
 | Key | Default | Description |
 |-----|---------|-------------|
 | `agent.plan_mode_shell_allowlist` | (read-only commands) | Command prefixes allowed during plan-mode exploration. Matched at a word boundary; prefix entries like `"git log"` match `"git log --oneline"` but not `"git logger"`. Set to `[]` to block shell entirely. |
-| `agent.plan_mode_allow_mcp` | `true` | Allow user-enabled MCP tools during plan mode. Set to `false` to block MCP tools in plan mode. |
 | `agent.edit_tool` | `""` | Override the file editing tool: `"search_replace_block"` or `"structured_patch"`. Empty auto-selects based on the active model. |
 
 See [configuration.md](configuration.md) for the full `agent` config section.

@@ -56,6 +56,40 @@ def fake_runtime() -> MagicMock:
     return rt
 
 
+@pytest.fixture(autouse=True)
+def bound_auth_kit(tmp_path) -> Any:
+    """Bind an AuthKit for the bare app this module mounts ``ide_ns`` on.
+
+    The ide views declare their requirement with ``@guard.requires``, which
+    resolves the process-wide kit at REQUEST time; a bare Flask app runs no
+    composition root, so the guards have nothing to resolve. The kit bound here
+    is a real one and the guards run for real against it — it accepts the
+    injected master credential, and auth-disabled settings make every permission
+    pass. It is deliberately NOT a permissive stand-in: ``init_ide`` no longer
+    accepts a guard, because a guard that a route never consults is worse than
+    no guard at all.
+
+    Rebound to the composed app's kit afterwards so the one process-wide guard
+    is never left pointing at this fixture for the rest of the session.
+    """
+    from mewbo_api import backend
+    from mewbo_api.auth import AuthKit
+    from mewbo_api.auth.guard_registry import guard_registry
+    from mewbo_core.key_store import KeyStore
+    from mewbo_iam import AuthSettings
+
+    guard_registry.bind(
+        AuthKit(
+            settings=AuthSettings(),
+            key_store=KeyStore(path=str(tmp_path / "keys.json")),
+            credential_reader=lambda *_a, **_kw: "ide-test-master",
+            master_matcher=lambda token: token == "ide-test-master",
+        )
+    )
+    yield
+    guard_registry.bind(backend._auth_kit)
+
+
 @pytest.fixture
 def client(
     fake_manager: MagicMock, fake_runtime: MagicMock, monkeypatch: pytest.MonkeyPatch
@@ -72,7 +106,7 @@ def client(
     app = Flask("ide-test")
     api = Api(app)
     api.add_namespace(ide_routes.ide_ns, path="/api")
-    ide_routes.init_ide(fake_manager, fake_runtime, lambda: None)
+    ide_routes.init_ide(fake_manager, fake_runtime)
     return app.test_client()
 
 

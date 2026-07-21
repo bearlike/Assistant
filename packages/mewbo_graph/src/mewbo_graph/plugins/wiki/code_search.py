@@ -49,8 +49,13 @@ class WikiCodeSearchArgs(BaseModel):
         description="Optional list of node types to filter (e.g. ['Class', 'Function']).",
     )
     graph_expand: bool = Field(
-        default=True,
-        description="Whether to expand top hits with 1-hop graph neighbours.",
+        default=False,
+        description=(
+            "Expand the top hits with their 1-hop graph neighbours. Off by "
+            "default: expansion returns more than ``k`` results, so the response "
+            "size stops being bounded by the argument that is supposed to bound "
+            "it. Turn it on when neighbours are the point of the query."
+        ),
     )
 
 
@@ -73,7 +78,7 @@ class WikiCodeSearchTool(WikiSessionTool):
         # 1. Resolve runtime and QA ctx.
         ctx = self._qa_ctx()
         if ctx is None:
-            return _err_result("internal", "wiki QA ctx not found for this session")
+            return self._ungrounded_result()
 
         # 2. Parse and validate args.
         args = self._parse_args(WikiCodeSearchArgs, action_step)
@@ -94,7 +99,7 @@ class WikiCodeSearchTool(WikiSessionTool):
                 sources="graph",
             )
         except Exception as exc:  # noqa: BLE001
-            logging.warning("wiki_code_search retrieval error: %s", exc)
+            logging.warning("wiki_code_search retrieval error: {}", exc)
             return _err_result("internal", f"retrieval failed: {exc}")
 
         # 4. Map to wire shape.

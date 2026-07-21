@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
   "mewbo-core>=0.0.10",
   "mewbo-tools>=0.0.10",
+  "mewbo-iam>=0.0.1",
   "flask>=3.0.3,<4.0.0",
   "flask-restx>=1.3.0,<2.0.0",
   "gunicorn>=22.0.0",
@@ -22,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # The wiki + search substrate now lives in the optional `mewbo-graph`
-# library (Gitea #25). This extra forwards to it so the public name and the
+# library. This extra forwards to it so the public name and the
 # Docker `WIKI_EXTRAS` toggle are unchanged — `mewbo-api[wiki]` still pulls
 # tree-sitter + rank-bm25 + numpy, now transitively via mewbo-graph's own
 # extras. Base `mewbo-api` installs graph-less; every graph import in the

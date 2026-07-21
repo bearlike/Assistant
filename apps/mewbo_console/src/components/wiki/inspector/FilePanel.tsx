@@ -50,7 +50,7 @@ export function FilePanel({
         <code className="font-mono break-all">{file || label}</code>
         {lang && (
           <div className="text-[hsl(var(--muted-foreground))] mt-1">
-            language <span className="font-mono">{lang}</span>
+            language <span className="font-medium">{lang}</span>
           </div>
         )}
       </Section>
@@ -58,7 +58,7 @@ export function FilePanel({
       {pageId && (
         <a
           href={buildHref({ kind: "page", pageId, slug, platform })}
-          className="inline-flex items-center gap-1.5 text-[11px] text-[hsl(var(--primary))] hover:underline"
+          className="inline-flex items-center gap-1.5 text-2xs text-[hsl(var(--primary-text))] hover:underline"
         >
           <FileText className="h-3.5 w-3.5" />
           Open wiki page

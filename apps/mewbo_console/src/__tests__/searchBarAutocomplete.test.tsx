@@ -1,5 +1,5 @@
 /**
- * SearchBar autocomplete-open behaviour (#82).
+ * SearchBar autocomplete-open behaviour.
  *
  * The suggestions dropdown must be CLOSED on landing-page load — even though
  * the hero bar auto-focuses its input — and open only on a genuine focus/typing
@@ -50,7 +50,7 @@ function renderBar(over: Partial<React.ComponentProps<typeof SearchBar>> = {}) {
         onSubmit={vi.fn()}
         workspace={wsA}
         workspaces={[wsA, wsB]}
-        onPickWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onNewWorkspace={vi.fn()}
         variant="hero"
         autoFocus
@@ -99,7 +99,7 @@ describe("SearchBar autocomplete default-open bug", () => {
   })
 })
 
-describe("SearchBar hero composer — expand affordance removed (#82)", () => {
+describe("SearchBar hero composer — expand affordance removed", () => {
   it("renders no Expand button in the hero bar", () => {
     renderBar()
     // The Maximize2 expand button was wired to nothing; it was removed rather

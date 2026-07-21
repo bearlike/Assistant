@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { X, Maximize2, Minimize2, GitCompare, ScrollText } from 'lucide-react';
+import { X, Maximize2, Minimize2, GitCompare, ScrollText, Anchor } from 'lucide-react';
 import { ReviewPane } from './ReviewPane';
 import { LogsView } from './LogsView';
+import { SessionBindingPanel } from './SessionBindingPanel';
 import { DiffFile, EventRecord, TurnMeta } from '../types';
 import { cn } from '../utils/cn';
 import { Button } from './ui/button';
@@ -9,14 +10,16 @@ import type { RunStatus } from './InputBar';
 
 interface WorkspacePanelProps {
   onClose: () => void;
-  activeTab: 'diff' | 'logs';
-  onTabChange: (tab: 'diff' | 'logs') => void;
+  activeTab: 'diff' | 'logs' | 'binding';
+  onTabChange: (tab: 'diff' | 'logs' | 'binding') => void;
   events: EventRecord[];
   sessionId: string;
   selectedTurn: TurnMeta | null;
   sessionFiles: DiffFile[];
-  onRetry?: () => void;
-  onContinue?: () => void;
+  onRetry?: (model?: string) => void;
+  onContinue?: (model?: string) => void;
+  model?: string;
+  fallbackModels?: string[];
   isRunning?: boolean;
   /** Live run telemetry forwarded to the LogsView FlowerSpinner. */
   runStatus?: RunStatus;
@@ -30,7 +33,7 @@ interface WorkspacePanelProps {
 }
 
 interface TabDef {
-  id: 'diff' | 'logs';
+  id: 'diff' | 'logs' | 'binding';
   label: string;
   icon: typeof GitCompare;
   count: number;
@@ -46,6 +49,8 @@ export function WorkspacePanel({
   sessionFiles,
   onRetry,
   onContinue,
+  model,
+  fallbackModels,
   isRunning,
   runStatus,
   isViewingLive,
@@ -56,6 +61,9 @@ export function WorkspacePanel({
   const tabs: TabDef[] = [
     { id: 'diff', label: 'Diff', icon: GitCompare, count: sessionFiles.length },
     { id: 'logs', label: 'Logs', icon: ScrollText, count: events.length },
+    // The binding is a single durable projection, not a growing collection —
+    // no count pip (0 hides it).
+    { id: 'binding', label: 'Binding', icon: Anchor, count: 0 },
   ];
 
   // Sliding under-line indicator — measures the active tab's bounding box
@@ -85,7 +93,7 @@ export function WorkspacePanel({
         !isMaximized && 'border-l border-[hsl(var(--border-strong))]',
       )}
     >
-      <div className="flex items-center justify-between pl-1 pr-2 h-11 border-b border-[hsl(var(--border))] bg-[hsl(var(--code-chrome))]">
+      <div className="flex items-center justify-between pl-1 pr-2 h-11 border-[hsl(var(--border))] bg-[hsl(var(--code-chrome))]">
         <div ref={tabStripRef} className="relative flex h-full items-stretch">
           {tabs.map((t) => {
             const Icon = t.icon;
@@ -108,9 +116,9 @@ export function WorkspacePanel({
                 {t.count > 0 && (
                   <span
                     className={cn(
-                      'inline-flex items-center justify-center text-[10px] font-mono leading-none px-1.5 py-0.5 rounded-[4px] tabular-nums',
+                      'inline-flex items-center justify-center text-2xs leading-none px-1.5 py-0.5 rounded-[4px] tabular-nums',
                       active
-                        ? 'bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))]'
+                        ? 'bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary-text))]'
                         : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]',
                     )}
                   >
@@ -154,11 +162,15 @@ export function WorkspacePanel({
       <div className="flex-1 overflow-hidden bg-[hsl(var(--surface-deep))]">
         {activeTab === 'diff' ? (
           <ReviewPane sessionId={sessionId} selectedTurn={selectedTurn} sessionFiles={sessionFiles} />
+        ) : activeTab === 'binding' ? (
+          <SessionBindingPanel sessionId={sessionId} />
         ) : (
           <LogsView
             events={events}
             onRetry={onRetry}
             onContinue={onContinue}
+            model={model}
+            fallbackModels={fallbackModels}
             isRunning={isRunning}
             runStatus={runStatus}
             isViewingLive={isViewingLive}

@@ -20,7 +20,7 @@ from mewbo_core.compact import (
 )
 from mewbo_core.prompt_registry import get_prompt_registry
 
-# The compaction prompts moved to the central prompt registry (Gitea #89);
+# The compaction prompts moved to the central prompt registry ;
 # byte-equality is pinned by tests/test_prompt_registry_compact.py. These
 # bindings keep the behavioral coverage below pointed at the live text.
 COMPACT_PROMPT = get_prompt_registry().render("compact.system")

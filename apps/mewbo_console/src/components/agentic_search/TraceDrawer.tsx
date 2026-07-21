@@ -7,9 +7,10 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
+import { formatDuration, formatTokens } from "../../utils/time"
 
 import type { TraceAgent } from "../../types/agenticSearch"
-import { agentSnapshot, compactTokens, humanizeMs, runProgress } from "./utils"
+import { agentSnapshot, runProgress } from "./utils"
 
 interface TraceDrawerProps {
   open: boolean
@@ -34,14 +35,14 @@ export function TraceDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-md p-0 flex flex-col bg-[hsl(var(--background))] shadow-[var(--elev-3)]"
+        className="w-full sm:max-w-md p-0 flex flex-col bg-[hsl(var(--background))] [box-shadow:var(--elev-3)]"
       >
-        <SheetHeader className="px-5 pt-5 pb-3 border-b border-[hsl(var(--border))]">
-          <SheetTitle className="flex items-center gap-2 text-base">
+        <SheetHeader className="px-4 pt-4 pb-3 border-b border-[hsl(var(--border))]">
+          <SheetTitle className="flex items-center gap-2 text-sm">
             <Layers className="h-4 w-4 text-[hsl(var(--primary))]" />
             Agent trace
           </SheetTitle>
-          <SheetDescription className="font-mono text-xs">
+          <SheetDescription className="text-xs">
             {agents.length} {agents.length === 1 ? "lane" : "lanes"}
           </SheetDescription>
         </SheetHeader>
@@ -51,12 +52,12 @@ export function TraceDrawer({
             style={{ width: `${progress * 100}%` }}
           />
         </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 font-mono text-[12.5px] text-[hsl(var(--code-fg))] bg-[hsl(var(--code-body))]">
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 font-mono text-sm text-[hsl(var(--code-fg))] bg-[hsl(var(--code-body))]">
           <div className="text-[hsl(var(--code-fg-muted))] leading-relaxed">
             <span className="text-[hsl(var(--code-prompt))]">▶</span>{" "}
             <span className="text-[hsl(var(--code-fg))]">plan_search</span>(
             <span className="text-[hsl(var(--hl-string))]">"{query}"</span>)
-            <div className="mt-1 text-[11px] text-[hsl(var(--code-fg-subtle))]">
+            <div className="mt-1 text-2xs text-[hsl(var(--code-fg-subtle))]">
               spawned {agents.length} {agents.length === 1 ? "lane" : "lanes"}
             </div>
           </div>
@@ -64,7 +65,7 @@ export function TraceDrawer({
             <AgentBlock key={agent.id} agent={agent} />
           ))}
         </div>
-        <footer className="flex items-center justify-between px-5 py-3 border-t border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))] font-mono">
+        <footer className="flex items-center justify-between px-4 py-3 border-t border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))]">
           <span>elapsed {(elapsedMs / 1000).toFixed(1)}s</span>
           <span>{done ? "aggregated · ranked" : "streaming…"}</span>
         </footer>
@@ -101,20 +102,24 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
             style={{ background: slotColor }}
           />
         )}
-        {/* The lane's kind (its role) leads; the model is a separate field. */}
-        <span className="font-medium text-[hsl(var(--foreground))]">
+        {/* The lane's kind (its role) leads; the model is a separate field.
+            Both are names, not machine text — `font-sans` escapes the
+            surrounding terminal-log `font-mono` (this block deliberately
+            mirrors TerminalCard's aesthetic, but a kind/model name is the
+            same "name, not text you'd copy" case as everywhere else). */}
+        <span className="font-sans font-medium text-[hsl(var(--foreground))]">
           {agent.kind ?? agent.name}
         </span>
         {agent.model && (
-          <span className="text-[11px] text-[hsl(var(--code-fg-muted))]">{agent.model}</span>
+          <span className="font-sans text-2xs text-[hsl(var(--code-fg-muted))]">{agent.model}</span>
         )}
         <span
           className={cn(
-            "ml-auto text-[11px]",
+            "ml-auto text-2xs",
             done
               ? "text-[hsl(var(--success))]"
               : running
-              ? "text-[hsl(var(--primary))]"
+              ? "text-[hsl(var(--primary-text))]"
               : "text-[hsl(var(--code-fg-subtle))]"
           )}
         >
@@ -125,10 +130,10 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
       {(() => {
         const m: string[] = []
         if (agent.steps != null) m.push(`${agent.steps} step${agent.steps === 1 ? "" : "s"}`)
-        const dur = humanizeMs(agent.duration_ms)
+        const dur = agent.duration_ms != null ? formatDuration(agent.duration_ms) : ""
         if (dur) m.push(dur)
-        const ti = compactTokens(agent.input_tokens)
-        const to = compactTokens(agent.output_tokens)
+        const ti = formatTokens(agent.input_tokens)
+        const to = formatTokens(agent.output_tokens)
         if (ti || to) m.push(`${ti || "0"}→${to || "0"} tok`)
         if (agent.results_count != null && !isCoordinator) {
           m.push(`${agent.results_count} result${agent.results_count === 1 ? "" : "s"}`)
@@ -140,7 +145,7 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
           if (filtered > 0) m.push(`${filtered} filtered`)
         }
         return m.length > 0 ? (
-          <div className="mb-1 text-[11px] text-[hsl(var(--code-fg-subtle))] tabular-nums">
+          <div className="mb-1 text-2xs text-[hsl(var(--code-fg-subtle))] tabular-nums">
             {m.join(" · ")}
           </div>
         ) : null
@@ -164,13 +169,13 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
                 className={cn(
                   "flex-1",
                   l.empty
-                    ? "text-[hsl(var(--primary))]"
+                    ? "text-[hsl(var(--primary-text))]"
                     : "text-[hsl(var(--code-fg))]"
                 )}
               >
                 {l.text}
                 {isLast && (
-                  <span className="ml-1 inline-block animate-pulse text-[hsl(var(--primary))]">▌</span>
+                  <span className="ml-1 inline-block animate-pulse text-[hsl(var(--primary-text))]">▌</span>
                 )}
               </span>
             </div>
@@ -188,12 +193,12 @@ function AgentBlock({ agent }: { agent: TraceAgent }) {
         // block. Native `<details>` (KISS — no vendored Collapsible), collapsed
         // by default so the race view stays scannable. Dead-ends rail in primary.
         <details className="group/ev mt-1.5">
-          <summary className="flex items-center gap-1 cursor-pointer select-none list-none text-[11px] text-[hsl(var(--code-fg-muted))] hover:text-[hsl(var(--code-fg))]">
+          <summary className="flex items-center gap-1 cursor-pointer select-none list-none font-sans text-2xs text-[hsl(var(--code-fg-muted))] hover:text-[hsl(var(--code-fg))]">
             <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open/ev:rotate-90" />
             {deadEnd ? "no data — pathway dead-ended" : "evidence returned"}
           </summary>
           <pre
-            className="mt-1 whitespace-pre-wrap break-words border-l-2 pl-2.5 py-1 text-[11.5px] leading-[1.5] text-[hsl(var(--code-fg))]"
+            className="mt-1 whitespace-pre-wrap break-words border-l-2 pl-2.5 py-1 text-2xs leading-[1.5] text-[hsl(var(--code-fg))]"
             style={{ borderColor: deadEnd ? "hsl(var(--primary))" : slotColor }}
           >
             {agent.result}

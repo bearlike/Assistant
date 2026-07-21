@@ -57,7 +57,7 @@ and may only be extended **additively**:
    result/answer block, itself carrying `workspace_id`/`query`/`tier`/
    `session_id`). The console reads these **top-level** — never move them
    under `payload`. `session_id` links the URL-addressed run to its
-   auditable session (#74).
+   auditable session.
 2. **Cold-store durability.** The snapshot is persisted through the run
    store (`create_run` + the terminal `update_run(..., payload=…)` BOTH
    runners write), file/Mongo-backed — it survives an api restart / a
@@ -134,7 +134,7 @@ reducer switches on). Rules:
   `result` events drive arrival order. The prototype's `finish_delay_ms`
   / `t_ms` are deprecated decorative fields — real ordering comes from
   event arrival, never a client timer.
-- Orchestrated runs now populate ALL of it (#95): `agent_*` includes a
+- Orchestrated runs now populate ALL of it: `agent_*` includes a
   synthetic **coordinator lane** for root-inlined tool activity, `result`
   events come from the agent's `scg_results` emission, and
   `total_ms`/`confidence`/`sources_count` are computed, never defaulted —
@@ -145,11 +145,11 @@ reducer switches on). Rules:
     facts (stars/language/version/state/size…) ride verbatim, **SCALARS only** (the
     projection drops a non-scalar value silently so a connector blob can't
     leak). This is the SINGLE card-metadata channel — the "card_meta footer"
-    (#111) is `meta` rendered as a structured footer by the console's open-vocab
+    is `meta` rendered as a structured footer by the console's open-vocab
     `resultMeta` classifier, NOT a second wire field (DRY); the LLM proposes the
     keys, the console renders any of them. `TraceAgent` gains `kind`/`model`/`steps`/`duration_ms`/
     `input_tokens`/`output_tokens`/`results_count` (+ `returned_count`, the raw
-    pre-dedup emit; `returned − results_count` = the lane's "N filtered", #111);
+    pre-dedup emit; `returned − results_count` = the lane's "N filtered");
     `RunPayload.stats:
     RunStatsWire | None` (probes·tool_calls·tokens·setup_ms·search_ms — populated
     at settle, **None when underivable; NEVER a fabricated 0**);
@@ -243,7 +243,7 @@ only, never credentials. No configured connector + no descriptor → 422; other
 source types keep the mapper's fetch-natively contract (descriptor stays
 `None`).
 
-**Virtual MCP config + workspace scope (#75, shipped).** A workspace = name +
+**Virtual MCP config + workspace scope (shipped).** A workspace = name +
 instructions + a selection of MCP servers. That selection persists as a DB-backed
 *virtual MCP config* — `WorkspaceMcpConfig` (`mcp_config.py`), an exact
 `CredentialStore` sibling: one `_encode`/`_decode` seam, stored in the
@@ -259,7 +259,7 @@ behavior). `WorkspaceSourceSync.on_workspace_saved` (`source_sync.py`) is the
 POST/PATCH hook: it refreshes the virtual config, then auto-maps newly-enabled
 **live** sources (idempotent — skips already-mapped/in-flight; a terminal/failed
 job does NOT block a re-map, so a previously-unreachable source re-maps once its
-URL is fixed). **The hook is register-and-return (#97):** only step 1 (virtual
+URL is fixed). **The hook is register-and-return:** only step 1 (virtual
 config refresh + NL fingerprint) runs on the request thread; the whole auto-map
 fan-out (mappable/drifted/re-enrich resolution + live descriptor builds +
 `MapSourceJob.start`) runs on one named daemon thread
@@ -268,10 +268,10 @@ source, and doing it in-request blocked "Create Workspace" for N handshakes
 (the user read it as browser-dependent indexing). The method returns the
 `Thread | None` so tests join deterministically; routes ignore it. Never move
 the fan-out back in-request, and never let the thread body raise. It ALSO re-maps already-mapped enabled sources whose live tool
-list drifted from the stamped `ManifestHash` (#81-C), and carries the workspace
+list drifted from the stamped `ManifestHash`, and carries the workspace
 `instructions`/`desc` as untrusted `nl_context` to seed the map-time enrich step
-(#81-B — see scg/CLAUDE.md). **Workspace editing IS a graph-lifecycle event
-(#83):** an instructions/desc edit moves no source + drifts no tool list, so the
+(see scg/CLAUDE.md). **Workspace editing IS a graph-lifecycle event:**
+an instructions/desc edit moves no source + drifts no tool list, so the
 old gates missed it — `NlContextFingerprint` (a `ManifestHash` sibling over the
 prose) stamped on `WorkspaceMcpConfigRecord.nl_fingerprint` (the honest internal
 home, NOT the wire `Workspace`) gates an idempotent re-enrich of enabled+mapped
@@ -329,14 +329,14 @@ preset (tier map → `llm.default_model`, exactly the drive's fallback; pure
 config read, NOT gated on `scg.enabled`) so the console's composer can show
 which model a tier runs before submit. The durable decisions + the two silent correctness
 traps live in **`scg/CLAUDE.md`**; the full spec + research grounding is
-**Gitea #19**.
+the design doc for this subsystem.
 
 The SCG *engine* itself (router / parser / entity-resolution / store / memory
-bridge) lives **down** in the optional `mewbo_graph.scg` library (Gitea #25);
+bridge) lives **down** in the optional `mewbo_graph.scg` library;
 this app holds only the runner seam + the map-job lifecycle glue and composes
 the engine via the `wiki` extra. See `packages/mewbo_graph/CLAUDE.md`.
 
-**Workspace binding ⇒ graph access (#77, LANDED):** `WorkspaceGraphBinding`
+**Workspace binding ⇒ graph access (LANDED):** `WorkspaceGraphBinding`
 (`scg/workspace_binding.py`) is the ONE seam — any workspace-bound run gets the
 `scg` capability + graph tools (`scg_route`/`scg_observe`/`scg_memory` + fan-out)
 + the `ScgScope` source scope. A `/v1/structured` run on a mapped workspace goes

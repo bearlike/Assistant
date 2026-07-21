@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TurnEngine — the App-agnostic dispatch + query core (issue #150).
+"""TurnEngine — the App-agnostic dispatch + query core.
 
 Ports the ``run_cli`` REPL body and ``_run_query`` from the ``cli_master``
 free-function monolith into one injectable atomic class. It owns the dispatch
@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from mewbo_core.hooks import HookManager
 from mewbo_core.session_runtime import SessionRuntime
 from mewbo_core.session_store import SessionStoreBase
+from mewbo_core.session_tools import SessionTool
 from mewbo_core.skills import activate_skill
 from mewbo_core.task_master import generate_action_plan
 from mewbo_core.tool_registry import ToolRegistry
@@ -111,6 +112,7 @@ class TurnEngine:
         emit: Callable[[TranscriptItem], None],
         emit_renderable: Callable[[RenderableType], None],
         plan_approval_resolver: Callable[[str, int], str] | None = None,
+        extra_session_tools_factory: Callable[[], list[SessionTool]] | None = None,
         max_iters: int = 3,
         session_step_budget: int = 0,
         no_color: bool = False,
@@ -125,6 +127,13 @@ class TurnEngine:
         permission-modal resolver). It returns ``"approve"`` / ``"refine"`` /
         ``"reject"``. ``None`` (the foundation default / no-TTY) leaves the plan
         pending so the plain-fallback ``/continue`` can approve it.
+
+        ``extra_session_tools_factory`` builds the ``SessionTool``s injected into
+        each run via ``run_sync(extra_session_tools=…)`` — the interactive path
+        binds ``AskUserQuestionTool(session_id)`` here so the agent can ask the
+        user. It is a FACTORY (not a fixed list) because the session id changes
+        under the engine (``/new``/``/resume``/fork) and the tool binds it at
+        construction; ``None`` (no-TTY / foundation) binds nothing.
         """
         self.runtime = runtime
         self.store = store
@@ -135,6 +144,7 @@ class TurnEngine:
         self.permission = permission
         self._hook_factory = hook_factory
         self._plan_approval_resolver = plan_approval_resolver
+        self._extra_session_tools_factory = extra_session_tools_factory
         self._emit = emit
         self._emit_renderable = emit_renderable
         self._max_iters = max_iters
@@ -153,6 +163,11 @@ class TurnEngine:
                 color_system=None if no_color else "truecolor",
             )
         )
+        # The most recently completed query turn's honest status (see
+        # :meth:`last_turn_outcome`) — the App reads this after ``handle()``
+        # returns to render the footer spinner's settled line honestly instead
+        # of a blanket green checkmark.
+        self._last_outcome: str | None = None
 
     # -- classification ---------------------------------------------------
 
@@ -160,6 +175,37 @@ class TurnEngine:
     def _parse_command(text: str) -> tuple[str, list[str]]:
         parts = text.strip().split()
         return parts[0], parts[1:]
+
+    @staticmethod
+    def terminated_notice_text(session_id: str) -> str:
+        """Return the friendly refusal text for a permanently terminated session.
+
+        Shared by the App path (:meth:`_refuse_if_terminated`) and the plain
+        non-interactive fallback (``cli_master._run_query``, which imports this
+        class) so both surfaces use identical wording — the only choke point
+        available since the two paths don't otherwise share a run seam.
+        """
+        return (
+            f"⊘ Session {session_id} is permanently terminated — start a new "
+            "session with /new."
+        )
+
+    def _refuse_if_terminated(self) -> bool:
+        """Emit a notice and return ``True`` if the session is terminated.
+
+        ``SessionRuntime.run_sync`` does not itself guard a terminated session
+        — the CLI's turn dispatch is the choke point, mirroring the
+        ``halted``-run notice styling in ``cli_notices.py``.
+        """
+        if not self.runtime.is_terminated(self.state.session_id):
+            return False
+        self._emit(
+            TranscriptItem(
+                "notice",
+                {"text": self.terminated_notice_text(self.state.session_id)},
+            )
+        )
+        return True
 
     def classify(self, text: str) -> str:
         """Return ``empty`` | ``command`` | ``skill`` | ``unknown`` | ``query``."""
@@ -178,8 +224,40 @@ class TurnEngine:
 
     # -- dispatch ---------------------------------------------------------
 
+    def last_turn_outcome(self) -> str | None:
+        """The most recently completed query turn's honest status, or ``None``.
+
+        ``None`` before any turn has run, or when the last dispatch was a
+        command/skill-registry invocation with no query run to summarize —
+        :meth:`handle` covers four dispatch kinds, but only a query turn (incl.
+        a skill's follow-up query and an approved plan's execution run)
+        produces a completion to report.
+        """
+        return self._last_outcome
+
+    def _capture_last_outcome(self) -> None:
+        """Read the just-finished turn's honest status off the session.
+
+        ``run_sync``'s return (``TaskQueue``) carries no ``done_reason`` /
+        ``blocked_code`` — those live on the session's ``completion`` event,
+        already appended by the time ``run_sync`` returns — so this reads the
+        SAME derived ``status`` ``/status`` and every other client trust
+        (``summarize_session``), rather than re-deriving it from a payload
+        this class was never handed.
+        """
+        try:
+            summary = self.runtime.summarize_session(self.state.session_id)
+        except Exception:  # noqa: BLE001 — a status read must never break the turn
+            self._last_outcome = None
+            return
+        self._last_outcome = str(summary.get("status") or "completed")
+
     def handle(self, text: str) -> bool:
         """Dispatch one input line. Returns ``False`` only to quit the app."""
+        # Reset per-dispatch: a command/skill-registry turn that follows a
+        # blocked/failed query turn must not inherit the PRIOR turn's outcome
+        # (only run_query/_approve_pending_plan set a fresh value below).
+        self._last_outcome = None
         kind = self.classify(text)
         if kind == "empty":
             return True
@@ -216,9 +294,9 @@ class TurnEngine:
             state=self.state,
             tool_registry=self.tool_registry,
             runtime=self.runtime,
-            prompt_func=None,  # interactive command dialogs land with #155/#157
+            prompt_func=None,  # interactive command dialogs land with the App
             # Let plan-approval commands (/approve, /continue) drive an act-mode
-            # run with the App's permission modal + lifecycle hooks (#159).
+            # run with the App's permission modal + lifecycle hooks.
             approval_callback=self.permission,
             hook_factory=self._hook_factory,
         )
@@ -230,10 +308,18 @@ class TurnEngine:
         self._flush(console)
         return keep
 
+    def _extra_session_tools(self) -> list[SessionTool] | None:
+        """Build this run's extra session tools (fresh, current session id)."""
+        if self._extra_session_tools_factory is None:
+            return None
+        return self._extra_session_tools_factory()
+
     # -- query turn -------------------------------------------------------
 
     def run_query(self, query: str, *, skill_instructions: str | None = None) -> Any:
         """Run a single query turn, emitting plan, tools, response and notices."""
+        if self._refuse_if_terminated():
+            return None
         query = expand_references(query, self._cwd()) or query
         mode = self.state.mode if self.state.mode in {"plan", "act"} else "act"
 
@@ -265,12 +351,14 @@ class TurnEngine:
             skill_instructions=skill_instructions,
             session_step_budget=self._session_step_budget,
             source_platform="cli",
+            extra_session_tools=self._extra_session_tools(),
         )
+        self._capture_last_outcome()
 
         # A plan-mode run that halted awaiting approval surfaces a clean plan
         # card + approval prompt — NOT the planner's raw spawn/check tool JSON,
         # which would otherwise bury the plan. Skip the per-step tool dump in
-        # that case (#159); ordinary runs render their results as usual.
+        # that case; ordinary runs render their results as usual.
         if self._maybe_emit_pending_plan(mode):
             return task_queue
         self._emit_results(task_queue)
@@ -365,7 +453,9 @@ class TurnEngine:
             mode="act",
             session_step_budget=self._session_step_budget,
             source_platform="cli",
+            extra_session_tools=self._extra_session_tools(),
         )
+        self._capture_last_outcome()
         self._emit_results(task_queue)
 
     def _reject_pending_plan(self) -> None:

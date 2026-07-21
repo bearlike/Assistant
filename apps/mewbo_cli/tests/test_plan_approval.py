@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""High-fidelity plan-approval tests (issue #159).
+"""High-fidelity plan-approval tests.
 
 Covers the three deliverables end-to-end without a live LLM:
 

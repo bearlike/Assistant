@@ -1,6 +1,6 @@
 """End-to-end: a graph-first structured run terminates in a validated emit.
 
-The #77 acceptance contract for deliverable 2 — a structured run bound to a
+The acceptance contract for deliverable 2 — a structured run bound to a
 search workspace stays an ORDINARY agentic session (the real ``StructuredResponder``
 / ``ToolUseLoop``, NOT a separate path) but is granted the ``scg`` capability +
 graph traversal tools + the workspace source scope, and terminates in the
@@ -215,8 +215,8 @@ def test_graph_first_structured_routes_then_emits() -> None:
     assert runtime.scope_during_run == frozenset({"github", "linear"})
     # The scope reset after the drive (no leak).
     assert ScgScope.allowed() is None
-    # The structured provenance tag was stamped (#78 seam, reused) — unique per
-    # session (``structured:run:<id>``), never the bare prefix (#87).
+    # The structured provenance tag was stamped (seam, reused) — unique per
+    # session (``structured:run:<id>``), never the bare prefix.
     assert "structured:run:sess-gf" in runtime.tags
     # The scg capability + the graph-first playbook reached the session/prompt.
     caps = [c["client_capabilities"] for c in runtime.context_events if "client_capabilities" in c]

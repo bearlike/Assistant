@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pilot tests for TranscriptView streaming + renderer registry (issue #152).
+"""Pilot tests for TranscriptView streaming + renderer registry.
 
 All tests use the ``asyncio.run(_run())`` + ``app.run_test()`` pattern
 mirrored from ``test_tui_app.py``.  Widget-only tests mount the widget in a
@@ -402,7 +402,7 @@ def test_diffview_mounted_for_edit_with_old_new() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mutable tool card + turn-summary spinner (#161)
+# Mutable tool card + turn-summary spinner
 # ---------------------------------------------------------------------------
 
 
@@ -507,6 +507,117 @@ def test_finish_activity_collapses_spinner_into_summary() -> None:
             assert tv._activity is None  # type: ignore[attr-defined]
             # …but the timer is stopped (no dangling animation).
             assert tv._activity_timer is None  # type: ignore[attr-defined]
+
+    asyncio.run(_run())
+
+
+def test_finish_activity_blocked_outcome_is_not_a_green_checkmark() -> None:
+    """A ``"blocked"`` outcome renders its own glyph/tone, never ``✓ done``.
+
+    Regression for the false-success bug: the footer spinner used to settle
+    unconditionally into a green checkmark regardless of how the turn ended.
+    """
+    registry = _make_registry()
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield TranscriptView(registry, palette=DEFAULT_PALETTE, id="tv")
+
+    async def _run() -> None:
+        app = _App()
+        async with app.run_test() as pilot:
+            tv = app.query_one(TranscriptView)
+            tv.start_activity("Working")
+            await pilot.pause()
+            widget = tv._activity  # type: ignore[attr-defined] — capture before release
+            tv.finish_activity(2.0, "blocked")
+            await pilot.pause()
+            content = widget.render()
+            text = str(content)
+            assert "✓" not in text
+            assert "⚠" in text
+            # Not the success tone — no span carries the success color.
+            assert not any(span.style == DEFAULT_PALETTE.success for span in content.spans)
+
+    asyncio.run(_run())
+
+
+def test_finish_activity_unmet_goal_renders_goal_not_met_label() -> None:
+    """An ``"unmet_goal"`` outcome renders a distinct, honest label."""
+    registry = _make_registry()
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield TranscriptView(registry, palette=DEFAULT_PALETTE, id="tv")
+
+    async def _run() -> None:
+        app = _App()
+        async with app.run_test() as pilot:
+            tv = app.query_one(TranscriptView)
+            tv.start_activity("Working")
+            await pilot.pause()
+            widget = tv._activity  # type: ignore[attr-defined]
+            tv.finish_activity(1.5, "unmet_goal")
+            await pilot.pause()
+            text = str(widget.render())
+            assert "◎" in text
+            assert "unmet goal" in text
+            assert "done" not in text
+
+    asyncio.run(_run())
+
+
+def test_finish_activity_completed_outcome_keeps_green_done() -> None:
+    """A clean ``"completed"`` outcome (and the ``None`` default) keep the
+    historical green ``✓ done`` line — no behaviour change for a normal turn.
+    """
+    registry = _make_registry()
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield TranscriptView(registry, palette=DEFAULT_PALETTE, id="tv")
+
+    async def _run() -> None:
+        app = _App()
+        async with app.run_test() as pilot:
+            tv = app.query_one(TranscriptView)
+            tv.start_activity("Working")
+            await pilot.pause()
+            widget = tv._activity  # type: ignore[attr-defined]
+            tv.finish_activity(0.5, "completed")
+            await pilot.pause()
+            text = str(widget.render())
+            assert "done" in text
+
+    asyncio.run(_run())
+
+
+def test_finish_activity_unmapped_outcome_is_neutral_not_a_failure() -> None:
+    """A status this vocabulary doesn't name yet (e.g. ``awaiting_approval``)
+    falls back to the SAME neutral "?" / muted tone as the fleet panel's own
+    fallback — never the error glyph, which would mischaracterize an
+    unmapped, possibly-benign outcome as a hard failure.
+    """
+    registry = _make_registry()
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield TranscriptView(registry, palette=DEFAULT_PALETTE, id="tv")
+
+    async def _run() -> None:
+        app = _App()
+        async with app.run_test() as pilot:
+            tv = app.query_one(TranscriptView)
+            tv.start_activity("Working")
+            await pilot.pause()
+            widget = tv._activity  # type: ignore[attr-defined]
+            tv.finish_activity(0.5, "awaiting_approval")
+            await pilot.pause()
+            content = widget.render()
+            text = str(content)
+            assert "✗" not in text
+            assert "?" in text
+            assert not any(span.style == DEFAULT_PALETTE.error for span in content.spans)
 
     asyncio.run(_run())
 

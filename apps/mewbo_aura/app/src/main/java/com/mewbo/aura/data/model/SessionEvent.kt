@@ -73,12 +73,49 @@ sealed interface SessionEvent {
     @Serializable
     data class Permission(override val ts: String, val payload: PermissionPayload) : SessionEvent
 
-    /** A client-executable tool call dispatched to this device (Gitea #179) - resolved by
+    /** A client-executable tool call dispatched to this device - resolved by
      * [com.mewbo.aura.data.device.DeviceToolExecutor] posting a result keyed on
      * [DeviceToolCallPayload.callToken]. Never rendered in the chat transcript
      * ([TranscriptReducer] drops it the same as `llm_call_end`/`permission`). */
     @Serializable
     data class DeviceToolCall(override val ts: String, val payload: DeviceToolCallPayload) : SessionEvent
+
+    /** A Streamlit widget the model built via the `widget_builder` plugin. Carries
+     * the whole `app.py` + `data.json` bundle the client renders in a self-contained stlite WebView
+     * ([com.mewbo.aura.ui.chat.widget.WidgetCard]); folded into a [ChatItem.Widget] keyed by
+     * [WidgetReadyPayload.widgetId]. Only arrives when the client advertised the `stlite` capability
+     * (see data/CLAUDE.md § "Widget capability"). */
+    @Serializable
+    data class WidgetReady(override val ts: String, val payload: WidgetReadyPayload) : SessionEvent
+
+    /** Build-phase terminal event for the Mewbo Apps sub-product (design spec §3 "Wire events"):
+     * fired once the `submit_app` tool validates + persists a builder run's [AppSpec][com.mewbo.aura.data.model.AppSummary],
+     * mirroring how [WidgetReady] terminates a widget build. [com.mewbo.aura.ui.apps.AppCreateViewModel]
+     * follows [com.mewbo.aura.data.repo.RunRepository.live] for the creation session looking for this
+     * event to know when to navigate to the freshly-live app's detail screen. Only arrives when the
+     * client advertised the `apps` capability (see `di/DataModule.kt`'s `AuthInterceptor`). */
+    @Serializable
+    data class AppReady(override val ts: String, val payload: AppReadyPayload) : SessionEvent
+
+    /**
+     * A pending ask-user question group (core `ask_user_question` tool, which BLOCKS the run). Carries
+     * the 1-4 questions plus the single-use [UserQuestionPayload.callToken] the answer POST presents
+     * ([com.mewbo.aura.data.api.AuraApi.answerQuestion]). Folded into a [ChatItem.Question] card keyed
+     * by [UserQuestionPayload.callId]; settled by the matching [UserQuestionAnswered] event (even when
+     * another surface answered). Only arrives when the client advertised the `ask_user` capability
+     * (`X-Mewbo-Capabilities`, see [com.mewbo.aura.di.AuthInterceptor]).
+     */
+    @Serializable
+    data class UserQuestion(override val ts: String, val payload: UserQuestionPayload) : SessionEvent
+
+    /**
+     * Resolution of a [UserQuestion] group — records the outcome so EVERY surface (not only the one
+     * that answered) settles its card. [UserQuestionAnsweredPayload.outcome] is `answered` (carrying
+     * the chosen answers) or `declined`/`interrupted`/`cancelled` (the run moved on without an
+     * answer); an unknown future value is tolerated as a plain dismissal ([TranscriptReducer]).
+     */
+    @Serializable
+    data class UserQuestionAnswered(override val ts: String, val payload: UserQuestionAnsweredPayload) : SessionEvent
 
     /** SSE-only terminal control frame. No `ts` on the wire; not part of the persisted transcript. */
     @Serializable
@@ -195,6 +232,10 @@ private object SessionEventSerializer : JsonContentPolymorphicSerializer<Session
             "sub_agent" -> SessionEvent.SubAgent.serializer()
             "permission" -> SessionEvent.Permission.serializer()
             "device_tool_call" -> SessionEvent.DeviceToolCall.serializer()
+            "widget_ready" -> SessionEvent.WidgetReady.serializer()
+            "app_ready" -> SessionEvent.AppReady.serializer()
+            "user_question" -> SessionEvent.UserQuestion.serializer()
+            "user_question_answered" -> SessionEvent.UserQuestionAnswered.serializer()
             "stream_end" -> SessionEvent.StreamEnd.serializer()
             else -> UnknownEventSerializer
         }
@@ -326,7 +367,7 @@ data class PermissionPayload(
     val decision: String,
 )
 
-/** Wire shape verbatim (Gitea #179 wire contract): `call_token` is consumed exactly once by the
+/** Wire shape verbatim: `call_token` is consumed exactly once by the
  * result POST (403 bad token / 404 unknown / 409 already-consumed); `expires_at` is epoch
  * seconds as a float, compared directly against [com.mewbo.aura.data.device.DeviceClock]. */
 @Serializable
@@ -336,4 +377,91 @@ data class DeviceToolCallPayload(
     @SerialName("tool_id") val toolId: String,
     val args: JsonObject = JsonObject(emptyMap()),
     @SerialName("expires_at") val expiresAt: Double,
+)
+
+/**
+ * Wire shape of a `widget_ready` event (mirrors `mewbo_core`'s `WidgetReadyPayload`
+ * and the console `WidgetReadyPayload` type field-for-field). [files] MUST carry both `app.py` and
+ * `data.json` ([WidgetFiles] makes them required, so a malformed bundle decodes to
+ * [SessionEvent.Unknown] and is dropped rather than rendered half-formed). The whole payload is
+ * re-serialized verbatim into the WebView's `postMessage` — the stlite host page owns booting it.
+ */
+@Serializable
+data class WidgetReadyPayload(
+    @SerialName("widget_id") val widgetId: String,
+    @SerialName("session_id") val sessionId: String,
+    val files: WidgetFiles,
+    val requirements: List<String> = emptyList(),
+    val summary: String? = null,
+)
+
+/** The two files every widget bundle ships (`app.py` is the Streamlit script, `data.json` its
+ * inlined data). Both required — see [WidgetReadyPayload]. */
+@Serializable
+data class WidgetFiles(
+    @SerialName("app.py") val appPy: String,
+    @SerialName("data.json") val dataJson: String,
+)
+
+/** Wire shape of an `app_ready` event (Mewbo Apps design spec §3, "Wire events" — frozen literal
+ * `{app_id, title, summary, version}`). Mirrors [WidgetReadyPayload]'s role for the widget flow. */
+@Serializable
+data class AppReadyPayload(
+    @SerialName("app_id") val appId: String,
+    val title: String,
+    val summary: String,
+    val version: Int,
+)
+
+/**
+ * Wire shape of a `user_question` event (core `ask_user.py`'s `USER_QUESTION_EVENT`, snake_case).
+ * [callToken] is a single-use bearer secret the answer POST presents (403 on mismatch) — proof of
+ * stream-read access, NOT of which surface answers. [questions] holds 1-4 questions; an empty
+ * [UserQuestionSpec.options] list is a free-text question.
+ */
+@Serializable
+data class UserQuestionPayload(
+    @SerialName("call_id") val callId: String,
+    @SerialName("call_token") val callToken: String,
+    val questions: List<UserQuestionSpec> = emptyList(),
+)
+
+/**
+ * One question in a [UserQuestionPayload]. Empty [options] ⇒ a free-text question; [multiSelect]
+ * widens index selection (and requires options server-side). A free-text answer is ALWAYS accepted
+ * regardless of [options]/[multiSelect] — the ever-present "Other".
+ */
+@Serializable
+data class UserQuestionSpec(
+    val header: String,
+    val question: String,
+    val options: List<UserQuestionOption> = emptyList(),
+    @SerialName("multi_select") val multiSelect: Boolean = false,
+)
+
+@Serializable
+data class UserQuestionOption(
+    val label: String,
+    val description: String? = null,
+)
+
+/**
+ * Wire shape of a `user_question_answered` event (core's `USER_QUESTION_ANSWERED_EVENT`). [outcome]
+ * is `answered`|`declined`|`interrupted`|`cancelled`; [answers] is populated only for `answered` (one
+ * item per question, [AnsweredItem.selectedIndexes] XOR [AnsweredItem.text]). [answeredVia] is the
+ * `X-Mewbo-Surface` of whoever answered, so a card can read "answered on console". An unknown future
+ * [outcome] is tolerated — [TranscriptReducer] treats any non-`answered` value as a plain dismissal.
+ */
+@Serializable
+data class UserQuestionAnsweredPayload(
+    @SerialName("call_id") val callId: String,
+    val outcome: String,
+    @SerialName("answered_via") val answeredVia: String? = null,
+    val answers: List<AnsweredItem>? = null,
+)
+
+@Serializable
+data class AnsweredItem(
+    @SerialName("selected_indexes") val selectedIndexes: List<Int>? = null,
+    val text: String? = null,
 )

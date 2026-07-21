@@ -4,12 +4,22 @@
 from __future__ import annotations
 
 import asyncio
+import platform as _platform
 import queue
+import socket
+import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 from mewbo_core.agent_context import AgentContext
-from mewbo_core.classes import ActionStep, OrchestrationState, Plan, TaskQueue
+from mewbo_core.classes import (
+    UNACHIEVED_DONE_REASONS,
+    ActionStep,
+    OrchestrationState,
+    Plan,
+    TaskQueue,
+)
 from mewbo_core.common import discover_project_instructions, get_logger, session_log_context
 from mewbo_core.components import langfuse_session_context
 from mewbo_core.config import (
@@ -17,23 +27,31 @@ from mewbo_core.config import (
     effective_fallback_models,
     get_config,
     get_config_value,
+    get_version,
 )
 from mewbo_core.context import ContextBuilder
 from mewbo_core.exit_plan_mode import ensure_plan_dir, plan_file_for
 from mewbo_core.hooks import HookManager, default_hook_manager
-from mewbo_core.hypervisor import AgentHypervisor
+from mewbo_core.hypervisor import ACTIVE_STATUSES, AgentHypervisor
 from mewbo_core.permissions import (
     PermissionPolicy,
     approval_callback_from_config,
     load_permission_policy,
 )
-from mewbo_core.session_provenance import TraceProvenance
+from mewbo_core.run_error import RunError
+from mewbo_core.session_provenance import SessionOrigin, TraceProvenance, is_mobile_surface
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.session_tools import SessionTool, SessionToolRegistry
 from mewbo_core.skills import SkillRegistry, activate_skill
+from mewbo_core.system_instructions import (
+    InstructionContext,
+    SystemInstructionsStoreBase,
+    create_system_instructions_store,
+)
 from mewbo_core.token_budget import get_token_budget
-from mewbo_core.tool_registry import ToolRegistry, filter_specs, get_or_build_registry
+from mewbo_core.tool_registry import ToolRegistry, ToolSpec, filter_specs, get_or_build_registry
 from mewbo_core.tool_use_loop import ToolUseLoop
+from mewbo_core.types import CompletionPayload, UserPayload
 
 logging = get_logger(name="core.orchestrator")
 
@@ -41,6 +59,27 @@ logging = get_logger(name="core.orchestrator")
 # transcript readable and the downstream ``recent_events`` bullet from
 # ballooning the system prompt.
 _CLOSURE_ERROR_MAX_LEN = 500
+
+# First-person commitments to future work, matched in terminal prose. The list
+# is short and literal ON PURPOSE. This is the one heuristic in the honest-
+# terminal workstream, and the only thing a heuristic can be trusted with here
+# is stating a fact the record already proves: a general intent classifier
+# firing on ambiguous prose would manufacture precisely the kind of
+# unfalsifiable claim this seam exists to remove. Anything broader (a bare
+# mention of "in the background") describes work that may genuinely exist and
+# is deliberately not matched.
+_FUTURE_COMMITMENT_MARKERS: tuple[str, ...] = (
+    "i'll check back",
+    "i will check back",
+    "i'll follow up",
+    "i will follow up",
+    "i'll report back",
+    "i will report back",
+    "i'll keep monitoring",
+    "i will keep monitoring",
+    "i'll keep an eye",
+    "i will keep an eye",
+)
 
 
 def _format_assistant_closure(done_reason: str | None, last_error: str | None) -> str:
@@ -59,6 +98,8 @@ def _format_assistant_closure(done_reason: str | None, last_error: str | None) -
         return f"(Run interrupted by error: {err})"
     if done_reason == "max_steps_reached":
         return "(Run stopped: step limit reached before final answer)"
+    if done_reason == "budget_exhausted":
+        return "(Run stopped: step budget exhausted before final answer)"
     if done_reason == "canceled":
         return "(Run canceled by user)"
     return f"(Run ended: {done_reason or 'unknown'})"
@@ -79,10 +120,25 @@ class Orchestrator:
         hook_manager: HookManager | None = None,
         cwd: str | None = None,
         session_step_budget: int = 0,
+        system_instructions_store: SystemInstructionsStoreBase | None = None,
     ) -> None:
         """Initialize orchestration dependencies."""
         self._cwd = cwd
         self._session_step_budget = session_step_budget
+        # Resolved LAZILY on first use (``_instructions_store``): the factory
+        # raises when the configured driver is mongodb and Mongo is unreachable,
+        # and a custom-instructions store being down must never stop a session
+        # from starting. ``_instructions_store_tried`` makes the failure sticky
+        # so we don't retry a dead connection once per run.
+        self._instructions_store: SystemInstructionsStoreBase | None = system_instructions_store
+        self._instructions_store_tried = system_instructions_store is not None
+        # Strong references for fire-and-forget background tasks scheduled on
+        # an already-running loop (the emscripten branch of
+        # ``_maybe_generate_title``) so asyncio can't GC them mid-run — the
+        # done-callback discards its own entry once finished. Mirrors
+        # ``AgentHandle.asyncio_task`` (hypervisor.py) / ``_lifecycle_tasks``
+        # (spawn_agent.py).
+        self._background_tasks: set[asyncio.Task] = set()
         self._model_name = (
             model_name
             or get_config_value("llm", "action_plan_model")
@@ -107,6 +163,16 @@ class Orchestrator:
         # reused by the API /skills and /tools endpoints (DRY).
         self._agent_registry = None
         self._session_tool_registry = SessionToolRegistry()
+        # schedule_trigger rides the ordinary SessionToolRegistry so
+        # a spawned sub-agent whose allowlist admits it can bind it — the old
+        # root-only extra_session_tools seam structurally could not. The factory
+        # exists only once the app pushed its store+policy; None (CLI/tests) ⇒
+        # the tool is simply absent, exactly as before.
+        from mewbo_core.triggers.session_tool import schedule_trigger_factory
+
+        _trigger_factory = schedule_trigger_factory()
+        if _trigger_factory is not None:
+            self._session_tool_registry.register(_trigger_factory)
         plugins_cfg = get_config().plugins
 
         if plugins_cfg.enabled:
@@ -142,8 +208,8 @@ class Orchestrator:
                 # Load this plugin's session tools WITH its capability gate, so a
                 # capability-gated session tool (e.g. the ``scg`` suite's
                 # ``scg_*``) surfaces to any session that holds the capability —
-                # including via the #83-B runtime grant — not only when the
-                # client lists the tool in ``allowed_tools`` (Gitea #84). Same
+                # including via the runtime grant — not only when the
+                # client lists the tool in ``allowed_tools``. Same
                 # data-driven gate the AgentDefs register through above.
                 for entry in pc.session_tool_entries:
                     self._session_tool_registry.load_entry(
@@ -158,7 +224,7 @@ class Orchestrator:
         # Reuse a cached registry across runs whose build inputs (cwd +
         # plugin-contributed MCP servers + MCP-config fingerprint) are identical,
         # instead of rebuilding per query — the per-run rebuild was on the
-        # critical path to the first FE-visible event (Gitea #138). An explicit
+        # critical path to the first FE-visible event. An explicit
         # ``tool_registry`` (tests, structured runners) still bypasses the cache.
         self._tool_registry = tool_registry or get_or_build_registry(
             cwd=cwd,
@@ -183,6 +249,7 @@ class Orchestrator:
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
+        capability_mode: str = "all",
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
@@ -193,7 +260,70 @@ class Orchestrator:
         enable_skills: bool = True,
         attachments: list[dict] | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
-        """Run orchestration for a session."""
+        """Run orchestration for a session (sync wrapper around :meth:`arun`).
+
+        Backward-compatible synchronous entry point for CLI / API request
+        threads / tests. Owns the event-loop lifecycle via ``asyncio.run``, so
+        every existing sync caller behaves exactly as before. Environments that
+        already drive an event loop (browser-hosted Pyodide's WebLoop) must call
+        :meth:`arun` instead — it awaits the same body with NO nested
+        ``asyncio.run`` (the "WebLoop wall").
+        """
+        return asyncio.run(
+            self.arun(
+                user_query,
+                max_iters=max_iters,
+                initial_plan=initial_plan,
+                return_state=return_state,
+                session_id=session_id,
+                mode=mode,
+                should_cancel=should_cancel,
+                allowed_tools=allowed_tools,
+                strict_tool_scope=strict_tool_scope,
+                capability_mode=capability_mode,
+                skill_instructions=skill_instructions,
+                message_queue=message_queue,
+                interrupt_step=interrupt_step,
+                user_id=user_id,
+                source_platform=source_platform,
+                invocation_id=invocation_id,
+                extra_session_tools=extra_session_tools,
+                enable_skills=enable_skills,
+                attachments=attachments,
+            )
+        )
+
+    async def arun(
+        self,
+        user_query: str,
+        *,
+        max_iters: int = 3,
+        initial_plan: Plan | None = None,
+        return_state: bool = False,
+        session_id: str | None = None,
+        mode: str | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        allowed_tools: list[str] | None = None,
+        strict_tool_scope: bool = False,
+        capability_mode: str = "all",
+        skill_instructions: str | None = None,
+        message_queue: queue.Queue[str] | None = None,
+        interrupt_step: threading.Event | None = None,
+        user_id: str | None = None,
+        source_platform: str | None = None,
+        invocation_id: str | None = None,
+        extra_session_tools: list[SessionTool] | None = None,
+        enable_skills: bool = True,
+        attachments: list[dict] | None = None,
+    ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
+        """Run orchestration asynchronously (async-first entry point).
+
+        Awaits the orchestration coroutine directly, so an environment that
+        already owns a running event loop (browser-hosted Pyodide's WebLoop,
+        async test harnesses) can drive a query with native ``await`` and NO
+        nested ``asyncio.run``. The sync :meth:`run` wrapper is the CPython
+        entry point and delegates here; the two share this single body.
+        """
         if session_id is None:
             session_id = self._session_store.create_session()
 
@@ -204,8 +334,8 @@ class Orchestrator:
         #
         # The merged context carries only the CLIENT-ADVERTISED capabilities, so
         # overlay the AUGMENTED set (advertised ∪ runtime-provider grants) before
-        # deriving — otherwise a capability granted at runtime (the #83-B ``scg``
-        # provider; #84) would be live in the run yet invisible in the trace's
+        # deriving — otherwise a capability granted at runtime (the ``scg``
+        # provider) would be live in the run yet invisible in the trace's
         # ``capabilities`` facet. ``derive`` stays a pure transform of
         # (tags, context, surface); we only enrich the context it reads.
         derive_context = dict(self._session_store.latest_context(session_id))
@@ -227,7 +357,7 @@ class Orchestrator:
                 tags=list(provenance.tags),
                 metadata=provenance.metadata,
             ):
-                return self._run_with_session_context(
+                return await self._run_with_session_context_async(
                     user_query,
                     max_iters=max_iters,
                     initial_plan=initial_plan,
@@ -237,15 +367,17 @@ class Orchestrator:
                     should_cancel=should_cancel,
                     allowed_tools=allowed_tools,
                     strict_tool_scope=strict_tool_scope,
+                    capability_mode=capability_mode,
                     skill_instructions=skill_instructions,
                     message_queue=message_queue,
                     interrupt_step=interrupt_step,
                     extra_session_tools=extra_session_tools,
                     enable_skills=enable_skills,
                     attachments=attachments,
+                    provenance=provenance,
                 )
 
-    def _run_with_session_context(
+    async def _run_with_session_context_async(
         self,
         user_query: str,
         *,
@@ -257,14 +389,21 @@ class Orchestrator:
         should_cancel: Callable[[], bool] | None,
         allowed_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
+        capability_mode: str = "all",
         skill_instructions: str | None = None,
         message_queue: queue.Queue[str] | None = None,
         interrupt_step: threading.Event | None = None,
         extra_session_tools: list[SessionTool] | None = None,
         enable_skills: bool = True,
         attachments: list[dict] | None = None,
+        provenance: TraceProvenance | None = None,
     ) -> TaskQueue | tuple[TaskQueue, OrchestrationState]:
-        """Run orchestration with Langfuse session context set."""
+        """Run orchestration with Langfuse session context set.
+
+        Async body shared by the sync :meth:`run` wrapper and the async-first
+        :meth:`arun`. Every LLM-driven leg is awaited directly (never wrapped
+        in ``asyncio.run``) so it composes on a caller-owned running loop.
+        """
         state = OrchestrationState(goal=user_query, session_id=session_id)
         resolved_mode = self._resolve_mode(mode)
         state.summary = self._session_store.load_summary(session_id)
@@ -275,7 +414,10 @@ class Orchestrator:
         self._hook_manager.run_on_session_start(session_id)
         error_msg: str | None = None
         try:
-            user_payload: dict[str, object] = {"text": user_query}
+            # Declared as the payload TypedDict, not a loose dict: the event
+            # payloads ARE the wire contract, so building to the contract is
+            # what keeps a key the schema does not know from reaching the store.
+            user_payload: UserPayload = {"text": user_query}
             if attachments:
                 # Additive duplicate of the sibling ``context`` event's
                 # attachments (see ``context._iter_attachments``) — keeps the
@@ -292,7 +434,7 @@ class Orchestrator:
                     user_query.strip(),
                 )
 
-            updated_summary = self._maybe_auto_compact(session_id)
+            updated_summary = await self._maybe_auto_compact_async(session_id)
             if updated_summary:
                 state.summary = updated_summary
 
@@ -330,7 +472,7 @@ class Orchestrator:
                         model_name=self._model_name,
                     )
                     try:
-                        result = asyncio.run(execute_command(cmd_name, cmd_args, cmd_ctx))
+                        result = await execute_command(cmd_name, cmd_args, cmd_ctx)
                         if cmd_name == "compact":
                             state.summary = self._session_store.load_summary(session_id) or ""
                             state.done_reason = "compacted"
@@ -364,7 +506,10 @@ class Orchestrator:
             # happens inside ``ToolUseLoop._bind_model`` so tools can be
             # re-bound after plan approval without reconstructing specs.
             tool_specs = self._tool_registry.list_specs()
-            if allowed_tools:
+            # Three-state: ``None`` skips the gate entirely (unrestricted); ``[]``
+            # is an explicit empty grant and MUST reach ``filter_specs``, which
+            # tests it with ``is None`` for the same reason.
+            if allowed_tools is not None:
                 if strict_tool_scope:
                     # Strict mode: ``allowed_tools`` is authoritative —
                     # nothing outside it survives, not even built-ins.
@@ -372,18 +517,34 @@ class Orchestrator:
                     # trips trying ``aider_shell_tool`` / ``spawn_agent``
                     # / etc. Caller is responsible for including any core
                     # tool it actually needs in ``allowed_tools``.
-                    tool_specs = filter_specs(tool_specs, allowed=allowed_tools)
+                    tool_specs = filter_specs(
+                        tool_specs, allowed=allowed_tools, capability_mode=capability_mode
+                    )
                 else:
                     # Permissive mode (FE default): ``allowed_tools`` only
                     # scopes MCP tools; built-in tools always stay.
                     builtin_ids = [s.tool_id for s in tool_specs if s.kind != "mcp"]
-                    tool_specs = filter_specs(tool_specs, allowed=allowed_tools + builtin_ids)
+                    tool_specs = filter_specs(
+                        tool_specs,
+                        allowed=allowed_tools + builtin_ids,
+                        capability_mode=capability_mode,
+                    )
+            elif capability_mode != "all":
+                # No allowlist, but a ROOT capability ceiling applies (a role
+                # narrowed a session to ``read_only``). Apply the coarse
+                # privilege gate to the registry specs so a read-only session
+                # binds only read-tier tools + ``always_load`` — mirroring the
+                # per-tier filter a spawned child gets. Guarded on the non-"all"
+                # tier so an unrestricted session skips ``filter_specs`` entirely
+                # and stays byte-identical (it also never newly applies
+                # ``agent.default_denied_tools`` to an unscoped session).
+                tool_specs = filter_specs(tool_specs, capability_mode=capability_mode)
 
             # Resolve session capabilities once so every downstream lookup
             # (slash-command skill activation, sub-agent catalog, activate_skill
             # tool dispatch) sees the same client-advertised set. Threading
             # allowed_tools derives any product-tool selection into a
-            # request-scoped grant too (#182) — see _session_capabilities.
+            # request-scoped grant too — see _session_capabilities.
             session_caps = self._session_capabilities(session_id, allowed_tools=allowed_tools)
 
             # Skill invocation detection and hot-reload.
@@ -406,9 +567,19 @@ class Orchestrator:
 
             max_depth = int(get_config_value("agent", "max_depth", default=5))
             max_concurrent = int(get_config_value("agent", "max_concurrent", default=20))
+            attestation = None
+            if bool(get_config_value("agent", "attestation_enabled", default=True)):
+                # Seed from the store's last persisted
+                # record so a recovered/continued session's chain links
+                # continuously instead of restarting at genesis.
+                from mewbo_core.attestation import AttestationChain
+
+                seed = self._session_store.last_attestation_hash(session_id)
+                attestation = AttestationChain(session_id=session_id, head=seed)
             registry = AgentHypervisor(
                 max_concurrent=max_concurrent,
                 session_step_budget=self._session_step_budget,
+                attestation=attestation,
             )
             root_ctx = AgentContext.root(
                 model_name=self._model_name,
@@ -419,6 +590,19 @@ class Orchestrator:
                 registry=registry,
                 message_queue=message_queue,
                 interrupt_step=interrupt_step,
+                # Seed the filesystem-containment axis from config;
+                # narrowed per sub-agent thereafter. Defaults to "full_access"
+                # (unrestricted), and enforcement is separately gated behind
+                # agent.workspace_enforcement, so this is a no-op until flipped.
+                workspace_mode=str(
+                    get_config_value("agent", "default_workspace_mode", default="full_access")
+                ),
+                # Seed the delegation-privilege axis from the caller's resolved
+                # ceiling. "all" (the default) is a no-op — every child then
+                # narrows from here. A role-narrowed session ("read_only" for a
+                # viewer) caps the ROOT's own session tools too, since the loop's
+                # ``build_for`` reads ``agent_context.capability_mode``.
+                capability_mode=capability_mode,
             )
             loop = ToolUseLoop(
                 agent_context=root_ctx,
@@ -427,6 +611,20 @@ class Orchestrator:
                 approval_callback=self._approval_callback,
                 hook_manager=self._hook_manager,
                 project_instructions=self._project_instructions,
+                user_instructions=self._resolve_user_instructions(
+                    session_id=session_id,
+                    session_caps=session_caps,
+                    tool_specs=tool_specs,
+                    # The same inputs the loop below is handed, so the tools
+                    # named in the operator's template match the ones it builds
+                    # — INCLUDING strict_tool_scope, or a permissive FE root's
+                    # {{ tools }} catalog drops schedule_trigger the agent holds.
+                    allowed_tools=allowed_tools,
+                    extra_session_tools=extra_session_tools,
+                    provenance=provenance,
+                    strict_tool_scope=strict_tool_scope,
+                    capability_mode=capability_mode,
+                ),
                 skill_instructions=skill_instructions,
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
@@ -436,6 +634,10 @@ class Orchestrator:
                 # root agents that need them. ``None`` still means "no
                 # plugin session tools" for plain user sessions.
                 allowed_tools=allowed_tools,
+                # Whether ``allowed_tools`` is authoritative (strict) or a
+                # permissive MCP ceiling — mirrors the ``filter_specs`` branch
+                # above so the loop's spawn_agent gate reads the same intent.
+                strict_tool_scope=strict_tool_scope,
                 cwd=self._cwd,
                 session_id=session_id,
                 session_capabilities=session_caps,
@@ -443,19 +645,23 @@ class Orchestrator:
                 enable_skills=enable_skills,
             )
             try:
-                task_queue, state = asyncio.run(
-                    loop.run(
-                        user_query,
-                        tool_specs=tool_specs,
-                        context=context,
-                        plan=initial_plan,
-                        mode=resolved_mode,
-                    )
+                task_queue, state = await loop.run(
+                    user_query,
+                    tool_specs=tool_specs,
+                    context=context,
+                    plan=initial_plan,
+                    mode=resolved_mode,
                 )
             finally:
+                # Snapshot the ownership index BEFORE cleanup force-settles it.
+                # Once cleanup has run every handle reports terminal, and the
+                # evidence that this run declared itself finished while work it
+                # owned was still live is gone with it — so the read has to
+                # happen here, not after.
+                unsettled_children = await self._unsettled_children(registry)
                 # Belt-and-suspenders: ensure all agents cleaned up.
                 try:
-                    asyncio.run(registry.cleanup(timeout=5.0))
+                    await registry.cleanup(timeout=5.0)
                 except Exception:
                     pass
             state.session_id = session_id
@@ -486,62 +692,243 @@ class Orchestrator:
                 state.done = True
                 state.done_reason = "max_iterations_reached"
 
-            completion_payload: dict[str, object] = {
+            # Promise-as-completion gate. A clean terminal is a CLAIM that the
+            # work is finished, and the claim is false while runs this session
+            # owns are still live. Children are collected at loop teardown, so a
+            # handle still non-terminal here was abandoned mid-flight: the run
+            # ended, the work did not. Downgrading the reason is what stops that
+            # from presenting as success — ``completed`` is the one status that
+            # withholds the recovery affordance, and a session with abandoned
+            # work is exactly one that needs it.
+            if state.done_reason == "completed" and unsettled_children:
+                state.done_reason = "unmet_goal"
+                if not task_queue.last_error:
+                    task_queue.last_error = (
+                        f"Run ended while {len(unsettled_children)} owned sub-agent "
+                        "run(s) were still live; their work was abandoned rather "
+                        "than collected."
+                    )
+
+            # Annotated as the TypedDict rather than ``dict[str, object]`` so
+            # the checker validates every key against ``CompletionPayload``;
+            # a bare literal widens to ``dict[str, str | dict[...]]`` the moment
+            # a nested value is added and stops matching the event contract.
+            completion_payload: CompletionPayload = {
                 "done": state.done,
                 "done_reason": state.done_reason,
                 "task_result": task_queue.task_result,
             }
-            # ``task_queue.last_error`` is a STICKY diagnostic — a mid-run tool
-            # failure the model recovered from still leaves it set. Only
-            # surface it on a non-successful completion; a "completed" run
-            # that recovered must not carry stale error residue.
-            if task_queue.last_error and state.done_reason != "completed":
-                completion_payload["error"] = task_queue.last_error
-                completion_payload["last_error"] = task_queue.last_error
+            # The loop leaves ``done_reason`` at "completed" for a run that died
+            # against a credential, a network path or a quota, so this code is
+            # the ONLY thing that carries that fact out of the run. Omitted when
+            # absent, so a run that hit no wall is byte-identical.
+            if state.blocked_code:
+                completion_payload["blocked_code"] = state.blocked_code
+            self._attach_failure_record(completion_payload, task_queue, state.done_reason)
             self._session_store.append_event(
                 session_id,
                 {"type": "completion", "payload": completion_payload},
             )
 
-            updated_summary = self._maybe_auto_compact(session_id)
+            note = self._promise_note(
+                task_queue.task_result or "",
+                owned_runs_live=bool(unsettled_children),
+            )
+            if note is not None:
+                self._session_store.append_event(
+                    session_id,
+                    {"type": "run_note", "payload": {"text": note}},
+                )
+
+            updated_summary = await self._maybe_auto_compact_async(session_id)
             if updated_summary:
                 state.summary = updated_summary
 
             return (task_queue, state) if return_state else task_queue
         except Exception as exc:
-            error_msg = str(exc)
             logging.exception("Orchestration failed for session {}", session_id)
             if task_queue is None:
                 task_queue = TaskQueue(_human_message=user_query, action_steps=[])
-            task_queue.last_error = str(exc)
+            # Classify + clamp ONCE, and let that ONE bounded projection feed
+            # every consumer. A raw ``str(exc)`` here is how an upstream HTML
+            # error page (thousands of characters, provider-controlled) reached
+            # the transcript, the completion payload, the next run's
+            # ``recent_events`` bullet list — and, via ``error_msg`` below, the
+            # ``on_session_end`` hook, whose string a channel adapter posts
+            # verbatim into a forge PR comment or a chat message. That last one
+            # is OUTWARD-facing, so it must never carry provider markup.
+            run_error = RunError.from_exception(exc, model=self._model_name)
+            error_msg = run_error.brief()
+            task_queue.last_error = error_msg
             state.done = True
             state.done_reason = "error"
             # Closure marker so the failed turn is always materialised in
             # the UI timeline and the LLM's ``recent_events`` carries
-            # narrative closure into the next recovery run.
+            # narrative closure into the next recovery run. The one-line
+            # ``title`` keeps that marker readable — the full diagnostic
+            # lives on the completion event's ``error_detail``.
             self._session_store.append_event(
                 session_id,
                 {
                     "type": "assistant",
-                    "payload": {"text": _format_assistant_closure(state.done_reason, str(exc))},
-                },
-            )
-            self._session_store.append_event(
-                session_id,
-                {
-                    "type": "completion",
                     "payload": {
-                        "done": True,
-                        "done_reason": state.done_reason,
-                        "task_result": task_queue.task_result,
-                        "error": str(exc),
-                        "last_error": str(exc),
+                        "text": _format_assistant_closure(state.done_reason, run_error.title)
                     },
                 },
             )
+            failure_payload: CompletionPayload = {
+                "done": True,
+                "done_reason": state.done_reason,
+                "task_result": task_queue.task_result,
+                "error": error_msg,
+                "last_error": error_msg,
+                "error_detail": run_error.model_dump(mode="json"),
+            }
+            # A run that RAISED can still have hit a wall first — a repo it
+            # could not reach, a quota it spent — and that wall is the more
+            # actionable half of the story. Carried on this path too, or a
+            # blocked run that then died of something else reads as a generic
+            # failure with nothing for the user to fix.
+            if state.blocked_code:
+                failure_payload["blocked_code"] = state.blocked_code
+            self._session_store.append_event(
+                session_id,
+                {"type": "completion", "payload": failure_payload},
+            )
             return (task_queue, state) if return_state else task_queue
         finally:
-            self._hook_manager.run_on_session_end(session_id, error_msg)
+            self._record_outcome_assertions(session_id, error_msg)
+
+    def _record_outcome_assertions(self, session_id: str, error_msg: str | None) -> None:
+        """Run the session-end hooks and persist anything they assert.
+
+        A session-end hook is the only component that can see whether the
+        session's PURPOSE succeeded — it holds the owning job, while the loop
+        holds only its own signals, every one of which can say success while the
+        job never reached its terminal state. The assertion lands as its own
+        transcript event AFTER the completion, which is where the status
+        derivation can consume it without this seam having to reorder the hook
+        dispatch ahead of the terminal it describes.
+
+        TOTAL BY CONSTRUCTION, because this runs inside ``run``'s ``finally``: a
+        raise here would REPLACE whatever exception the run was already
+        propagating, reporting a genuine orchestration failure as a hook bug.
+        That also covers a ``HookManager`` predating the return channel — it
+        reports ``None``, which is simply no assertion, never an error.
+        """
+        try:
+            assertions = self._hook_manager.run_on_session_end(session_id, error_msg)
+        except Exception:  # pragma: no cover - defensive; a finally must not raise
+            logging.warning(
+                "session-end hooks failed for session {}", session_id, exc_info=True
+            )
+            return
+        if not isinstance(assertions, list):
+            return
+        for assertion in assertions:
+            try:
+                self._session_store.append_event(
+                    session_id,
+                    {
+                        "type": "outcome_assertion",
+                        "payload": assertion.model_dump(mode="json"),
+                    },
+                )
+            except Exception:  # pragma: no cover - defensive; see above
+                logging.warning(
+                    "could not persist an outcome assertion for session {}",
+                    session_id,
+                    exc_info=True,
+                )
+
+    def _attach_failure_record(
+        self,
+        payload: CompletionPayload,
+        task_queue: TaskQueue,
+        done_reason: str | None,
+    ) -> None:
+        """Attach the bounded failure record to a terminal completion payload.
+
+        ``task_queue.last_error`` is a STICKY diagnostic — a mid-run tool
+        failure the model recovered from still leaves it set. It is CLAMPED
+        whenever set, whatever the outcome: its readers do not check
+        ``done_reason`` (the scg map-job persists it onto the job record, the
+        CLI prints it on /retry|/continue|/edit), so gating the clamp let a run
+        that recovered and finished clean carry a raw multi-KB provider page out
+        to them.
+
+        The payload keys used to be WITHHELD whenever ``done_reason ==
+        "completed"``, to keep error residue off a successful run's wire. That
+        rule cost more than it bought: the runs it silenced were overwhelmingly
+        the LAUNDERED ones — a halt presenting as success — and withholding the
+        one field able to contradict the status is what turned a wrong status
+        into an unfalsifiable one. A status is only worth trusting if the record
+        can be used to check it.
+
+        A run that stopped short leaving NO sticky string (a doom-loop halt, a
+        spent budget, a failed ground-truth check) is why the structured record
+        was populated on so few of the error-ish completions. It gets one here —
+        but only the additive ``error_detail``, never the flat keys: those are
+        what the legacy clients render as an error card, and a halt that
+        produced a wrap-up answer is not an error to put in front of a user.
+        """
+        if task_queue.last_error:
+            run_error = RunError.from_message(task_queue.last_error, model=self._model_name)
+            brief = run_error.brief()
+            task_queue.last_error = brief
+            payload["error"] = brief
+            payload["last_error"] = brief
+            payload["error_detail"] = run_error.model_dump(mode="json")
+        elif done_reason in UNACHIEVED_DONE_REASONS:
+            payload["error_detail"] = RunError.from_message(
+                f"Run ended without reaching its goal ({done_reason}).",
+                model=self._model_name,
+            ).model_dump(mode="json")
+
+    @staticmethod
+    async def _unsettled_children(registry: AgentHypervisor) -> list[str]:
+        """Ids of agents still non-terminal as the run tears down.
+
+        The ownership index the promise-as-completion gate reads. Must be called
+        BEFORE ``registry.cleanup``, which force-settles every handle and erases
+        the distinction between "this run finished its work" and "this run
+        merely stopped".
+
+        Read-only and total: a registry that cannot answer reports nothing owed
+        rather than failing a run that has otherwise succeeded.
+        """
+        try:
+            agents = await registry.list_all()
+        except Exception:  # pragma: no cover - defensive; never fail a run here
+            return []
+        return [h.agent_id for h in agents if h.status in ACTIVE_STATUSES]
+
+    @staticmethod
+    def _promise_note(text: str, *, owned_runs_live: bool) -> str | None:
+        """Return ONE factual reminder when terminal prose promises future work.
+
+        The prose half of promise-as-completion: a terminal that reads "I'll
+        check back on it shortly" and then ends zero seconds later is not
+        masking an error, it is fabricating a future. Nothing downstream can
+        falsify that from the record, because there is no error to find.
+
+        What this returns is a statement of fact the record already proves — no
+        background work is scheduled — and never a verdict on the output. It is
+        deliberately silent when owned runs ARE live, because then the promise
+        is simply true, and silent on non-matching prose, because a heuristic
+        that guesses at intent would invent the very unfalsifiable claim this
+        seam exists to remove.
+        """
+        if owned_runs_live or not text:
+            return None
+        probe = text.lower()
+        if not any(marker in probe for marker in _FUTURE_COMMITMENT_MARKERS):
+            return None
+        return (
+            "This turn ended with no scheduled or running background work. "
+            "Any follow-up stated in the response above will not happen on "
+            "its own."
+        )
 
     # ------------------------------------------------------------------
     # Session helpers (kept from original)
@@ -555,11 +942,11 @@ class Orchestrator:
         Reads ``client_capabilities`` from the most recently appended
         ``context`` event (set by the API from the ``X-Mewbo-Capabilities``
         header). Unions in capabilities DERIVED from *allowed_tools*
-        (Gitea #182) — REQUEST-SCOPED, never persisted: when the caller names
+        — REQUEST-SCOPED, never persisted: when the caller names
         a product ``SessionTool``'s id (e.g. ``wiki_search_pages``) in this
         request's allowlist, ``SessionToolRegistry.capabilities_for`` looks up
         the tool's plugin-manifest ``requires_capabilities`` and unions it in
-        for THIS call only. This closes the #84 asymmetry: selecting a
+        for THIS call only. This closes the asymmetry: selecting a
         product tool via the SAME ``context.mcp_tools`` field that already
         gates ``SessionToolRegistry.build_for``'s allowlist now *also* unlocks
         its AgentDef family on the capability-only catalog gate
@@ -595,16 +982,190 @@ class Orchestrator:
         base = set(parse_capabilities(advertised)) | set(derived)
         return augment_session_capabilities(tuple(sorted(base)))
 
+    def _system_instructions_store(self) -> SystemInstructionsStoreBase | None:
+        """Return the custom-instructions store, resolving the factory once.
+
+        Resolution is lazy + sticky: the factory raises when the configured
+        driver is ``mongodb`` and Mongo is unreachable, and this feature must
+        never be the reason a session refuses to start. A failure is logged once
+        and remembered, so a dead connection isn't re-probed every run.
+        """
+        if self._instructions_store_tried:
+            return self._instructions_store
+        self._instructions_store_tried = True
+        try:
+            self._instructions_store = create_system_instructions_store()
+        except Exception:
+            logging.warning(
+                "Custom system instructions unavailable (store unreachable); "
+                "running without them.",
+                exc_info=True,
+            )
+            self._instructions_store = None
+        return self._instructions_store
+
+    def _resolve_instruction_tools(
+        self,
+        *,
+        tool_specs: list[ToolSpec],
+        allowed_tools: list[str] | None,
+        session_caps: tuple[str, ...],
+        extra_session_tools: list[SessionTool] | None,
+        strict_tool_scope: bool,
+        capability_mode: str = "all",
+    ) -> tuple[str, ...]:
+        """The tool ids an operator's template sees in ``InstructionContext.tools``.
+
+        The ``ToolRegistry`` specs bound for this run, UNIONED with the session
+        tools the root agent will actually be built with. The union is the fix:
+        the field used to carry the registry specs alone, so every session tool
+        (``wiki_*``, ``scg_*``, ``submit_widget``, ``schedule_trigger``) was
+        missing and ``'wiki_search' in tools`` silently rendered False for an
+        agent that genuinely held it — a template branching on a product tool
+        could never fire.
+
+        The session-tool half is resolved through ``SessionToolRegistry.ids_for``,
+        the SAME selection ``ToolUseLoop`` builds from, so this list cannot drift
+        from what the agent gets. Caller-injected tools (``extra_session_tools``,
+        e.g. the structured-response emit tool) are unioned in too — they are
+        bound for this run just as truly.
+
+        DELIBERATELY OMITTED: the five internals the loop injects for ITSELF
+        (``spawn_agent``/``spawn_agents``, ``update_todos``, ``exit_plan_mode``,
+        ``activate_skill``). They are decided INSIDE ``ToolUseLoop``, downstream
+        of this call, and several are mode-dependent (``update_todos`` is
+        act-mode, ``exit_plan_mode`` is plan-mode), so naming them here would
+        trade one lie for another. The field's ``description`` states the
+        omission outright — honesty over completeness.
+
+        ``tool_search`` is NOT one of them and IS included: despite being loop
+        machinery, it is a genuine ``ToolRegistry`` spec (``always_load``), so it
+        arrives through *tool_specs* like any other tool. Listing it as omitted
+        would itself have been a lie — the exact failure this method exists to
+        fix, one level down.
+        """
+        ids = {spec.tool_id for spec in tool_specs}
+        ids.update(
+            self._session_tool_registry.ids_for(
+                allowed_tools,
+                session_capabilities=session_caps,
+                # Same intent the loop's build_for gets, or the operator's
+                # {{ tools }} catalog drifts from what the agent holds:
+                # a permissive FE root genuinely holds schedule_trigger, and a
+                # role-narrowed root drops the write-tier session tools its
+                # ``capability_mode`` withholds.
+                strict_tool_scope=strict_tool_scope,
+                capability_mode=capability_mode,
+            )
+        )
+        ids.update(tool.tool_id for tool in extra_session_tools or [])
+        return tuple(sorted(ids))
+
+    def _resolve_user_instructions(
+        self,
+        *,
+        session_id: str,
+        session_caps: tuple[str, ...],
+        tool_specs: list[ToolSpec],
+        allowed_tools: list[str] | None,
+        extra_session_tools: list[SessionTool] | None,
+        provenance: TraceProvenance | None,
+        strict_tool_scope: bool,
+        capability_mode: str = "all",
+    ) -> str | None:
+        """Render the operator's custom system instructions for this run.
+
+        The ONE resolution point: read the stored template, render it once
+        against this run's :class:`InstructionContext`, and hand the plain string
+        to the loop (which then survives compaction and the escalation
+        re-render because it lives on the loop instance).
+
+        Fully fail-soft by construction — a missing/disabled doc, an unreachable
+        store, or a broken template all yield ``None``, and the run proceeds
+        exactly as it would have without the feature. Never raises into a run.
+        """
+        store = self._system_instructions_store()
+        if store is None:
+            return None
+        try:
+            doc = store.get()
+        except Exception:
+            logging.warning("Could not read the custom system instructions.", exc_info=True)
+            return None
+        if doc is None or not doc.enabled or not doc.template.strip():
+            return None
+
+        surface = provenance.surface if provenance else "unknown"
+        context = InstructionContext(
+            surface=surface,
+            # The enum MEMBER, not its ``.value``. Pydantic coerces the bare
+            # string back to the member, so this is runtime-identical — but the
+            # field is declared ``SessionOrigin`` and ``describe()`` walks the
+            # schema to generate the operator-facing variable reference, so the
+            # typed contract has to be honoured at the boundary rather than
+            # widened to satisfy a caller.
+            origin=provenance.origin if provenance else SessionOrigin.USER,
+            is_mobile=is_mobile_surface(surface),
+            session_id=session_id,
+            model=self._model_name,
+            cwd=self._cwd or str(Path.cwd()),
+            platform=_platform.system().lower(),
+            hostname=socket.gethostname(),
+            mewbo_version=get_version(),
+            capabilities=tuple(session_caps),
+            tools=self._resolve_instruction_tools(
+                tool_specs=tool_specs,
+                allowed_tools=allowed_tools,
+                session_caps=session_caps,
+                extra_session_tools=extra_session_tools,
+                strict_tool_scope=strict_tool_scope,
+                capability_mode=capability_mode,
+            ),
+            # ``project`` is absent for a managed worktree too, not just for an
+            # unscoped session: ``TraceProvenance._facets_from_context`` routes a
+            # ``managed:<uuid>`` context value to a ``worktree`` facet and never
+            # into ``metadata["project"]``. The field's description says so.
+            project=provenance.metadata.get("project") if provenance else None,
+        )
+        rendered = doc.render(context)
+        # Persist the render outcome so the settings UI can surface a broken
+        # template (which is otherwise invisible: it degrades to no injection
+        # rather than to a failure). Best-effort — ``record_error`` swallows.
+        store.record_error(doc.id, rendered.error)
+        return rendered.text or None
+
     def _maybe_generate_title(self, session_id: str) -> None:
-        """Kick off title generation in a daemon thread (non-blocking).
+        """Kick off non-blocking title generation.
 
         Runs only once per session (guarded by ``load_title`` absence). The
         caller returns immediately; the title appears via a ``title_update``
         event whenever the LLM call finishes. Failures are logged, never
         raised — the first-user-message fallback remains as safety net.
+
+        Two backgrounding strategies keep the sync and async worlds happy:
+
+        * Pyodide / single-threaded runtimes (``sys.platform == "emscripten"``):
+          schedule the coroutine on the already-running event loop. The WebLoop
+          persists past the per-request lifecycle, so the task survives — and we
+          never touch ``threading`` (which is inlined there) nor
+          ``asyncio.run`` (illegal inside a running loop).
+        * CPython: spawn a daemon thread that owns its own ``asyncio.run``
+          lifecycle — identical to the pre-async-surface behaviour.
         """
         if self._session_store.load_title(session_id) is not None:
             return
+        if sys.platform == "emscripten":
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self._run_title_generation_async(session_id))
+                # Hold a strong reference so asyncio can't GC this
+                # fire-and-forget task mid-run; the done-callback discards it
+                # once finished (see ``self._background_tasks`` in __init__).
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+                return
+            except RuntimeError:
+                pass  # No running loop yet — fall through to the thread path.
         threading.Thread(
             target=self._run_title_generation,
             args=(session_id,),
@@ -613,12 +1174,21 @@ class Orchestrator:
         ).start()
 
     def _run_title_generation(self, session_id: str) -> None:
-        """Worker body for background title generation."""
+        """Sync worker body for background title generation (CPython thread).
+
+        No try/except here: the coroutine body already catches and logs
+        every exception internally (see :meth:`_run_title_generation_async`),
+        so ``asyncio.run`` never raises out of this call.
+        """
+        asyncio.run(self._run_title_generation_async(session_id))
+
+    async def _run_title_generation_async(self, session_id: str) -> None:
+        """Async title generation — single source of truth for the LLM call."""
         try:
             from mewbo_core.title_generator import generate_session_title
 
             events = self._session_store.load_transcript(session_id)
-            title = asyncio.run(generate_session_title(events))
+            title = await generate_session_title(events)
             if not title:
                 return
             self._session_store.save_title(session_id, title)
@@ -630,6 +1200,14 @@ class Orchestrator:
             logging.warning("Title generation failed: {}: {}", type(exc).__name__, exc)
 
     def _maybe_auto_compact(self, session_id: str) -> str | None:
+        """Sync wrapper around :meth:`_maybe_auto_compact_async`.
+
+        Kept for callers that drive compaction from a synchronous context
+        (test harnesses asserting the thrash-guard short-circuit).
+        """
+        return asyncio.run(self._maybe_auto_compact_async(session_id))
+
+    async def _maybe_auto_compact_async(self, session_id: str) -> str | None:
         from mewbo_core.compact import (
             CompactionMode,
             compact_conversation,
@@ -659,7 +1237,7 @@ class Orchestrator:
             return None
         compact_model = self._model_name
         try:
-            result = asyncio.run(compact_conversation(events, CompactionMode.PARTIAL))
+            result = await compact_conversation(events, CompactionMode.PARTIAL)
             compact_model = result.model or self._model_name
             summary = result.summary
             tokens_saved = result.tokens_saved

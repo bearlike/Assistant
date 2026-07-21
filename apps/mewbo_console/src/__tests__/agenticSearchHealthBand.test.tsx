@@ -1,5 +1,5 @@
 /**
- * Landing health-band tests (#139).
+ * Landing health-band tests.
  *
  * The active-workspace health band must read the LIGHT
  * `GET /workspaces/<id>/graph/summary` projection — NOT the full node/edge
@@ -56,11 +56,15 @@ function renderLanding() {
         workspace={workspace}
         workspaces={[workspace]}
         sources={[]}
-        tier="auto"
-        onTierChange={vi.fn()}
-        model=""
-        onModelChange={vi.fn()}
-        onPickWorkspace={vi.fn()}
+        scope={{
+          tier: "auto",
+          onTierChange: vi.fn(),
+          model: "",
+          onModelChange: vi.fn(),
+          fallbackModels: [],
+          onFallbackModelsChange: vi.fn(),
+        }}
+        onSelectWorkspace={vi.fn()}
         onSubmit={vi.fn()}
         onOpenCreate={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -80,7 +84,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("WorkspaceHealthBand summary read (#139)", () => {
+describe("WorkspaceHealthBand summary read", () => {
   it("fetches the light summary for the active workspace, not the full graph", async () => {
     renderLanding()
     // mapped = total(2) − unmapped(1) = 1 → "1/2 sources mapped".

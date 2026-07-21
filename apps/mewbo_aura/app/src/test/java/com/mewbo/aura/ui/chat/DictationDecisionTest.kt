@@ -8,7 +8,7 @@ import org.junit.Test
 /**
  * [DictationDecision.next] is the pure `TranscriberEvent` -> [DictationState] mapping
  * [ChatViewModel.startDictation] applies on every event its collected `Transcriber` flow emits
- * (Gitea #180 P2) - covered directly here since `ChatViewModel` can't be constructed in a plain JVM
+ * - covered directly here since `ChatViewModel` can't be constructed in a plain JVM
  * test (no Robolectric in this module, same reasoning [SendDecisionTest] documents).
  */
 class DictationDecisionTest {

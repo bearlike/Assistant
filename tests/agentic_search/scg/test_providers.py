@@ -2,7 +2,7 @@
 
 Each provider parses a source-type-specific :class:`SourceDescriptor` into a
 normalized :class:`StructureGraph` of ``ScgNode`` / ``ScgEdge`` tuples. These
-tests pin the contract the spec (Gitea #19 P3) fixes: deterministic source
+tests pin the contract the spec (P3) fixes: deterministic source
 keys, binding modes (required→``bound`` / optional→``optional``), the
 HAS_ENTITY / HAS_FIELD / SUPPORTS_QUERY / PRODUCES edge fabric, and the
 registry dispatch by ``source_type``. No network, no real LLM.

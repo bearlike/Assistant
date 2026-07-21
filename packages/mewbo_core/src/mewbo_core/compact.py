@@ -114,7 +114,7 @@ def get_compact_prompt(model: str | None = None) -> str:
 
     ``model`` threads the summarization model through to the registry so a
     per-model override of ``compact.system`` reaches the compaction prompt too
-    (#113) — not just the loop's per-step prompts. ``None`` renders the base.
+    — not just the loop's per-step prompts. ``None`` renders the base.
     The scenario (caveman) still wins over a model override per registry
     resolution order.
     """
@@ -238,7 +238,7 @@ async def compact_conversation(
     from langchain_core.messages import HumanMessage, SystemMessage
 
     # Render the compaction prompt for the model that will actually summarize
-    # (the primary candidate) so its per-model override applies (#113).
+    # (the primary candidate) so its per-model override applies.
     system_content = get_compact_prompt(model=models[0])
     if focus_prompt and focus_prompt.strip():
         system_content += get_prompt_registry().render(
@@ -261,7 +261,7 @@ async def compact_conversation(
         except Exception:
             if i < len(models) - 1:
                 logger.warning(
-                    "Compact model %s failed, trying next: %s",
+                    "Compact model {} failed, trying next: {}",
                     model,
                     models[i + 1],
                     exc_info=True,
@@ -301,7 +301,7 @@ async def compact_conversation(
                         f"## File: {path} (truncated)\n```\n{content[:char_limit]}\n```"
                     )
         except (OSError, UnicodeDecodeError):
-            logger.debug("Could not restore file: %s", path)
+            logger.debug("Could not restore file: {}", path)
 
     return CompactionResult(
         summary=summary,

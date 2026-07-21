@@ -6,6 +6,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
@@ -44,18 +45,37 @@ internal fun rememberShaderTimeSeconds(): MutableFloatState {
         onDispose { lifecycle.removeObserver(observer) }
     }
 
+    // The frame clock is milliseconds since BOOT. Narrowing that straight to Float quantizes it:
+    // on a device up 5 days the value is ~4.3e8 ms, which lands in a binade where the float32 ULP
+    // is 32ms - so `timeSeconds` would only advance every OTHER frame, and the shader phase would
+    // judder rather than drift (at ~11 days uptime the ULP doubles again, to 4-frame stalls). It
+    // degrades with uptime, which is why it never appears on redroid (containers live for minutes)
+    // and only bites a real phone. Anchor to the first observed frame in Long, where the subtraction
+    // is EXACT, and narrow only the small difference - the shaders then see a dense, smooth value
+    // regardless of uptime. Same bug class as 's absolute-uptime flow-field freeze; that fix
+    // landed at one call site, this is the shared seam it missed.
+    // The origin is remembered OUTSIDE the frame loop so a lifecycle pause/resume (which restarts
+    // the LaunchedEffect) resumes the phase instead of resetting it to zero.
+    val originMs = remember { mutableLongStateOf(UNSET_ORIGIN) }
+
     LaunchedEffect(isVisible) {
         if (!isVisible) return@LaunchedEffect
         while (isActive) {
-            withInfiniteAnimationFrameMillis { frameMs -> timeSeconds.floatValue = frameMs / 1000f }
+            withInfiniteAnimationFrameMillis { frameMs ->
+                if (originMs.longValue == UNSET_ORIGIN) originMs.longValue = frameMs
+                timeSeconds.floatValue = (frameMs - originMs.longValue) / 1000f
+            }
         }
     }
 
     return timeSeconds
 }
 
+/** Sentinel for "no frame observed yet" - a real [withInfiniteAnimationFrameMillis] value is never negative. */
+private const val UNSET_ORIGIN = -1L
+
 /**
- * M8 reduced-motion "opacity breathe" (Gitea #181 fix wave, finding 4): a smooth sine envelope over
+ * M8 reduced-motion "opacity breathe": a smooth sine envelope over
  * [rememberShaderTimeSeconds]'s own lifecycle-gated clock, replacing a second, ungated
  * `rememberInfiniteTransition()` per reduced-motion fallback ([com.mewbo.aura.ui.orb.Orb]'s
  * `ReducedMotionOrb`, `AuraSpark`'s `ReducedMotionSpark`) - the old fallback kept animating (and,
@@ -64,7 +84,7 @@ internal fun rememberShaderTimeSeconds(): MutableFloatState {
  * STARTED" rule on exactly the accessibility path. Meant to be read only where every other shader
  * uniform in this family is read - `graphicsLayer{}`/`onDrawBehind{}`, never composable scope.
  * [min] is the trough (each brand mark measured its own; Orb and Spark differ); the peak is always
- * `1f`, matching the pre-#181 fallback's own range for each.
+ * `1f`, matching the pre-v5 fallback's own range for each.
  */
 internal fun reducedMotionBreatheAlpha(timeSeconds: Float, min: Float): Float {
     val periodSeconds = 2f * AuraMotion.reducedMotionBreatheHalfPeriodMs / 1000f

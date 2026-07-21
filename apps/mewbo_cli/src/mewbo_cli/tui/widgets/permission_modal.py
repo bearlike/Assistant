@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Textual approval modal for the Mewbo TUI (issue #154, epic #149).
+"""Textual approval modal for the Mewbo TUI.
 
 :class:`PermissionModal` is a :class:`~textual.screen.ModalScreen` that
 presents a tool-call approval request to the user.  It embeds a

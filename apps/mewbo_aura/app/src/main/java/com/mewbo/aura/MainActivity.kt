@@ -1,6 +1,9 @@
 package com.mewbo.aura
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewTreeObserver
@@ -8,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -16,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.mewbo.aura.data.settings.SettingsStore
 import com.mewbo.aura.mock.MockBackendFlags
+import com.mewbo.aura.notify.RunNotificationLauncher
 import com.mewbo.aura.ui.navigation.AuraNavHost
 import com.mewbo.aura.ui.navigation.IS_DEBUG_BUILD
 import com.mewbo.aura.ui.theme.AuraTheme
@@ -28,6 +33,22 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsStore: SettingsStore
     @Inject lateinit var mockBackendFlags: MockBackendFlags
+
+    /** Emits when a run starts (see [RunNotificationLauncher.runStarted]) so the POST_NOTIFICATIONS
+     * request can fire at first relevance — the first query send — rather than on cold launch. */
+    @Inject lateinit var runNotificationLauncher: RunNotificationLauncher
+
+    /**
+     * POST_NOTIFICATIONS (API 33+) runtime request. Registered as a field so it exists before the
+     * activity is STARTED (the framework requirement). The result is intentionally ignored: the OS
+     * grant is the SOLE consent gate (hard user directive — no in-app pre-consent dialog, no nagging
+     * on denial; a denial just means no completion notifications).
+     */
+    private val requestNotificationsPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* OS grant is the sole gate */ }
+
+    /** One-shot guard so the notification permission is requested at most once per process. */
+    private var askedForNotifications = false
 
     /**
      * Flips once the first real reduced-motion value loads from DataStore. Read by the pre-draw
@@ -43,7 +64,7 @@ class MainActivity : ComponentActivity() {
      * property: `AuraNavHost` is the only reader and this Activity is the only writer. */
     private var pendingHandoffSessionId by mutableStateOf<String?>(null)
 
-    /** Paired with [pendingHandoffSessionId] (Gitea #180 P1) - the raw `EXTRA_HANDOFF_MODALITY`
+    /** Paired with [pendingHandoffSessionId] - the raw `EXTRA_HANDOFF_MODALITY`
      * string (an `InputModality.name`, e.g. "Voice"/"Text"). Kept as a plain `String` rather than
      * `com.mewbo.aura.voice.InputModality` here: this Activity and `AuraNavHost` are the `ui`/app-root
      * layer, which never imports `voice/` (apps/mewbo_aura/CLAUDE.md package layering) - only
@@ -83,7 +104,7 @@ class MainActivity : ComponentActivity() {
                     seedApiKey?.let { settingsStore.setApiKey(it) }
                 }
             }
-            // Same seed-extra pattern, for the mock backend toggle (Gitea #181 follow-up):
+            // Same seed-extra pattern, for the mock backend toggle:
             //   adb shell am start -n com.mewbo.aura/.MainActivity -e mockBackend true
             // `hasExtra` guards this so a normal launch (no extra passed at all) never touches the
             // toggle - only an EXPLICIT true/false flips it, leaving whatever the Settings row last
@@ -101,6 +122,12 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch { mockBackendFlags.setEnabled(enabled) }
             }
         }
+        // Request POST_NOTIFICATIONS at first relevance — the first query send — via
+        // RunNotificationLauncher.runStarted (replay=1 so an overlay-started run before the app was
+        // open still counts on launch). No pre-consent dialog: the OS prompt is the only gate.
+        lifecycleScope.launch {
+            runNotificationLauncher.runStarted.collect { maybeRequestNotificationsPermission() }
+        }
         // Holds the platform cold-start splash (native since API 31; minSdk here is 33) past its
         // first frame until settingsLoaded flips - the same mechanism
         // androidx.core:core-splashscreen's setKeepOnScreenCondition uses internally, done
@@ -117,7 +144,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
-        // Frameless/full-bleed (#181 follow-up, user directive, reference parity): FORCE dark
+        // Frameless/full-bleed (user directive, reference parity): FORCE dark
         // transparent system bars instead of enableEdgeToEdge()'s auto style - auto follows the
         // SYSTEM light/dark theme, so a light-themed device got a light (white) navigation-bar
         // scrim under this dark-only app: a visible white frame at the bottom. Dark+transparent on
@@ -168,6 +195,17 @@ class MainActivity : ComponentActivity() {
         pendingHandoffModality = intent.getStringExtra(EXTRA_HANDOFF_MODALITY)
         pendingHandoffDraft = intent.getStringExtra(EXTRA_HANDOFF_DRAFT)
         pendingHandoffNewChat = intent.getBooleanExtra(EXTRA_HANDOFF_NEW_CHAT, false)
+    }
+
+    /** Fires the system POST_NOTIFICATIONS prompt once, only when it can matter: API 33+, not yet
+     * asked this process, not already granted. Below API 33 the permission is auto-granted, so there
+     * is nothing to request. */
+    private fun maybeRequestNotificationsPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (askedForNotifications) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        askedForNotifications = true
+        requestNotificationsPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     companion object {

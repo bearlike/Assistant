@@ -1,0 +1,76 @@
+[project]
+name = "mewbo-iam"
+version = "0.0.13"
+description = "Identity kernel for Mewbo — principals, authenticators, permissions/roles, teams, ownership grants, group→role/team mappings, user records, and an auth audit trail. Pure data-owned models plus JSON/Mongo stores; depends only on mewbo-core. Consumed by apps, never imports one."
+readme = "../../README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+# Down-only: the identity kernel imports the lean core SDK (for the store
+# drivers' config/logging seam) and pydantic, never mewbo-tools, mewbo-graph,
+# or any app. Provider integrations (OIDC discovery, LDAP bind, SAML) are heavy
+# and optional — they live behind the extras below plus in-code import-guards,
+# so a bare install carries only the models and the JSON/Mongo stores.
+dependencies = [
+  "mewbo-core>=0.0.10",
+  "pydantic>=2.7.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+# OpenID Connect relying-party support (the OIDC authenticator's runtime
+# driver — discovery, token exchange, JWKS/JWT verification). The kernel's
+# OidcAuthenticator model is pure (claims arrive as a Mapping); these deps are
+# only pulled in by the app-side driver that fetches and verifies them.
+#   * authlib >=1.6 — the RP flow (metadata discovery + client assertion).
+#   * joserfc >=1.0 — JWKS fetch + JWS/JWT verification, the maintained
+#     successor to the authlib-jose primitives; 1.0 is the first stable line.
+#   * requests >=2.32 — the HTTP transport for discovery/JWKS/token/userinfo/
+#     introspection (also authlib's requests_client backend). Already ubiquitous
+#     in the API app (transitive via mewbo-tools); pinned here so the driver's
+#     own network legs are covered when the extra is installed standalone.
+oidc = [
+  "authlib>=1.6",
+  "joserfc>=1.0",
+  "requests>=2.32.0",
+]
+# LDAP / Active Directory bind + group search for the LDAP authenticator's
+# runtime driver. The model only maps an already-fetched entry → RawIdentity;
+# the bind/search I/O lives behind this extra.
+#   * ldap3 >=2.9 — pure-python LDAP v3 client, the last widely-deployed line.
+ldap = [
+  "ldap3>=2.9",
+]
+# SAML 2.0 service-provider support (the SamlAuthenticator's runtime driver —
+# AuthnRequest build, IdP metadata parse, ACS signature/audience/replay
+# verification). The kernel's SamlAuthenticator model is pure (an
+# already-validated assertion's attributes arrive as a Mapping); these deps
+# are only pulled in by the app-side driver that verifies the assertion.
+#   * python3-saml >=1.16 — the SAML-Toolkits-maintained SP toolkit (formerly
+#     onelogin/python3-saml), chosen over pysaml2. The deciding factor is
+#     WHERE the cryptographic verification happens: python3-saml binds
+#     libxmlsec1 in-process via the `xmlsec` C extension, while pysaml2's
+#     default backend shells out to the `xmlsec1` CLI as a subprocess over
+#     temp files — the same hand-rolled-subprocess trap this repo's git-auth
+#     rule exists to avoid, applied to signature verification instead of git.
+#     `xmlsec` has shipped prebuilt manylinux/macOS/Windows wheels since
+#     1.3.7, so the historical "needs libxmlsec1-dev to compile" cost mostly
+#     no longer applies on common platforms; it still earns its own extra
+#     because a from-source fallback on an unsupported platform pulls in
+#     libxml2/libxmlsec1 headers, unlike anything else in this package.
+saml = [
+  "python3-saml>=1.16,<2.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mewbo_iam"]
+# Contributor docs are not runtime assets; keep them out of the published wheel.
+exclude = [
+  "**/CLAUDE.md",
+]

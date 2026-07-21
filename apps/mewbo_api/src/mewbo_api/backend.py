@@ -15,14 +15,22 @@ import json
 import os
 import queue
 import subprocess
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
-from flask import Flask, Response, request, stream_with_context
+from flask import Flask, Request, Response, g, request, stream_with_context
 from flask_restx import Api, Resource, fields
+from mewbo_core.ask_user import (
+    ASK_USER_CAPABILITY,
+    AskUserQuestionTool,
+    QuestionAnswerItem,
+    QuestionDispatcher,
+)
 from mewbo_core.attachments import (
     is_image,
     is_supported,
@@ -47,16 +55,27 @@ from mewbo_core.config import (
 )
 from mewbo_core.context import _iter_attachments
 from mewbo_core.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for, session_temp_dir
-from mewbo_core.key_store import KeyStoreBase, create_key_store
+from mewbo_core.key_store import KeyScopes, KeyStoreBase, PublicKeyRecord, create_key_store
+from mewbo_core.llm_resilience import RetryStrategy
 from mewbo_core.notifications import NotificationStore
 from mewbo_core.permissions import auto_approve
 from mewbo_core.project_store import VirtualProject, create_project_store
-from mewbo_core.session_provenance import MOBILE_TAG_PREFIX, is_mobile_surface
-from mewbo_core.session_runtime import SessionRuntime, parse_core_command
+from mewbo_core.secret_redaction import redact_mapping, redact_text
+from mewbo_core.session_provenance import MOBILE_TAG_PREFIX, SessionOrigin, is_mobile_surface
+from mewbo_core.session_runtime import (
+    SessionRuntime,
+    SessionTerminatedError,
+    parse_core_command,
+)
 from mewbo_core.session_store import SessionStoreBase, create_session_store
 from mewbo_core.session_tools import SessionTool
 from mewbo_core.share_store import ShareStore
-from mewbo_core.tool_registry import classify_tool_scope, load_registry
+from mewbo_core.tool_registry import (
+    classify_tool_scope,
+    get_or_build_registry,
+    load_registry,
+)
+from mewbo_core.transcript_timeline import TranscriptTimeline
 from mewbo_core.types import EventRecord
 from mewbo_core.worktree import WorktreeBranchInUseError, WorktreeManager
 from mewbo_tools.integration.file_catalog import FileCatalog
@@ -66,9 +85,22 @@ from werkzeug.exceptions import NotFound
 from werkzeug.utils import secure_filename
 
 from mewbo_api.config_view import ConfigSchemaView
+from mewbo_api.errors import register_api_error_handler
 from mewbo_api.repo_identity import RepoIdentity
 from mewbo_api.request_context import request_surface
 from mewbo_api.responses import ApiResponseKit
+from mewbo_api.session_spec import (
+    SPEC_CONTEXT_KEY,
+    SessionSpec,
+    SessionSpecOverrides,
+    SessionSpecStore,
+)
+
+# The canonical 410-Gone body for a permanently terminated session lives on the
+# response kit (the ONE home both this module and triggers/routes.py import with
+# no cycle); this thin module alias keeps the six legacy guard call sites
+# untouched while the envelope stays single-sourced.
+_terminated_response = ApiResponseKit.terminated_response
 
 # ``done_reason`` taxonomy — the orchestrator and /command paths share these
 # canonical values so every consumer (notifications, status badge,
@@ -266,7 +298,7 @@ def _auto_cleanup_worktree_on_session_end(session_id: str, error: str | None) ->
     user can resume or recover work.
 
     After reaping the child worktree, also reaps the auto-promoted parent if it
-    now has no remaining worktree children (the #53 orphan-parent symptom). An
+    now has no remaining worktree children (the orphan-parent symptom). An
     auto-promoted parent is identified by ``path_source == "provided"`` — it was
     lifted from a config project and is system-owned, not user-created.
 
@@ -319,7 +351,32 @@ runtime = SessionRuntime(session_store=session_store)
 notification_store = NotificationStore(root_dir=session_store.root_dir)
 share_store = ShareStore(root_dir=session_store.root_dir)
 
-# Client-declared device tools (Gitea #179, Phase 1): register the concrete
+# Settle session runs orphaned by a process restart (deploy / OOM kill): a
+# worker that died mid-turn leaves a transcript ending on run activity with no
+# terminal ``completion``, so ``summarize_session`` reads ``idle`` and the
+# console's recovery card never renders. The session-side peer of the apps
+# ledger's ``sweep_orphaned_runs`` appends a synthetic error completion so the
+# status flips to ``failed`` and recovery surfaces. Store-only + best-effort: a
+# failure here must never break startup. NOTE this WRITES synthetic completions
+# to the configured store at import — and in this app import IS startup, so any
+# test importing this module triggers it (idempotent, but a write; see
+# apps/mewbo_api/CLAUDE.md → the /variables prime-at-boot lesson).
+# ``MEWBO_BOOT_RUN_SWEEP=0`` opts out entirely.
+try:
+    from mewbo_api.run_sweep import SessionRunSweeper  # noqa: PLC0415
+
+    _session_runs_settled = SessionRunSweeper(
+        session_store, now=lambda: datetime.now(timezone.utc)
+    ).sweep()
+    if _session_runs_settled:
+        logging.warning(
+            "Settled {} orphaned session run(s) as interrupted at startup",
+            _session_runs_settled,
+        )
+except Exception:
+    logging.warning("Session-run startup sweep failed", exc_info=True)
+
+# Client-declared device tools (Phase 1): register the concrete
 # dispatcher into the core seam, mirroring how the api registers
 # RunStoreSearchLauncher for the agentic-search SessionTool. Unconditional
 # (no feature flag) — a session simply never advertises `device_tools` when
@@ -327,6 +384,13 @@ share_store = ShareStore(root_dir=session_store.root_dir)
 from mewbo_api.device_tools import ApiDeviceToolDispatcher, get_pending_calls  # noqa: E402
 
 DeviceToolDispatcher.register(ApiDeviceToolDispatcher(runtime=runtime))
+
+# Ask-user questions: same down-only registration, same no-flag rationale — a
+# session simply never advertises the `ask_user` capability when no interactive
+# client is attached, so the tool (and its unbounded wait) never exists for it.
+from mewbo_api.ask_user import ApiQuestionDispatcher, get_pending_questions  # noqa: E402
+
+QuestionDispatcher.register(ApiQuestionDispatcher(runtime=runtime))
 
 authorizations = {"apikey": {"type": "apiKey", "in": "header", "name": "X-API-KEY"}}
 VERSION = get_version()
@@ -349,6 +413,14 @@ ns = api.namespace("api", description="Mewbo operations")
 kit = ApiResponseKit(ns, prefix="Api")
 
 
+# Renders a raised ``ApiError`` on BOTH surfaces, and both are required: a plain
+# Flask errorhandler does not cover a flask-restx ``Resource``, because RESTX
+# installs its own error_router ahead of Flask's dispatch and would otherwise
+# render a generic 500 for any route it owns. Registered here, beside the
+# ``Api(app, …)`` setup, so the taxonomy works the first time a Resource raises.
+register_api_error_handler(app, api)
+
+
 @app.errorhandler(NotFound)
 def _handle_not_found(exc: NotFound) -> tuple[dict, int]:
     """Return JSON for any unmatched route (no raw Werkzeug HTML leak).
@@ -361,7 +433,7 @@ def _handle_not_found(exc: NotFound) -> tuple[dict, int]:
 
 
 def _session_not_found(session_id: str) -> tuple[dict, int]:
-    """Canonical JSON 404 envelope for an unknown session id (#64).
+    """Canonical JSON 404 envelope for an unknown session id.
 
     Matches the ``@app.errorhandler(NotFound)`` shape so the MCP ``_enveloped``
     not-found mapping reads it identically whether the route or Werkzeug raised.
@@ -372,6 +444,21 @@ def _session_not_found(session_id: str) -> tuple[dict, int]:
 def _session_exists(session_id: str) -> bool:
     """True iff *session_id* is a real stored session (the canonical guard)."""
     return session_id in runtime.session_store.list_sessions()
+
+
+def _terminated_guard(session_id: str) -> tuple[dict, int] | None:
+    """Return a 410 Gone envelope iff *session_id* is permanently terminated.
+
+    The single guard every MUTATING entry point calls (query/message/interrupt/
+    recover/fork/sync-query). Reads — events, stream, history — deliberately do
+    NOT call it: a terminated session stays fully inspectable (terminated ≠
+    deleted). The ``code`` is the semantic ``session_terminated`` token and
+    ``retryable`` is false; a non-terminated (or unknown) session returns
+    ``None`` so callers fall through (WP2).
+    """
+    if runtime.is_terminated(session_id):
+        return _terminated_response()
+    return None
 
 
 # Free-text payload fields that can carry full prompts / tool dumps (uncapped
@@ -391,7 +478,7 @@ def _cap_freetext(value: object) -> object:
 def _truncate_event_freetext(events: list[dict]) -> list[dict]:
     """Cap large free-text payload fields (full prompts / tool dumps).
 
-    Opt-in via ?truncate=1 so the console's full-result view is unaffected (#42).
+    Opt-in via ?truncate=1 so the console's full-result view is unaffected.
     """
     out = []
     for event in events:
@@ -472,10 +559,17 @@ task_queue_model = api.model(
 
 @app.before_request
 def log_request_info() -> None:
-    """Log request metadata for debugging."""
+    """Log request metadata for debugging.
+
+    Headers (``Authorization``/``X-API-KEY``/``Cookie``) and the body can carry
+    credentials, so both are scrubbed through the secret redactor before they
+    reach any sink — the record-level patcher would also catch known shapes, but
+    redacting the structured payload here catches arbitrary-shaped secrets under
+    a named key too.
+    """
     logging.debug("Endpoint: {}", request.endpoint)
-    logging.debug("Headers: {}", request.headers)
-    logging.debug("Body: {}", request.get_data())
+    logging.debug("Headers: {}", redact_mapping(dict(request.headers)))
+    logging.debug("Body: {}", redact_text(request.get_data(as_text=True)))
 
 
 _CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
@@ -486,15 +580,25 @@ def _add_cors_headers(response: Response) -> Response:
     """Allow cross-origin requests. Set CORS_ORIGIN env var to restrict."""
     response.headers["Access-Control-Allow-Origin"] = _CORS_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = (
-        "Content-Type, X-API-Key, X-Mewbo-Capabilities, X-Mewbo-Surface"
+        "Content-Type, X-API-Key, X-Mewbo-Capabilities, X-Mewbo-Surface, "
+        "X-Mewbo-App-Token, Authorization"
     )
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+    # Cookie auth is cross-origin-credentialed; a wildcard origin cannot carry
+    # credentials, so send Allow-Credentials only for an exact origin.
+    if _CORS_ORIGIN != "*":
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
 
-def _request_credential() -> str | None:
-    """Return the presented credential (header preferred, query param for SSE)."""
-    return request.headers.get("X-API-Key") or request.args.get("api_key")
+def _request_credential(req: Request | None = None) -> str | None:
+    """Return the presented credential (header preferred, query param for SSE).
+
+    ``req`` defaults to the in-flight Flask ``request``; the AuthKit passes an
+    explicit request so principal resolution reads the same credential contract.
+    """
+    source = req if req is not None else request
+    return source.headers.get("X-API-Key") or source.args.get("api_key")
 
 
 def _token_matches_master(token: str) -> bool:
@@ -507,38 +611,210 @@ def _token_matches_master(token: str) -> bool:
     return hmac.compare_digest(token, MASTER_API_TOKEN)
 
 
-def _require_api_key() -> tuple[dict, int] | None:
-    """Authorize a protected route.
+# -- Identity & access management -----------------------------------------
+# ONE AuthKit resolves every request to a Principal. With no ``api.auth`` block
+# (the default) it is DISABLED: ``resolve`` returns the legacy full-power
+# principal, the guards below behave exactly as they did before IAM existed, no
+# IAM store is created, and no ``iam_*.json`` is written. Constructed here (this
+# app builds at import) so an ENABLED deployment fails LOUD at boot on invalid
+# auth config or a missing authenticator driver. The credential reader and the
+# master compare are injected so the kit reuses the one documented contract.
+from mewbo_api.auth import AuthKit  # noqa: E402
+from mewbo_api.auth.guard_registry import guard, guard_registry  # noqa: E402
 
-    A request is authorized if the presented credential equals the master
-    token (break-glass) OR matches a non-revoked stored key via the
-    ``KeyStore``. Accepts the ``X-API-Key`` header or the ``api_key`` query
-    param (the latter for SSE, where EventSource cannot set headers).
+_auth_kit = AuthKit.from_config(
+    _config,
+    # A provider, not the instance: resolved per request off this module, so a
+    # caller that substitutes the store after boot is actually honored.
+    key_store=lambda: key_store,
+    credential_reader=_request_credential,
+    master_matcher=_token_matches_master,
+)
+
+# A browser-login deployment cannot sit behind a wildcard CORS origin: the
+# credentialed cookie request the console makes is invalid against "*". Fail at
+# boot rather than at the user's first login attempt.
+_auth_kit.validate_deployment(_CORS_ORIGIN)
+
+# THE composition root for the declarative route guard. Route modules import the
+# process-wide guard and decorate at module scope, which runs long before this
+# line; every one of those bindings enforces against nothing until the live kit
+# is bound here. It must therefore stay AHEAD of the first route import below —
+# an unbound guard raises rather than failing open, so a missing bind is a 500
+# on every decorated route, not a silently unguarded one.
+guard_registry.bind(_auth_kit)
+
+
+@app.before_request
+def _resolve_principal() -> None:
+    """Store the caller's resolved identity on ``g.principal`` (never rejects).
+
+    Additive to the request outcome: rejection stays in the per-route guards, so
+    the deliberately-public routes (share links, trigger hooks, channel
+    webhooks, CORS preflight) are untouched. A resolution error while auth is
+    enabled fails CLOSED to ``None`` — the guards then reject — and never 500s.
     """
-    api_token = _request_credential()
-    if api_token is None:
-        return {"message": "API token is not provided."}, 401
-    if _token_matches_master(api_token):
-        return None
-    if key_store.verify_key(api_token) is not None:
-        return None
-    logging.warning("Unauthorized API call attempt from {}.", request.remote_addr)
-    return {"message": "Unauthorized"}, 401
+    try:
+        g.principal = _auth_kit.resolve(request)
+    except Exception:  # noqa: BLE001 - resolution must never break the request
+        g.principal = None
+        logging.warning("principal resolution failed; treating as unauthenticated", exc_info=True)
+
+
+def _require_api_key() -> tuple[dict, int] | None:
+    """Authorize a protected route — thin wrapper over the one AuthKit.
+
+    Preserves the exact wire contract every call site depends on: same accepted
+    credentials (``X-API-Key`` header / ``api_key`` query, the latter for SSE),
+    same ``{"message": ...}`` bodies and statuses. See ``AuthKit.require_api_key``.
+    """
+    return _auth_kit.require_api_key()
 
 
 def _require_master_token() -> tuple[dict, int] | None:
-    """Authorize a master-token-only route (e.g. API key management).
+    """Authorize a master-token-only route — thin wrapper over the one AuthKit.
 
-    Issued keys are deliberately rejected here: a leaked key must not be able
-    to mint or revoke keys, or revocation would be meaningless.
+    Issued keys are deliberately rejected here: a leaked key must not be able to
+    mint or revoke keys. Same wire contract as before. See
+    ``AuthKit.require_master_token``.
     """
-    api_token = _request_credential()
-    if api_token is None:
-        return {"message": "API token is not provided."}, 401
-    if not _token_matches_master(api_token):
-        logging.warning("Unauthorized key-management attempt from {}.", request.remote_addr)
-        return {"message": "Unauthorized"}, 401
-    return None
+    return _auth_kit.require_master_token()
+
+
+# A permission-guard FACTORY over the resolved ``g.principal``:
+# ``_require_permission("wiki.read")`` returns a zero-arg guard with the same
+# ``(body, status) | None`` contract as the two guards above, so it COMPOSES with
+# them rather than replacing them —
+# ``_require_api_key() or _require_permission("sessions.read")()`` authenticates
+# first, then authorizes. Order matters: an unauthenticated caller must get the
+# 401 the key guard has always returned, never a 403 about a role it was never
+# asked to present. With auth disabled every request resolves to the legacy admin
+# principal, which bypasses every check — so the composed form is byte-identical
+# to the bare key guard in a default deployment.
+#
+# Route modules receive the factory the same way they receive the key guard (an
+# ``init_*`` parameter or a controller field), never by importing it from here.
+_require_permission = _auth_kit.require_permission
+
+# Browser login + identity surface. The controller reads the kit's shared OIDC
+# runtime (one JWKS/discovery cache for both request resolution and the routes);
+# with auth or OIDC off the runtime is None and the routes answer "not
+# configured" without touching a store.
+from mewbo_api.auth import AuthRoutesController, init_auth_routes  # noqa: E402
+
+init_auth_routes(app, AuthRoutesController.from_kit(_auth_kit))
+
+from mewbo_api.auth.saml_routes import SamlRoutesController, init_saml_routes  # noqa: E402
+
+init_saml_routes(app, SamlRoutesController.from_kit(_auth_kit))
+
+
+def _deprovision_scim_subject(subject: str) -> None:
+    """Revoke every credential the deprovisioned *subject* owns.
+
+    Session termination is not covered yet: sessions carry no owner stamp and
+    the store has no owner-scoped bulk terminate, so a disabled user's live runs
+    survive until the ownership sweep lands. Best-effort by contract — a store
+    failure is logged, never raised into the SCIM request path.
+    """
+    try:
+        for record in key_store.list_keys():
+            if record.get("owner_subject") == subject:
+                key_store.revoke_key(record["id"])
+    except Exception:  # noqa: BLE001 - provisioning must not break on store errors
+        logging.warning("key revocation failed for deprovisioned subject", exc_info=True)
+
+
+from mewbo_api.scim import init_scim  # noqa: E402
+
+init_scim(app, settings=_auth_kit.settings, deprovision=_deprovision_scim_subject)
+
+# The administration surface over the same stores. It takes the SAME
+# deprovision callback SCIM does, so an account disabled from the console loses
+# its credentials exactly as one disabled by an identity provider does.
+from mewbo_api.iam import init_iam_routes  # noqa: E402
+
+init_iam_routes(
+    app,
+    settings=_auth_kit.settings,
+    deprovision=_deprovision_scim_subject,
+)
+
+# Imported down HERE, not at the top of the file: the ``AuthKit`` constructed
+# above has already pulled the kernel in, so this costs nothing, while a
+# top-of-file import would load ``mewbo_iam`` before the config seam this
+# module builds against. Used for its ``subject`` law at the key-mint boundary
+# and for annotations.
+from mewbo_iam import Principal  # noqa: E402
+
+# ONE resolver turns the resolved principal's role into a per-run SessionScope
+# (tool ceiling + permission policy + approval callback) that every
+# ``start_async``/``run_sync`` site threads into the runtime. Reuses the
+# AuthKit's already-parsed settings, so the disabled/admin path is a pure
+# passthrough and the run stays byte-identical.
+from mewbo_api.auth import current_principal  # noqa: E402
+from mewbo_api.auth.session_scope import (  # noqa: E402
+    SessionScope,
+    SessionScopeResolver,
+    principal_from_authority,
+)
+
+
+def _baseline_tool_ids() -> frozenset[str]:
+    """Built-in (non-MCP) tool ids a role-bounded session keeps under strict scope.
+
+    Read from the LIVE registry (cached) so a newly registered built-in flows in
+    automatically — never a hardcoded list. The built-in set is cwd-invariant
+    (only MCP tools vary by project), so the ``cwd=None`` registry is the right
+    source. ``always_load`` specs (``tool_search``) are included harmlessly —
+    ``filter_specs`` exempts them from the allowlist gate regardless.
+    """
+    return frozenset(
+        spec.tool_id
+        for spec in get_or_build_registry(cwd=None).list_specs()
+        if spec.kind != "mcp"
+    )
+
+
+_session_scope = SessionScopeResolver(
+    settings=_auth_kit.settings,
+    baseline_tool_ids=_baseline_tool_ids,
+)
+
+
+def _run_scope(
+    *,
+    allowed_tools: list[str] | None,
+    client_capabilities: Sequence[str] | None = None,
+    strict_tool_scope: bool = False,
+) -> SessionScope:
+    """Resolve the in-flight caller's role into a run scope for a start/run call.
+
+    The single seam every request-driven ``start_async``/``run_sync`` site uses:
+    reads ``current_principal()`` and hands the resolver the caller's requested
+    grants. Auth disabled or an admin caller ⇒ a byte-identical passthrough scope
+    (permissive, ``capability_mode="all"``, no policy, ``auto_approve``).
+    """
+    return _session_scope.resolve(
+        current_principal(),
+        requested_allowed_tools=allowed_tools,
+        requested_capabilities=client_capabilities,
+        requested_strict_tool_scope=strict_tool_scope,
+    )
+
+
+def _stamp_principal_subject(context_payload: dict[str, object]) -> None:
+    """Record the caller's subject on a fresh context payload (auth-enabled only).
+
+    Additive provenance: which principal a session was created/run under. Gated
+    on auth being enabled AND a resolved principal, so a disabled deployment
+    never writes the key and the persisted context stays byte-identical.
+    """
+    if not _auth_kit.enabled:
+        return
+    principal = current_principal()
+    if principal is not None:
+        context_payload["principal_subject"] = principal.subject
 
 
 # -- Web IDE (code-server) namespace --------------------------------------
@@ -559,7 +835,7 @@ if _web_ide_cfg is not None and _web_ide_cfg.enabled:
 
             _ide_store = IdeStore(_mongo_db)
             _ide_manager = IdeManager(_web_ide_cfg, _ide_store)
-            init_ide(_ide_manager, runtime, _require_api_key)
+            init_ide(_ide_manager, runtime)
             api.add_namespace(ide_ns, path="/api")
             logging.info("web_ide namespace registered at /api")
         except Exception as exc:  # pragma: no cover - startup fail-soft
@@ -571,37 +847,67 @@ if _web_ide_cfg is not None and _web_ide_cfg.enabled:
 # Persistent workspaces + runs (JSON/Mongo via the store) and a run lifecycle
 # driven by the per-run resolved SearchRunner (echo replay, or the orchestrated
 # SCG runner once scg.enabled is on and a source is mapped).
-from mewbo_api.agentic_search import init_agentic_search  # noqa: E402
+from mewbo_api.agentic_search import (  # noqa: E402
+    init_agentic_search,
+    store as agentic_search_store,
+)
+from mewbo_api.agentic_search.runs import SearchRun  # noqa: E402
 
-init_agentic_search(api, _require_api_key, runtime=runtime)
+init_agentic_search(api, runtime=runtime)
 logging.info("agentic_search namespace registered at /api")
+
+# A run backed by a real (orchestrated) session settles ``failed`` when its
+# session dies mid-flight; if that session is later recovered (``/recover``,
+# a ``/message`` re-engage) and genuinely finishes, the run record is stuck
+# wrong forever unless something re-visits it. Every session end already
+# knows a session reached a terminal state, so this checks whether the
+# ending session backs a search run — via its ``agentic_search:run:<id>``
+# tag, the orchestrated runner's own tag (``scg/orchestrated_runner.py:
+# _seed_session``) — and offers it to ``SearchRun.reconcile_after_recovery``.
+# That call refuses unless the run is currently ``failed`` AND the session
+# now summarises ``completed``, so firing it on every ordinary settle
+# (recovered or not) is a safe no-op.
+_AGENTIC_SEARCH_RUN_TAG_PREFIX = "agentic_search:run:"
+
+
+def _reconcile_agentic_search_after_recovery(session_id: str, error: str | None) -> None:
+    """Amend a ``failed`` search run whose backing session went on to complete."""
+    for tag in session_store.tags_for_session(session_id):
+        if tag.startswith(_AGENTIC_SEARCH_RUN_TAG_PREFIX):
+            run_id = tag[len(_AGENTIC_SEARCH_RUN_TAG_PREFIX) :]
+            SearchRun.reconcile_after_recovery(
+                run_id, store=agentic_search_store.get_store(), runtime=runtime
+            )
+            return
+
+
+_hook_manager.on_session_end.append(_reconcile_agentic_search_after_recovery)
 
 
 # -- Structured-response namespace ----------------------------------------
 # Schema-constrained synthesis over the core StructuredResponder (down-only
 # compose). POST /v1/structured returns a JSON-Schema-validated object — the
 # default 'agentic' mode after a bounded session, or an inline no-loop
-# 'synthesis' mode (the former /v1/structured/fast lane, folded in by #85).
+# 'synthesis' mode (the former /v1/structured/fast lane, folded in).
 from mewbo_api.structured import init_structured  # noqa: E402
 
-init_structured(api, _require_api_key, runtime=runtime)
+init_structured(api, runtime=runtime)
 logging.info("structured namespace registered at /v1/structured")
 
-# Token-streaming draft synthesis (POST /v1/draft/stream) — #50/#78.
+# Token-streaming draft synthesis (POST /v1/draft/stream).
 from mewbo_api.realtime import init_realtime  # noqa: E402
 
-init_realtime(api, _require_api_key, runtime=runtime)
+init_realtime(api, runtime=runtime)
 logging.info("realtime draft-stream endpoint registered at /v1/draft/stream")
 
 # -- VCS automation namespace ----------------------------------------------
 # Agent pickup for GitHub/Gitea Actions: assigning or @mentioning the bot on
 # an issue/PR posts here; the endpoint binds a session to the right branch
-# worktree and starts/continues the run (issue #72).
+# worktree and starts/continues the run.
 from mewbo_api.vcs_pickup import init_vcs_pickup, vcs_ns  # noqa: E402
 
 init_vcs_pickup(
     runtime,
-    _require_api_key,
     # Late-bound: _resolve_repo_or_404 is defined further down this module.
     lambda key, promote=False: _resolve_repo_or_404(key, promote=promote),
     project_store,
@@ -724,13 +1030,71 @@ def _session_attachment_map(session_id: str) -> dict[str, str]:
 
 
 def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | None:
-    """Extract MCP tool allowlist from context payload, if present."""
+    """Extract MCP tool allowlist from context payload, if present.
+
+    Three-state, and the empty case is PRESERVED rather than normalized to
+    ``None``: a client that persisted ``mcp_tools: []`` advertised no MCP tools,
+    which is a real ceiling, not an absent one. Collapsing it re-bound every MCP
+    tool in the registry to a session that declared none. Under the permissive
+    scope this path feeds, built-ins are unioned back in downstream
+    (``Orchestrator.run``), so an empty list narrows MCP tools only — it never
+    strands a session with no tools at all.
+    """
     if not context_payload:
         return None
     mcp_tools = context_payload.get("mcp_tools")
-    if isinstance(mcp_tools, list) and mcp_tools:
+    if isinstance(mcp_tools, list):
         return [str(t) for t in mcp_tools if t]
     return None
+
+
+def _extract_strict_tool_scope(context_payload: dict[str, object]) -> bool:
+    """Extract the persisted ``strict_tool_scope`` flag from context, if present.
+
+    Mirrors ``_extract_allowed_tools`` — a re-engage site (``/message``,
+    ``/recover``) that derives its tool grants from persisted context should
+    re-apply the SAME scoping the originating ``start_async`` call used,
+    not silently default to unscoped. Absent ⇒ ``False``, the
+    historical re-engage behaviour for every non-scoped session.
+    """
+    return bool(context_payload.get("strict_tool_scope", False))
+
+
+def _persisted_client_capabilities(context_payload: dict[str, object]) -> list[str] | None:
+    """The advertised capabilities persisted on a session's context, if any.
+
+    Read at a re-engage site so the resolved run scope sees the SAME capability
+    set the session was created with (a viewer re-engaging a wiki session still
+    reasons about ``wiki``). Absent ⇒ ``None``.
+    """
+    caps = context_payload.get("client_capabilities")
+    if isinstance(caps, list):
+        return [str(c) for c in caps if str(c).strip()]
+    return None
+
+
+def _extract_skill_instructions(context_payload: dict[str, object]) -> str | None:
+    """Extract a persisted ``skill_instructions`` playbook from context, if present.
+
+    A caller that started a session with a non-default ``skill_instructions``
+    (e.g. the wiki-qa hypervisor playbook) can persist it here so a re-engage
+    re-applies the SAME playbook instead of silently dropping it.
+    """
+    val = context_payload.get("skill_instructions")
+    return str(val) if isinstance(val, str) and val else None
+
+
+def _extract_session_step_budget(context_payload: dict[str, object]) -> int:
+    """Persisted per-session step budget override, else the configured default.
+
+    A caller that started a session with a narrower budget than the config
+    default (e.g. the wiki-qa read-only run's cost backstop) can persist it
+    here so a re-engage doesn't silently widen back to the generic default.
+    """
+    val = context_payload.get("session_step_budget")
+    if isinstance(val, int) and val > 0:
+        return val
+    return int(get_config_value("agent", "session_step_budget", default=0))
 
 
 def _extract_device_tools(context_payload: dict[str, object]) -> list[ClientToolSpec]:
@@ -762,6 +1126,42 @@ def _extract_device_tools(context_payload: dict[str, object]) -> list[ClientTool
     return specs
 
 
+# Reverse-invocation trigger subsystem (WP3). Populated by
+# ``init_triggers`` at module scope; None/False until then so the read sites
+# below no-op on an unconfigured (or disabled) deployment.
+_trigger_service = None
+_trigger_store = None
+_trigger_policy = None
+_triggers_enabled = False
+
+# Mewbo Apps pipeline-run ledger tracker. Populated by ``init_apps`` (below,
+# module scope), read at trigger-fire time by ``_trigger_deliver``; None until
+# then so the trigger path no-ops on a deployment without the apps sub-product.
+_apps_pipeline_tracker = None
+# Mewbo Apps code-pipeline executor (Phase 2). Populated by ``init_apps``;
+# also pushed to the plugin's run_pipeline seam via ``register_pipeline_runner``.
+# The tracker holds it for the fire seam; this module handle lets the REST run
+# endpoint reach it too (``current_pipeline_runner()`` is the plugin's path).
+_apps_pipeline_runner = None
+
+
+def _ask_user_tools(session_id: str, context_payload: dict[str, object]) -> list[SessionTool]:
+    """The ``ask_user_question`` SessionTool, iff the client advertised for it.
+
+    The gate is the ``ask_user`` entry in ``context.client_capabilities``
+    (``X-Mewbo-Capabilities``) — the client's promise that a human is on the
+    other end to render the question card and POST the answer. Headless
+    drives (triggers, wiki, search, channels) never advertise it, so the
+    block-until-answered tool never exists for them. Bound via
+    ``extra_session_tools`` ⇒ structurally root-only (children never inherit
+    that seam).
+    """
+    caps = context_payload.get("client_capabilities")
+    if isinstance(caps, list) and ASK_USER_CAPABILITY in caps:
+        return [AskUserQuestionTool(session_id)]
+    return []
+
+
 def _derive_tool_grants(
     session_id: str, context_payload: dict[str, object]
 ) -> tuple[list[str] | None, list[SessionTool]]:
@@ -780,6 +1180,10 @@ def _derive_tool_grants(
     extra_session_tools: list[SessionTool] = [
         ClientDeclaredTool(session_id, spec) for spec in device_specs
     ]
+    # NB: schedule_trigger is NO LONGER injected here — it rides the ordinary
+    # SessionToolRegistry (wired in init_triggers) so spawned
+    # sub-agents can bind it too. ask_user_question stays root-only on this seam.
+    extra_session_tools.extend(_ask_user_tools(session_id, context_payload))
     return allowed_tools, extra_session_tools
 
 
@@ -809,7 +1213,9 @@ def _derive_tool_grants_tolerant(
             session_id,
             exc,
         )
-        return _extract_allowed_tools(context_payload), []
+        return _extract_allowed_tools(context_payload), [
+            *_ask_user_tools(session_id, context_payload),
+        ]
 
 
 def _load_last_context(session_id: str) -> dict[str, object]:
@@ -835,6 +1241,34 @@ def _extract_fallback_models(context_payload: dict[str, object]) -> tuple[str, .
         models = tuple(str(m).strip() for m in raw if str(m).strip())
         return models or None
     return None
+
+
+# The ONE reader/writer of a session's durable purpose binding. Both collaborators
+# are LATE-BOUND lambdas rather than bound methods captured at import: the test
+# suite swaps ``runtime`` wholesale for a temp-dir store, and a bound
+# ``runtime.session_store.load_transcript`` captured here would keep serving the
+# store that existed at import — a spec read that silently answers from the wrong
+# session. Same late-binding reason as the ``_resolve_repo_or_404`` lambda above.
+_session_specs = SessionSpecStore(
+    load_transcript=lambda session_id: runtime.session_store.load_transcript(session_id),
+    append_context_event=lambda session_id, payload: runtime.append_context_event(
+        session_id, payload
+    ),
+)
+
+
+def _spec_origin(session_id: str, context_payload: dict[str, object]) -> SessionOrigin:
+    """Classify a NEW session's purpose from the signals present at creation.
+
+    Tags win over context (the classifier's own rule), so this reads the session's
+    tags rather than only the context payload — a wiki/search/apps surface tags at
+    creation and may write no capability at all.
+    """
+    try:
+        tags = list(runtime.session_store.tags_for_session(session_id))
+    except Exception:  # noqa: BLE001 - provenance must never fail a session create
+        tags = []
+    return SessionOrigin.classify(tags, context_payload)
 
 
 def _populate_worktree_context(project_name: str, context_payload: dict) -> None:
@@ -980,9 +1414,96 @@ class ExternalCwdPolicy:
                     },
                     400,
                 )
+            # Root-derivation seam. This validated external cwd is the
+            # session's working directory, and thus (once workspace enforcement is
+            # enabled) the workspace-containment ROOT: it flows unchanged to
+            # ``ToolUseLoop.cwd``, which builds the ``WorkspaceContainment(root=cwd)``
+            # for the run. External workspace managers anchor sessions at
+            # their worktree root, so the anchored cwd already IS the project root —
+            # no separate enclosing-project derivation is needed in v1. The D5
+            # "enclosing project root" refinement (git-toplevel / RepoIdentity) would
+            # plug in HERE, narrowing the returned path before it becomes the root.
             return raw_cwd, None
         # No explicit cwd → delegate to project resolution.
         return None, None
+
+
+class RunReadinessGate:
+    """Refuses a run this process is not yet able to serve, instead of accepting it.
+
+    A restarting worker can answer HTTP before its configuration has finished
+    resolving, so runs were accepted seconds before the first model call died. The
+    run was already persisted by then, so the failure read as a credential defect
+    rather than as the restart window it actually was — a burned session per
+    request, and a misleading diagnosis on top.
+
+    **What this deliberately does NOT do: guess at credentials.** An empty
+    ``llm.api_key`` is indistinguishable from the outside between "not loaded yet"
+    (transient, retry) and "never configured" (permanent, fix your config), and a
+    gate that refuses the second while SAYING "retry shortly" is actively lying
+    about a misconfiguration. Credentials also legitimately arrive by routes this
+    process cannot enumerate — a proxy at ``llm.api_base`` that authenticates on
+    the caller's behalf, a provider env var, an instance role. So the only signal
+    used is the one that is unambiguous and process-local: whether the config
+    LOADS at all. That is narrower than "predict whether this run will succeed",
+    and narrow is the point — a run that fails for a configured reason must fail
+    with that reason, not behind a readiness message that misdirects.
+
+    Two properties make it safe in front of every accept:
+
+    * **It latches.** Readiness is monotonic within a process, so only the first
+      request after start pays for a probe.
+    * **Only a config-load failure refuses.** Every other error inside the probe
+      reports READY — a gate whose own bug can refuse traffic is worse than the
+      window it closes.
+
+    The config accessor is injected so a test drives both arms without touching
+    global config.
+    """
+
+    def __init__(self, config_reader: Callable[[], AppConfig] = get_config) -> None:
+        """Bind the config accessor; readiness is probed lazily on first use."""
+        self._config_reader = config_reader
+        self._ready = False
+
+    def check(self) -> tuple[dict, int] | None:
+        """``None`` when the process can serve a run, else a retryable 503 to return.
+
+        The structured envelope carries ``retryable: true`` — the caller SHOULD come
+        back, which is precisely the distinction the old behaviour destroyed by
+        accepting the run and failing it a few seconds later.
+        """
+        if self._is_ready():
+            return None
+        return (
+            {
+                "error": {
+                    "code": 503,
+                    "reason": (
+                        "Server is still starting up and cannot accept runs yet; retry shortly."
+                    ),
+                    "retryable": True,
+                }
+            },
+            503,
+        )
+
+    def _is_ready(self) -> bool:
+        """Probe once, then latch. Only an unloadable config reports not-ready."""
+        if self._ready:
+            return True
+        try:
+            config = self._config_reader()
+        except Exception:  # noqa: BLE001 - THE signal: config has not resolved yet
+            return False
+        try:
+            self._ready = bool((config.llm.default_model or "").strip())
+        except Exception:  # noqa: BLE001 - a probe bug must never refuse traffic
+            self._ready = True
+        return self._ready
+
+
+_run_readiness = RunReadinessGate()
 
 
 def _resolve_skill_instructions(
@@ -1034,6 +1555,621 @@ from mewbo_api.wiki import init_wiki  # noqa: E402
 # can emit the terminal ``complete`` event + reconcile the answer snapshot
 # (the QA counterpart to indexing's wiki_finalize tool).
 init_wiki(app, runtime, hook_manager=_hook_manager)
+
+
+# -- Reverse-invocation triggers (WP3) -------------------------
+# The durable peer of the AgentHypervisor: a background watcher that fires
+# time/cron/CI/PR/webhook triggers and re-invokes the sessions that armed them.
+from mewbo_api.triggers import (  # noqa: E402
+    TriggerFireContext,
+    TriggerService,
+    build_forge_client_factory,
+    init_trigger_routes,
+)
+
+
+def _reengage_idle_session(
+    session_id: str,
+    message: str,
+    *,
+    source_platform: str,
+    allowed_tools_override: list[str] | None = None,
+    strict_scope_override: bool | None = None,
+    scope: SessionScope | None = None,
+) -> str:
+    """Start a fresh run on an IDLE session inheriting its persisted context.
+
+    The shared idle-start idiom for a fired trigger AND an app kick-off (builder /
+    repair): re-inject capability-gating context (so a gated session doesn't wake
+    TOOLS-MISSING), derive tool grants from the last persisted context, and
+    ``start_async``. The two overrides let a scoped pipeline fire replace the
+    permissive grants with its ``tools_allowlist``.
+
+    ``scope`` carries the arming principal's role ceiling for a fired trigger
+    (see :func:`_trigger_fire_scope`): its ``approval_callback`` /
+    ``capability_mode`` / ``permission_policy`` layer over whatever tool allowlist
+    the pipeline/persisted context resolved. ``None`` (an app kick-off, or a
+    trigger armed with no captured authority) keeps today's ambient full power.
+    Returns the ``run_id`` (``""`` when the runtime refused, e.g. a run is live).
+    """
+    # Read the binding BEFORE ``reinject_recovery_context``, which appends an event
+    # carrying ONLY the gating keys — reading after it returns a payload with no
+    # model, no tool ceiling and no playbook, which is how an unattended wake used
+    # to silently drop everything but the capabilities.
+    spec = _session_specs.load(session_id)
+    runtime.reinject_recovery_context(session_id)
+    gating = _load_last_context(session_id)
+
+    # Per-fire capability re-derivation: ``allowed_tools`` was already recomputed
+    # per fire, capabilities were not — so ONE interactive turn that advertised
+    # ``ask_user`` left every later scheduled fire able to bind a tool that BLOCKS
+    # until a human answers, with no human attached. Re-derive from the purpose and
+    # make that the newest context event, carrying any non-spec gating key
+    # (``structured_workspace``) forward so the reinject above is not undone.
+    fire_context = spec.to_context_payload(capabilities=spec.unattended_capabilities())
+    for key, value in gating.items():
+        if key not in SessionSpec.SPEC_OWNED_CONTEXT_KEYS:
+            fire_context.setdefault(key, value)
+    runtime.append_context_event(session_id, fire_context)
+
+    allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, fire_context)
+    strict_tool_scope = spec.strict_tool_scope
+    if allowed_tools_override is not None:
+        allowed_tools = allowed_tools_override
+    if strict_scope_override is not None:
+        strict_tool_scope = strict_scope_override
+    return (
+        runtime.start_async(
+            session_id=session_id,
+            user_query=message,
+            model_name=spec.model,
+            # An opted-in ladder is part of the binding: reverting to config policy
+            # here left every unattended wake as defenceless as the run that armed it.
+            fallback_models=spec.fallback_models,
+            approval_callback=scope.approval_callback if scope else auto_approve,
+            permission_policy=scope.permission_policy if scope else None,
+            hook_manager=_hook_manager,
+            mode=spec.mode,
+            allowed_tools=allowed_tools,
+            strict_tool_scope=strict_tool_scope,
+            capability_mode=scope.capability_mode if scope else "all",
+            skill_instructions=spec.skill_instructions,
+            cwd=spec.cwd or _resolve_session_cwd(session_id) or session_temp_dir(session_id),
+            max_iters=int(get_config_value("agent", "max_iters", default=30)),
+            session_step_budget=spec.session_step_budget
+            or int(get_config_value("agent", "session_step_budget", default=0)),
+            source_platform=source_platform,
+            extra_session_tools=extra_session_tools,
+        )
+        or ""
+    )
+
+
+def _trigger_fire_scope(trigger_id: str) -> SessionScope | None:
+    """Resolve a firing trigger's captured authority into a run scope, or ``None``.
+
+    A fired trigger re-engages its session out-of-band, so it must inherit the
+    arming principal's role ceiling rather than ambient full power. Reads the
+    trigger's optional ``authority`` snapshot and resolves it through the SAME
+    :class:`SessionScopeResolver` a live request uses. ``None`` — no trigger
+    store, an unknown trigger, or a trigger armed with no captured authority
+    (auth disabled, or armed by an admin) — leaves the fire path on today's
+    ambient behavior, byte-identical.
+    """
+    if _trigger_store is None or not trigger_id:
+        return None
+    try:
+        trigger = _trigger_store.get(trigger_id)
+    except Exception:  # noqa: BLE001 — a store read must never break trigger delivery
+        return None
+    if trigger is None or trigger.authority is None:
+        return None
+    return _session_scope.resolve(
+        principal_from_authority(trigger.authority), requested_allowed_tools=None
+    )
+
+
+def _trigger_deliver(ctx: TriggerFireContext) -> bool:
+    """Deliver a fired trigger's wake message into its session (the app seam).
+
+    Encapsulates the re-engage decision the ``TriggerService`` delegates so the
+    service stays free of backend-private helpers (no import cycle). Mirrors the
+    ``/message`` re-engage path — a running session is steered (``message``) or
+    left for the next tick (``start`` can't open a 2nd concurrent run); an idle
+    session starts a fresh run inheriting its persisted context. Returns True
+    when delivered, False when the session was busy (the service re-arms).
+
+    ``ctx.trigger_id`` lets the Mewbo Apps ledger attribute the fire: when the
+    firing trigger belongs to an app pipeline, the tracker OPENS a
+    ``PipelineRun`` on a successful delivery and scopes an idle-start run to the
+    pipeline's ``tools_allowlist`` (least privilege, spec §2.10). A non-app fire
+    is a no-op. (The tracker still consumes ``trigger_id`` positionally, so the
+    apps package needs no change for the structured-payload switch.)
+    """
+    session_id, wake, action, trigger_id = (
+        ctx.session_id,
+        ctx.wake,
+        ctx.action,
+        ctx.trigger_id,
+    )
+    # Phase 2: a fired ``mode="code"`` pipeline runs its ENGINE synchronously
+    # (deterministic, no LLM call) and is fully handled here — the maintainer
+    # session is never woken. Checked FIRST so a code fire short-circuits before any
+    # re-engage decision; a non-code / non-app fire returns False and falls through
+    # to the unchanged agentic path below.
+    if _apps_pipeline_tracker is not None and _apps_pipeline_tracker.run_code_pipeline_fire(
+        trigger_id, now=datetime.now(timezone.utc)
+    ):
+        return True
+    if runtime.is_running(session_id):
+        if action != "message":
+            return False  # one-live-run-per-session: action="start" can't stack a run
+        delivered = runtime.enqueue_message(session_id, wake)
+        if delivered and _apps_pipeline_tracker is not None:
+            _apps_pipeline_tracker.open_run(session_id, trigger_id)
+        return delivered
+    # Idle → re-engage. I3: an app pipeline fire with a non-empty tools_allowlist
+    # runs under that authoritative least-privilege scope (+ app_data); an empty
+    # allowlist / non-app fire keeps the session's derived grants.
+    override_allow: list[str] | None = None
+    override_strict: bool | None = None
+    if _apps_pipeline_tracker is not None:
+        pipeline_scope = _apps_pipeline_tracker.pipeline_scope(trigger_id)
+        if pipeline_scope is not None:
+            override_allow, override_strict = pipeline_scope
+    run_id = _reengage_idle_session(
+        session_id,
+        wake,
+        source_platform="trigger",
+        allowed_tools_override=override_allow,
+        strict_scope_override=override_strict,
+        # RBAC ceiling of whoever armed the trigger (None ⇒ ambient, today's
+        # behavior): layers over the pipeline's least-privilege allowlist above.
+        scope=_trigger_fire_scope(trigger_id),
+    )
+    if run_id and _apps_pipeline_tracker is not None:
+        _apps_pipeline_tracker.open_run(session_id, trigger_id)
+    return bool(run_id)
+
+
+def init_triggers(app_, runtime_: SessionRuntime, config) -> None:
+    """Wire the trigger subsystem (mirrors ``init_channels``, called once).
+
+    Management routes + the terminate cascade are ALWAYS registered so the
+    console can list/arm/pause/cancel; the firing watcher starts only when
+    ``triggers.enabled`` (a disabled deployment can hold armed triggers that
+    wait for the watcher to be turned on).
+    """
+    global _trigger_service, _trigger_store, _trigger_policy, _triggers_enabled  # noqa: PLW0603
+    tcfg = config.triggers
+    from mewbo_core.triggers.session_tool import register_schedule_trigger_provider
+    from mewbo_core.triggers.store import create_trigger_store
+
+    store = create_trigger_store()
+    policy = tcfg.to_policy()
+    service = TriggerService(
+        runtime=runtime_,
+        store=store,
+        policy=policy,
+        config=tcfg,
+        forge_client_factory=build_forge_client_factory(config),
+        deliver=_trigger_deliver,
+    )
+    _trigger_service = service
+    _trigger_store = store
+    _trigger_policy = policy
+    _triggers_enabled = bool(tcfg.enabled)
+    init_trigger_routes(
+        api,
+        service=service,
+        store=store,
+        policy=policy,
+        runtime=runtime_,
+    )
+    # Cascade: terminating a session cancels every trigger still waiting to wake
+    # it. The returned count is summed into the /terminate response's
+    # ``cancelled_triggers``.
+    runtime_.register_on_terminate(lambda sid: store.cancel_for_session(sid))
+    if tcfg.enabled:
+        # Down-only push: hand the store+policy to core so every
+        # Orchestrator registers the schedule_trigger SessionToolRegistry
+        # factory — replacing the old root-only extra_session_tools injection so
+        # a spawned sub-agent (the app-builder) whose allowlist names it can
+        # bind it too. Gated on triggers.enabled, byte-identical to the old
+        # _schedule_trigger_tools guard: arming a trigger no watcher will ever
+        # fire would only mislead the agent.
+        register_schedule_trigger_provider(store, policy)
+        service.start()
+        logging.info("Trigger watcher started (triggers.enabled=true)")
+    else:
+        logging.info("Trigger routes registered; watcher idle (triggers.enabled=false)")
+
+
+init_triggers(app, runtime, _config)
+
+
+# -- Custom system instructions ----------------------------------------------
+# Operator-authored Jinja template appended to every session's system prompt,
+# branching on client/surface (InstructionContext). REST + API key only —
+# deliberately no agent-facing SessionTool/MCP surface (see routes.py).
+from mewbo_api.system_instructions import (  # noqa: E402
+    InstructionValueSources,
+    init_system_instructions_routes,
+)
+
+
+def init_system_instructions() -> None:
+    """Wire the custom-system-instructions subsystem (mirrors ``init_triggers``).
+
+    Two injected collaborators: the singleton document store, and the
+    ``InstructionValueSources`` edge that resolves what this deployment's
+    tools/capabilities/projects/models actually ARE (it takes the same managed
+    ``project_store`` ``GET /api/projects`` lists; its other sources — config,
+    tool registry, plugin fan-out — default to the live accessors).
+    """
+    from mewbo_core.system_instructions import create_system_instructions_store
+
+    init_system_instructions_routes(
+        api,
+        store=create_system_instructions_store(),
+        value_sources=InstructionValueSources(project_store=project_store),
+    )
+
+
+init_system_instructions()
+
+
+# -- Mewbo Apps (LLM-built, trigger-maintained mini apps) --------------------
+# API-only sub-product (nothing importable from core/CLI paths): manifest +
+# version + pipeline-run + data stores, the app lifecycle, and the REST surface,
+# plus the agent-side plugin root pushed at startup. Wired after triggers because
+# the lifecycle arms pipeline triggers via the trigger store + policy that
+# ``init_triggers`` built above.
+from mewbo_api.apps.lifecycle import (  # noqa: E402
+    AppLifecycle,
+    RuntimeSessionBackend,
+)
+from mewbo_api.apps.models import AppSpec  # noqa: E402
+from mewbo_api.apps.pipeline_runner import AppPipelineRunner  # noqa: E402
+from mewbo_api.apps.pipeline_tracker import AppPipelineRunTracker  # noqa: E402
+from mewbo_api.apps.plugin import PLUGIN_ROOT as _APPS_PLUGIN_ROOT  # noqa: E402
+from mewbo_api.apps.plugin.runtime import (  # noqa: E402
+    register_app_submitter,
+    register_pipeline_runner,
+)
+from mewbo_api.apps.routes import (  # noqa: E402
+    AppsRoutesController,
+    init_apps_routes,
+)
+from mewbo_api.apps.store import (  # noqa: E402
+    get_app_data_store,
+    get_app_store,
+    get_pipeline_run_store,
+)
+from mewbo_api.apps.tokens import AppReadTokenSigner  # noqa: E402
+
+
+def _build_apps_token_signer(configured_secret: str, master_token: str) -> AppReadTokenSigner:
+    """Build the apps render-token signer from config, falling back to the master token.
+
+    A dedicated ``api.apps_token_secret`` lets an operator sign (and rotate) the
+    short-lived app render tokens independently of the master token. When it is
+    unset the signer falls back to the master token — with ONE startup warning, so
+    a deployment that never rotates is honest about sharing the secret rather than
+    silently doing so. Pure + injected (no module reads) so the fallback branch is
+    unit-testable without touching global config.
+    """
+    secret = (configured_secret or "").strip()
+    if secret:
+        return AppReadTokenSigner(secret=secret)
+    logging.warning(
+        "apps token secret falls back to master token — set api.apps_token_secret "
+        "to rotate app render-token signing independently"
+    )
+    return AppReadTokenSigner(secret=master_token)
+
+
+class _RuntimeAppRunStarter:
+    """Adapts the runtime idle-start idiom to the ``AppRunStarter`` Protocol.
+
+    Starts a fresh run on an idle builder/maintainer session (builder kick-off at
+    ``create_draft``, repair run on a failed pipeline); if a run is already live
+    (a kick-off racing an in-flight run) the message is steered in instead.
+    Best-effort — a start failure is logged, never raised into the lifecycle /
+    tracker that called it.
+    """
+
+    def start_app_run(self, session_id: str, message: str) -> str:
+        """Start (or steer) a run on *session_id*; return the landed signal.
+
+        ``"steered"`` (a run was live, so the message was enqueued), ``"started"``
+        (an idle session began a fresh run), or ``"refused"`` (the runtime declined
+        the start, or a start/steer failure) — so the ``/fire`` route reports what
+        actually happened. Best-effort: a raised exception logs and reports
+        ``"refused"``, never propagating into the create/close/​fire path.
+        """
+        try:
+            if runtime.is_running(session_id):
+                return "steered" if runtime.enqueue_message(session_id, message) else "refused"
+            return "started" if _reengage_idle_session(
+                session_id, message, source_platform="apps"
+            ) else "refused"
+        except Exception:  # noqa: BLE001 — a kick-off failure must not break create/close
+            logging.warning("Apps run start failed for session {}", session_id, exc_info=True)
+            return "refused"
+
+
+def _resolve_app_workspace_cwd(app: AppSpec) -> str | None:
+    """The filesystem cwd a code pipeline's ``ctx`` (glob/read_file) is scoped to.
+
+    Reuses the maintainer session's OWN cwd resolution (``_resolve_session_cwd``):
+    a ``shared`` workspace wrote a ``project`` context event on the maintainer, so
+    this resolves the SAME project cwd a trigger re-engage would; an ``own`` (v1
+    isolated) app has no project, so it falls back to the maintainer's temp dir.
+    ``None`` when the app has no maintainer yet (a still-building draft) — the
+    runner then treats the workspace as empty (``glob`` → ``[]``, ``read_file`` →
+    a clean error), never reaching outside a scope.
+    """
+    maintainer = app.maintainer_session_id
+    if not maintainer:
+        return None
+    return _resolve_session_cwd(maintainer) or session_temp_dir(maintainer)
+
+
+# The X-Mewbo-Surface value stamped on a code-pipeline's ctx.llm run so its
+# session/Langfuse provenance is filterable as apps-pipeline LLM spend (a distinct
+# source_platform) while reusing the structured:fast recording machinery.
+_APPS_PIPELINE_LLM_SURFACE = "apps-pipeline"
+
+
+class BoundedSyncRetry:
+    """Bounded retry for a SYNCHRONOUS one-shot model call, on the shared classifier.
+
+    The apps ``ctx.llm`` step is the one LLM call in the product with no
+    :class:`ToolUseLoop` behind it — one no-loop ``StructuredSynthesizer``
+    round-trip — so it inherited no retry of any kind and a transient 502 killed
+    the whole pipeline run. (The runner's own single retry is a SCHEMA reask; it
+    never re-issues a call that failed in transport.)
+
+    This deliberately reuses ``RetryStrategy`` for the two parts that carry the
+    decision — ``classify`` (a pure staticmethod over the exception) and
+    ``backoff`` (full-jitter over the configured knobs) — rather than its
+    ``run()``. That method is an ASYNC state machine typed to chat ``AIMessage``
+    turns and needs ``emit``/``compact`` callbacks over a message history, none of
+    which exist for a synchronous schema round-trip that returns a dict. Driving
+    the taxonomy from one place is what matters; wrapping a chat-turn machine
+    around a non-chat call would have meant faking three collaborators.
+
+    Only ``RETRY_SAME`` is retried. ``SWITCH_MODEL`` has nowhere to switch to (the
+    synthesis seam takes no ladder) and ``FATAL`` must never be retried, so both
+    re-raise immediately rather than burning the budget on a decided failure.
+    """
+
+    def __init__(self, strategy_factory: Callable[[], Any] | None = None) -> None:
+        """Bind the strategy factory; the strategy itself is built per call.
+
+        Built per call so the retry knobs are hot-read from config exactly as every
+        other retry site reads them, and so one pipeline's transient failures never
+        consume a budget shared with the next.
+        """
+        self._strategy_factory = strategy_factory or RetryStrategy.from_config
+
+    def call(self, invoke: Callable[[], Any]) -> Any:
+        """Run *invoke*, retrying transient failures; re-raise anything decided."""
+        strategy = self._strategy_factory()
+        attempts = max(1, int(strategy.primary_retries))
+        for attempt in range(attempts):
+            try:
+                return invoke()
+            except Exception as exc:  # noqa: BLE001 - re-raised unless transient
+                decision = RetryStrategy.classify(exc)
+                if not decision.retryable or attempt == attempts - 1:
+                    raise
+                delay = strategy.backoff(attempt, decision.retry_after)
+                logging.warning(
+                    "apps ctx.llm call failed ({}, {}); retrying in {:.1f}s",
+                    decision.error_type,
+                    decision.reason,
+                    delay,
+                )
+                time.sleep(delay)
+        raise RuntimeError("unreachable: bounded retry exhausted without raising")
+
+
+_apps_llm_retry = BoundedSyncRetry()
+
+
+def _apps_llm_invoke(prompt: str, output_schema: dict, max_tokens: int) -> dict:
+    """The bounded ``ctx.llm`` step's model round-trip (Wave 5), session-recorded.
+
+    Reuses the DEDICATED structured-output surface the ``/v1/structured`` 'synthesis'
+    mode rides — the in-process :class:`~mewbo_api.structured.synthesis.SynthesisRunner`,
+    which drives ONE no-loop ``StructuredSynthesizer`` round-trip (an arbitrary
+    JSON-schema dict in → a schema-validated dict out, no ``ToolUseLoop``) AND wraps
+    it in the write-behind :class:`RealtimeSessionRecorder`. So each ``ctx.llm`` call
+    becomes a session-backed, Langfuse-traced structured run: a code pipeline's LLM
+    spend gets the SAME observability + provenance an interactive synthesis run has,
+    for free. Called DIRECTLY in-process (never HTTP-to-self, never a fresh
+    ``build_chat_model`` client).
+
+    ``surface="apps-pipeline"`` stamps a distinct ``source_platform`` on the run so
+    pipeline LLM spend is filterable — WITHOUT the surgery a custom ``session_type``
+    tag would need (``SynthesisRunner`` hardcodes the ``structured:fast`` base tag,
+    and a new tag prefix would also have to be taught to core's provenance
+    classifier, else it reclassifies to the ``user`` origin fallback). Returns the
+    model's validated dict (the runner re-checks it against ``output_schema`` and
+    owns the one-retry / budget / cache). ``max_tokens`` drives the runner's budget
+    accounting ONLY — the synthesis seam accepts no per-call token cap (documented,
+    not silently dropped). ``runtime is None`` degrades to trace-only, never a crash.
+    """
+    from mewbo_api.structured.synthesis import SynthesisRunner  # noqa: PLC0415 - edge dep
+
+    result = _apps_llm_retry.call(
+        lambda: SynthesisRunner(runtime=runtime).run(
+            query=prompt,
+            schema=output_schema,
+            workspace=None,  # un-grounded: a pipeline prompt carries its own context
+            model=None,  # the configured default synthesis model
+            surface=_APPS_PIPELINE_LLM_SURFACE,
+        )
+    )
+    output = result["output"]
+    return output if isinstance(output, dict) else {"result": output}
+
+
+def init_apps() -> None:
+    """Wire the Mewbo Apps sub-product (mirrors ``init_triggers``, called once).
+
+    Registers the agent-side plugin root (down-only push, discovered by
+    ``load_all_plugin_components`` alongside core's own suites) and the REST
+    namespace. The read-token signer is keyed by the API master token — the one
+    server secret already governing this deployment.
+    """
+    from mewbo_core.plugins import (  # noqa: PLC0415
+        discover_builtin_plugins,
+        register_builtin_root,
+    )
+
+    # ``discover_builtin_plugins`` scans a root's immediate subdirectories for a
+    # ``<suite>/.claude-plugin/plugin.json``. The agent-side suite ships its
+    # manifest at ``plugin/.claude-plugin/plugin.json`` (``plugin/`` IS the
+    # suite), so the discovery ROOT is its parent — the ``mewbo_api.apps`` package
+    # dir — inside which ``plugin/`` is the one suite it finds. Guard against a
+    # silent layout drift (a manifest move breaks discovery with no error): log
+    # loudly rather than ship an apps deployment with no app-builder AgentDef.
+    plugin_root = _APPS_PLUGIN_ROOT.parent
+    register_builtin_root(plugin_root)
+    if not discover_builtin_plugins(plugin_root):
+        logging.warning(
+            "Mewbo Apps agent plugin not discovered under %s — the app-builder / "
+            "app-repair AgentDefs will be unavailable (check the suite's "
+            ".claude-plugin/plugin.json location).",
+            plugin_root,
+        )
+    global _apps_pipeline_tracker, _apps_pipeline_runner  # noqa: PLW0603 - composition-root handles
+    app_store = get_app_store()
+    run_store = get_pipeline_run_store()
+    data_store = get_app_data_store()
+    # ONE run-starter, shared by the lifecycle (builder/repair kick-off + agentic
+    # seed) and the tracker (the agentic /fire wake) — both wake a session the same
+    # way through the _trigger_deliver idle-start idiom.
+    apps_run_starter = _RuntimeAppRunStarter()
+    lifecycle = AppLifecycle(
+        app_store=app_store,
+        trigger_store=_trigger_store,
+        trigger_policy=_trigger_policy,
+        sessions=RuntimeSessionBackend(runtime),
+        # Starts the builder run at create_draft + the repair run on a failed
+        # pipeline; mirrors the _trigger_deliver idle-start idiom.
+        run_starter=apps_run_starter,
+    )
+    # Code-pipeline executor (Phase 2): runs a ``mode="code"`` pipeline's
+    # entrypoint deterministically (no LLM call) at the fire seam + on demand. The
+    # workspace resolver reuses the SAME session-cwd resolution a trigger re-engage
+    # would (the maintainer session already carries the app's project/own-scope
+    # context), so glob/read_file see exactly the workspace the agentic path would.
+    _apps_pipeline_runner = AppPipelineRunner(
+        app_store=app_store,
+        app_data=data_store,
+        workspace_resolver=_resolve_app_workspace_cwd,
+        # The bounded ctx.llm() step (Wave 5): a thin adapter over the SAME
+        # structured-synthesis seam /v1/structured 'synthesis' mode uses (no new LLM
+        # client). Unwired ⇒ ctx.llm raises a clean "not configured"; a pipeline must
+        # still DECLARE a positive llm_budget_tokens to reach it.
+        llm_invoke=_apps_llm_invoke,
+    )
+    # Push it to the plugin's run_pipeline seam (mirrors register_app_submitter);
+    # unwired ⇒ run_pipeline degrades to a clean "not configured" error.
+    register_pipeline_runner(_apps_pipeline_runner)
+    # Pipeline-run ledger tracker (spec §2.8): opens a PipelineRun when a fired
+    # pipeline trigger re-engages a maintainer (read at fire time by
+    # ``_trigger_deliver`` via the module handle) and closes it at the run's end
+    # via the session-end hook — the seam that actually OBSERVES run completion
+    # (``start_async`` returns a run_id immediately, so the deliver closure never
+    # does). A failed close dispatches the lifecycle's on_pipeline_failure policy.
+    # The runner is handed to it so a fired ``mode="code"`` pipeline runs the engine
+    # synchronously (no maintainer wake) at the ``_trigger_deliver`` seam.
+    _apps_pipeline_tracker = AppPipelineRunTracker(
+        run_store=run_store,
+        app_store=app_store,
+        failure_handler=lifecycle,
+        pipeline_runner=_apps_pipeline_runner,
+        # The agentic /fire wake + seed rides the SAME idle-start idiom the builder
+        # and repair kick-offs do.
+        run_starter=apps_run_starter,
+    )
+    # Close the lifecycle<->tracker cycle: the lifecycle drives the fire seam to SEED
+    # a first run of every pipeline at go-live (so freshness is never born "Never
+    # refreshed") and to seed a re-armed pipeline. The tracker is built after the
+    # lifecycle (it takes the lifecycle as its failure_handler), so this is an
+    # assign-after-construction wiring — a reference cycle, never an import one.
+    lifecycle.tracker = _apps_pipeline_tracker
+    # A process death (deploy/restart) strands in-flight runs as `running`
+    # forever — close them honestly before any new fire can open a run
+    # (live-verified: a stack redeploy left a run open with
+    # zero trace and blocked the failure policy from ever firing).
+    swept = _apps_pipeline_tracker.sweep_orphaned_runs(datetime.now(timezone.utc))
+    if swept:
+        logging.warning("Closed {} orphaned running pipeline run(s) at startup", swept)
+    _hook_manager.on_session_end.append(_apps_pipeline_tracker.close_runs)
+    # Push the concrete lifecycle to the plugin's submitter seam so ``submit_app``
+    # (built through the manifest path, which feeds it only session_id+event_logger)
+    # resolves its ``AppSubmitter``. The stores self-wire via their process-wide
+    # factories, so this is the ONLY runtime wiring the agent plugin needs; without
+    # it ``submit_app`` degrades to a clean "apps runtime not configured" error.
+    register_app_submitter(lifecycle)
+    controller = AppsRoutesController(
+        lifecycle=lifecycle,
+        app_store=app_store,
+        run_store=run_store,
+        data_store=data_store,
+        trigger_store=_trigger_store,
+        token_signer=_build_apps_token_signer(_config.api.apps_token_secret, MASTER_API_TOKEN),
+        require_api_key=_require_api_key,
+        # Minting a WRITE-scoped app token is master-key-only (Phase 2) — a
+        # SEPARATE guard from require_api_key, mirroring _require_master_token's
+        # existing use for key-management routes: an issued key must never be
+        # able to escalate a served app's pipeline surface to invocable.
+        require_master_token=_require_master_token,
+        require_permission=_require_permission,
+        sdk_files=_load_app_sdk_files(),
+        # The SAME code-pipeline engine the fire seam + run_pipeline tool use
+        # (Phase 2) — GET/POST .../pipelines/<name> executes for real
+        # instead of 503ing "pipeline execution not configured".
+        runner=_apps_pipeline_runner,
+        # The SAME ledger tracker the fire seam uses (Phase 2 revised
+        # ruling) — an on-demand invoke that writes data or genuinely fails is
+        # ledgered kind="on_request"; a cache hit or a no-write success mints no
+        # row. See AppsRoutesController.invoke_pipeline / record_code_run.
+        tracker=_apps_pipeline_tracker,
+    )
+    init_apps_routes(api, controller)
+
+
+def _load_app_sdk_files() -> dict[str, str]:
+    """Read the agent SDK once at startup for server-side injection into rendered apps.
+
+    The stlite frontend imports ``mewbo_app`` (the sanctioned network path, spec
+    §2.5); the backend injects the SDK source into the rendered detail response's
+    ``frontend.files`` rather than the console/Aura bundling it, so both clients
+    stay SDK-free and the stored :class:`AppSpec` is never polluted. A missing SDK
+    file logs loudly and degrades to no injection (served apps then fail their
+    ``import mewbo_app`` — visible, never a silent server crash).
+    """
+    sdk_path = _APPS_PLUGIN_ROOT / "sdk" / "mewbo_app.py"
+    try:
+        return {"mewbo_app.py": sdk_path.read_text(encoding="utf-8")}
+    except OSError as exc:
+        logging.warning(
+            "Mewbo Apps SDK not readable at %s (%s) — rendered apps will fail "
+            "`import mewbo_app`; check the plugin's sdk/ directory.",
+            sdk_path,
+            exc,
+        )
+        return {}
+
+
+init_apps()
 
 
 # ---------------------------------------------------------------------------
@@ -1625,13 +2761,28 @@ session_summary_model = ns.model(
         "session_id": fields.String(example="9e2d47c1a0b34f12"),
         "title": fields.String(example="Refactor the billing pipeline"),
         "status": fields.String(
-            example="completed", description="`idle`, `running`, `completed`, or `incomplete`."
+            example="completed",
+            description="`idle`, `running`, `completed`, `incomplete`, or `terminated`.",
         ),
         "done_reason": fields.String(example="completed"),
+        # The enum is READ OFF core's SessionOrigin rather than spelled out here:
+        # the hand-written prose list this replaced had gone stale by four members,
+        # and it is published — it renders into the REST reference from
+        # docs/openapi.json. Deriving it means a new origin documents itself.
         "origin": fields.String(
-            example="user", description="`user`, `wiki`, `search`, or `channel`."
+            example="user",
+            enum=[member.value for member in SessionOrigin],
+            description=(
+                "What created the session, derived from its tags and first context event."
+            ),
         ),
         "recoverable": fields.Boolean(example=False),
+        "terminated": fields.Boolean(
+            example=False, description="True once the session is permanently terminated."
+        ),
+        "terminated_at": fields.String(
+            example=None, description="ISO termination time, or null if the session is live."
+        ),
         "created_at": fields.String(example="2026-06-15T18:24:05.412903+00:00"),
         "updated_at": fields.String(example="2026-06-15T18:31:42.108551+00:00"),
     },
@@ -1691,6 +2842,178 @@ session_events_model = ns.model(
         "done_reason": fields.String(example="completed"),
         "title": fields.String(example="Refactor the billing pipeline"),
         "recoverable": fields.Boolean(example=False),
+    },
+)
+
+timeline_token_usage_model = ns.model(
+    "TimelineTokenUsage",
+    {
+        "input_tokens": fields.Integer(
+            example=24110, description="Peak root input — context pressure, not a sum."
+        ),
+        "output_tokens": fields.Integer(example=5102),
+        "sub_input_tokens": fields.Integer(
+            example=18200, description="Sum of per-sub-agent peak input."
+        ),
+        "sub_output_tokens": fields.Integer(example=1200),
+        "sub_agent_count": fields.Integer(example=3),
+        "cache_creation_tokens": fields.Integer(example=800),
+        "cache_read_tokens": fields.Integer(example=19400),
+        "reasoning_tokens": fields.Integer(example=640),
+        "billed_input_tokens": fields.Integer(
+            example=88120, description="Cumulative billable input (root sum + sub sum)."
+        ),
+    },
+)
+
+timeline_turn_model = ns.model(
+    "TimelineTurn",
+    {
+        "id": fields.String(example="turn-3"),
+        "duration_ms": fields.Integer(
+            example=18400, description="Prompt-to-closure span; absent when not measurable."
+        ),
+        "model": fields.String(example="some-model"),
+        "done_reason": fields.String(
+            example="completed",
+            description=(
+                "The closing completion's reason; absent when an assistant "
+                "event closed the turn."
+            ),
+        ),
+        "token_usage": fields.Nested(timeline_token_usage_model, allow_null=True),
+    },
+)
+
+timeline_entry_model = ns.model(
+    "TimelineEntry",
+    {
+        "id": fields.String(example="assistant-3"),
+        "role": fields.String(
+            example="assistant",
+            description=(
+                "One of: user, assistant, run_failed, plan, widget, todos, "
+                "question, trigger, session_terminated, recovery."
+            ),
+        ),
+        "content": fields.String(example="Here is the summary you asked for."),
+        "turn_id": fields.String(example="turn-3"),
+        "ts": fields.String(example="2026-06-15T18:24:10.882001+00:00"),
+        # Turn metadata rides only the row that CLOSED a turn, so a client can
+        # render one footer per turn without de-duplicating.
+        "turn": fields.Nested(timeline_turn_model, allow_null=True),
+        "plan": fields.Raw(description="Present on `plan` rows: revision, status, content."),
+        "widget": fields.Raw(description="Present on `widget` rows: the widget_ready payload."),
+        "todos": fields.Raw(description="Present on `todos` rows: the checklist items."),
+        "question": fields.Raw(
+            description=(
+                "Present on `question` rows. Never carries the answer credential — "
+                "answering goes through the questions endpoint."
+            )
+        ),
+        "trigger": fields.Raw(description="Present on `trigger` rows: kind, action, summary."),
+        "recovery": fields.Raw(description="Present on `recovery` rows: retry or continue."),
+        "run_failure": fields.Raw(
+            description="Present on `run_failed` rows: reason plus the classified error detail."
+        ),
+        "attachments": fields.Raw(description="Descriptors for files sent with a `user` row."),
+    },
+)
+
+session_timeline_model = ns.model(
+    "SessionTimelineResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "entries": fields.List(fields.Nested(timeline_entry_model)),
+        "open_turn": fields.Nested(
+            timeline_turn_model,
+            allow_null=True,
+            description="The still-running turn, absent once every turn has concluded.",
+        ),
+        "running": fields.Boolean(example=False),
+        "status": fields.String(example="completed"),
+        "terminated": fields.Boolean(example=False),
+    },
+)
+
+session_spec_binding_model = ns.model(
+    "SessionSpecBinding",
+    {
+        "origin": fields.String(
+            example="wiki",
+            description="Provenance of the creating surface: user/wiki/search/channel/"
+            "mobile/structured/draft/apps.",
+        ),
+        "surface": fields.String(
+            example="console", description="Client surface the session was created from."
+        ),
+        "purpose_bound": fields.Boolean(
+            example=True,
+            description=(
+                "True when the session was created FOR a narrower purpose than open "
+                "chat — a product surface created it, or its tool scope is "
+                "authoritative. A bound session refuses tool/scope overrides."
+            ),
+        ),
+        "project": fields.String(example="Assistant", description="Bound project name."),
+        "slug": fields.String(example="acme/beacon", description="Product-scoped identifier."),
+        "cwd": fields.String(example="/srv/projects/assistant"),
+        "model": fields.String(example="openai/claude-sonnet-5"),
+        "fallback_models": fields.List(
+            fields.String,
+            description="Opted-in fallback ladder; null defers to the configured policy.",
+        ),
+        "allowed_tools": fields.List(
+            fields.String,
+            description=(
+                "MCP tool ceiling. THREE-STATE: null unrestricted, [] grants no MCP "
+                "tool, non-empty grants exactly those."
+            ),
+        ),
+        "strict_tool_scope": fields.Boolean(example=True),
+        "capabilities": fields.List(
+            fields.String, description="Capabilities the purpose requires."
+        ),
+        "skill_instructions_present": fields.Boolean(
+            example=True,
+            description="Whether a playbook is bound. The text itself is not projected.",
+        ),
+        "session_step_budget": fields.Integer(example=50),
+        "mode": fields.String(example="act"),
+    },
+)
+
+session_spec_model = ns.model(
+    "SessionSpecResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "spec": fields.Nested(session_spec_binding_model),
+        "editable": fields.Raw(
+            description=(
+                "Server-declared per-field modifiability, keyed by the binding's field "
+                "names. Fail-closed and authoritative: a false field is refused "
+                "server-side rather than silently ignored."
+            ),
+            example={
+                "model": True,
+                "fallback_models": True,
+                "mode": True,
+                "project": False,
+                "slug": False,
+                "cwd": False,
+                "allowed_tools": False,
+                "strict_tool_scope": False,
+                "skill_instructions": False,
+                "session_step_budget": False,
+            },
+        ),
+        "source": fields.String(
+            example="spec",
+            description=(
+                "`spec` when a durable binding was recorded, `legacy_context` when it "
+                "was reconstructed from a session predating them."
+            ),
+        ),
     },
 )
 
@@ -1774,6 +3097,47 @@ device_tool_resolved_model = ns.model(
     {"resolved": fields.Boolean(example=True)},
 )
 
+question_answer_item_model = ns.model(
+    "QuestionAnswerItem",
+    {
+        "selected_indexes": fields.List(
+            fields.Integer,
+            required=False,
+            description="0-based indexes into the question's options (XOR `text`).",
+            example=[0],
+        ),
+        "text": fields.String(
+            required=False,
+            description=(
+                "Free-text answer — always accepted, even with options "
+                "(XOR `selected_indexes`)."
+            ),
+            example="Use the staging cluster instead",
+        ),
+    },
+)
+
+question_answer_model = ns.model(
+    "QuestionAnswerRequest",
+    {
+        "call_token": fields.String(
+            required=True,
+            description="Single-use token carried on the `user_question` event this answers.",
+            example="Q1sT9x...redacted",
+        ),
+        "answers": fields.List(
+            fields.Nested(question_answer_item_model),
+            required=True,
+            description="One item per question, in the question order.",
+        ),
+    },
+)
+
+question_answered_model = ns.model(
+    "QuestionAnswered",
+    {"resolved": fields.Boolean(example=True)},
+)
+
 session_recover_response_model = ns.model(
     "SessionRecoverResponse",
     {
@@ -1829,6 +3193,40 @@ session_archive_model = ns.model(
     {
         "session_id": fields.String(example="9e2d47c1a0b34f12"),
         "archived": fields.Boolean(example=True),
+    },
+)
+
+session_terminate_model = ns.model(
+    "SessionTerminateResponse",
+    {
+        "session_id": fields.String(example="9e2d47c1a0b34f12"),
+        "status": fields.String(example="terminated"),
+        "terminated_at": fields.String(example="2026-07-13T18:24:10.882001+00:00"),
+        "cancelled_triggers": fields.Integer(
+            example=0,
+            description="Downstream artifacts (e.g. scheduled triggers) cancelled by this call.",
+        ),
+    },
+)
+
+# A terminated session rejects every mutating call with this 410 envelope. The
+# ``code`` is the SEMANTIC token ``session_terminated`` (not the HTTP status) so
+# a small agent can branch on it; ``retryable`` is always false — the state is
+# permanent. Distinct from the generic ``kit`` envelope (whose ``code`` is the
+# int status), so it is documented with a bespoke model.
+session_terminated_error_model = ns.model(
+    "SessionTerminatedError",
+    {
+        "error": fields.Nested(
+            ns.model(
+                "SessionTerminatedErrorBody",
+                {
+                    "code": fields.String(example="session_terminated"),
+                    "reason": fields.String(example="Session is permanently terminated"),
+                    "retryable": fields.Boolean(example=False),
+                },
+            )
+        )
     },
 )
 
@@ -2031,7 +3429,7 @@ tool_spec_model = ns.model(
                 "Set only on capability-gated internal/product tools (wiki_*, scg_*, "
                 "agentic_search): the session capability that must be granted for the "
                 "tool to actually bind. Selecting the tool via a session's `mcp_tools` "
-                "allowlist grants this capability for that request (Gitea #182)."
+                "allowlist grants this capability for that request."
             ),
         ),
     },
@@ -2192,6 +3590,211 @@ command_running_model = ns.model(
 )
 
 
+class SelfMintRefused(Exception):
+    """A self-service mint asked for more authority than the caller holds."""
+
+
+@dataclass(frozen=True)
+class SelfMintGrant:
+    """The exact identity fields a self-service mint may write to the store."""
+
+    roles: list[str]
+    scopes: list[str] | None
+    expires_at: str | None
+
+
+class SelfMintAuthority:
+    """The ceiling a self-service key mint may never exceed.
+
+    **Why this is a class and not three inline conditionals.** The three fields a
+    self-minting caller can influence are each TRI-STATE on the wire — omitted,
+    an explicit empty value, or an explicit non-empty value — and the key store
+    already honours all three correctly (``_mint_scoped_record`` writes a field
+    only when it ``is not None``, so ``[]`` persists as ``[]`` while an ABSENT
+    field reads back as legacy-unrestricted). The route was therefore the only
+    place the law could be broken, and it was broken in the most expensive way
+    possible: ``list(payload.get("roles") or ()) or None`` collapsed
+    omitted/``null``/``[]`` into ``None``, which the store faithfully recorded as
+    ABSENT, which :meth:`AuthKit._principal_from_record` faithfully read back as
+    ``(ADMIN_ROLE,)``. Three correct layers, one route-level coalesce, full
+    admin from a ``member`` key that posted ``{"label": "x"}``.
+
+    The rule this class exists to make unmissable: **omitted INHERITS the
+    caller's own value; an explicit value is checked against it; nothing here
+    can widen.** ``is None`` is load-bearing in every branch — a truthiness test
+    is the original defect, so there is deliberately not one anywhere below.
+
+    The structural half matters as much as the checks: :meth:`attenuate` always
+    returns a CONCRETE ``roles`` list (the caller's own when omitted), so this
+    path can no longer produce a record with an absent ``roles`` field at all.
+    The store's legacy-key default stays correct for genuinely legacy records
+    and becomes unreachable from client input, which is a stronger guarantee
+    than a conditional that must keep being written correctly.
+    """
+
+    __slots__ = ("_expires_at", "_roles", "_scopes")
+
+    def __init__(
+        self, *, roles: tuple[str, ...], scopes: tuple[str, ...] | None, expires_at: str | None
+    ) -> None:
+        """Capture the caller's own authority — the ceiling every mint attenuates to."""
+        self._roles = roles
+        self._scopes = scopes
+        self._expires_at = expires_at
+
+    @classmethod
+    def for_request(
+        cls, principal: Principal, *, key_store: KeyStoreBase, credential: str | None
+    ) -> SelfMintAuthority:
+        """Build the ceiling from the in-flight caller.
+
+        Roles and scopes come off the resolved principal; the EXPIRY has to come
+        from the caller's own key record, because a principal carries no expiry
+        (it is a property of the credential, not of the identity behind it).
+        A caller whose record cannot be re-resolved is treated as unexpiring,
+        which is exactly what it was before this narrowing existed.
+        """
+        record = key_store.resolve_key(credential) if credential else None
+        return cls(
+            roles=tuple(principal.roles),
+            scopes=None if principal.scopes is None else tuple(principal.scopes),
+            expires_at=(record or {}).get("expires_at"),
+        )
+
+    def attenuate(self, payload: dict) -> SelfMintGrant:
+        """Resolve *payload*'s requested authority against this ceiling."""
+        return SelfMintGrant(
+            roles=self._roles_for(payload.get("roles")),
+            scopes=self._scopes_for(payload.get("scopes")),
+            expires_at=self._expires_at_for(payload.get("expires_at")),
+        )
+
+    def _roles_for(self, requested: object) -> list[str]:
+        """The minted roles: the caller's own when omitted, else a subset of them."""
+        if requested is None:
+            return list(self._roles)
+        if not isinstance(requested, (list, tuple)) or not set(requested) <= set(self._roles):
+            raise SelfMintRefused("requested roles exceed the caller's own")
+        return [str(role) for role in requested]
+
+    def _scopes_for(self, requested: object) -> list[str] | None:
+        """The minted scopes, preserving the three-state law in both directions."""
+        if requested is None:
+            return None if self._scopes is None else list(self._scopes)
+        if not isinstance(requested, (list, tuple)):
+            raise SelfMintRefused("requested scopes exceed the caller's own")
+        caller = KeyScopes(self._scopes)
+        if not all(caller.matches(str(scope)) for scope in requested):
+            raise SelfMintRefused("requested scopes exceed the caller's own")
+        return [str(scope) for scope in requested]
+
+    def _expires_at_for(self, requested: object) -> str | None:
+        """The minted expiry — a self-minted key must never outlive its parent."""
+        if requested is None:
+            return self._expires_at
+        moment = self._parse_iso(requested)
+        if moment is None:
+            raise SelfMintRefused("expires_at must be an ISO-8601 timestamp")
+        ceiling = self._parse_iso(self._expires_at)
+        if ceiling is not None and moment > ceiling:
+            raise SelfMintRefused("requested expiry exceeds the caller's own")
+        return str(requested)
+
+    @staticmethod
+    def _parse_iso(raw: object) -> datetime | None:
+        """Parse an ISO-8601 stamp to an aware datetime, mirroring the key store.
+
+        Naive values are read as UTC exactly as ``key_store._record_expired``
+        does, so the comparison here and the expiry check that later enforces it
+        can never disagree about what a stored stamp means.
+        """
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            moment = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+
+def _key_mint_response(record: PublicKeyRecord, plaintext: str) -> dict:
+    """Shape a minted/rotated key into the wire response.
+
+    Optional identity fields appear only when the record carries them, so a
+    legacy mint's body stays exactly what it was before keys grew an owner.
+    """
+    body: dict = {
+        "id": record["id"],
+        "label": record["label"],
+        "key": plaintext,
+        "created_at": record["created_at"],
+    }
+    for field in ("owner_subject", "roles", "scopes", "team_id", "expires_at"):
+        if field in record:
+            body[field] = record[field]
+    return body
+
+
+def _self_mint_denied() -> tuple[dict, int] | None:
+    """Return the refusal when the caller may not mint keys for itself.
+
+    Self-service exists only once identity does: with auth disabled there is no
+    subject to own a key, so the master-token contract stands alone.
+    """
+    if not _auth_kit.settings.enabled:
+        return {"message": "Unauthorized"}, 401
+    return _require_permission("keys.mint_own")()
+
+
+@ns.route("/keys/<string:key_id>/rotate")
+class ApiKeyRotate(Resource):
+    """Mint a replacement key carrying the original's authority, then revoke it."""
+
+    @api.doc(
+        security="apikey",
+        params={"key_id": "Key id returned by POST /api/keys."},
+        description=(
+            "Mint a replacement carrying the same owner, roles, scopes, team and "
+            "expiry as `key_id`, and revoke the original in the same call. The new "
+            "plaintext key is returned exactly once — store it immediately. "
+            "Requires the **master** token, or `keys.mint_own` on a key the caller owns."
+        ),
+    )
+    @ns.response(200, "Key rotated. The new plaintext key is in the body.", key_mint_response_model)
+    @kit.errors(404, shape="message", descriptions={404: "No key with that id exists."})
+    @kit.auth_error()
+    @guard.dual_channel(
+        "keys.admin",
+        primary="master",
+        channel="self_service",
+        alternate_permissions=("keys.mint_own",),
+        enforced_by="ApiKeyRotate.post (owner check against list_keys_for_owner)",
+    )
+    def post(self, key_id: str) -> tuple[dict, int]:
+        """Rotate an API key
+
+        Mints a replacement carrying the same authority as the original and
+        revokes the original. The new plaintext key is returned exactly once.
+        """
+        admin_error = _require_master_token() or _require_permission("keys.admin")()
+        if admin_error is not None:
+            if _self_mint_denied() is not None:
+                return admin_error
+            principal = current_principal()
+            if principal is None:
+                return admin_error
+            owned = key_store.list_keys_for_owner(principal.subject)
+            if not any(record["id"] == key_id for record in owned):
+                # Uniform not-found: a foreign key's id must not be probeable.
+                return {"message": f"Key '{key_id}' not found"}, 404
+
+        rotated = key_store.rotate_key(key_id)
+        if rotated is None:
+            return {"message": f"Key '{key_id}' not found"}, 404
+        plaintext, record = rotated
+        return _key_mint_response(record, plaintext), 200
+
+
 @ns.route("/keys")
 class ApiKeys(Resource):
     """Mint and list API keys (master-token-only)."""
@@ -2213,6 +3816,13 @@ class ApiKeys(Resource):
     @kit.errors(400, shape="message", descriptions={400: "The `label` field is missing or empty."})
     @kit.auth_error()
     @ns.expect(key_mint_model)
+    @guard.dual_channel(
+        "keys.admin",
+        primary="master",
+        channel="self_service",
+        alternate_permissions=("keys.mint_own",),
+        enforced_by="ApiKeys.post (owner forced to the caller's subject, roles/scopes subset)",
+    )
     def post(self) -> tuple[dict, int]:
         """Mint an API key
 
@@ -2221,20 +3831,73 @@ class ApiKeys(Resource):
         again, so store it securely. Requires the master token; keys minted
         here cannot manage other keys.
         """
-        auth_error = _require_master_token()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         label = str(payload.get("label", "")).strip()
         if not label:
             return {"message": "Invalid input: 'label' is required"}, 400
-        plaintext, record = key_store.create_key(label)
-        return {
-            "id": record["id"],
-            "label": record["label"],
-            "key": plaintext,
-            "created_at": record["created_at"],
-        }, 201
+
+        admin_error = _require_master_token() or _require_permission("keys.admin")()
+        if admin_error is None:
+            # An admin may name ANY owner, but not a malformed one: the store
+            # takes the string verbatim and only `Principal` enforces the
+            # `user:`/`svc:` law, so an unvalidated value mints happily and then
+            # raises at every AUTH attempt — a key that exists but can never be
+            # used, failing on the wrong request. Same law, checked where the
+            # mistake is made. `is None` and not truthiness: the subject is
+            # OPTIONAL (a legacy ownerless key), while `""` is a bad value.
+            owner_subject = payload.get("owner_subject")
+            if owner_subject is not None:
+                try:
+                    owner_subject = Principal.validate_subject(str(owner_subject))
+                except ValueError as exc:
+                    return {"message": str(exc)}, 400
+            plaintext, record = key_store.create_scoped_key(
+                label,
+                owner_subject=owner_subject,
+                roles=payload.get("roles"),
+                scopes=payload.get("scopes"),
+                team_id=payload.get("team_id"),
+                expires_at=payload.get("expires_at"),
+            )
+            _auth_kit.record_key_minted(
+                key_id=str(record.get("id", "")),
+                subject=str(owner_subject or record.get("id", "")),
+                label=label,
+            )
+            return _key_mint_response(record, plaintext), 201
+
+        self_error = _self_mint_denied()
+        if self_error is not None:
+            # Report the ORIGINAL admin failure: a caller who cannot self-mint
+            # should not learn that a self-mint tier exists.
+            return admin_error
+        principal = current_principal()
+        if principal is None:
+            return admin_error
+        authority = SelfMintAuthority.for_request(
+            principal, key_store=key_store, credential=_request_credential()
+        )
+        try:
+            grant = authority.attenuate(payload)
+        except SelfMintRefused as exc:
+            return {"message": str(exc)}, 400
+        plaintext, record = key_store.create_scoped_key(
+            label,
+            owner_subject=principal.subject,  # forced: a self-mint cannot name another owner
+            roles=grant.roles,
+            scopes=grant.scopes,
+            # team_id is deliberately NOT narrowed here, and that is safe only
+            # because _principal_from_record never projects it into team
+            # memberships. Anything that starts reading a key's team as authority
+            # must narrow it against the caller's own teams FIRST — otherwise a
+            # self-mint names any team it likes and this becomes an escalation.
+            team_id=payload.get("team_id"),
+            expires_at=grant.expires_at,
+        )
+        _auth_kit.record_key_minted(
+            key_id=str(record.get("id", "")), subject=principal.subject, label=label
+        )
+        return _key_mint_response(record, plaintext), 201
 
     @api.doc(
         security="apikey",
@@ -2247,6 +3910,13 @@ class ApiKeys(Resource):
     )
     @ns.response(200, "Key metadata list.", keys_list_model)
     @kit.auth_error()
+    @guard.dual_channel(
+        "keys.admin",
+        primary="master",
+        channel="self_service",
+        alternate_permissions=("keys.mint_own",),
+        enforced_by="ApiKeys.get (owner filter pinned to the caller's subject)",
+    )
     def get(self) -> tuple[dict, int]:
         """List API keys
 
@@ -2254,10 +3924,20 @@ class ApiKeys(Resource):
         revocation state. Hashes and plaintext key values are never included.
         Requires the master token.
         """
-        auth_error = _require_master_token()
-        if auth_error:
-            return auth_error
-        return {"keys": key_store.list_keys()}, 200
+        owner = request.args.get("owner")
+        admin_error = _require_master_token() or _require_permission("keys.admin")()
+        if admin_error is None:
+            keys = key_store.list_keys_for_owner(owner) if owner else key_store.list_keys()
+            return {"keys": keys}, 200
+
+        if _self_mint_denied() is not None:
+            return admin_error
+        principal = current_principal()
+        if principal is None:
+            return admin_error
+        if owner is not None and owner != principal.subject:
+            return {"message": "insufficient role"}, 403
+        return {"keys": key_store.list_keys_for_owner(principal.subject)}, 200
 
 
 @ns.route("/keys/<string:key_id>")
@@ -2277,17 +3957,26 @@ class ApiKey(Resource):
     @ns.response(200, "Key revoked.", key_revoke_model)
     @kit.errors(404, shape="message", descriptions={404: "No key with that id exists."})
     @kit.auth_error()
+    @guard.requires_master("keys.admin")
     def delete(self, key_id: str) -> tuple[dict, int]:
         """Revoke an API key
 
         Permanently revokes the key. Requests presenting a revoked key are
         rejected with 401 from that point on. Requires the master token.
         """
-        auth_error = _require_master_token()
-        if auth_error:
-            return auth_error
+        # Read the owner BEFORE revoking: the audit entry names whose access was
+        # withdrawn, and only the pre-revoke record still says who that was.
+        owner = next(
+            (
+                str(k.get("owner_subject") or "")
+                for k in key_store.list_keys()
+                if k.get("id") == key_id
+            ),
+            "",
+        )
         if not key_store.revoke_key(key_id):
             return {"message": f"Key '{key_id}' not found"}, 404
+        _auth_kit.record_key_revoked(key_id=key_id, subject=owner or key_id)
         return {"id": key_id, "revoked": True}, 200
 
 
@@ -2306,6 +3995,7 @@ class Models(Resource):
     )
     @ns.response(200, "Model names, default model, and capability map.", models_list_model)
     @kit.auth_error()
+    @guard.requires("projects.read")
     def get(self) -> tuple[dict, int]:
         """List available models
 
@@ -2314,9 +4004,6 @@ class Models(Resource):
         `capabilities[name].supports_vision` to decide whether image
         attachments can be sent to a given model.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         default_model = get_config_value("llm", "default_model", default="unknown")
         try:
             models = get_config().llm.list_models()
@@ -2372,6 +4059,7 @@ class Projects(Resource):
     )
     @ns.response(200, "Unified project list.", projects_list_model)
     @kit.auth_error()
+    @guard.requires("projects.read")
     def get(self) -> tuple[dict, int]:
         """List projects
 
@@ -2381,9 +4069,6 @@ class Projects(Resource):
         `owner/repo` that address the same project elsewhere in the API.
         Managed worktrees appear as child entries with `is_worktree` set.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         # Config-defined projects
         result: list[dict] = [
             _enrich_project_identity(
@@ -2451,6 +4136,7 @@ class VirtualProjects(Resource):
     @kit.errors(400, shape="message", descriptions={400: "The `name` field is missing or empty."})
     @kit.auth_error()
     @ns.expect(project_create_model)
+    @guard.requires("projects.write")
     def post(self) -> tuple[dict, int]:
         """Create a managed project
 
@@ -2460,9 +4146,6 @@ class VirtualProjects(Resource):
         `/api/v_projects` endpoints, and as `managed:<project_id>` when
         creating sessions.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         name = payload.get("name", "").strip()
         if not name:
@@ -2490,6 +4173,7 @@ class VirtualProject_(Resource):
     @ns.response(200, "Project record.", vproject_model)
     @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
     @kit.auth_error()
+    @guard.requires("projects.read")
     def get(self, project_id: str) -> tuple[dict, int]:
         """Get a managed project
 
@@ -2498,9 +4182,6 @@ class VirtualProject_(Resource):
         timestamps. Only managed project ids are accepted here; configured
         projects are listed via GET /api/projects.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         proj = project_store.get_project(project_id)
         if proj is None:
             return {"message": f"Project '{project_id}' not found"}, 404
@@ -2519,6 +4200,7 @@ class VirtualProject_(Resource):
     @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
     @kit.auth_error()
     @ns.expect(project_patch_model)
+    @guard.requires("projects.write")
     def patch(self, project_id: str) -> tuple[dict, int]:
         """Update a managed project
 
@@ -2526,9 +4208,6 @@ class VirtualProject_(Resource):
         left unchanged. The path and worktree linkage of a project cannot be
         changed after creation.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         name = payload.get("name")
         description = payload.get("description")
@@ -2550,15 +4229,13 @@ class VirtualProject_(Resource):
     @api.response(204, "Project deleted (empty body).")
     @kit.errors(404, shape="message", descriptions={404: "No managed project with that id exists."})
     @kit.auth_error()
+    @guard.requires("projects.admin")
     def delete(self, project_id: str) -> tuple[dict, int]:
         """Delete a managed project
 
         Removes the managed project record. Returns 204 with an empty body on
         success.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         proj = project_store.get_project(project_id)
         if proj is None:
             return {"message": f"Project '{project_id}' not found"}, 404
@@ -2760,6 +4437,7 @@ class VirtualProjectBranches(Resource):
         },
     )
     @kit.auth_error()
+    @guard.requires("projects.read")
     def get(self, project_id: str) -> tuple[dict, int]:
         """List branches
 
@@ -2770,9 +4448,6 @@ class VirtualProjectBranches(Resource):
         missing or not a git repository the call still returns 200 with
         `git_repo` false and a `reason`.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         target, err = _resolve_repo_or_404(project_id)
         if err:
             return err
@@ -2888,6 +4563,7 @@ class VirtualProjectWorktrees(Resource):
         },
     )
     @kit.auth_error()
+    @guard.requires("projects.read")
     def get(self, project_id: str) -> tuple[dict, int]:
         """List worktrees
 
@@ -2897,9 +4573,6 @@ class VirtualProjectWorktrees(Resource):
         entry includes a `clean` flag indicating it has no uncommitted
         changes.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         target, err = _resolve_repo_or_404(project_id)
         if err:
             return err
@@ -2936,6 +4609,7 @@ class VirtualProjectWorktrees(Resource):
     )
     @kit.auth_error()
     @ns.expect(worktree_create_model)
+    @guard.requires("projects.write")
     def post(self, project_id: str) -> tuple[dict, int]:
         """Create a worktree
 
@@ -2946,9 +4620,6 @@ class VirtualProjectWorktrees(Resource):
         stable parent. Worktree lifecycle is system owned: a clean worktree is
         removed automatically when its session ends.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         branch = str(payload.get("branch", "")).strip()
         # Optional ``base`` — when provided, the backend creates a fresh
@@ -3025,6 +4696,7 @@ class VirtualProjectWorktree(Resource):
         },
     )
     @kit.auth_error()
+    @guard.requires("projects.admin")
     def delete(self, project_id: str, worktree_id: str) -> tuple[dict, int]:
         """Remove a worktree
 
@@ -3034,9 +4706,6 @@ class VirtualProjectWorktree(Resource):
         409 unless `force=true`. Worktrees created outside this API must be
         removed with git directly.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         force = _parse_bool(request.args.get("force"))
         wt = project_store.get_project(worktree_id)
         if wt is None or not wt.is_worktree:
@@ -3075,24 +4744,22 @@ class Sessions(Resource):
         },
         description=(
             "List one summary per session — status, title, timestamps, and an "
-            "`origin` (`user`, `wiki`, `search`, or `channel`) describing what "
-            "created it. Archived sessions are hidden unless "
-            "`include_archived=true`."
+            "`origin` describing what created it (the `SessionSummary` model "
+            "carries the full set of values). Archived sessions are hidden "
+            "unless `include_archived=true`."
         ),
     )
     @ns.response(200, "Session summaries.", sessions_list_model)
     @kit.auth_error()
+    @guard.requires("sessions.read_all")
     def get(self) -> tuple[dict, int]:
         """List sessions
 
         Returns one summary per session with status, title, timestamps, and an
-        `origin` field (`user`, `wiki`, `search`, or `channel`) describing
-        what created it. Archived sessions are hidden unless
+        `origin` field describing what created it (the `SessionSummary` model
+        carries the full set of values). Archived sessions are hidden unless
         `include_archived=true`.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         include_archived = _parse_bool(request.args.get("include_archived"))
         sessions = runtime.list_sessions(include_archived=include_archived)
         return {"sessions": sessions}, 200
@@ -3123,6 +4790,7 @@ class Sessions(Resource):
     )
     @kit.auth_error()
     @ns.expect(session_create_model)
+    @guard.requires("sessions.create")
     def post(self) -> tuple[dict, int]:
         """Create a session
 
@@ -3132,9 +4800,6 @@ class Sessions(Resource):
         `X-Mewbo-Capabilities` header (comma separated). Run queries against
         the session with POST /api/sessions/{session_id}/query.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         session_id = runtime.session_store.create_session()
         notification_service.emit_session_created(session_id)
@@ -3158,7 +4823,7 @@ class Sessions(Resource):
             ]
             if client_capabilities:
                 context_payload["client_capabilities"] = client_capabilities
-        # External cwd (Grove / workspace managers): explicit cwd wins.
+        # External cwd (external workspace managers): explicit cwd wins.
         ext_policy = ExternalCwdPolicy(get_config())
         ext_cwd, ext_err = ext_policy.resolve(payload)
         if ext_err is not None:
@@ -3181,8 +4846,17 @@ class Sessions(Resource):
                 _populate_worktree_context(project_name, context_payload)
         if "model" not in context_payload:
             context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
-        if context_payload:
-            runtime.append_context_event(session_id, context_payload)
+        # Bind the session's PURPOSE at creation — the one moment the creating
+        # surface's intent is unambiguous. Every later turn through any surface
+        # reads this instead of re-deriving from whoever happens to be calling.
+        # Persisted as a full context event (typed mirror + the loose keys every
+        # existing reader still consumes), so nothing downstream changes shape.
+        spec = SessionSpec.from_context(
+            context_payload,
+            origin=_spec_origin(session_id, context_payload),
+            surface=surface or None,
+        )
+        runtime.append_context_event(session_id, spec.to_context_payload() | context_payload)
         return {"session_id": session_id}, 200
 
 
@@ -3209,6 +4883,9 @@ class SessionQuery(Resource):
         session_query_accepted_model,
     )
     @ns.response(200, "Slash command handled inline (`/status`).", session_status_model)
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(
         400,
         shape="message",
@@ -3223,6 +4900,7 @@ class SessionQuery(Resource):
     )
     @kit.auth_error()
     @ns.expect(session_query_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Run a session query
 
@@ -3232,9 +4910,6 @@ class SessionQuery(Resource):
         starting a run. A session executes one run at a time, so a second
         call while one is active returns 409.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         request_data = request.get_json(silent=True) or {}
         user_query = request_data.get("query")
         if not user_query:
@@ -3244,58 +4919,128 @@ class SessionQuery(Resource):
         if command_response is not None:
             return command_response
 
+        # A terminated session rejects new runs. Slash commands above stay
+        # allowed: /status is a read; the /terminate COMMAND is a run-cancel
+        # (not this endpoint's permanent kill) and no-ops when nothing runs —
+        # same verb, different permanence. 410 Gone below.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
+
         if runtime.is_running(session_id):
             return {"message": "Session is already running."}, 409
 
-        context_payload = _build_context_payload(request_data)
+        # Refuse before the run is persisted, not after it dies: a worker still
+        # resolving its provider credentials must answer "retry" rather than
+        # accept a turn it cannot serve.
+        not_ready = _run_readiness.check()
+        if not_ready is not None:
+            return not_ready
+
+        request_context = _build_context_payload(request_data)
         # Capability header — same parsing as Sessions.post() for per-query declarations.
+        # Falls back to the body's `context.client_capabilities` when no header is
+        # sent, mirroring Sessions.post()'s header-wins-else-body precedence: this
+        # is the interactive turn's OWN advertisement (run_capabilities is
+        # turn-scoped, never persisted to the spec), not a spec override, so a
+        # body-only "ask_user" declaration on /query must still reach it.
         capabilities_header = request.headers.get("X-Mewbo-Capabilities", "")
+        requested_capabilities: Sequence[str] | None = None
         if capabilities_header:
-            client_capabilities = [
-                c.strip() for c in capabilities_header.split(",") if c.strip()
-            ]
-            if client_capabilities:
-                context_payload["client_capabilities"] = client_capabilities
+            parsed = [c.strip() for c in capabilities_header.split(",") if c.strip()]
+            if parsed:
+                requested_capabilities = parsed
+        if requested_capabilities is None:
+            requested_capabilities = SessionSpec.normalize_ids(
+                request_context.get("client_capabilities")
+            )
         source_platform = _request_surface()
 
-        # External cwd (Grove / workspace managers): explicit cwd wins.
+        # External cwd (external workspace managers): explicit cwd wins.
         ext_policy = ExternalCwdPolicy(get_config())
         ext_cwd, ext_err = ext_policy.resolve(request_data)
         if ext_err is not None:
             return ext_err
-        if ext_cwd is not None:
-            context_payload["cwd"] = ext_cwd
 
-        # Use model from context if provided, else config default
-        if "model" not in context_payload:
-            context_payload["model"] = get_config_value("llm", "default_model", default="unknown")
+        # Resolve project → cwd BEFORE the merge, so an explicitly-named project
+        # arrives as a resolved path the spec can bind. A request that names NO
+        # project resolves to None here and INHERITS the session's cwd below —
+        # this is the seam where a follow-up used to silently fall back to an empty
+        # per-session temp dir, which is the reported "temporary project with no
+        # awareness of previous state".
+        requested_cwd = ext_cwd
+        if requested_cwd is None:
+            try:
+                requested_cwd = _resolve_project_cwd(request_data)
+            except ValueError as exc:
+                return {"message": str(exc)}, 400
+
+        mode = _parse_mode(request_data.get("mode"))
+        # Skill activation: resolve from top-level "skill" field or context.skill.
+        skill_instructions = _resolve_skill_instructions(request_data, user_query, request_context)
+
+        # THE re-derivation fix. Every other re-engage path (`/message`,
+        # `/recover`, the trigger wake) already reads the session's persisted
+        # binding; this one re-derived model/tools/scope/cwd from the request
+        # alone, defaulted whatever the request omitted, and then PERSISTED those
+        # defaults — corrupting the binding every later turn reads. Load the spec
+        # first and apply only the overrides it sanctions: absence inherits.
+        spec = _session_specs.load(session_id)
+        overrides = SessionSpecOverrides.from_request_context(
+            request_context,
+            cwd=requested_cwd,
+            mode=mode,
+            skill_instructions=skill_instructions,
+        )
+        run_spec, refused = spec.merge_request_overrides(overrides)
+        if refused:
+            logging.info(
+                "Session {} is purpose-bound; ignoring request override(s) {} on /query",
+                session_id,
+                ", ".join(refused),
+            )
+        run_capabilities = run_spec.run_capabilities(requested_capabilities)
+
+        # The persisted payload the tool-grant + scope resolution reads. Built from
+        # the MERGED spec rather than the raw request so device tools and the
+        # ask-user gate see the session's real binding, not a partial declaration.
+        context_payload = run_spec.to_context_payload(capabilities=run_capabilities)
+        # Non-binding request keys (attachments, device_tools, structured
+        # workspace, …) still ride the context event as they always have. The
+        # spec-owned keys are SKIPPED rather than merely defaulted: re-adding a raw
+        # request value for a field the merge just refused would hand the override
+        # straight back through the side door.
+        for key, value in request_context.items():
+            if key in SessionSpec.SPEC_OWNED_CONTEXT_KEYS:
+                continue
+            context_payload.setdefault(key, value)
 
         # Validate BEFORE persisting: a malformed `device_tools` declaration
         # must 400 without poisoning the session's context event, or
         # `/message` re-engage and `/recover` (which read the LAST-PERSISTED
         # context) would inherit the same malformed declaration and 400
-        # forever — a bricked session (Gitea #179 whole-branch review, F6).
+        # forever — a bricked session (whole-branch review, F6).
         try:
             allowed_tools, extra_session_tools = _derive_tool_grants(session_id, context_payload)
         except ValueError as exc:
             return {"message": str(exc)}, 400
 
+        # Resolve the caller's role into an authoritative run scope BEFORE the
+        # context is persisted, so the intersected grants + provenance subject
+        # are what land on the session's context event.
+        scope = _run_scope(
+            allowed_tools=allowed_tools,
+            client_capabilities=_persisted_client_capabilities(context_payload),
+            strict_tool_scope=run_spec.strict_tool_scope,
+        )
+        _stamp_principal_subject(context_payload)
+
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
 
-        mode = _parse_mode(request_data.get("mode"))
-
-        # Skill activation: resolve from top-level "skill" field or context.skill.
-        skill_instructions = _resolve_skill_instructions(request_data, user_query, context_payload)
-
-        # Resolve project → cwd: explicit external cwd wins, then project, then temp dir.
-        if ext_cwd is not None:
-            project_cwd = ext_cwd
-        else:
-            try:
-                project_cwd = _resolve_project_cwd(request_data) or session_temp_dir(session_id)
-            except ValueError as exc:
-                return {"message": str(exc)}, 400
+        # A session with no cwd of its own still falls back to its temp dir — but
+        # only when neither the request nor the binding named one.
+        project_cwd = run_spec.cwd or session_temp_dir(session_id)
 
         # Inline @<ref> context expansion — files/dirs/@diff/URLs resolved
         # against the session cwd, pre-LLM. File/dir refs are scoped to the
@@ -3306,22 +5051,24 @@ class SessionQuery(Resource):
             attachments=_session_attachment_map(session_id),
         )
 
-        # Extract model for orchestration (may differ from config default)
-        model_name = str(context_payload.get("model", "")) or None
-        fallback_models = _extract_fallback_models(context_payload)
-
-        budget = int(get_config_value("agent", "session_step_budget", default=0))
+        budget = run_spec.session_step_budget or int(
+            get_config_value("agent", "session_step_budget", default=0)
+        )
         max_iters = int(get_config_value("agent", "max_iters", default=30))
         started = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
-            model_name=model_name,
-            fallback_models=fallback_models,
-            approval_callback=auto_approve,
+            model_name=run_spec.model
+            or get_config_value("llm", "default_model", default="unknown"),
+            fallback_models=run_spec.fallback_models,
+            approval_callback=scope.approval_callback,
+            permission_policy=scope.permission_policy,
             hook_manager=_hook_manager,
-            mode=mode,
-            allowed_tools=allowed_tools,
-            skill_instructions=skill_instructions,
+            mode=run_spec.mode,
+            allowed_tools=scope.allowed_tools,
+            strict_tool_scope=scope.strict_tool_scope,
+            capability_mode=scope.capability_mode,
+            skill_instructions=run_spec.skill_instructions,
             cwd=project_cwd,
             max_iters=max_iters,
             session_step_budget=budget,
@@ -3370,6 +5117,7 @@ class SessionEvents(Resource):
     @ns.response(200, "Events plus authoritative session status.", session_events_model)
     @kit.errors(404, descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Poll session events
 
@@ -3379,17 +5127,14 @@ class SessionEvents(Resource):
         always computed from the full transcript. Prefer the stream endpoint
         when you want push delivery.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
-        # Unknown id must 404, not synthesize a phantom idle (#64): without this
+        # Unknown id must 404, not synthesize a phantom idle: without this
         # guard ``load_events`` returns [] and ``summarize_session`` fabricates a
         # placeholder ``{status:"idle", title:"Session <id>"}`` → a false 200.
         if not _session_exists(session_id):
             return _session_not_found(session_id)
         after_ts = request.args.get("after")
         events = runtime.load_events(session_id, after_ts)
-        # Opt-in payload cap (#42): the console renders full ``result`` by design,
+        # Opt-in payload cap: the console renders full ``result`` by design,
         # so only a caller (the MCP) that asks via ?truncate=1 gets the smaller
         # transcript — default behaviour is byte-identical.
         if request.args.get("truncate") in ("1", "true"):
@@ -3401,16 +5146,37 @@ class SessionEvents(Resource):
         # title; reuse it rather than recompute. ``after_ts`` only narrows the
         # returned event window, never the status — so summarize the full log.
         summary = runtime.summarize_session(session_id)
+        # Reuse ``summary["running"]`` — the SAME ``is_running`` call
+        # ``summarize_session`` already made to derive ``status`` — instead of
+        # a second independent call here. Two calls can straddle a run
+        # starting/stopping and disagree; one call keeps the tuple atomic.
+        # ``done_reason`` also carries the LAST completion event in the
+        # transcript, which is the previous turn's once a new one is running —
+        # suppress it so a live turn never reports a stale prior reason.
+        running = summary["running"]
         return {
             "session_id": session_id,
             "events": events,
-            "running": runtime.is_running(session_id),
+            "running": running,
             "status": summary["status"],
-            "done_reason": summary["done_reason"],
+            "done_reason": "" if running else summary["done_reason"],
             "title": summary["title"],
             # F2: lets a polling consumer (console/CLI) show a Continue/Restart
             # affordance without re-deriving recoverability from the timeline.
             "recoverable": summary["recoverable"],
+            # Append-when-present: an untroubled session's summary carries none
+            # of these, so its /events shape stays byte-identical. This is the
+            # ONLY thing gating the MCP overview tier's failure_reason/models_tried.
+            **{
+                k: summary[k]
+                for k in ("blocked_code", "failure_reason", "models_tried")
+                if k in summary
+            },
+            # Forward the permanent-termination signal so downstream
+            # projections (the MCP facade, console) can surface a killed session
+            # without re-reading the transcript for the terminal marker.
+            "terminated": summary["terminated"],
+            "terminated_at": summary["terminated_at"],
         }, 200
 
     @api.doc(
@@ -3428,6 +5194,7 @@ class SessionEvents(Resource):
     @ns.expect(session_events_ingest_request_model)
     @ns.response(202, "Events appended.", session_events_ingest_model)
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Ingest mirrored session events
 
@@ -3436,9 +5203,6 @@ class SessionEvents(Resource):
         (the CLI) can mirror its transcript here. Local JSONL stays authoritative
         on the client; this endpoint only stores what it is handed.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         records = payload.get("records")
         if records is None and isinstance(payload.get("record"), dict):
@@ -3456,9 +5220,112 @@ class SessionEvents(Resource):
         return {"session_id": session_id, "appended": len(clean)}, 202
 
 
+@ns.route("/sessions/<string:session_id>/timeline")
+class SessionTimeline(Resource):
+    """Return the session's transcript already assembled into conversation turns."""
+
+    @api.doc(
+        security="apikey",
+        params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return the session's transcript assembled into conversation rows — "
+            "turn boundaries, plans, checklists, questions, triggers, recoveries "
+            "and run failures, in transcript order. Prefer this over deriving "
+            "turns from the raw event log: the assembly rules live in one place, "
+            "so every client renders the same conversation. Turn bodies are NOT "
+            "inlined; fetch the raw events endpoint when you need them."
+        ),
+    )
+    @ns.response(200, "The assembled conversation.", session_timeline_model)
+    @kit.errors(404, descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
+    @guard.requires("sessions.read")
+    def get(self, session_id: str) -> tuple[dict, int]:
+        """Get the assembled timeline
+
+        Returns the session's transcript already reconstructed into turns and
+        markers. A terminated session is still fully readable — termination
+        ends a session's run, it does not withdraw its transcript.
+        """
+        # Same guard as the events route: an unknown id must 404 rather than
+        # render an empty-but-successful conversation.
+        if not _session_exists(session_id):
+            return _session_not_found(session_id)
+        transcript = TranscriptTimeline.build(runtime.load_events(session_id))
+        summary = runtime.summarize_session(session_id)
+        # A turn's events are its whole slice of the transcript, so inlining
+        # them here would repeat the entire event log once per turn. Clients
+        # that need bodies read the events endpoint, which already caps
+        # oversized free-text fields.
+        return {
+            "session_id": session_id,
+            "entries": [
+                entry.model_dump(exclude={"turn": {"events"}}, exclude_none=True)
+                for entry in transcript.entries
+            ],
+            "open_turn": (
+                transcript.open_turn.model_dump(exclude={"events"}, exclude_none=True)
+                if transcript.open_turn
+                else None
+            ),
+            "running": summary["running"],
+            "status": summary["status"],
+            "terminated": summary["terminated"],
+        }, 200
+
+
+@ns.route("/sessions/<string:session_id>/spec")
+class SessionSpecView(Resource):
+    """Return the session's durable purpose binding plus what may be changed."""
+
+    @api.doc(
+        security="apikey",
+        params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Return the session's binding — the purpose it was created for, and the "
+            "model, fallback ladder, tool ceiling, capabilities and working directory "
+            "it runs under — together with a server-declared `editable` map naming "
+            "which of those a request may override. Hydrate a composer from this "
+            "rather than from client-global defaults: re-deriving the context per "
+            "turn is what lets a follow-up arrive on a different model with an "
+            "unrelated tool set. `editable` is authoritative and fail-closed; a "
+            "field it reports false for is refused server-side, so a client should "
+            "render it read-only rather than offer an edit that will be ignored."
+        ),
+    )
+    @ns.response(200, "The session's binding and its editable map.", session_spec_model)
+    @kit.errors(404, descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
+    @guard.requires("sessions.read")
+    def get(self, session_id: str) -> tuple[dict, int]:
+        """Get the session binding
+
+        Returns what this session is bound to run as, and which of those fields a
+        request may legitimately override. A session created before bindings were
+        recorded reports one reconstructed from its persisted context, flagged by
+        `source` so a client can tell a durable binding from a reconstruction.
+        """
+        if not _session_exists(session_id):
+            return _session_not_found(session_id)
+        events = runtime.session_store.load_transcript(session_id)
+        bound = any(
+            isinstance(event.get("payload"), dict)
+            and SPEC_CONTEXT_KEY in event["payload"]
+            for event in events
+            if event.get("type") == "context"
+        )
+        spec = _session_specs.load(session_id)
+        return {
+            "session_id": session_id,
+            "spec": spec.projection(),
+            "editable": spec.editable_fields(),
+            "source": "spec" if bound else "legacy_context",
+        }, 200
+
+
 @ns.route("/sessions/<string:session_id>/stream")
 class SessionStream(Resource):
-    r"""Stream session events via Server-Sent Events (push-based, #46).
+    r"""Stream session events via Server-Sent Events (push-based).
 
     Subscribes to the in-process ``SessionEventBus`` so an appended event wakes
     the stream immediately — no 0.5s poll and no per-event full-transcript
@@ -3575,7 +5442,13 @@ class SessionStream(Resource):
         when the run finishes. Because EventSource cannot set headers, the API
         key may be passed as the `api_key` query parameter instead.
         """
-        auth_error = _require_api_key()
+        # NOT migrated to ``@guard.requires`` deliberately. This route hand-builds
+        # its refusal as a ``Response`` with ``json.dumps``, which emits no trailing
+        # newline; the decorator returns the dict form that flask-restx serializes
+        # WITH one. Every other route already sends the newline, so adopting the
+        # decorator here is a one-byte wire change on a body an SSE client parses.
+        # Migrate it together with a deliberate decision to normalize that byte.
+        auth_error = _require_api_key() or _require_permission("sessions.read")()
         if auth_error:
             return Response(
                 json.dumps(auth_error[0]),
@@ -3618,10 +5491,14 @@ class SessionMessage(Resource):
         "Idle session re-engaged; body carries the new `run_id`.",
         session_message_enqueued_model,
     )
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(400, shape="message", descriptions={400: "The `text` field is missing or empty."})
     @kit.errors(409, shape="message", descriptions={409: "The session could not be re-engaged."})
     @kit.auth_error()
     @ns.expect(session_message_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Send a session message
 
@@ -3631,13 +5508,14 @@ class SessionMessage(Resource):
         query and the call returns 200 with the new `run_id`. Run ids have the
         form `<session_id>:r<seq>`. Only a terminated session rejects.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         text = payload.get("text")
         if not text or not isinstance(text, str):
             return {"message": "'text' is required"}, 400
+        # A terminated session rejects both steering and re-engagement.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         if runtime.enqueue_message(session_id, text):
             return {"session_id": session_id, "enqueued": True}, 202
         # No active run → re-engage: start a fresh run with this message,
@@ -3649,20 +5527,37 @@ class SessionMessage(Resource):
         # Resolve cwd from session context (honours persisted external cwd) or
         # fall back to the per-session temp dir for sessions without a project.
         session_cwd = _resolve_session_cwd(session_id) or session_temp_dir(session_id)
-        budget = int(get_config_value("agent", "session_step_budget", default=0))
+        budget = _extract_session_step_budget(last_context)
         max_iters = int(get_config_value("agent", "max_iters", default=30))
         # Tolerant: re-engagement reads PERSISTED context it can't 400 on
         # behalf of — a poisoned prior write self-heals (drops device tools,
-        # keeps going) instead of bricking the session (#179 review, F6).
+        # keeps going) instead of bricking the session (review, F6).
         allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, last_context)
+        # RBAC applies to whoever drives this re-engage: resolve the CURRENT
+        # caller's role, carrying the session's persisted tool scope as the
+        # requested grants.
+        scope = _run_scope(
+            allowed_tools=allowed_tools,
+            client_capabilities=_persisted_client_capabilities(last_context),
+            strict_tool_scope=_extract_strict_tool_scope(last_context),
+        )
         run_id = runtime.start_async(
             session_id=session_id,
             user_query=text,
             model_name=model_name,
-            approval_callback=auto_approve,
+            approval_callback=scope.approval_callback,
+            permission_policy=scope.permission_policy,
             hook_manager=_hook_manager,
             mode=_parse_mode(last_context.get("mode")),
-            allowed_tools=allowed_tools,
+            allowed_tools=scope.allowed_tools,
+            # Re-apply persisted scope instead of silently
+            # widening back to the unscoped default on re-engage — e.g. a
+            # wiki-qa session's ``strict_tool_scope``/playbook survive a
+            # follow-up driven through this generic endpoint too, not just
+            # through ``WikiQaSession.follow_up``.
+            strict_tool_scope=scope.strict_tool_scope,
+            capability_mode=scope.capability_mode,
+            skill_instructions=_extract_skill_instructions(last_context),
             cwd=session_cwd,
             max_iters=max_iters,
             session_step_budget=budget,
@@ -3693,7 +5588,11 @@ class SessionInterrupt(Resource):
         "Session was idle; nothing to interrupt (`interrupted: false`).",
         session_interrupt_model,
     )
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Interrupt a session
 
@@ -3701,9 +5600,10 @@ class SessionInterrupt(Resource):
         Interrupting an idle session is an idempotent no-op that returns 200
         with `interrupted` false, so the call is always safe to make.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # Terminated sessions reject interrupt too, for a consistent contract.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         ok = runtime.interrupt_step(session_id)
         if not ok:
             return {"session_id": session_id, "interrupted": False}, 200
@@ -3724,7 +5624,7 @@ def _parse_device_tool_result_body(body: dict[str, object]) -> dict[str, object]
     — ``{"status":"error","error":{}}`` is a valid-looking body a client could
     send, and letting it through would depend entirely on
     ``client_tools._error_envelope``'s blank-field defaulting to make the
-    failure visible to the loop (#179 review, F3). Reject early instead of
+    failure visible to the loop (review, F3). Reject early instead of
     trusting a second layer to compensate.
     """
     status = body.get("status")
@@ -3787,6 +5687,7 @@ class SessionDeviceToolResult(Resource):
     )
     @kit.auth_error()
     @ns.expect(device_tool_result_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str, call_id: str) -> tuple[dict, int]:
         """Deliver a device-tool result
 
@@ -3796,9 +5697,13 @@ class SessionDeviceToolResult(Resource):
         identity — see the route description). A result may be delivered
         exactly once.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # Delivering a device-tool result advances a live run (it resolves the
+        # tool call the agent is blocked on), so it is a mutating entry point and
+        # a permanently terminated session must reject it with 410 like the other
+        # run-advancing routes.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         body = request.get_json(silent=True) or {}
         payload = _parse_device_tool_result_body(body)
         if payload is None:
@@ -3814,11 +5719,97 @@ class SessionDeviceToolResult(Resource):
         return {"message": "A result was already delivered for this call."}, 409
 
 
+@ns.route("/sessions/<string:session_id>/questions/<string:call_id>/answer")
+class SessionQuestionAnswer(Resource):
+    """Deliver a human answer for a pending ask-user question group."""
+
+    @api.doc(
+        security="apikey",
+        params={
+            "session_id": "Session id returned by POST /api/sessions.",
+            "call_id": "The `call_id` from the `user_question` event being answered.",
+        },
+        description=(
+            "Answer a pending `user_question` event (emitted while the agent "
+            "blocks on its `ask_user_question` tool call — see the `ask_user` "
+            "entry in `X-Mewbo-Capabilities`). The caller presents the "
+            "single-use `call_token` carried on that event, proving "
+            "session-stream read access and preventing replay (same threat "
+            "model as device tools — not proof of WHICH surface answered; "
+            "the `X-Mewbo-Surface` header is recorded as `answered_via` on "
+            "the resulting `user_question_answered` event). One item per "
+            "question, `selected_indexes` XOR `text`; free text is always "
+            "accepted. First answer wins: a later POST returns 409 while the "
+            "run is still reading it, then 404."
+        ),
+    )
+    @ns.response(200, "Answer delivered; the blocked tool call resolves.", question_answered_model)
+    @kit.errors(
+        400,
+        403,
+        404,
+        409,
+        422,
+        shape="message",
+        descriptions={
+            400: "The request body is malformed.",
+            403: "`call_token` does not match the pending question.",
+            404: "No pending question with that `call_id` (unknown, superseded, or already read).",
+            409: "An answer was already delivered for this question.",
+            422: "Answers do not fit the questions (count, bounds, or arity).",
+        },
+    )
+    @kit.auth_error()
+    @ns.expect(question_answer_model)
+    @guard.requires("sessions.interact")
+    def post(self, session_id: str, call_id: str) -> tuple[dict, int]:
+        """Answer a pending user question
+
+        Delivers the human's answers for a pending `user_question` event;
+        the blocked `ask_user_question` tool call resolves with them. One
+        answer item per question (`selected_indexes` XOR `text`).
+        """
+        # Answering advances a live run (it resolves the tool call the agent
+        # is blocked on) — a permanently terminated session rejects with 410
+        # like every other run-advancing route.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
+        body = request.get_json(silent=True) or {}
+        call_token = body.get("call_token")
+        raw_answers = body.get("answers")
+        if (
+            not isinstance(call_token, str)
+            or not call_token
+            or not isinstance(raw_answers, list)
+            or not raw_answers
+            or set(body) - {"call_token", "answers"}
+        ):
+            return {"message": "Invalid question answer body."}, 400
+        try:
+            items = [QuestionAnswerItem.model_validate(entry) for entry in raw_answers]
+        except ValidationError as exc:
+            return {"message": f"Invalid answer item: {exc}"}, 400
+        answered_via = request.headers.get("X-Mewbo-Surface", "api")
+        outcome, detail = get_pending_questions().resolve(
+            session_id, call_id, call_token, items, answered_via=answered_via
+        )
+        if outcome == "ok":
+            return {"resolved": True}, 200
+        if outcome == "not_found":
+            return {"message": detail}, 404
+        if outcome == "bad_token":
+            return {"message": detail}, 403
+        if outcome == "invalid":
+            return {"message": detail}, 422
+        return {"message": detail}, 409
+
+
 def _try_wiki_indexing_resume(session_id: str, action: str) -> dict | None:
     """Dispatch to the wiki checkpoint resume when *session_id* is an indexing job.
 
     A wiki **indexing** session's "Continue" must route to the checkpoint
-    :class:`WikiResume` (Gitea #54, Part B) — re-cloning at the recorded commit
+    :class:`WikiResume` (Part B) — re-cloning at the recorded commit
     and skipping already-done phases — not the generic resolve_recovery_query
     path. This keeps clients agnostic: one endpoint handles every origin.
 
@@ -3903,6 +5894,9 @@ class SessionRecovery(Resource):
         "Recovery run started; body carries `run_id` (or `job_id` for wiki jobs).",
         session_recover_response_model,
     )
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(
         400,
         shape="message",
@@ -3913,6 +5907,7 @@ class SessionRecovery(Resource):
     )
     @kit.auth_error()
     @ns.expect(session_recover_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Recover a session
 
@@ -3923,9 +5918,10 @@ class SessionRecovery(Resource):
         checkpoint instead and return a `job_id` to monitor rather than a
         `run_id`.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # A terminated session cannot be recovered — it is a hard dead-end.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         body = request.get_json(silent=True) or {}
         action = body.get("action")
         if action not in ("retry", "continue"):
@@ -3936,7 +5932,7 @@ class SessionRecovery(Resource):
         if runtime.is_running(session_id):
             return {"message": "Session is already running."}, 409
 
-        # Origin-aware dispatch (Gitea #54, Part F4): a wiki INDEXING session's
+        # Origin-aware dispatch (Part F4): a wiki INDEXING session's
         # recovery must route to the checkpoint ``WikiResume`` (re-clone at the
         # recorded commit + skip done phases), not the generic stitch. Server-
         # side so clients stay agnostic — one endpoint handles every origin. A
@@ -3961,10 +5957,12 @@ class SessionRecovery(Resource):
         # Reuse the same dispatch shape as SessionQuery.post so recovered
         # runs inherit the session's context and settings.
         last_context = _load_last_context(session_id)
+        # Read the binding BEFORE the appends below rewrite the transcript tail.
+        spec = _session_specs.load(session_id)
         mode = _parse_mode(last_context.get("mode"))
         # Tolerant: recovery reads PERSISTED context it can't 400 on behalf
         # of — a poisoned prior write self-heals (drops device tools, keeps
-        # going) instead of bricking the session (#179 review, F6).
+        # going) instead of bricking the session (review, F6).
         allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, last_context)
         try:
             project_cwd = _resolve_project_cwd({"context": last_context})
@@ -3972,23 +5970,48 @@ class SessionRecovery(Resource):
             return {"message": str(exc)}, 400
         model_name = model_override or str(last_context.get("model", "")) or None
         if model_override:
-            runtime.append_context_event(session_id, {"model": model_override})
+            # Choosing a model is a sanctioned override, so it updates the BINDING.
+            # Persisting it as a model-only context event (the prior behaviour) made
+            # that event the newest one, and every reader that takes the newest
+            # payload verbatim then saw a session with no tool ceiling, no playbook
+            # and no cwd. Re-validate rather than model_copy: the latter skips field
+            # validators, so a blank/garbage model_override would land un-normalized
+            # instead of collapsing to "no override" like every other entry path.
+            spec = SessionSpec.model_validate({**spec.model_dump(), "model": model_override})
+            _session_specs.save(
+                session_id, spec, capabilities=_persisted_client_capabilities(last_context)
+            )
         # Re-inject capability-gating context (client_capabilities /
         # structured_workspace) so a recovered wiki/QA/structured session keeps
         # its capability — the orchestrator reads the MOST-RECENT context event,
         # and the model-override append above (or the recovery audit) would
-        # otherwise leave a gating-less event as the latest one (Gitea #54, F1).
+        # otherwise leave a gating-less event as the latest one (F1).
         runtime.reinject_recovery_context(session_id)
-        budget = int(get_config_value("agent", "session_step_budget", default=0))
+        budget = _extract_session_step_budget(last_context)
         max_iters = int(get_config_value("agent", "max_iters", default=30))
+        scope = _run_scope(
+            allowed_tools=allowed_tools,
+            client_capabilities=_persisted_client_capabilities(last_context),
+            strict_tool_scope=_extract_strict_tool_scope(last_context),
+        )
         run_id = runtime.start_async(
             session_id=session_id,
             user_query=user_query,
             model_name=model_name,
-            approval_callback=auto_approve,
+            # Recovery used to pass no ladder at all, so a recovered run inherited
+            # the empty config policy — as defenceless as the run that just died.
+            # The persisted ladder is part of the binding, and a run being
+            # recovered is exactly when its auto-heal chain matters most.
+            fallback_models=spec.fallback_models,
+            approval_callback=scope.approval_callback,
+            permission_policy=scope.permission_policy,
             hook_manager=_hook_manager,
             mode=mode,
-            allowed_tools=allowed_tools,
+            allowed_tools=scope.allowed_tools,
+            # Re-apply persisted scope — see SessionMessage.post.
+            strict_tool_scope=scope.strict_tool_scope,
+            capability_mode=scope.capability_mode,
+            skill_instructions=_extract_skill_instructions(last_context),
             cwd=project_cwd,
             max_iters=max_iters,
             session_step_budget=budget,
@@ -4023,6 +6046,9 @@ class SessionFork(Resource):
     @ns.response(
         201, "Fork created; body carries the new `session_id`.", session_fork_response_model
     )
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(
         400,
         shape="message",
@@ -4033,6 +6059,7 @@ class SessionFork(Resource):
     )
     @kit.auth_error()
     @ns.expect(session_fork_model)
+    @guard.requires("sessions.create")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Fork a session
 
@@ -4041,9 +6068,10 @@ class SessionFork(Resource):
         The fork records its provenance and can apply a new tag or model. A
         running session cannot be forked.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # No new work may derive from a terminated session, forks included.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         if runtime.is_running(session_id):
             return {"message": "Cannot fork a running session."}, 409
         body = request.get_json(silent=True) or {}
@@ -4109,6 +6137,9 @@ class SessionPlanApprove(Resource):
         ),
     )
     @ns.response(200, "Decision recorded.", plan_decision_model)
+    @ns.response(
+        410, "Session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(400, shape="message", descriptions={400: "`approved` must be a boolean."})
     @kit.errors(
         404,
@@ -4122,6 +6153,7 @@ class SessionPlanApprove(Resource):
     )
     @kit.auth_error()
     @ns.expect(plan_approve_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Approve or reject a plan
 
@@ -4130,9 +6162,12 @@ class SessionPlanApprove(Resource):
         leaves the session dormant so the user can send refinement guidance
         via the query endpoint. Returns 404 when no proposal is pending.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # Approving a plan starts an act-mode run, so a terminated session must
+        # reject it too — otherwise a pending proposal is a hole in the "no
+        # further invocations" guarantee.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         payload = request.get_json(silent=True) or {}
         approved = payload.get("approved")
         if not isinstance(approved, bool):
@@ -4145,7 +6180,10 @@ class SessionPlanApprove(Resource):
                         "No pending plan proposal for this session, or a run is already active."
                     ),
                 }, 404
-            # Start a new run in act mode with a synthetic continuation
+            # Start a new run in act mode with a synthetic continuation. The
+            # approver's role still governs the run: "full toolset" means the
+            # full set the caller is entitled to, not an escape from the ceiling.
+            scope = _run_scope(allowed_tools=None)
             started = runtime.start_async(
                 session_id=session_id,
                 user_query=(
@@ -4153,7 +6191,9 @@ class SessionPlanApprove(Resource):
                     "implementation using the full toolset. The approved "
                     "plan is in the conversation history."
                 ),
-                approval_callback=auto_approve,
+                approval_callback=scope.approval_callback,
+                permission_policy=scope.permission_policy,
+                capability_mode=scope.capability_mode,
                 hook_manager=_hook_manager,
                 mode="act",
                 source_platform=_request_surface(),
@@ -4202,6 +6242,7 @@ class SessionPlanFile(Resource):
         },
     )
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int] | Response:
         """Fetch the session plan
 
@@ -4209,9 +6250,6 @@ class SessionPlanFile(Resource):
         file exists only after a plan-mode run has written one; otherwise the
         call returns 404.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         path = plan_file_for(session_id)
         # Path-traversal defence: ensure the resolved path stays under the
         # shared plan root even if ``session_id`` contains ``..`` or ``/``.
@@ -4256,6 +6294,7 @@ class SessionAgents(Resource):
     )
     @ns.response(200, "Agent tree and token rollups.", agents_tree_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get the agent tree
 
@@ -4265,9 +6304,6 @@ class SessionAgents(Resource):
         `total_input_tokens_billed` (cumulative billed input). Use it to
         render a live agent tree alongside the event stream.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         events = runtime.load_events(session_id)
         total_steps = sum(1 for e in events if e.get("type") == "tool_result")
         agents = [
@@ -4278,7 +6314,7 @@ class SessionAgents(Resource):
                 "model": e.get("payload", {}).get("model"),
                 "action": e.get("payload", {}).get("action"),
                 # Cap the free-text ``detail`` so the agent tree can't regrow the
-                # transcript bloat #42 caps on the events route.
+                # transcript bloat the payload cap on the events route already fixed.
                 "detail": _cap_freetext(e.get("payload", {}).get("detail")),
                 "status": e.get("payload", {}).get("status"),
                 "steps_completed": e.get("payload", {}).get("steps_completed", 0),
@@ -4331,15 +6367,13 @@ class SessionUsage(Resource):
     )
     @ns.response(200, "Token usage breakdown.", usage_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get token usage
 
         Returns token usage split between the root agent and sub-agents,
         including peak and billed input figures and compaction statistics.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.token_budget import build_usage_numbers
 
         events = runtime.load_events(session_id)
@@ -4373,15 +6407,13 @@ class SessionArchive(Resource):
     @ns.response(200, "Session archived.", session_archive_model)
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Archive a session
 
         Hides the session from the default session list. Archiving is fully
         reversible with DELETE on the same path.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         runtime.session_store.archive_session(session_id)
@@ -4395,18 +6427,52 @@ class SessionArchive(Resource):
     @ns.response(200, "Session unarchived.", session_archive_model)
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def delete(self, session_id: str) -> tuple[dict, int]:
         """Unarchive a session
 
         Restores an archived session to the default session list.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         runtime.session_store.unarchive_session(session_id)
         return {"session_id": session_id, "archived": False}, 200
+
+
+@ns.route("/sessions/<string:session_id>/terminate")
+class SessionTerminate(Resource):
+    """Permanently terminate a session (irreversible)."""
+
+    @api.doc(
+        security="apikey",
+        params={"session_id": "Session id returned by POST /api/sessions."},
+        description=(
+            "Permanently terminate the session. Cancels any active run, fires "
+            "cascade-cancel callbacks, and appends a `session_terminated` event. "
+            "This is a one-way door: there is no un-terminate, and every "
+            "subsequent mutating call (query, message, interrupt, recover, fork) "
+            "returns 410. Reads (events, stream, history) keep working — "
+            "terminated is not deleted. The call is idempotent: repeating it "
+            "returns 200 with the original `terminated_at` and "
+            "`cancelled_triggers: 0`."
+        ),
+    )
+    @ns.response(200, "Session terminated (idempotent).", session_terminate_model)
+    @kit.errors(404, descriptions={404: "No session with that id exists."})
+    @kit.auth_error()
+    @guard.requires("sessions.terminate")
+    def post(self, session_id: str) -> tuple[dict, int]:
+        """Terminate a session
+
+        Permanently terminates the session: cancels any active run, runs
+        cascade-cancel callbacks, and records a `session_terminated` event.
+        Irreversible — every subsequent mutating call returns 410 while reads
+        keep working. Idempotent: a repeat call returns the original
+        `terminated_at` and does not re-fire the side effects.
+        """
+        if not _session_exists(session_id):
+            return _session_not_found(session_id)
+        return runtime.terminate_session(session_id), 200
 
 
 @ns.route("/sessions/<string:session_id>/title")
@@ -4427,15 +6493,13 @@ class SessionTitle(Resource):
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
     @ns.expect(title_patch_model)
+    @guard.requires("sessions.interact")
     def patch(self, session_id: str) -> tuple[dict, int]:
         """Rename a session
 
         Saves a user-provided display title for the session. Titles are
         trimmed and capped at 120 characters.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         payload = request.get_json(silent=True) or {}
@@ -4461,6 +6525,7 @@ class SessionTitle(Resource):
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.errors(422, shape="message", descriptions={422: "No usable title could be generated."})
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Generate a session title
 
@@ -4468,9 +6533,6 @@ class SessionTitle(Resource):
         saves it, and appends a `title_update` event to the session. Returns
         422 when no usable title could be generated.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         import asyncio
@@ -4523,6 +6585,7 @@ class SessionAttachments(Resource):
     )
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Upload attachments
 
@@ -4533,9 +6596,6 @@ class SessionAttachments(Resource):
         when the `model` hint names a model without vision support. Reference
         the returned descriptors in the `attachments` field of a query.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         files = request.files.getlist("files")
@@ -4639,15 +6699,13 @@ class SessionShare(Resource):
     @ns.response(200, "Share record with the new token.", share_record_model)
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Create a share link
 
         Mints a share token for the session. Anyone holding the token can
         read the transcript via GET /api/share/{token} without an API key.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         record = share_store.create(session_id)
@@ -4669,15 +6727,13 @@ class SessionExport(Resource):
     @ns.response(200, "Transcript and summary.", session_export_model)
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Export a session
 
         Returns the full event transcript and the stored summary in one
         payload, suitable for download or offline analysis.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
         return {
@@ -4764,6 +6820,7 @@ class FileCatalogView(Resource):
         descriptions={404: "A `session` was supplied but no session with that id exists."},
     )
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self) -> tuple[dict, int]:
         """List referenceable files
 
@@ -4773,10 +6830,6 @@ class FileCatalogView(Resource):
         composer). Falls back to a bounded filesystem walk for non-git
         projects.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
-
         project = request.args.get("project")
         session_id = request.args.get("session")
         cwd: str | None = None
@@ -4837,6 +6890,7 @@ class SessionGitDiff(Resource):
     )
     @kit.errors(404, shape="message", descriptions={404: "No session with that id exists."})
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Get the session diff
 
@@ -4845,9 +6899,6 @@ class SessionGitDiff(Resource):
         call still returns 200 with `git_repo` false and a `reason` instead of
         an error.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         if session_id not in runtime.session_store.list_sessions():
             return {"message": "Session not found."}, 404
 
@@ -4920,6 +6971,7 @@ class ShareLookup(Resource):
     )
     @ns.response(200, "Shared transcript and summary.", share_lookup_model)
     @kit.errors(404, shape="message", descriptions={404: "No share token matches."})
+    @guard.public("share links carry an unguessable token as their proof; no principal is involved")
     def get(self, token: str) -> tuple[dict, int]:
         """Resolve a share link
 
@@ -4955,6 +7007,7 @@ class CommandRegistry(Resource):
     )
     @ns.response(200, "Command registry.", commands_list_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self) -> tuple[dict, int]:
         """List commands
 
@@ -4962,9 +7015,6 @@ class CommandRegistry(Resource):
         name, arguments, and render kind, so clients can build command
         palettes without hardcoding the list.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.commands import list_commands
 
         return {"commands": list_commands()}, 200
@@ -4997,6 +7047,7 @@ class SessionCommand(Resource):
     @ns.response(500, "Command handler failed.", command_error_model)
     @kit.auth_error()
     @ns.expect(session_command_model)
+    @guard.requires("sessions.interact")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Run a command
 
@@ -5007,9 +7058,15 @@ class SessionCommand(Resource):
         return their result in the response body with 200. Discover available
         commands via GET /api/commands.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
+        # A permanently terminated session rejects EVERY server-side command,
+        # mirroring the mutating query/message/fork routes. This closes a
+        # fork-resurrection hole: the ``fork`` command dispatches into
+        # ``mewbo_core.commands`` which copies the transcript store-directly,
+        # bypassing the ``resolve_session`` kill-switch seam — and ``compact``
+        # would mutate a frozen transcript. Guard here so neither reaches core.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
 
         import asyncio
 
@@ -5146,7 +7203,19 @@ class SessionCommand(Resource):
 
 @ns.route("/notifications")
 class Notifications(Resource):
-    """List notifications."""
+    """List notifications.
+
+    Listing gates on ``sessions.read``; dismiss and clear gate on
+    ``sessions.interact``, the write verb every other session-mutating route in
+    this module already uses. No ``notifications.*`` pair is minted for them —
+    the existing verb covers the shape, and a new id would add catalog surface
+    for nothing.
+
+    The split matters because the store is NOT per-caller: ``dismiss`` and
+    ``clear`` take no subject, so they mutate the one process-wide collection
+    every principal reads. ``clear_all`` therefore destroys other people's
+    notifications, which is not something a read-only role should be able to do.
+    """
 
     @api.doc(
         security="apikey",
@@ -5165,6 +7234,7 @@ class Notifications(Resource):
     )
     @ns.response(200, "Notification list.", notifications_list_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self) -> tuple[dict, int]:
         """List notifications
 
@@ -5172,9 +7242,6 @@ class Notifications(Resource):
         completed, or failed. Dismissed entries are hidden unless
         `include_dismissed=true`.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         include_dismissed = _parse_bool(request.args.get("include_dismissed"))
         return {
             "notifications": notification_store.list(include_dismissed=include_dismissed),
@@ -5195,15 +7262,13 @@ class NotificationDismiss(Resource):
     @ns.response(200, "Number of notifications dismissed.", notification_dismiss_response_model)
     @kit.auth_error()
     @ns.expect(notification_dismiss_model)
+    @guard.requires("sessions.interact")
     def post(self) -> tuple[dict, int]:
         """Dismiss notifications
 
         Marks the given notification ids as dismissed. Accepts either an
         `ids` array or a single `id`. Returns the number dismissed.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         ids: list[str] = []
         ids_payload = payload.get("ids")
@@ -5229,15 +7294,13 @@ class NotificationClear(Resource):
     @ns.response(200, "Number of notifications cleared.", notification_clear_response_model)
     @kit.auth_error()
     @ns.expect(notification_clear_model)
+    @guard.requires("sessions.interact")
     def post(self) -> tuple[dict, int]:
         """Clear notifications
 
         Deletes dismissed notifications, or every notification when
         `clear_all` is true. Returns the number cleared.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         payload = request.get_json(silent=True) or {}
         clear_all = payload.get("clear_all")
         if isinstance(clear_all, str):
@@ -5249,7 +7312,7 @@ class NotificationClear(Resource):
 
 
 # Display label for a capability-gated plugin's product-tool group in
-# GET /api/tools (Gitea #182). Keyed by `PluginManifest.name` (which today
+# GET /api/tools. Keyed by `PluginManifest.name` (which today
 # equals the capability it declares for both shipped product plugins); a
 # future capability-gated plugin not in this map falls back to a titlecased
 # rendering of its manifest name rather than needing this list touched.
@@ -5282,6 +7345,7 @@ class Tools(Resource):
     )
     @ns.response(200, "Tool list.", tools_list_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self) -> tuple[dict, int]:
         """List tools
 
@@ -5291,9 +7355,6 @@ class Tools(Resource):
         inside that project. Use the `tool_id` values in a session's
         `mcp_tools` allowlist to scope what a run may call.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         project_name = request.args.get("project")
         project_cwd = None
         if project_name:
@@ -5343,7 +7404,7 @@ class Tools(Resource):
 
         # Product/internal tools (wiki_*, scg_*, agentic_search) live in a
         # capability-gated SessionToolRegistry, not the MCP/core ToolRegistry
-        # above — they never appeared here before Gitea #182. `fan_out` (already
+        # above — they never appeared here before. `fan_out` (already
         # fetched for its MCP servers) also carries every plugin's manifest +
         # raw session_tool_entries, so no new discovery machinery is needed:
         # a capability-gated plugin (non-empty `requires_capabilities`) becomes
@@ -5406,6 +7467,7 @@ class Skills(Resource):
     )
     @ns.response(200, "Skill list.", skills_list_model)
     @kit.auth_error()
+    @guard.requires("sessions.read")
     def get(self) -> tuple[dict, int]:
         """List skills
 
@@ -5413,9 +7475,6 @@ class Skills(Resource):
         plugins, with their descriptions, tool allowlists, and invocation
         flags. Activate a skill for a run via the `skill` field of a query.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.skills import SkillRegistry
 
         project_name = request.args.get("project")
@@ -5472,6 +7531,9 @@ class MewboQuery(Resource):
         ),
     )
     @ns.response(200, "Completed run with the executed action steps.", task_queue_model)
+    @ns.response(
+        410, "A targeted session is permanently terminated.", session_terminated_error_model
+    )
     @kit.errors(
         400,
         shape="message",
@@ -5479,6 +7541,7 @@ class MewboQuery(Resource):
     )
     @kit.auth_error()
     @ns.expect(sync_query_model)
+    @guard.requires("sessions.create")
     def post(self) -> tuple[dict, int]:
         """Run a synchronous query
 
@@ -5489,33 +7552,48 @@ class MewboQuery(Resource):
         session is created automatically unless `session_id`, `session_tag`,
         or `fork_from` selects an existing one.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         request_data = request.get_json(silent=True) or {}
         user_query = request_data.get("query")
         if not user_query:
             return {"message": "Invalid input: 'query' is required"}, 400
         mode = _parse_mode(request_data.get("mode"))
         existing_sessions = set(runtime.session_store.list_sessions())
-        session_id = runtime.resolve_session(
-            session_id=request_data.get("session_id"),
-            session_tag=request_data.get("session_tag"),
-            fork_from=request_data.get("fork_from"),
-        )
+        try:
+            session_id = runtime.resolve_session(
+                session_id=request_data.get("session_id"),
+                session_tag=request_data.get("session_tag"),
+                fork_from=request_data.get("fork_from"),
+            )
+        except SessionTerminatedError:
+            # A terminated fork_from SOURCE rejects at the core seam — the
+            # kill switch also covers fork-resurrection.
+            return _terminated_response()
         if session_id not in existing_sessions:
             notification_service.emit_session_created(session_id)
+        # This sync path bypasses start_async entirely, so it needs its own
+        # terminated guard: a resolved (existing) terminated session rejects
+        # with 410 before any run. A freshly created/forked session is
+        # never terminated, so this only bites session_id/session_tag targets.
+        terminated = _terminated_guard(session_id)
+        if terminated is not None:
+            return terminated
         context_payload = _build_context_payload(request_data)
 
         # Validate BEFORE persisting: a malformed `device_tools` declaration
         # must 400 without poisoning the session's context event, or
         # `/message` re-engage and `/recover` (which read the LAST-PERSISTED
         # context) would inherit the same malformed declaration and 400
-        # forever — a bricked session (Gitea #179 whole-branch review, F6).
+        # forever — a bricked session (whole-branch review, F6).
         try:
             allowed_tools, extra_session_tools = _derive_tool_grants(session_id, context_payload)
         except ValueError as exc:
             return {"message": str(exc)}, 400
+
+        scope = _run_scope(
+            allowed_tools=allowed_tools,
+            client_capabilities=_persisted_client_capabilities(context_payload),
+        )
+        _stamp_principal_subject(context_payload)
 
         if context_payload:
             runtime.append_context_event(session_id, context_payload)
@@ -5537,9 +7615,12 @@ class MewboQuery(Resource):
         task_queue: TaskQueue = runtime.run_sync(
             user_query=user_query,
             session_id=session_id,
-            approval_callback=auto_approve,
+            approval_callback=scope.approval_callback,
+            permission_policy=scope.permission_policy,
             mode=mode,
-            allowed_tools=allowed_tools,
+            allowed_tools=scope.allowed_tools,
+            strict_tool_scope=scope.strict_tool_scope,
+            capability_mode=scope.capability_mode,
             cwd=project_cwd,
             source_platform=_request_surface(),
             extra_session_tools=extra_session_tools,
@@ -5577,6 +7658,7 @@ class ConfigSchemaResource(Resource):
     )
     @api.response(200, "Configuration JSON Schema.")
     @kit.auth_error()
+    @guard.requires("config.read")
     def get(self) -> tuple[dict, int]:
         """Get the configuration schema
 
@@ -5584,9 +7666,6 @@ class ConfigSchemaResource(Resource):
         Protected fields are stripped entirely and secret fields are marked
         `writeOnly`, so the schema can drive a settings UI directly.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         return ConfigSchemaView.from_model().public_schema(), 200
 
 
@@ -5605,6 +7684,7 @@ class ConfigResource(Resource):
     )
     @ns.response(200, "Configuration values and secret status map.", config_response_model)
     @kit.auth_error()
+    @guard.requires("config.read")
     def get(self) -> tuple[dict, int]:
         """Get configuration
 
@@ -5612,9 +7692,6 @@ class ConfigResource(Resource):
         stripped, plus a `secrets` map reporting which secret fields are set
         (true or false) without revealing their values.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         view = ConfigSchemaView.from_model()
         data = get_config().model_dump()
         secrets = view.secret_status(data)
@@ -5642,6 +7719,7 @@ class ConfigResource(Resource):
     )
     @kit.auth_error()
     @ns.expect(config_patch_model)
+    @guard.requires("config.write")
     def patch(self) -> tuple[dict, int]:
         """Update configuration
 
@@ -5650,9 +7728,6 @@ class ConfigResource(Resource):
         rejected with 403. A merge that fails validation returns 422 with the
         validation errors and changes nothing.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         patch = request.get_json(silent=True) or {}
         if not patch:
             return {"message": "Empty payload"}, 400
@@ -5691,6 +7766,7 @@ class PluginList(Resource):
     )
     @ns.response(200, "Installed plugin list.", plugins_list_model)
     @kit.auth_error()
+    @guard.requires("plugins.read")
     def get(self) -> tuple[dict, int]:
         """List installed plugins
 
@@ -5698,9 +7774,6 @@ class PluginList(Resource):
         scope, and component counts: skills, agents, commands, MCP servers,
         and hooks.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.config import get_config
         from mewbo_core.plugins import discover_installed_plugins
 
@@ -5739,15 +7812,13 @@ class PluginMarketplace(Resource):
     )
     @ns.response(200, "Available plugin list.", marketplace_plugins_model)
     @kit.auth_error()
+    @guard.requires("plugins.read")
     def get(self) -> tuple[dict, int]:
         """List marketplace plugins
 
         Returns the plugins available for installation from the configured
         marketplaces. Install one with POST on this same path.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.config import get_config
         from mewbo_core.plugins import discover_marketplace_plugins
 
@@ -5770,6 +7841,7 @@ class PluginMarketplace(Resource):
     @ns.response(500, "Installation failed.", plugin_error_model)
     @kit.auth_error()
     @ns.expect(plugin_install_model)
+    @guard.requires("plugins.admin")
     def post(self) -> tuple[dict, int]:
         """Install a plugin
 
@@ -5777,9 +7849,6 @@ class PluginMarketplace(Resource):
         commands, agents, and MCP servers become available to sessions started
         after installation.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         data = request.get_json(silent=True) or {}
         name = data.get("name")
         marketplace = data.get("marketplace")
@@ -5820,15 +7889,13 @@ class PluginDetail(Resource):
     @ns.response(200, "Plugin uninstalled.", plugin_uninstall_model)
     @ns.response(404, "Plugin not found.", plugin_error_model)
     @kit.auth_error()
+    @guard.requires("plugins.admin")
     def delete(self, plugin_name: str) -> tuple[dict, int]:
         """Uninstall a plugin
 
         Removes an installed plugin and its components from the install
         directory.
         """
-        auth_error = _require_api_key()
-        if auth_error:
-            return auth_error
         from mewbo_core.config import get_config
         from mewbo_core.plugins import uninstall_plugin
 
@@ -5838,9 +7905,76 @@ class PluginDetail(Resource):
         return {"error": "Plugin not found"}, 404
 
 
+# Route permission coverage, checked at BOOT — the last statement that runs
+# after every route module has imported and registered.
+#
+# Strict: an unbound route is a boot failure, not a warning. A route that
+# reaches the URL map without declaring what it requires is indistinguishable
+# from one whose author forgot, and the whole point of declaring access above
+# the handler is that "forgot" cannot be silent. Refusing to start is the only
+# reading of that anyone acts on — a logged warning on a server that came up
+# fine is a warning nobody sees.
+#
+# The single exemption is stated rather than hidden: an exempted route still
+# appears in the report as unbound, so the coverage number keeps telling the
+# truth and the reason travels with it.
+_SCIM_BEARER_GATED = (
+    "authenticated by the SCIM bearer secret in the blueprint's before_request "
+    "gate, not by a permission: the caller is an identity provider, which holds "
+    "no Mewbo principal to carry roles"
+)
+
+guard_registry.guard.audit(
+    app,
+    strict=True,
+    allow_unbound={
+        "mewbo_api.backend.SessionStream.get": (
+            "hand-builds its 401 via json.dumps under the byte-identical law"
+        ),
+        # The SCIM surface mounts only when auth AND scim are enabled, so it is
+        # invisible to an audit taken with auth off — which is exactly how it
+        # stayed unbound until this check ran in a boot with auth on. Listed one
+        # handler at a time on purpose: a blanket prefix exemption would also
+        # swallow a route someone adds to this blueprint later.
+        #
+        # The keys name the CLOSURES `_build_blueprint()` binds, not the
+        # controller methods they delegate to — the closure is what Flask holds
+        # in `view_functions`, so it is what the audit sees.
+        **{
+            f"mewbo_api.scim.routes._build_blueprint.<locals>.{handler}": _SCIM_BEARER_GATED
+            for handler in (
+                "service_provider_config",
+                "list_users",
+                "create_user",
+                "get_user",
+                "replace_user",
+                "patch_user",
+                "delete_user",
+                "list_groups",
+                "create_group",
+                "get_group",
+                "replace_group",
+                "patch_group",
+                "delete_group",
+            )
+        },
+    },
+)
+
+
 def main() -> None:
-    """Run the Mewbo API server."""
-    app.run(debug=True, host="0.0.0.0", port=5124)
+    """Run the Mewbo API server (local-dev runner only).
+
+    Production serves ``mewbo_api.backend:app`` under gunicorn, which imports the
+    WSGI app directly and never calls this — so ``app.run`` is a developer
+    convenience reachable via the ``mewbo-api`` console script, not a deployment
+    path.
+    """
+    # debug defaults OFF: the Werkzeug reloader/debugger is an interactive
+    # code-execution surface that must never run unless a developer explicitly
+    # opts in for a local session. Opt in with MEWBO_API_DEBUG=1.
+    debug = os.environ.get("MEWBO_API_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    app.run(debug=debug, host="0.0.0.0", port=5124)
 
 
 if __name__ == "__main__":

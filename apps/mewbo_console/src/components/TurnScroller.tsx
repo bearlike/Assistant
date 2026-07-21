@@ -128,7 +128,21 @@ export function TurnScroller({ scrollRef, timeline }: TurnScrollerProps) {
   return (
     <div
       ref={railRef}
-      className="fixed left-2 top-1/2 -translate-y-1/2 z-10 select-none"
+      // `absolute` within `.conv-scroll` (ConversationTimeline's outer div —
+      // `position: relative; overflow: hidden`), NOT `fixed` to the viewport.
+      // A viewport-fixed rail centered via `top-1/2` has no notion of the
+      // SessionHeader above or the composer below, so a long enough turn
+      // list bled past both — and past the inset content card's rounded
+      // top/bottom edges, which sit 8px in from the viewport, not 0.
+      // Anchoring here instead means the rail centers on the conversation
+      // PANE's own box (already exactly "below header, above composer"),
+      // and `.conv-scroll`'s `overflow-hidden` hard-clips it at those
+      // bounds for pathologically long sessions instead of letting it
+      // escape the layout. It also lands at the correct horizontal offset
+      // at every rail width for free — `.conv-scroll` already sits to the
+      // right of the NavRail in normal flow, so no `--rail-w` compensation
+      // is needed here (contrast `QADock`, which really is viewport-fixed).
+      className="absolute left-2 top-1/2 -translate-y-1/2 z-10 select-none"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
       aria-label="Turn navigator"

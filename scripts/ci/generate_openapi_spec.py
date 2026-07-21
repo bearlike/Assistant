@@ -175,6 +175,7 @@ RETAG_RULES: list[tuple[str, str]] = [
     ("/v1/draft", "Draft Streaming"),
     ("/v1/wiki", "Wiki Ingestion"),
     ("/api/automation", "Automation"),
+    ("/api/triggers", "Triggers"),
 ]
 
 # Sidebar groups (rendered by Scalar via the x-tagGroups vendor extension).
@@ -192,7 +193,7 @@ TAG_GROUPS: list[tuple[str, list[str]]] = [
         "Platform",
         ["Models", "Tools & Skills", "Plugins", "Notifications", "Configuration", "API Keys"],
     ),
-    ("Automation", ["Automation"]),
+    ("Automation", ["Automation", "Triggers"]),
 ]
 
 TAG_DESCRIPTIONS: dict[str, str] = {
@@ -256,6 +257,13 @@ TAG_DESCRIPTIONS: dict[str, str] = {
     "Automation": (
         "CI and VCS automation. Lets a pipeline hand issues and pull "
         "requests to Mewbo agents (see the CI Agent Pickup guide)."
+    ),
+    "Triggers": (
+        "Reverse invocation. A trigger is a durable contract that wakes a "
+        "session later, when a CI run finishes, a pull request moves, a "
+        "schedule fires, or a webhook arrives, so an agent never has to sit in "
+        "a polling loop. Arm, list, pause, resume, and cancel them here; "
+        "agents arm their own from inside a session."
     ),
 }
 

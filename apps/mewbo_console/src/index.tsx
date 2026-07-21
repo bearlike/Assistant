@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { App } from "./App";
+import { AuthGate } from "./components/auth/AuthGate";
 import { UpdatePrompt } from "./components/UpdatePrompt";
 
 const queryClient = new QueryClient({
@@ -20,7 +21,9 @@ const container = document.getElementById("root");
 if (container) {
   createRoot(container).render(
     <QueryClientProvider client={queryClient}>
-      <App />
+      <AuthGate>
+        <App />
+      </AuthGate>
       <UpdatePrompt />
       {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>

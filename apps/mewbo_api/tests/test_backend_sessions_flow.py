@@ -277,6 +277,26 @@ class TestSessionList:
         assert resp.status_code == 200
         assert resp.get_json()["recoverable"] is True
 
+    def test_events_running_suppresses_stale_done_reason(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A live new turn must report ``running: True`` with an EMPTY
+        ``done_reason`` — not the previous turn's, which is otherwise still
+        sitting in the transcript's last ``completion`` event."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "q1"}})
+        backend.session_store.append_event(
+            sid, {"type": "completion", "payload": {"done": True, "done_reason": "canceled"}}
+        )
+        monkeypatch.setattr(backend.runtime, "is_running", lambda sid: True)
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["running"] is True
+        assert body["status"] == "running"
+        assert body["done_reason"] == ""
+
     def test_list_hides_archived_by_default(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()
@@ -576,7 +596,7 @@ class TestSessionEvents:
         assert len(body2["events"]) == 0
 
     def test_events_unknown_session_404(self, client, auth_headers, tmp_path, monkeypatch):
-        """#64: an unknown id must 404 — never synthesize a phantom idle 200."""
+        """an unknown id must 404 — never synthesize a phantom idle 200."""
         _reset_backend(tmp_path, monkeypatch)
         resp = client.get("/api/sessions/does-not-exist/events", headers=auth_headers)
         assert resp.status_code == 404
@@ -589,7 +609,7 @@ class TestSessionEvents:
     def test_events_known_empty_session_returns_200(
         self, client, auth_headers, tmp_path, monkeypatch
     ):
-        """#64: the guard distinguishes 'exists-but-empty' from 'unknown' —
+        """the guard distinguishes 'exists-but-empty' from 'unknown' —
         a real session with no events still polls 200 (with the placeholder)."""
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()  # exists, zero events
@@ -604,7 +624,7 @@ class TestSessionEvents:
     def test_events_truncate_is_opt_in_default_preserves_full_result(
         self, client, auth_headers, tmp_path, monkeypatch
     ):
-        """#42: default GET returns the FULL result (console renders it) — no cap,
+        """default GET returns the FULL result (console renders it) — no cap,
         no _truncated flag; ?truncate=1 caps free-text fields and flags them, but
         leaves the already-capped ``summary`` untouched."""
         _reset_backend(tmp_path, monkeypatch)
@@ -641,6 +661,55 @@ class TestSessionEvents:
         assert ev2["payload"]["result_truncated"] is True
         assert ev2["payload"]["tool_input_truncated"] is True
         assert ev2["payload"]["summary"] == "short-summary"
+
+    def test_events_forwards_failure_facets_when_present(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A blocked / model-attributable failure's facets ride the /events summary."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "q"}})
+        backend.session_store.append_event(
+            sid,
+            {
+                "type": "llm_fallback",
+                "payload": {
+                    "from_model": "openai/primary",
+                    "to_model": "openai/fallback",
+                    "reason": "retries_exhausted",
+                },
+            },
+        )
+        backend.session_store.append_event(
+            sid,
+            {
+                "type": "completion",
+                "payload": {"done": True, "done_reason": "blocked", "blocked_code": "network"},
+            },
+        )
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["blocked_code"] == "network"
+        assert body["failure_reason"] == "retries_exhausted"
+        assert body["models_tried"] == ["openai/primary", "openai/fallback"]
+
+    def test_events_omits_failure_facets_when_absent(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """An untroubled session's /events shape stays byte-identical — no keys."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.append_event(sid, {"type": "user", "payload": {"text": "q"}})
+        backend.session_store.append_event(
+            sid, {"type": "completion", "payload": {"done": True, "done_reason": "completed"}}
+        )
+        resp = client.get(f"/api/sessions/{sid}/events", headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "blocked_code" not in body
+        assert "failure_reason" not in body
+        assert "models_tried" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +751,7 @@ class TestSessionMessage:
     def test_message_idle_reengages_with_new_run(
         self, client, auth_headers, tmp_path, monkeypatch
     ):
-        """Idle session: a message starts a fresh run instead of 404 (#44.5)."""
+        """Idle session: a message starts a fresh run instead of 404."""
         _reset_backend(tmp_path, monkeypatch)
         monkeypatch.setattr(backend.runtime, "enqueue_message", lambda sid, text: False)
         monkeypatch.setattr(backend.runtime, "is_running", lambda sid: False)
@@ -724,7 +793,7 @@ class TestSessionInterrupt:
         assert sid in interrupted
 
     def test_interrupt_idle_is_graceful_noop(self, client, auth_headers, tmp_path, monkeypatch):
-        """Idle session: interrupt is an idempotent no-op (200), not a 404 (#44.5)."""
+        """Idle session: interrupt is an idempotent no-op (200), not a 404."""
         _reset_backend(tmp_path, monkeypatch)
         monkeypatch.setattr(backend.runtime, "interrupt_step", lambda sid: False)
         sid = backend.session_store.create_session()
@@ -780,7 +849,7 @@ class TestSessionAgents:
 
     def test_agents_token_totals_include_root(self, client, auth_headers, tmp_path, monkeypatch):
         """Token rollup delegates to build_usage_numbers — root (depth==0)
-        tokens are counted, so a root-only session no longer reports 0 (#44.3)."""
+        tokens are counted, so a root-only session no longer reports 0."""
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()
         backend.session_store.append_event(
@@ -1205,8 +1274,10 @@ class TestSessionRecovery:
     ):
         """F5: the generic recovery path must NOT strip the auto-heal chain.
 
-        It passes ``fallback_models`` unset (None) so the resolved config policy
-        applies — never an explicit empty tuple that would disable fallback.
+        A session that never opted into a ladder recovers with ``fallback_models``
+        unset (None) so the resolved config policy applies — never an explicit
+        empty tuple, which would DISABLE fallback on the one run that most needs it.
+        The session-carries-a-ladder arm is the sibling test below.
         """
         _reset_backend(tmp_path, monkeypatch)
         sid = backend.session_store.create_session()
@@ -1232,6 +1303,82 @@ class TestSessionRecovery:
         # Not stripped to () — defers to config default (None) so auto-heal stays.
         assert captured.get("fallback_models") in (None,)
         assert captured.get("fallback_models") != ()
+
+    def test_recovery_carries_the_sessions_persisted_ladder(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Recovery runs on the session's OWN ladder, not the empty config policy.
+
+        This supersedes the older reading of the test above, which asserted that
+        ``/recover`` always passed ``fallback_models=None``. That encoded the
+        behaviour of the day, not a requirement: a recovered run inherited the
+        config policy and was therefore exactly as defenceless as the run that had
+        just died. An opted-in ladder is part of the session's binding, and the
+        moment a run is being recovered is when its auto-heal chain matters most.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend._session_specs.save(
+            sid,
+            backend.SessionSpec(model="primary", fallback_models=["rescue-a", "rescue-b"]),
+        )
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        captured = {}
+
+        def fake_start_async(**kw):
+            captured.update(kw)
+            return f"{sid}:r2"
+
+        monkeypatch.setattr(backend.runtime, "start_async", fake_start_async)
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry"},
+        )
+        assert resp.status_code == 202
+        assert captured.get("fallback_models") == ("rescue-a", "rescue-b")
+
+    def test_recovery_model_override_does_not_blank_the_binding(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A chosen recovery model updates the binding rather than replacing it.
+
+        The override used to be persisted as a model-only context event, which then
+        became the newest one — so every reader that takes the newest payload
+        verbatim saw a session with no tool ceiling, no playbook and no cwd.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend._session_specs.save(
+            sid,
+            backend.SessionSpec(
+                model="old", allowed_tools=["wiki_finalize"], skill_instructions="PLAYBOOK"
+            ),
+        )
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        monkeypatch.setattr(backend.runtime, "start_async", lambda **kw: f"{sid}:r2")
+
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry", "model": "chosen"},
+        )
+
+        assert resp.status_code == 202
+        spec = backend._session_specs.load(sid)
+        assert spec.model == "chosen"
+        assert spec.allowed_tools == ("wiki_finalize",)
+        assert spec.skill_instructions == "PLAYBOOK"
 
 
 class _FakeJob:
@@ -1835,3 +1982,50 @@ class TestSessionRecoveryModelOverride:
         assert resp.status_code == 202
         # Context event with model override should have been appended
         assert any("model" in p for p in context_appended)
+
+
+# ---------------------------------------------------------------------------
+# Agentic-search post-recovery reconciliation (on_session_end hook)
+# ---------------------------------------------------------------------------
+
+
+class TestAgenticSearchRecoveryReconcile:
+    """``backend._reconcile_agentic_search_after_recovery`` — the on_session_end
+    hook that offers a ``failed`` search run for amendment once its backing
+    session recovers and actually completes. ``SearchRun.reconcile_after_recovery``
+    itself owns every refusal rule (run not failed / not a real session / session
+    not completed); this only tests that the hook fires it for the RIGHT session
+    and stays a no-op for every other one.
+    """
+
+    def test_fires_reconcile_for_a_session_tagged_as_a_search_run(
+        self, tmp_path, monkeypatch
+    ):
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.session_store.tag_session(sid, "agentic_search:run:run-123")
+        calls = []
+        monkeypatch.setattr(
+            backend.SearchRun,
+            "reconcile_after_recovery",
+            lambda run_id, *, store, runtime: calls.append((run_id, store, runtime)),
+        )
+        backend._reconcile_agentic_search_after_recovery(sid, None)
+        assert len(calls) == 1
+        run_id, store, runtime = calls[0]
+        assert run_id == "run-123"
+        assert store is backend.agentic_search_store.get_store()
+        assert runtime is backend.runtime
+
+    def test_is_a_no_op_for_a_session_with_no_search_run_tag(self, tmp_path, monkeypatch):
+        """The overwhelming majority of session ends — never touched."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        calls = []
+        monkeypatch.setattr(
+            backend.SearchRun,
+            "reconcile_after_recovery",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        backend._reconcile_agentic_search_after_recovery(sid, "some error")  # must not raise
+        assert calls == []

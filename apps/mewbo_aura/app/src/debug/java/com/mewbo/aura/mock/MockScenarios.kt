@@ -4,6 +4,7 @@ import java.time.Instant
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -41,7 +42,7 @@ object MockScenarios {
     }
 
     /** Exercises card scroll/expand + long-generation UI without a fixed-slab-vs-shrink-wrap
-     * regression (Gitea #181 item 1) needing a real long backend reply to test against. */
+     * regression needing a real long backend reply to test against. */
     val longResponse: Scenario = run {
         val sentences = (1..14).map { i ->
             "This is scripted sentence number $i of a long mock reply, used to exercise " +
@@ -64,13 +65,81 @@ object MockScenarios {
         Scenario("error", frames)
     }
 
+    /**
+     * The ONLY scripted `tool_result` frame, and the only way to reach a promoted-tool action card
+     * (DESIGN.md §6) without a live backend. Before it existed, the alarm card was reachable solely
+     * through a real LLM turn — i.e. the one feature in the app whose on-device verification cost
+     * real tokens, in an app that keeps a mock backend precisely so it doesn't have to.
+     *
+     * `tool_input` is a JSON OBJECT, matching the real wire: the backend emits the model's arg dict
+     * verbatim (`tool_use_loop`'s single `tool_result` emission site — a client-declared device tool
+     * is a plain session tool and takes the same path, adding no envelope of its own). A stringified
+     * input here would script a shape the backend never sends, and `AlarmArgs.parse` would correctly
+     * degrade it to the generic card — testing a lie. Narration follows the tool call, as it does in
+     * a real turn; the reducer is what guarantees the card still renders ABOVE it.
+     */
+    val alarmScenario: Scenario = run {
+        var t = Instant.now()
+        val frames = mutableListOf<Pair<Long, JsonObject>>()
+        frames += 120L to toolResultFrame(
+            t = t,
+            toolId = "device_set_alarm",
+            operation = "set_alarm",
+            input = buildJsonObject {
+                put("hour", 8)
+                put("minute", 0)
+                put("message", "Wake up")
+            },
+            summary = "Handed off an 8:00 AM alarm to the clock app.",
+        ).also { t = t.plusMillis(120) }
+        val text = "Alarm set for 8:00 AM — the request was handed off to your clock app."
+        frames += 80L to deltaFrame(t, text).also { t = t.plusMillis(80) }
+        frames += ASSISTANT_DELAY_MS to assistantFrame(t, text)
+        t = t.plusMillis(ASSISTANT_DELAY_MS)
+        frames += COMPLETION_DELAY_MS to completionFrame(t)
+        Scenario("alarm", frames)
+    }
+
+    /**
+     * The ONLY scripted `widget_ready` frame - the one way to reach the stlite
+     * WebView card on-device without the model actually invoking the `widget_builder` plugin over a
+     * real LLM turn. A deliberately MINIMAL Streamlit script (no extra `requirements`, so Pyodide
+     * boots only the vendored streamlit closure - the fastest path on the SwiftShader redroid) plus a
+     * trivial `data.json`, exactly the two-file bundle the wire contract requires ([WidgetFiles]).
+     */
+    val widgetScenario: Scenario = run {
+        var t = Instant.now()
+        val frames = mutableListOf<Pair<Long, JsonObject>>()
+        val appPy = """
+            import streamlit as st
+
+            st.title("Mock widget")
+            st.write("Rendered offline via stlite - no live backend, no real tokens.")
+            st.metric(label="Widgets rendered", value=1)
+        """.trimIndent()
+        frames += 120L to widgetReadyFrame(
+            t = t,
+            appPy = appPy,
+            dataJson = """{"value": 1}""",
+            summary = "A mock Streamlit widget for on-device verification.",
+        ).also { t = t.plusMillis(120) }
+        val text = "Here's a small interactive widget."
+        frames += 80L to deltaFrame(t, text).also { t = t.plusMillis(80) }
+        frames += ASSISTANT_DELAY_MS to assistantFrame(t, text)
+        t = t.plusMillis(ASSISTANT_DELAY_MS)
+        frames += COMPLETION_DELAY_MS to completionFrame(t)
+        Scenario("widget", frames)
+    }
+
     /** Cheap, on-device-discoverable scenario selection purely from the query text - no extra UI
-     * needed to reach the long-response/error paths: type or say "trigger a long response" / "give
-     * me an error". Defaults to [happyPath] for everything else - the auto-listen overlay's normal
-     * scripted turn. */
+     * needed to reach the long-response/error/alarm/widget paths: type or say "trigger a long
+     * response" / "give me an error" / "set an alarm" / "show me a widget". Defaults to [happyPath]
+     * for everything else - the auto-listen overlay's normal scripted turn. */
     fun forQuery(text: String): Scenario = when {
         text.contains("error", ignoreCase = true) -> errorScenario
         text.contains("long", ignoreCase = true) -> longResponse
+        text.contains("alarm", ignoreCase = true) -> alarmScenario
+        text.contains("widget", ignoreCase = true) -> widgetScenario
         else -> happyPath
     }
 
@@ -108,6 +177,47 @@ object MockScenarios {
         put("ts", ts(t))
         putJsonObject("payload") { put("text", text) }
     }
+
+    /** Mirrors the backend's real `tool_result` payload field-for-field (`tool_id`, `operation`,
+     * `tool_input`, `result`, `success`, `summary`) - see [alarmScenario] for why `tool_input` must
+     * stay a JSON object rather than a string. */
+    private fun toolResultFrame(
+        t: Instant,
+        toolId: String,
+        operation: String,
+        input: JsonObject,
+        summary: String,
+    ): JsonObject = buildJsonObject {
+        put("type", "tool_result")
+        put("ts", ts(t))
+        putJsonObject("payload") {
+            put("tool_id", toolId)
+            put("operation", operation)
+            put("tool_input", input)
+            put("result", summary)
+            put("success", true)
+            put("summary", summary)
+        }
+    }
+
+    /** Mirrors the backend's real `widget_ready` payload field-for-field: `files`
+     * carries BOTH `app.py` and `data.json` ([com.mewbo.aura.data.model.WidgetFiles] requires both,
+     * so a bundle missing either decodes to `Unknown` and never reaches the card). */
+    private fun widgetReadyFrame(t: Instant, appPy: String, dataJson: String, summary: String): JsonObject =
+        buildJsonObject {
+            put("type", "widget_ready")
+            put("ts", ts(t))
+            putJsonObject("payload") {
+                put("widget_id", "mock-widget-1")
+                put("session_id", "mock")
+                putJsonObject("files") {
+                    put("app.py", appPy)
+                    put("data.json", dataJson)
+                }
+                putJsonArray("requirements") {}
+                put("summary", summary)
+            }
+        }
 
     private fun completionFrame(t: Instant, error: String? = null): JsonObject = buildJsonObject {
         put("type", "completion")

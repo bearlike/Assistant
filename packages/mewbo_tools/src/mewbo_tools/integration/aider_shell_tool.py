@@ -69,6 +69,12 @@ def _run_command(command: str, cwd: str, *, timeout: float = _DEFAULT_TIMEOUT_S)
     """
     env = {**os.environ, **_PAGER_SAFE_ENV}
     try:
+        # shell=True is the tool's entire purpose: ``command`` is the agent's own tool
+        # argument, and running an agent-authored shell command IS the documented trust
+        # boundary — there is nothing to sanitize (quoting would defeat the feature).
+        # Admission is gated upstream by tool-scope/allowed_tools; ``cwd`` is separately
+        # confined by resolve_safe_path. The command itself cannot be sandboxed — it is a
+        # shell — so the guard is on whether the agent holds this tool at all, not the string.
         proc = subprocess.Popen(
             command,
             shell=True,

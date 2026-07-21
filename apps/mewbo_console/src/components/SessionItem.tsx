@@ -4,6 +4,7 @@ import { SessionSummary } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { SessionOriginBadge } from './SessionOriginBadge';
 import { Button } from './ui/button';
+import { FOCUS_RING } from './ui/focus-ring';
 import { useRecoverSession } from '../hooks/useRecoverSession';
 import { ProjectLabel } from '../utils/projectLabel';
 import { formatSessionTime } from '../utils/time';
@@ -33,7 +34,14 @@ export function SessionItem({
   ) => {
     event.stopPropagation();
     if (recover.isPending) return;
-    recover.mutate({ sessionId: session.session_id, action });
+    // Carry the session's own model. Omitting it lets the server fall back to
+    // config policy, so a row-level recovery would run on a different model
+    // than the session it is recovering.
+    recover.mutate({
+      sessionId: session.session_id,
+      action,
+      model: session.context?.model,
+    });
   };
   const handleArchive = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -49,10 +57,14 @@ export function SessionItem({
       className="group flex items-start gap-4 py-3.5 px-3 hover:bg-[hsl(var(--accent))] cursor-pointer transition-colors">
 
       <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+        {/* The title is the row's own emphasis, so it keeps `font-medium`;
+            every metadata chip below it stays at the base weight and drops one
+            scale step. Hierarchy in this row comes from weight and colour — the
+            chips are deliberately NOT a third size. */}
         <h3 className="text-sm font-medium text-[hsl(var(--foreground))] group-hover:opacity-90 transition-colors line-clamp-2">
           {session.title}
         </h3>
-        <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+        <div className="flex items-center gap-1.5 text-xs font-normal text-[hsl(var(--muted-foreground))]">
           <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
           <SessionOriginBadge session={session} />
           {project && (
@@ -62,12 +74,17 @@ export function SessionItem({
               <span className="truncate">{project}</span>
             </>
           )}
+          {/* A branch and a workspace are NAMES you read, not machine text you
+              copy, diff or align — so they take the proportional face like the
+              rest of the row. The chip background and the medium weight carry
+              the "this is a distinct token" job that the second typeface used
+              to do. */}
           {branch && (
-            <span className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]">{branch}</span>
+            <span className="truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-2xs font-medium">{branch}</span>
           )}
           {workspace && (
             <span
-              className="font-mono truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[11px]"
+              className="truncate bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-2xs font-medium"
               title={`Workspace ${workspace}`}
             >
               {workspace}
@@ -76,7 +93,7 @@ export function SessionItem({
           {capabilities.map((cap) => (
             <span
               key={cap}
-              className="uppercase tracking-wide bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-[10px]"
+              className="uppercase tracking-wide bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded text-2xs"
               title={`Scoped to the "${cap}" capability`}
             >
               {cap}
@@ -120,7 +137,8 @@ export function SessionItem({
         <button
           onClick={handleArchive}
           aria-label={isArchived ? 'Unarchive session' : 'Archive session'}
-          className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] opacity-0 group-hover:opacity-100 transition-opacity">
+          title={isArchived ? 'Unarchive session' : 'Archive session'}
+          className={`p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 ${FOCUS_RING} transition-opacity`}>
 
             {isArchived ?
           <RotateCcw className="w-4 h-4" /> :

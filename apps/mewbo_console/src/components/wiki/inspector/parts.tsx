@@ -15,7 +15,7 @@ import rehypeHighlight from "rehype-highlight";
 
 import { cn } from "@/lib/utils";
 
-import { buildMarkdownComponents } from "../markdownComponents";
+import { buildMarkdownComponents, wikiUrlTransform } from "../markdownComponents";
 import type { AdjacentEdge, InspectorNode } from "./GraphIndex";
 import { EDGE_DOT, groupEdgesByKind, kindDot } from "./palette";
 
@@ -24,7 +24,7 @@ import { EDGE_DOT, groupEdgesByKind, kindDot } from "./palette";
 /** A small uppercase muted section label. */
 export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
+    <div className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1">
       {children}
     </div>
   );
@@ -58,7 +58,7 @@ export function LabelPills({ labels }: { labels: string[] }) {
       {labels.map((l) => (
         <span
           key={l}
-          className="px-1.5 py-px rounded-full text-[10px] bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))] font-mono"
+          className="px-1.5 py-px rounded-full text-2xs bg-[hsl(var(--muted))]/50 text-[hsl(var(--muted-foreground))]"
         >
           {l}
         </span>
@@ -85,7 +85,7 @@ export function NodeLinkRow({
   const inner = (
     <>
       <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", kindDot(kind))} />
-      <span className="font-mono truncate text-[11px]">{label || id}</span>
+      <span className="font-mono truncate text-2xs">{label || id}</span>
     </>
   );
   if (!onNavigate) {
@@ -95,7 +95,7 @@ export function NodeLinkRow({
     <button
       type="button"
       onClick={() => onNavigate(id)}
-      className="flex w-full items-center gap-1.5 truncate py-0.5 text-left hover:text-[hsl(var(--primary))]"
+      className="flex w-full items-center gap-1.5 truncate py-0.5 text-left hover:text-[hsl(var(--primary-text))]"
     >
       {inner}
     </button>
@@ -119,7 +119,7 @@ export function NodeLinkList({
 }) {
   if (nodes.length === 0) {
     return emptyHint ? (
-      <div className="text-[11px] text-[hsl(var(--muted-foreground))] italic">
+      <div className="text-2xs text-[hsl(var(--muted-foreground))] italic">
         {emptyHint}
       </div>
     ) : null;
@@ -132,7 +132,7 @@ export function NodeLinkList({
         </li>
       ))}
       {nodes.length > limit && (
-        <li className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">
+        <li className="text-2xs text-[hsl(var(--muted-foreground))] mt-0.5">
           +{nodes.length - limit} more
         </li>
       )}
@@ -167,8 +167,8 @@ export function EdgeSection({
           <div key={kind}>
             <div className="flex items-center gap-1.5 mb-0.5">
               <span className={cn("w-3 h-[2px] rounded-full", EDGE_DOT[kind])} />
-              <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))]">
-                {kind} · {items.length}
+              <span className="text-2xs text-[hsl(var(--muted-foreground))]">
+                <span className="font-medium">{kind}</span> · {items.length}
               </span>
             </div>
             <ul className="ml-4 space-y-0.5">
@@ -178,7 +178,7 @@ export function EdgeSection({
                 </li>
               ))}
               {items.length > 12 && (
-                <li className="text-[10px] text-[hsl(var(--muted-foreground))] ml-3">
+                <li className="text-2xs text-[hsl(var(--muted-foreground))] ml-3">
                   +{items.length - 12} more
                 </li>
               )}
@@ -202,7 +202,7 @@ function EdgeTargetRow({
   return (
     <div className="flex items-center gap-1.5 truncate py-0.5">
       <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[hsl(var(--graph-edge-soft))]" />
-      <span className="font-mono truncate text-[11px] text-[hsl(var(--muted-foreground))]">
+      <span className="font-mono truncate text-2xs text-[hsl(var(--muted-foreground))]">
         {edge.otherId}
       </span>
     </div>
@@ -229,10 +229,11 @@ export function DocstringMarkdown({ text }: { text: string }) {
     [],
   );
   return (
-    <div className="text-[hsl(var(--muted-foreground))] [&_p]:my-1.5 [&_p]:text-[12px] [&_p]:leading-[1.6]">
+    <div className="text-[hsl(var(--muted-foreground))] [&_p]:my-1.5 [&_p]:text-xs [&_p]:leading-[1.6]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
+        urlTransform={wikiUrlTransform}
         components={components}
       >
         {text}

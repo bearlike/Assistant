@@ -21,6 +21,7 @@ from jinja2 import Environment, PackageLoader, TemplateNotFound
 from loguru import logger as loguru_logger
 
 from mewbo_core.config import get_config_value
+from mewbo_core.secret_redaction import install_log_redaction, install_stdlib_log_bridge
 
 
 class MockSpeaker(NamedTuple):
@@ -73,6 +74,14 @@ def _configure_logging() -> None:
         logging_real.getLogger(logger_name).setLevel(logging_real.ERROR)
 
     loguru_logger.remove()
+    # Install the secret redactor as the global patcher BEFORE any sink is
+    # added, so every record is scrubbed at this one chokepoint regardless of
+    # which sinks (stderr / cli file / per-session file) are later attached.
+    install_log_redaction(loguru_logger)
+    # Route stdlib logging (litellm/langfuse/httpx/…) through loguru so those
+    # third-party records pass the SAME redactor patcher. Installed after the
+    # per-logger suppress-list above, whose ERROR levels still govern volume.
+    install_stdlib_log_bridge(loguru_logger)
     colorize = sys.stderr.isatty()
     if _should_use_cli_dark_logs():
         format_str = (
@@ -82,8 +91,12 @@ def _configure_logging() -> None:
     else:
         format_str = "{time:YYYY-MM-DD HH:mm:ss} [{extra[name]}] <level>{level}</level> {message}"
     global _STDERR_SINK_ID
+    # ``diagnose=False`` keeps loguru from annotating tracebacks with local
+    # variable values — a secret held in a local (a token, a bearer header)
+    # would otherwise be rendered into the traceback, which the record-level
+    # redactor cannot reach (it runs before the handler formats the exception).
     _STDERR_SINK_ID = loguru_logger.add(
-        sys.stderr, level=log_level, format=format_str, colorize=colorize
+        sys.stderr, level=log_level, format=format_str, colorize=colorize, diagnose=False
     )
     _LOG_CONFIGURED = True
 
@@ -116,6 +129,7 @@ def set_cli_log_file(
         colorize=False,
         mode="w" if overwrite else "a",
         enqueue=True,
+        diagnose=False,  # keep secret-bearing locals out of persisted tracebacks
     )
     if quiet_console and _STDERR_SINK_ID is not None:
         loguru_logger.remove(_STDERR_SINK_ID)
@@ -147,6 +161,7 @@ def _ensure_session_log_sink(session_id: str, log_dir: str | None = None) -> Non
         format=_session_log_format(),
         colorize=False,
         filter=lambda record: record["extra"].get("session_id") == session_id,
+        diagnose=False,  # keep secret-bearing locals out of persisted tracebacks
     )
     _SESSION_SINKS[session_id] = {"id": sink_id, "count": 1}
 
@@ -518,6 +533,9 @@ def render_jinja_prompt(name: str, **variables: object) -> str:
     # missing variable rendering blank rather than raising, which the registry's
     # ``StrictUndefined`` deliberately does not allow. Making these strict is a
     # behaviour change for a later phase, not this verbatim extraction.
+    #
+    # autoescape stays off (the default): the rendered result is LLM prompt text,
+    # never browser-facing HTML — HTML-entity-encoding it would corrupt the prompt.
     log = get_logger(name="core.common.render_jinja_prompt")
     template_env = Environment(loader=PackageLoader("mewbo_core", "prompts"))
     last_exc: TemplateNotFound | None = None

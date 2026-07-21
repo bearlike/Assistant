@@ -7,11 +7,11 @@ Scope: `apps/mewbo_api/src/mewbo_api/agentic_search/scg/` — the run/map-job
 `descriptors`, `playbooks`).
 The deterministic SCG **engine** (`types`, `store`, `providers`, `parser`,
 `router`, `entity_resolution`, `memory_bridge`) moved **down** to
-`mewbo_graph.scg` and the SessionTools to `mewbo_graph.plugins.scg` (Gitea #25);
+`mewbo_graph.scg` and the SessionTools to `mewbo_graph.plugins.scg`;
 see `packages/mewbo_graph/CLAUDE.md`. This file stays the canonical home for the
 SCG architecture decisions below — they hold wherever the code sits. The full
-spec + phased build + ~40-citation research grounding live in **Gitea #19**
-(`bearlike/Assistant#19`, "Implementation Plan v2 — lean & converged"); only the
+spec + phased build + ~40-citation research grounding live in the design doc
+("Implementation Plan v2 — lean & converged"); only the
 non-obvious decisions a future implementer must not relitigate are here.
 
 ## Architecture — graph routes, agents search, memory compounds
@@ -40,11 +40,11 @@ explicit A\* `f=g+h` frontier, multi-path self-consistency / majority-vote
 verification, process-reward heuristic, MCTS, trained PRM / value-fn, RL search.
 
 **The search-run terminal is NL** — `AnswerSynthesis`. The **structured
-graph-first** terminal (#77, LANDED) reuses `EmitStructuredResponseTool`
-semantics incl. the `should_terminate_run()` override (WikiFinalize/#58: a
+graph-first** terminal (LANDED) reuses `EmitStructuredResponseTool`
+semantics incl. the `should_terminate_run()` override (WikiFinalize: a
 terminal emit tool ends the loop itself).
 
-## #77 seams (LANDED) — binding · streaming · graph-first structured
+## Search-graph seams (LANDED) — binding · streaming · graph-first structured
 
 - **`WorkspaceGraphBinding`** (`workspace_binding.py`) = THE one seam any
   workspace-bound run crosses → {capability+quarantined-instruction context
@@ -52,7 +52,7 @@ terminal emit tool ends the loop itself).
   `ScgScope.use(sources, workspace=id)` cm}. Search runner AND structured
   graph-first consume it; never re-assemble inline.
 - **Live streaming** (`run_streamer.py:RunEventStreamer`): subscribe the backing
-  session's core `SessionEventBus` (SideStage seam) BEFORE the drive; a daemon
+  session's core `SessionEventBus` (the realtime streaming seam) BEFORE the drive; a daemon
   consumer projects `sub_agent`→`agent_*` AS published. `_settle` is RECONCILE-
   only (`reconcile_missing`, no double-emit). `ProbeTrace` = ONE projection (live
   + settle agree); the `start` brief's first line is the lane label.
@@ -66,7 +66,7 @@ terminal emit tool ends the loop itself).
   threads `SearchRun.start(source_platform=…)`→`_seed_session` (route passes
   `request_surface()`).
 
-## Probe evidence → trace response + synthesis metrics (#86)
+## Probe evidence → trace response + synthesis metrics
 
 The `sub_agent` STOP event's `detail` is only the `done_reason` ("completed") —
 the probe's real `EVIDENCE (pathway: …)` / `NO DATA …` block is `tq.task_result`,
@@ -88,7 +88,7 @@ now echoed as an additive `summary` on that event (core `spawn_agent`). So:
   evidence panel is empty (the same "mirror the real engine shape" rule as the
   `completion` payload above).
 
-## Coordinator lane + result cards + honest settle (#95)
+## Coordinator lane + result cards + honest settle
 
 A fast-tier run can legitimately spawn ZERO probes (the root inlines every
 tool call — verified live, run `run-02ad562781`), and the original projection
@@ -107,7 +107,7 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
   fires at settle, `empty = no data-bearing probe AND no results`. Slots come
   from merged first-seen order (`_assign_lane_slots`) so settle reproduces
   the live interleaving.
-- **Probe tool_results ARE on this transcript/bus (#102 — the #95
+- **Probe tool_results ARE on this transcript/bus (the prior
   "own-sessions" premise was WRONG, verified live in Mongo).** A child loop
   inherits the parent's `event_logger` (core `AgentContext.child`), and every
   `tool_result` payload carries the emitting `agent_id` — so EVERY
@@ -117,7 +117,7 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
   the lane is known in time). Unclassified, probe tool calls mislabel into
   the coordinator lane. A probe's `scg_results` projects as ITS result
   cards; its other tool calls project NOWHERE (the probe lane stays
-  lifecycle-only — the #86 evidence rides the stop summary).
+  lifecycle-only — the evidence rides the stop summary).
 - **`scg_results` = transcript-as-transport, EVERY search agent emits.** The
   tool (`mewbo_graph.plugins.scg.results`, granted via `TRAVERSAL_TOOLS` +
   bound to probes by the capability gate) validates (≤50 entries,
@@ -127,13 +127,13 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
   api). `ResultsProjection` maps entries → `SearchResult` with stable ids:
   `r-<run_id8>-<n>` (root) / `r-<run_id8>-<agent8>-<n>` (probe emit, salted
   so concurrent emitters never collide) — that id is the live↔settle dedup
-  key. Entry `confidence` rides the wire verbatim (`SearchResult.confidence`,
-  #102) AND folds into `relevance` only when `relevance` is absent. Playbook
+  key. Entry `confidence` rides the wire verbatim (`SearchResult.confidence`)
+  AND folds into `relevance` only when `relevance` is absent. Playbook
   discipline: each probe emits ONCE before its evidence block; the ROOT
   emits once, before synthesis, ONLY for hits it grounded inline (never
   re-emitting a probe's — duplicate cards have distinct ids, the playbook is
   the dedup). Emitting is NOT terminal for anyone — a probe's terminal stays
-  the stop-summary evidence block (#86).
+  the stop-summary evidence block.
 - **Metrics provenance** (`_synthesis_metrics`): `sources_count` = distinct
   grounding sources = data-bearing probe lanes (keyed by `agent_id` — the
   wire `source_id` is the shared parent grouping key, useless for
@@ -177,8 +177,8 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
     first user/llm event (the pre-turn MCP-handshake gap the "73s total" hid),
     `search_ms` = `total − setup`. The two `_ms` fields are **None when the
     bracketing event is absent — NEVER a fabricated 0** (the RunStats discipline).
-  - **`related_questions` is a PARALLEL structured call, not the agent's emit
-    (#111).** `RelatedQuestionsRunner` (`related_questions.py`) reuses the core
+  - **`related_questions` is a PARALLEL structured call, not the agent's
+    emit.** `RelatedQuestionsRunner` (`related_questions.py`) reuses the core
     no-loop `StructuredSynthesizer` (one emit + reask) to generate follow-ups from
     the query + synthesized answer. The settle worker kicks it off on a daemon
     thread BEFORE the `answer_delta*`/`answer_ready` events stream (so the answer
@@ -191,7 +191,7 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
     tests stay LLM-free (`_related_runner=None` ⇒ legacy path), upholding the
     no-real-LLM rule. The console also folds the event live (the snapshot carries
     `RunPayload.related_questions` regardless).
-  - **Per-lane `returned_count` complements `results_count` (#111).** `results_count`
+  - **Per-lane `returned_count` complements `results_count`.** `results_count`
     is the KEPT count (post cross-emitter dedup); `returned_count` is the RAW emit.
     `_build_results` returns `(results, kept, returned)`; the live streamer tracks
     `_returned_by_emitter` (credit raw BEFORE the dedup skip in `_emit_results`).
@@ -203,8 +203,8 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
   `enable_skills=False` (Lane A) via `_skills_opt_out(runtime)` — a signature
   introspection so a pre-Lane-A `run_sync` never raises — because the scg-*
   playbook is the ONLY trusted system-prompt extension.
-- **`resolve_entity` trap (open, #95-D):** it reaches search-run sessions via
-  the scg plugin manifest + #84's capability-driven `build_for`, but a search
+- **`resolve_entity` trap (open):** it reaches search-run sessions via
+  the scg plugin manifest + its capability-driven `build_for`, but a search
   RUN never satisfies `resolve_qa_ctx` (no QA answer, no
   `structured_workspace` event) → it always errors `wiki ctx not found`.
   Exclusion is NOT one-seam: the same registration serves
@@ -215,16 +215,16 @@ keyed everything off `sub_agent` events → blank trace, `results=[]`,
 ## Two correctness traps (both silent — no exception)
 
 1. **Two different `StructureProvider` protocols share a name root and nothing
-   else.** #13's `StructureProvider` (`resolve` / `resolve_many` / `entity_key_of`
+   else.** The code-graph's `StructureProvider` (`resolve` / `resolve_many` / `entity_key_of`
    / `exists`) resolves an `entity_key`↔code-node. SCG's `SourceStructureProvider`
    (`build_structure`, in `providers/base.py`) *builds* a connector subgraph from
    a raw descriptor. The memory bridge MUST hand `InsightIngestor` a
-   `ScgAnchorResolver` (which implements **#13's** protocol over `source_key`) —
+   `ScgAnchorResolver` (which implements the anchor-resolution protocol over `source_key`) —
    otherwise the default `CodeStructureProvider` can't resolve a connector
    `source_key`, the live `ANCHORS` edge is never created, and the insight is
    written but silently dropped on read (`memory_vector_search` defaults to
    `exclude_invalidated=True`).
-   **The resolver must be KIND-AGNOSTIC (#81-A).** `node_id =
+   **The resolver must be KIND-AGNOSTIC.** `node_id =
    sha1(source_key|kind)`, so `ScgAnchorResolver.resolve` probes `_ANCHORABLE_KINDS
    = (capability, entity_type)` — an MCP-tool-list source mints `capability` nodes
    (no entity layer), so the old hard-coded `make_id(source_key, "entity_type")`
@@ -263,21 +263,21 @@ registered (needs an injected LLM).
   `reset_for_tests`). `node_id = sha1(source_key|kind)[:16]`, overwritten on
   validate (content-addressed, stable across re-maps); `parse_source` does a
   clean `delete_source` first so re-indexing replaces, never accumulates.
-- **Learned layer** reuses **#13's `InsightIngestor`** with `corpus="connector"`,
+- **Learned layer** reuses **the code-graph's `InsightIngestor`** with `corpus="connector"`,
   anchored by `source_key` (the shared memory substrate on `runtime.wiki_store`).
   ZERO re-implementation of atomic-note / anchor / dedup machinery.
-- **Manifest hash + drift re-map (#81-C).** `parse_source` stamps
+- **Manifest hash + drift re-map.** `parse_source` stamps
   `mewbo_graph.scg.manifest.ManifestHash.of_descriptor_raw` (order-independent,
   schema-aware sha over sorted tool names+props+required) onto
   `SourceDescriptor.schema_version`. `WorkspaceSourceSync._drifted` recomputes it
   from the LIVE tool list on workspace save and re-maps already-mapped enabled
   sources whose surface drifted (idempotent, in-flight-guarded, no new tick).
-- **Map-time enrich (#81-B).** The mapper playbook mints initial memory notes from
+- **Map-time enrich.** The mapper playbook mints initial memory notes from
   the connector's own tool descriptions + the workspace `instructions`/`desc`,
   which ride `SourceMapInput.nl_context` → `_render_user_query` as an UNTRUSTED
   user-turn block (NEVER `skill_instructions`); anchored to capability `source_key`s.
 
-## Workspace scope is a VIEW, never a store partition (#75 — do NOT re-litigate)
+## Workspace scope is a VIEW, never a store partition (do NOT re-litigate)
 
 A workspace does **not** get its own copy of the SCG. `docs/features-search.md`
 is binding: the SCG is one tenant of the shared multiplex graph and the
@@ -373,7 +373,7 @@ writes its own *relocated* store, which is already down in `mewbo_graph`.)
   `{"tools": [{name, description?, inputSchema?}]}` is exactly what
   `McpToolListStructureProvider` parses.
 
-## Node-query cache + landing summary (#139)
+## Node-query cache + landing summary
 
 `/sources` (a per-source capability lookup per configured server) and
 `/workspaces/<id>/graph` (a `query_nodes(source_id=…)` per scoped source)
@@ -415,7 +415,7 @@ structured error instead of crashing at plugin load. AgentDefs (`scg-mapper`,
 `scg-search`, `scg-path-probe`) gate on the `scg` capability advertised at
 session start; see `mewbo_graph/src/mewbo_graph/plugins/scg/CLAUDE.md`.
 Today ONLY `OrchestratedSearchRunner` advertises `scg` — that is the gating
-seam #77 widens (any workspace-bound run type grants it + the graph tools).
+seam this widens (any workspace-bound run type grants it + the graph tools).
 
 ## Testing notes
 

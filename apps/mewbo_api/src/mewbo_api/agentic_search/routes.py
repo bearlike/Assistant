@@ -15,6 +15,7 @@ Workspaces + sources (persistent — JSON/Mongo via the store):
 Run lifecycle (durable run store + normalized SSE projection):
 
 - ``POST   /runs``                    create + drive a run; back-compat ``{run}``
+- ``GET    /runs?limit=``             recent run summaries across ALL workspaces, newest-first
 - ``GET    /runs/<run_id>``           run snapshot (reload / share / deep-link)
 - ``GET    /runs/<run_id>/events``    normalized SSE event stream
 - ``POST   /runs/<run_id>/cancel``    cancel a run
@@ -27,14 +28,14 @@ SCG indexing (Source Capability Graph — gated on ``scg.enabled``):
 - ``GET    /sources/<id>/map/events`` SSE over the map-job event log
 - ``GET    /scg``                     introspection — node/edge counts + sources
 
-Auth: every route guards behind ``_require_api_key`` (injected by
-``init_agentic_search``); SSE additionally accepts the ``api_key`` query param
-because ``_require_api_key`` already honours it.
+Auth: every route declares ``@guard.requires("search.run")`` at its definition,
+which runs the API-key check before the permission check; SSE additionally
+accepts the ``api_key`` query param because the same credential reader honours
+it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, cast
 
 from flask import Response, request, stream_with_context
@@ -43,6 +44,7 @@ from mewbo_core.common import get_logger
 from mewbo_core.config import get_config_value
 from pydantic import ValidationError
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.request_context import request_surface
 from mewbo_api.responses import ApiResponseKit
 
@@ -52,20 +54,11 @@ from .events import RunSseGenerator
 from .mcp_config import WorkspaceMcpConfig
 from .runs import SearchRun
 from .scg.config import ScgConfig
-from .schemas import SEARCH_TIERS, WorkspaceInput
+from .schemas import SEARCH_TIERS, SearchRunCreateRequest, WorkspaceInput
 from .source_sync import WorkspaceSourceSync
 
 logging = get_logger(name="api.agentic_search.routes")
 
-AuthResult = tuple[dict, int] | None
-AuthGuard = Callable[[], AuthResult]
-
-
-def _no_auth() -> AuthResult:
-    return None
-
-
-_require_api_key: AuthGuard = _no_auth
 _runtime: Any = None  # populated by init_agentic_search; used by the real runner
 
 agentic_ns = Namespace(
@@ -77,6 +70,10 @@ agentic_ns = Namespace(
 # error half of every operation's contract — see ``mewbo_api.responses``).
 # graph_routes builds its OWN kit from ``graph_ns``; it does not reuse this one.
 kit = ApiResponseKit(agentic_ns, prefix="Search")
+
+# GET /runs?limit= — cross-workspace recent-runs cap (default / hard ceiling).
+_RECENT_RUNS_DEFAULT_LIMIT = 30
+_RECENT_RUNS_MAX_LIMIT = 100
 
 
 # -- Request models (documentation only — handlers validate via Pydantic) ----
@@ -157,6 +154,15 @@ search_run_create_request = agentic_ns.model(
         ),
         "project": fields.String(
             description="Optional project name that scopes connector configuration.",
+        ),
+        "fallback_models": fields.List(
+            fields.String,
+            description=(
+                "Optional cross-model fallback ladder for this run, as LiteLLM model "
+                "names in try-order. Omit to inherit the configured fallback policy; "
+                "an empty list is treated the same as omitting it."
+            ),
+            example=["anthropic/claude-haiku-4-5", "openai/gpt-oss-120b"],
         ),
     },
 )
@@ -376,6 +382,13 @@ search_run_payload_model = agentic_ns.model(
             description="Derived run stats; null until a real settle ran.",
         ),
         "error": fields.String(example=None),
+        "partial": fields.Boolean(
+            example=False,
+            description=(
+                "True when a FAILED run's `results`/`trace` still carry grounded "
+                "evidence gathered before the failure, rather than being empty."
+            ),
+        ),
     },
 )
 
@@ -413,6 +426,14 @@ search_run_record_model = agentic_ns.model(
         "status": fields.String(example="completed"),
         "tier": fields.String(example="auto"),
         "model": fields.String(example=None),
+        "fallback_models": fields.List(
+            fields.String,
+            example=None,
+            description=(
+                "Per-run cross-model fallback ladder; null inherits the configured "
+                "fallback policy."
+            ),
+        ),
         "created_at": fields.String(example="2026-06-15T09:30:00Z"),
         "started_at": fields.String(example="2026-06-15T09:30:01Z"),
         "completed_at": fields.String(example="2026-06-15T09:30:08Z"),
@@ -438,6 +459,27 @@ search_workspace_runs_model = agentic_ns.model(
         "runs": fields.List(
             fields.Nested(search_run_record_model),
             description="The workspace's recent run records, newest first.",
+        )
+    },
+)
+
+search_recent_run_model = agentic_ns.model(
+    "SearchRecentRun",
+    {
+        "run_id": fields.String(example="r-1a2b3c4d-1"),
+        "workspace_id": fields.String(example="ws-7f3a91"),
+        "query": fields.String(example="Which services call the billing API?"),
+        "created_at": fields.String(example="2026-06-15T09:30:00Z"),
+        "status": fields.String(example="completed"),
+    },
+)
+
+search_recent_runs_model = agentic_ns.model(
+    "SearchRecentRunsResponse",
+    {
+        "runs": fields.List(
+            fields.Nested(search_recent_run_model),
+            description="Recent run summaries across all workspaces, newest first.",
         )
     },
 )
@@ -513,22 +555,23 @@ search_scg_model = agentic_ns.model(
 )
 
 
-def init_agentic_search(
-    api: object, require_api_key: AuthGuard, runtime: Any = None
-) -> None:
-    """Wire the namespace + capture the auth guard and the session runtime.
+def init_agentic_search(api: object, runtime: Any = None) -> None:
+    """Wire the namespace + capture the session runtime.
 
     The active :class:`SearchRunner` is NOT chosen here — ``get_search_runner``
     resolves it per run (orchestrated iff ``scg.enabled`` AND ≥1 mapped source),
     so mapping the first source takes effect without a process restart.
+
+    Authentication and authorization are NOT wired here: every view declares its
+    own requirement with ``@guard.requires``, which resolves the live
+    ``AuthKit`` through ``guard_registry`` at request time.
     """
-    global _require_api_key, _runtime
-    _require_api_key = require_api_key
+    global _runtime
     _runtime = runtime
     api.add_namespace(agentic_ns, path="/api/agentic_search")  # type: ignore[attr-defined]
     from .graph_routes import init_agentic_search_graph  # noqa: PLC0415
 
-    init_agentic_search_graph(api, require_api_key, runtime)  # #79 workspace graph
+    init_agentic_search_graph(api, runtime)  # workspace graph
     _register_map_phase_sink()
     _register_search_launcher()
 
@@ -621,6 +664,7 @@ class SourcesResource(Resource):
     )
     @agentic_ns.response(200, "The source catalog.", search_sources_model)
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self) -> tuple[dict, int]:
         """List available sources.
 
@@ -630,8 +674,6 @@ class SourcesResource(Resource):
         `available` false rather than being omitted. Pass `project` to scope
         the catalog to one project's configuration.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         project = request.args.get("project")
         sources = [s.model_dump() for s in SourceCatalog.entries(project)]
         return {"sources": sources}, 200
@@ -654,6 +696,7 @@ class TiersResource(Resource):
         200, "Tier ids mapped to the model each tier runs on.", search_tiers_model
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self) -> tuple[dict, int]:
         """List the search tiers and their model presets.
 
@@ -665,8 +708,6 @@ class TiersResource(Resource):
         carries an explicit `model` override. Pure config read — available
         regardless of `scg.enabled`.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         default_model = str(get_config_value("llm", "default_model") or "")
         return {
             "default_tier": ScgConfig.default_tier(),
@@ -703,6 +744,7 @@ class WorkspacesResource(Resource):
     )
     @agentic_ns.response(200, "Matching workspaces.", search_workspaces_model)
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self) -> tuple[dict, int]:
         """List workspaces.
 
@@ -710,8 +752,6 @@ class WorkspacesResource(Resource):
         instructions and recent query history. Pass `q` to filter by name,
         description or past-query text.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         q = request.args.get("q")
         st = store_mod.get_store()
         found = st.search_workspaces(q) if q else st.list_workspaces()
@@ -738,6 +778,7 @@ class WorkspacesResource(Resource):
     @agentic_ns.response(201, "Workspace created.", search_workspace_item_model)
     @kit.errors(400, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def post(self) -> tuple[dict, int]:
         """Create a workspace.
 
@@ -746,8 +787,6 @@ class WorkspacesResource(Resource):
         and may start mapping newly enabled live sources in the background.
         The new workspace is returned with its generated `id`.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return {"message": "request body must be a JSON object"}, 400
@@ -758,7 +797,7 @@ class WorkspacesResource(Resource):
         st = store_mod.get_store()
         workspace = st.create_workspace(data)
         # Refresh the persisted virtual MCP config + auto-map newly-enabled live
-        # sources into the GLOBAL SCG (best-effort, idempotent — #75).
+        # sources into the GLOBAL SCG (best-effort, idempotent).
         WorkspaceSourceSync.on_workspace_saved(
             store=st,
             workspace_id=workspace.id,
@@ -798,6 +837,7 @@ class WorkspaceItemResource(Resource):
     @agentic_ns.response(200, "The updated workspace.", search_workspace_item_model)
     @kit.errors(400, 404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def patch(self, workspace_id: str) -> tuple[dict, int]:
         """Update a workspace.
 
@@ -807,8 +847,6 @@ class WorkspaceItemResource(Resource):
         background re-mapping of the affected sources. Returns the full
         updated workspace.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return {"message": "request body must be a JSON object"}, 400
@@ -816,8 +854,8 @@ class WorkspaceItemResource(Resource):
             return {"message": "sources must be a list of source ids"}, 400
         st = store_mod.get_store()
         # Capture the prior selection + prose BEFORE the update so the source-sync
-        # hook can map only the newly-enabled sources (#75) and detect an
-        # instructions/desc change that should re-seed the map-time enrich (#83).
+        # hook can map only the newly-enabled sources and detect an
+        # instructions/desc change that should re-seed the map-time enrich.
         existing = st.get_workspace(workspace_id)
         prev_sources = list(existing.sources) if existing is not None else None
         prev_prose = (
@@ -831,7 +869,7 @@ class WorkspaceItemResource(Resource):
         # The hook is the graph-lifecycle seam: a sources change OR an
         # instructions/desc edit can re-drive the map+enrich. An instructions-only
         # PATCH carries no ``sources`` key, so the old sources-only gate skipped
-        # it (the #83 gap). Fire whenever the selection or the prose moved; the
+        # it (the gap). Fire whenever the selection or the prose moved; the
         # hook is idempotent + in-flight-guarded, so a no-op PATCH still fires
         # nothing downstream.
         prose_changed = prev_prose is not None and prev_prose != (
@@ -864,6 +902,7 @@ class WorkspaceItemResource(Resource):
     @agentic_ns.response(200, "Workspace deleted.", search_workspace_deleted_model)
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def delete(self, workspace_id: str) -> tuple[dict, int]:
         """Delete a workspace.
 
@@ -871,13 +910,11 @@ class WorkspaceItemResource(Resource):
         including any auth material that configuration carried. Past runs
         remain readable by id. The response confirms the deleted id.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         st = store_mod.get_store()
         if not st.delete_workspace(workspace_id):
             return {"message": "workspace not found"}, 404
         # Drop the secret-bearing virtual config alongside the workspace so no
-        # orphaned auth material lingers in the isolated config store (#75).
+        # orphaned auth material lingers in the isolated config store.
         WorkspaceMcpConfig.delete(st, workspace_id)
         return {"workspace_id": workspace_id, "deleted": True}, 200
 
@@ -901,6 +938,7 @@ class WorkspaceRunsResource(Resource):
     )
     @agentic_ns.response(200, "Recent runs, newest first.", search_workspace_runs_model)
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, workspace_id: str) -> tuple[dict, int]:
         """List runs for a workspace.
 
@@ -909,8 +947,6 @@ class WorkspaceRunsResource(Resource):
         `GET /runs/{run_id}` for the full snapshot. An unknown workspace id
         yields an empty list.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         runs = [r.model_dump() for r in store_mod.get_store().list_runs(workspace_id)]
         return {"runs": runs}, 200
 
@@ -920,7 +956,60 @@ class WorkspaceRunsResource(Resource):
 
 @agentic_ns.route("/runs")
 class RunsResource(Resource):
-    """Create + drive a search run scoped to a workspace."""
+    """Create + drive a search run scoped to a workspace; list recent runs.
+
+    ``GET`` and ``POST`` live on ONE resource class — Flask-RESTX's swagger
+    builder keys ``paths`` by URL, so two ``Resource`` classes routed at the
+    same path silently overwrite each other in the emitted spec (the second
+    registration wins) even though Werkzeug itself dispatches both methods
+    correctly. A split-class version of this route once shipped that trap:
+    ``GET /runs`` worked at runtime but vanished from ``/swagger.json`` →
+    ``docs/openapi.json`` → the Scalar reference. Keep every verb on this
+    class; regression-checked by ``test_swagger_runs_path_lists_both_verbs``.
+    """
+
+    @agentic_ns.doc(
+        "list_recent_runs",
+        description=(
+            "Returns the most recent search runs across ALL workspaces, "
+            "newest first — use it to populate a global recent-searches list. "
+            f"`limit` caps the count (default {_RECENT_RUNS_DEFAULT_LIMIT}, "
+            f"capped at {_RECENT_RUNS_MAX_LIMIT})."
+        ),
+        params={
+            "limit": {
+                "description": "Max number of runs to return.",
+                "in": "query",
+                "type": "integer",
+                "default": _RECENT_RUNS_DEFAULT_LIMIT,
+            },
+        },
+    )
+    @agentic_ns.response(200, "Recent run summaries, newest first.", search_recent_runs_model)
+    @kit.auth_error()
+    @guard.requires("search.run")
+    def get(self) -> tuple[dict, int]:
+        """List recent search runs across all workspaces.
+
+        Returns run summaries (id, workspace, query, created time, status)
+        newest first, capped at `limit`. Projects the same `RunRecord` the
+        per-workspace endpoint returns down to these summary fields — fetch
+        `GET /runs/{run_id}` for the full snapshot.
+        """
+        limit = request.args.get("limit", type=int) or _RECENT_RUNS_DEFAULT_LIMIT
+        limit = max(1, min(limit, _RECENT_RUNS_MAX_LIMIT))
+        records = store_mod.get_store().list_recent_runs(limit)
+        runs = [
+            {
+                "run_id": r.run_id,
+                "workspace_id": r.workspace_id,
+                "query": r.query,
+                "created_at": r.created_at,
+                "status": r.status,
+            }
+            for r in records
+        ]
+        return {"runs": runs}, 200
 
     @agentic_ns.doc(
         "create_run",
@@ -942,6 +1031,7 @@ class RunsResource(Resource):
     )
     @kit.errors(400, 404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def post(self) -> tuple[dict, int]:
         """Start a search run.
 
@@ -953,32 +1043,22 @@ class RunsResource(Resource):
         trade depth for latency; the tier also picks the model that drives
         the run.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return {"message": "request body must be a JSON object"}, 400
-        workspace_id = body.get("workspace_id")
-        query = body.get("query")
-        if not isinstance(workspace_id, str) or not workspace_id.strip():
-            return {"message": "workspace_id is required"}, 400
-        if not isinstance(query, str) or not query.strip():
-            return {"message": "query is required"}, 400
-        tier = body.get("tier")
-        if tier is not None and tier not in SEARCH_TIERS:
-            return {"message": "tier must be one of fast|auto|deep"}, 400
-        # Optional per-run model override — the /v1/structured stance: a
-        # non-string (or blank) value is ignored, never a 400.
-        model = body.get("model")
-        project = body.get("project")
+        try:
+            data = SearchRunCreateRequest.model_validate(body)
+        except ValidationError as exc:
+            return _validation_error(exc)
         payload = SearchRun.start(
-            workspace_id=workspace_id,
-            query=query.strip(),
+            workspace_id=data.workspace_id,
+            query=data.query,
             store=store_mod.get_store(),
             runtime=_runtime,
-            project=project if isinstance(project, str) else None,
-            tier=tier,
-            model=model.strip() if isinstance(model, str) and model.strip() else None,
+            project=data.project,
+            tier=data.tier,
+            model=data.model,
+            fallback_models=data.fallback_models,
             source_platform=request_surface(),
         )
         if payload is None:
@@ -1009,6 +1089,7 @@ class RunItemResource(Resource):
     @agentic_ns.response(200, "The run snapshot.", search_run_item_model)
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, run_id: str) -> tuple[dict, int]:
         """Get a run.
 
@@ -1017,8 +1098,6 @@ class RunItemResource(Resource):
         is `running`, and self-sufficient for reload, share and deep-link
         views with no other context.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         record = SearchRun.get(run_id, store=store_mod.get_store())
         if record is None:
             return {"message": "run not found"}, 404
@@ -1046,6 +1125,7 @@ class RunCancelResource(Resource):
     )
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def post(self, run_id: str) -> tuple[dict, int]:
         """Cancel a run.
 
@@ -1054,8 +1134,6 @@ class RunCancelResource(Resource):
         when the run had already settled, in which case nothing changes.
         The terminal state still arrives on the event stream and snapshot.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         st = store_mod.get_store()
         if SearchRun.get(run_id, store=st) is None:
             return {"message": "run not found"}, 404
@@ -1097,6 +1175,7 @@ class RunEventsResource(Resource):
     @agentic_ns.response(200, "Server-sent event stream of run events.")
     @kit.errors(404, shape="message")
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, run_id: str) -> Any:
         """Stream run events.
 
@@ -1107,8 +1186,6 @@ class RunEventsResource(Resource):
         header. Because EventSource cannot set headers, the API key is also
         accepted as the `api_key` query parameter.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         st = store_mod.get_store()
         if SearchRun.get(run_id, store=st) is None:
             return {"message": "run not found"}, 404
@@ -1170,6 +1247,7 @@ class SourceMapResource(Resource):
         },
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def post(self, source_id: str) -> tuple[dict, int]:
         """Map a source.
 
@@ -1182,8 +1260,6 @@ class SourceMapResource(Resource):
         list; a source with no configured connector returns 422 instead.
         Returns 503 when `scg.enabled` is off.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         if not ScgConfig.enabled():
             return {"message": "SCG is disabled (set scg.enabled=true)"}, 503
 
@@ -1249,6 +1325,7 @@ class SourceMapJobsResource(Resource):
         200, "Map jobs for the source, newest first.", search_map_jobs_model
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, source_id: str) -> tuple[dict, int]:
         """List map jobs for a source.
 
@@ -1257,8 +1334,6 @@ class SourceMapJobsResource(Resource):
         its progress phase. Poll this after starting a map job to follow it
         without holding an event stream open.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         jobs = store_mod.get_store().list_map_jobs(source_id=source_id)
         return {"jobs": [j.model_dump() for j in jobs]}, 200
 
@@ -1286,6 +1361,7 @@ class SourceMapJobItemResource(Resource):
         descriptions={404: "Map job not found, or it belongs to another source."},
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, source_id: str, job_id: str) -> tuple[dict, int]:
         """Get a map job.
 
@@ -1293,8 +1369,6 @@ class SourceMapJobItemResource(Resource):
         in the path; otherwise the response is 404. Poll this until the
         status settles to `completed` or `failed`.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         job = store_mod.get_store().get_map_job(job_id)
         if job is None or job.source_id != source_id:
             return {"message": "map job not found"}, 404
@@ -1344,6 +1418,7 @@ class SourceMapEventsResource(Resource):
         descriptions={404: "No map job for the source, or unknown job id."},
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self, source_id: str) -> Any:
         """Stream map job events.
 
@@ -1355,8 +1430,6 @@ class SourceMapEventsResource(Resource):
         set headers, the API key is also accepted as the `api_key` query
         parameter.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         st = store_mod.get_store()
         job_id = request.args.get("job_id")
         if job_id is None:
@@ -1406,6 +1479,7 @@ class ScgResource(Resource):
         descriptions={503: "Source Capability Graph is disabled."},
     )
     @kit.auth_error()
+    @guard.requires("search.run")
     def get(self) -> tuple[dict, int]:
         """Inspect the capability graph.
 
@@ -1415,8 +1489,6 @@ class ScgResource(Resource):
         deterministic and never invokes a model. Returns 503 when
         `scg.enabled` is off.
         """
-        if (auth := _require_api_key()) is not None:
-            return auth
         if not ScgConfig.enabled():
             return {"message": "SCG is disabled (set scg.enabled=true)"}, 503
 

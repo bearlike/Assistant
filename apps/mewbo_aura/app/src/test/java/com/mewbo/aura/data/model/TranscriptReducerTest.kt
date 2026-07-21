@@ -154,7 +154,7 @@ class TranscriptReducerTest {
 
     @Test
     fun `a fresh assistant-text item no longer closes the open tool group - a later tool_result still folds into it, ahead of the text`() {
-        // CHANGED (Gitea #177 W1-B follow-up): narration/assistant-text used to close the group
+        // CHANGED: narration/assistant-text used to close the group
         // (closeToolGroup was called from openAssistantIfNeeded); real sessions interleave
         // tool_results with root narration WITHIN one turn (9/122 aura-android turns), so only a
         // fresh user/user_steer turn closes the group now. The turn's one group must still end up
@@ -405,6 +405,78 @@ class TranscriptReducerTest {
         assertEquals(1, items.size)
     }
 
+    // ---- `steer` + the server-ts anchor: what makes a bubble usable as a `from_ts` ----
+
+    @Test
+    fun `a user_steer event folds to a bubble flagged steer, a plain user event does not`() {
+        // The flag exists for exactly one consumer: MessageAction's gate withholds "Retry from here"
+        // on a steered bubble, because /recover's from_ts scan (session_runtime.py:996) matches
+        // `type == "user"` and can therefore NEVER find a `user_steer` event -> 400.
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"user","ts":"2026-06-15T18:24:00.000000+00:00","payload":{"text":"fresh turn"}}""",
+                """{"type":"user_steer","ts":"2026-06-15T18:24:30.000000+00:00","payload":{"text":"steered in"}}""",
+            ),
+        )
+        val bubbles = items.filterIsInstance<ChatItem.UserBubble>()
+        assertEquals(2, bubbles.size)
+        assertFalse("a plain `user` event is not a steer", bubbles[0].steer)
+        assertTrue("a `user_steer` event IS a steer", bubbles[1].steer)
+    }
+
+    @Test
+    fun `a steering send's optimistic echo adopts steer when the server's user_steer reconciles it`() {
+        // The client folds its own echo as a SessionEvent.User (ChatViewModel.send), so the bubble is
+        // BORN steer=false however it was actually sent. The server's `user_steer` arrives down the
+        // dedupe branch and is the first authoritative word - if that branch dropped it, every steered
+        // bubble would keep claiming it can anchor a retry.
+        var state = TranscriptReducer.State()
+        state = TranscriptReducer.fold(
+            state,
+            events("""{"type":"user","ts":"2026-07-02T03:34:41.000000Z","payload":{"text":"steer me"}}""").single(),
+            pending = true,
+        )
+        assertFalse((state.chatItems.single() as ChatItem.UserBubble).steer)
+
+        state = TranscriptReducer.fold(
+            state,
+            events("""{"type":"user_steer","ts":"2026-07-02T03:34:42.633140+00:00","payload":{"text":"steer me"}}""").single(),
+        )
+        val bubble = state.chatItems.single() as ChatItem.UserBubble
+        assertTrue("the server's user_steer must flip the reconciled bubble to steer", bubble.steer)
+        assertFalse("and settle it", bubble.pending)
+    }
+
+    @Test
+    fun `a reconciled bubble adopts the SERVER ts - a client clock stamp can anchor nothing`() {
+        // Regression: the optimistic echo is stamped `Instant.now()` (a LOCAL clock), which exists
+        // nowhere in the server's transcript. The dedupe branch used to leave that ts in place, so
+        // every message sent in the current session carried an anchor that /recover would 400 on
+        // ("no user event at ts=…") and /fork would cut the transcript at a meaningless point. This
+        // covers the ORDINARY fresh-turn send (pending=false) - the case that used to skip
+        // reconciliation entirely.
+        val clientTs = "2026-07-02T03:34:41.000000Z"
+        val serverTs = "2026-07-02T03:34:42.633140+00:00"
+        var state = TranscriptReducer.State()
+        state = TranscriptReducer.fold(
+            state,
+            events("""{"type":"user","ts":"$clientTs","payload":{"text":"hi"}}""").single(),
+            pending = false,
+        )
+        val optimistic = state.chatItems.single() as ChatItem.UserBubble
+        assertEquals(clientTs, optimistic.ts)
+
+        state = TranscriptReducer.fold(
+            state,
+            events("""{"type":"user","ts":"$serverTs","payload":{"text":"hi"}}""").single(),
+        )
+        val reconciled = state.chatItems.single() as ChatItem.UserBubble
+        assertEquals("the bubble must anchor on the server's ts", serverTs, reconciled.ts)
+        // The KEY must NOT follow the ts - it is the row's LazyColumn identity, and changing it would
+        // re-animate a settled row. Key = identity; ts = the server anchor.
+        assertEquals("the row's identity must survive the swap", optimistic.key, reconciled.key)
+    }
+
     @Test
     fun `optimistic echo dedupe matches a client-clock Z timestamp against the real backend offset format`() {
         // Regression test for the task-B review round 3 live-run bug: the client's own optimistic
@@ -644,6 +716,141 @@ class TranscriptReducerTest {
     }
 
     @Test
+    fun `a successful device_set_alarm tool_result is promoted to its own top-level ToolCard`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"tool_result","ts":"t1","payload":{"tool_id":"device_set_alarm","operation":"set","success":true,"summary":"7am alarm set"}}""",
+            ),
+        )
+        val card = items.single() as ChatItem.ToolCard
+        assertEquals("device_set_alarm", card.call.toolId)
+        assertTrue(card.call.success)
+        assertTrue("a promoted call must not also spawn a ToolCallGroup", items.none { it is ChatItem.ToolCallGroup })
+    }
+
+    @Test
+    fun `a failed device_set_alarm tool_result stays in the generic ToolCallGroup fold, not a ToolCard`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"tool_result","ts":"t1","payload":{"tool_id":"device_set_alarm","operation":"set","success":false,"error":"permission denied"}}""",
+            ),
+        )
+        val group = items.single() as ChatItem.ToolCallGroup
+        assertEquals(listOf("device_set_alarm"), group.calls.map { it.toolId })
+        assertTrue("a failed promoted call must never produce a confident ToolCard", items.none { it is ChatItem.ToolCard })
+    }
+
+    @Test
+    fun `an unregistered tool id still folds into ToolCallGroup exactly as before - promotion regression guard`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"tool_result","ts":"t1","payload":{"tool_id":"shell","operation":"run","success":true}}""",
+            ),
+        )
+        val group = items.single() as ChatItem.ToolCallGroup
+        assertEquals(listOf("shell"), group.calls.map { it.toolId })
+    }
+
+    @Test
+    fun `a promoted card renders before the turn's assistant narration`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"agent_message_delta","ts":"t1","payload":{"text":"Setting your alarm","agent_id":"a1","depth":0}}""",
+                """{"type":"tool_result","ts":"t2","payload":{"tool_id":"device_set_alarm","operation":"set","success":true}}""",
+                """{"type":"assistant","ts":"t3","payload":{"text":"Alarm set for 7am"}}""",
+            ),
+        )
+        assertEquals(2, items.size)
+        assertTrue(items[0] is ChatItem.ToolCard)
+        val assistant = items[1] as ChatItem.AssistantMessage
+        assertEquals("Alarm set for 7am", assistant.text)
+    }
+
+    @Test
+    fun `re-reducing the same device_set_alarm event log twice is idempotent - no duplicate ToolCard`() {
+        val raw = arrayOf(
+            """{"type":"tool_result","ts":"t1","payload":{"tool_id":"device_set_alarm","operation":"set","success":true}}""",
+            """{"type":"assistant","ts":"t2","payload":{"text":"done"}}""",
+        )
+        val once = TranscriptReducer.reduce(events(*raw))
+        val replayed = TranscriptReducer.reduce(events(*raw, *raw))
+        assertEquals(once, replayed)
+        assertEquals(1, once.count { it is ChatItem.ToolCard })
+    }
+
+    @Test
+    fun `a mixed turn of one promoted and two unregistered tool calls yields one ToolCard plus a two-call group`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"tool_result","ts":"t1","payload":{"tool_id":"shell","operation":"run","success":true}}""",
+                """{"type":"tool_result","ts":"t2","payload":{"tool_id":"device_set_alarm","operation":"set","success":true}}""",
+                """{"type":"tool_result","ts":"t3","payload":{"tool_id":"grep","operation":"run","success":true}}""",
+            ),
+        )
+        val card = items.filterIsInstance<ChatItem.ToolCard>().single()
+        assertEquals("device_set_alarm", card.call.toolId)
+        val group = items.filterIsInstance<ChatItem.ToolCallGroup>().single()
+        assertEquals(listOf("shell", "grep"), group.calls.map { it.toolId })
+        assertEquals(2, group.calls.size) // the promoted call must never inflate the group's "Used N tools" count
+    }
+
+    // --- widget_ready fold ---
+
+    private val widgetFrame =
+        """{"type":"widget_ready","ts":"t2","payload":{"widget_id":"w1","session_id":"s1",""" +
+            """"files":{"app.py":"import streamlit as st","data.json":"{}"},"requirements":["pandas"],"summary":"A chart"}}"""
+
+    @Test
+    fun `a widget_ready folds into its own top-level Widget item carrying the bundle`() {
+        val items = TranscriptReducer.reduce(events(widgetFrame))
+        val widget = items.single() as ChatItem.Widget
+        assertEquals("w1", widget.widgetId)
+        assertEquals("import streamlit as st", widget.appPy)
+        assertEquals("{}", widget.dataJson)
+        assertEquals(listOf("pandas"), widget.requirements)
+        assertEquals("A chart", widget.summary)
+        assertEquals("widget:w1", widget.key)
+    }
+
+    @Test
+    fun `a widget renders before the turn's assistant narration`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"agent_message_delta","ts":"t1","payload":{"text":"Here is a chart","agent_id":"a1","depth":0}}""",
+                widgetFrame,
+                """{"type":"assistant","ts":"t3","payload":{"text":"Here is a chart"}}""",
+            ),
+        )
+        assertEquals(2, items.size)
+        assertTrue(items[0] is ChatItem.Widget)
+        assertTrue(items[1] is ChatItem.AssistantMessage)
+    }
+
+    @Test
+    fun `re-emitting the same widget_id upserts in place - no duplicate Widget, idempotent replay`() {
+        val once = TranscriptReducer.reduce(events(widgetFrame))
+        val replayed = TranscriptReducer.reduce(events(widgetFrame, widgetFrame))
+        assertEquals(once, replayed)
+        assertEquals(1, once.count { it is ChatItem.Widget })
+    }
+
+    @Test
+    fun `a widget_ready does not disturb the turn's tool-group fold`() {
+        // The widget is orthogonal to the fold (like a promoted card): unregistered tool_results
+        // before and after it keep folding into ONE group whose count never includes the widget.
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"tool_result","ts":"t1","payload":{"tool_id":"shell","operation":"run","success":true}}""",
+                widgetFrame,
+                """{"type":"tool_result","ts":"t3","payload":{"tool_id":"grep","operation":"run","success":true}}""",
+            ),
+        )
+        assertEquals(1, items.count { it is ChatItem.Widget })
+        val group = items.filterIsInstance<ChatItem.ToolCallGroup>().single()
+        assertEquals(listOf("shell", "grep"), group.calls.map { it.toolId })
+    }
+
+    @Test
     fun `incremental fold matches a full reduce over the same events`() {
         val raw = arrayOf(
             """{"type":"user","ts":"t1","payload":{"text":"hi"}}""",
@@ -654,5 +861,84 @@ class TranscriptReducerTest {
         val viaReduce = TranscriptReducer.reduce(decoded)
         val viaFold = decoded.fold(TranscriptReducer.State()) { state, event -> TranscriptReducer.fold(state, event) }
         assertEquals(viaReduce, viaFold.chatItems)
+    }
+
+    // --- ask-user questions: user_question / user_question_answered fold ---
+
+    private val questionFrame =
+        """{"type":"user_question","ts":"t2","payload":{"call_id":"q1","call_token":"tok1","questions":[""" +
+            """{"header":"Scope","question":"Which scope?","options":[{"label":"A","description":"desc a"},{"label":"B","description":null}],"multi_select":false},""" +
+            """{"header":"Notes","question":"Anything else?","options":[]}]}}"""
+
+    @Test
+    fun `a user_question folds into its own pending Question item carrying the group and token`() {
+        val items = TranscriptReducer.reduce(events(questionFrame))
+        val question = items.single() as ChatItem.Question
+        assertEquals("q1", question.callId)
+        assertEquals("tok1", question.callToken)
+        assertEquals("question:q1", question.key)
+        assertEquals(null, question.resolution) // pending until answered
+        assertEquals(2, question.questions.size)
+        assertEquals("Scope", question.questions[0].header)
+        assertEquals(listOf("A", "B"), question.questions[0].options.map { it.label })
+        assertEquals(false, question.questions[0].multiSelect)
+        assertTrue(question.questions[1].options.isEmpty()) // free-text question
+    }
+
+    @Test
+    fun `a question renders before the turn's assistant narration`() {
+        val items = TranscriptReducer.reduce(
+            events(
+                """{"type":"agent_message_delta","ts":"t1","payload":{"text":"Before I proceed","agent_id":"a1","depth":0}}""",
+                questionFrame,
+                """{"type":"assistant","ts":"t3","payload":{"text":"Before I proceed"}}""",
+            ),
+        )
+        assertEquals(2, items.size)
+        assertTrue(items[0] is ChatItem.Question)
+        assertTrue(items[1] is ChatItem.AssistantMessage)
+    }
+
+    @Test
+    fun `user_question_answered settles the matching card with the chosen answers`() {
+        val answeredFrame =
+            """{"type":"user_question_answered","ts":"t3","payload":{"call_id":"q1","outcome":"answered","answered_via":"console","answers":[""" +
+                """{"selected_indexes":[0],"text":null},{"selected_indexes":null,"text":"looks good"}]}}"""
+        val items = TranscriptReducer.reduce(events(questionFrame, answeredFrame))
+        val question = items.single() as ChatItem.Question
+        val resolution = question.resolution as QuestionResolution.Answered
+        assertEquals("console", resolution.answeredVia)
+        assertEquals(listOf(0), resolution.answers[0].selectedIndexes)
+        assertEquals("looks good", resolution.answers[1].text)
+    }
+
+    @Test
+    fun `a declined-or-unknown outcome settles the card as a plain dismissal, never an error`() {
+        // declined/interrupted/cancelled and any unknown future value all map to Dismissed, no residue.
+        val dismissedFrame =
+            """{"type":"user_question_answered","ts":"t3","payload":{"call_id":"q1","outcome":"declined"}}"""
+        val items = TranscriptReducer.reduce(events(questionFrame, dismissedFrame))
+        val question = items.single() as ChatItem.Question
+        val resolution = question.resolution as QuestionResolution.Dismissed
+        assertEquals("declined", resolution.outcome)
+    }
+
+    @Test
+    fun `an answered event with no matching question is ignored, not rendered as an orphan`() {
+        val answeredFrame =
+            """{"type":"user_question_answered","ts":"t1","payload":{"call_id":"ghost","outcome":"answered","answers":[{"text":"x"}]}}"""
+        assertTrue(TranscriptReducer.reduce(events(answeredFrame)).isEmpty())
+    }
+
+    @Test
+    fun `re-emitting the same question upserts in place and never resets an already-settled card`() {
+        // Backlog replay re-sends both frames; content-key dedupe means the settled card is preserved.
+        val answeredFrame =
+            """{"type":"user_question_answered","ts":"t3","payload":{"call_id":"q1","outcome":"answered","answers":[{"selected_indexes":[0]},{"text":"ok"}]}}"""
+        val once = TranscriptReducer.reduce(events(questionFrame, answeredFrame))
+        val replayed = TranscriptReducer.reduce(events(questionFrame, answeredFrame, questionFrame, answeredFrame))
+        assertEquals(once, replayed)
+        assertEquals(1, once.count { it is ChatItem.Question })
+        assertTrue((once.single() as ChatItem.Question).resolution is QuestionResolution.Answered)
     }
 }

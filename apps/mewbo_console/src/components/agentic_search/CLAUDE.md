@@ -9,7 +9,7 @@ non-obvious FE decisions for the multi-source search surface. Read the
 console root `apps/mewbo_console/CLAUDE.md` first — the library-first,
 theming, and shape-vocabulary rules all apply here unchanged.
 
-## Landing first paint — lazy the run/graph children, not just the route (#125)
+## Landing first paint — lazy the run/graph children, not just the route
 
 `AgenticSearchView` is `React.lazy()` at the `/search` route, but that only
 defers the route — it does NOT shrink the chunk. The view statically imported
@@ -49,7 +49,7 @@ the arrival clock: `result` events gate result cards, `agent_*` events
 gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
 `run_done` close it. Treat `finish_delay_ms` / `t_ms` as dead fields.
 
-## Synthesis card + trace fidelity (#86)
+## Synthesis card + trace fidelity
 
 - **The synthesis is markdown — reuse the ONE renderer.** `AnswerCard` renders
   `answer.tldr` through the wiki's `buildMarkdownComponents` + react-markdown
@@ -62,7 +62,7 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
 - **Provenance chips are honest or absent.** `confidence` / `sources_count` are
   settle-derived BE-side from data-bearing probes — never invented FE-side; the
   `ConfidenceBar` is suppressed when `confidence <= 0` (unknown ≠ "0% faith").
-- **Related questions stream on their OWN event (#111).** The rail's "Related
+- **Related questions stream on their OWN event.** The rail's "Related
   questions" come from a dedicated `related_questions` SSE event (the BE's parallel
   structured call), folded by `reduceRun` onto `stream.related_questions` — NOT
   `answer_ready`, and NOT the snapshot alone. This matters because the live view
@@ -75,7 +75,7 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
   `<details>` (KISS — no Collapsible), dead-ends (`empty`) railed in primary.
   The lifecycle line `text` is only the done-status — the evidence is the field.
 
-## Results-page top band · honest stats · coordinator lane (#96, #98)
+## Results-page top band · honest stats · coordinator lane
 
 - **The query lives ONLY in the SearchBar input.** The old band echoed it a
   second time in an italic-mono strip — deleted. Band structure is three calm
@@ -93,10 +93,10 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
   both already on the wire; nothing invented.
 - **Coordinator lane renders honestly.** `utils.laneSource(agent, sources)`
   flags `source_id === ""` / catalog-unmatched lanes `isCoordinator` (the
-  `scg-search` root lane #95 emits). ProgressStrip / RightRail / TraceDrawer
+  `scg-search` root lane emits). ProgressStrip / RightRail / TraceDrawer
   show a `Workflow` glyph instead of a blank `SrcAvatar` and HIDE the
   per-source count chip (no misleading 0). Keep the honest lane name.
-- **cmdk identity trap (#98): `CommandItem value` IS the hover/selection
+- **cmdk identity trap: `CommandItem value` IS the hover/selection
   identity.** Identical values ⇒ all twins highlight together. Past-query
   items use `pastQueryKey(p, i)` (`run_id`, fallback `q-index`) — never the
   bare query text. And the rendered recents are `dedupePastQueries(...)`
@@ -111,7 +111,7 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
   pins the row so description length never shifts it; the grid's stretch
   alignment keeps rows reading as one shelf.
 
-## Stream state machine · dedup · composer · autocomplete (#82)
+## Stream state machine · dedup · composer · autocomplete
 
 - **`stream.attached`, not `runId`, gates the live view.** `reduceRun` flips
   `attached` on the FIRST frame of ANY type (incl. `agent_start`); `useRunStream`
@@ -127,15 +127,18 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
   render the SAME `ComposerShell`, differing only by surface/padding size tokens
   — so the landing and in-run composers are literally one component, not two
   look-alikes (the old `compact` branch hand-rolled a divergent flat pill row;
-  deleted). Tasks' `InputComposerBody` deliberately stays off it (JS-glow
-  surface, per-variant toolbar, running Queue/Stop) — forcing it would add knobs
-  (YAGNI) / regress.
-- **Focus language is SHARED with the Tasks composer, via CSS not JS**:
+  deleted). Since the composer unification the shell is console-wide: Wiki's
+  `QADock` and Apps' `HeroComposer` render it too, and Tasks' `composerCard()`
+  shares the same `.composer-surface` chrome family (only its BODY/behavior —
+  per-variant toolbar, running Queue/Stop — stays bespoke). `composerSurface()`
+  takes `{elevation, halo}` only; radius is always `--composer-radius`.
+- **Focus language is SHARED across every composer, via CSS not JS**:
   `composerSurface()` emits `.composer-surface` + a `data-halo` attr
   (`composerSurfaceData()`), and `index.css` owns the primary-tinted 4px bloom
-  + border tint + 200ms ease-out (sibling of `.composer-shell`, reduced-motion
-  guarded). Don't reintroduce a `--ring`-tinted `focus-within:` Tailwind halo
-  on a composer — the two composers must bloom identically.
+  + border tint + 200ms ease-out (reduced-motion guarded), plus the
+  `data-running`/`data-command` behavioural tints Tasks sets. Don't reintroduce
+  a `--ring`-tinted `focus-within:` Tailwind halo on a composer — all composers
+  must bloom identically.
 - **Suggestions dropdown pans out from the composer**: `.composer-suggest`
   (origin-top scaleY+fade, 160ms, one-shot on `acOpen`, reduced-motion safe),
   `mt-1` tight anchor, same border-strong/rounded-xl/elev-3 family as the bar.
@@ -147,6 +150,24 @@ gate trace lines, `answer_delta*` drive the typewriter, `answer_ready` /
   none — re-add only alongside a real implementation (user rule, emphatic).
 - **Autocomplete opens on gesture only**: `SearchBar` suppresses the mount-time
   `autoFocus` open (`suppressFocusOpenRef`) — never `combobox [expanded]` at rest.
+
+## File map — `hooks/useAgenticSearch.ts` split by streaming concern
+
+`hooks/useAgenticSearch.ts` is the TanStack Query surface ONLY (every
+`use*` hook that reads/writes through `useQuery`/`useMutation`, plus the
+query-key consts it exports for its siblings). The two SSE-streaming
+reducers live as SEPARATE sibling files, not re-exported through the query
+file — import them directly:
+
+- `hooks/runStream.ts` — self-contained (`RunStreamState`, `reduceRun`,
+  `useRunStream`, `toRunPayload`; no dependency on the query file).
+- `hooks/mapJobStream.ts` — imports the query file's `mapJobsKey`/`SCG_KEY`/
+  `SOURCES_KEY` for its terminal-invalidation (`MapJobStreamState`,
+  `useMapJobStream`).
+
+This mirrors the wiki's `api/hooks.ts` → `api/streamHooks.ts` split. Don't
+grow `useAgenticSearch.ts` back into a streaming-reducer host — a new
+event-log fold gets its own sibling file.
 
 ## SSE consumer — reuse the shared util, mirror `useQaStream`
 
@@ -233,10 +254,17 @@ the workspace context pill and the scope pill. This is the design fix for
 "everything visible, nothing important": the composer is the focal point;
 power-user knobs disclose on click.
 
+- **The run-config quartet is ONE `SearchScope` object prop** (`{tier,
+  onTierChange, model, onModelChange}`, exported from `SearchScopeControl.tsx`),
+  threaded `AgenticSearchView` → `ResultsPanel`/`LandingPanel` → `SearchBar` →
+  `SearchScopeControl` as `scope`/`scope?`, not four individually-drilled props
+  per layer. `AgenticSearchView` builds the one `scope` object (`useMemo`) and
+  passes it down; a new run-config knob is one field here, not a new prop at
+  every hop.
 - **`SearchScopeControl` is its OWN atomic file** (`SearchScopeControl.tsx`),
   not inlined in `SearchBar` — one feature, one component. `SearchBar`'s toolbar
   is just `WorkspacePill` + `SearchScopeControl`; the control renders only when
-  its run-config props (`tier`/`onTierChange`/`onModelChange`) are present so
+  its `scope` prop is present so
   legacy call sites stay valid.
 - **The pill names the resolved config at rest** — tier name + override-else-preset
   (`run.model or models?.[tier]`, via `formatModelName`) → `"Auto · claude-sonnet-4-6"`;
@@ -244,7 +272,8 @@ power-user knobs disclose on click.
   fabricate a model name). The info scent stays visible without opening anything.
 - **ONE `DropdownMenu` hosts all three concerns — not a Popover.** Budget = the
   `DropdownMenuRadioGroup` (Fast/Auto/Deep two-line rows: name + depth/fan-out
-  hint in prose, tier preset in mono). Model = a `DropdownMenuSub` whose
+  hint in prose, tier preset muted below it — a model name is a name, not
+  machine text, so it stays out of the mono family). Model = a `DropdownMenuSub` whose
   `DropdownMenuSubContent` embeds the shared `ModelMenu` as a flyout. Sources =
   a `DropdownMenuItem` (avatars + count → `onOpenConfig`). A `DropdownMenuSub` is
   why this is a DropdownMenu and not a Popover: nesting the cmdk `ModelMenu`
@@ -264,7 +293,7 @@ power-user knobs disclose on click.
   a non-component module so the control and any other consumer share one
   definition (DRY; it can't drift).
 
-### Mobile viewport — the sub-flyout can't sit beside the parent (#125)
+### Mobile viewport — the sub-flyout can't sit beside the parent
 
 A nested side-flyout (`DropdownMenuSub`) geometrically cannot coexist with a
 full-width parent menu on a phone-width viewport: parent (≈288px) + flyout
@@ -318,7 +347,7 @@ showed only dead fixture data). The rebuilt contract:
   breadcrumb → snippet (`line-clamp-3` until expanded) → **meta chip row** →
   footer (author/timestamp **only when non-empty** — no dangling `·` — + actions).
 - **`meta` IS the "card_meta" footer — there is NO second field.** The agent
-  proposes an open-vocab scalar dict on each `scg_results` entry (#111); the card
+  proposes an open-vocab scalar dict on each `scg_results` entry; the card
   renders it as a structured footer. A parallel `card_meta` would duplicate it
   verbatim (DRY) — `resultMeta.ts` is the generic *mechanism* that renders ANY
   key richly, so the wire stays one field. `metaChips` classifies each pair:
@@ -357,7 +386,7 @@ rail hides and the grid collapses to one centered column — so the **Agent-trac
 trigger also lives in the run-meta row** (`Layers` button), reachable at every
 width (the rail held the only at-rest trigger).
 
-**Density is VERTICAL rhythm, not the horizontal gutter (#111).** The #106 grid
+**Density is VERTICAL rhythm, not the horizontal gutter.** The grid
 fixed horizontal dead space; the remaining "too much empty space" was vertical
 slack. The tightening pass lives in the inter-section margins (grid `py-4`,
 `gap-y-4`; `mb-3/mb-4` between progress/answer/filter/results) and intra-card
@@ -379,7 +408,7 @@ The trace surfaces read per-lane + run-level instrument data, all
   (`ResultCountPip` — the headline "how much this tool contributed"; the
   count-pip vocabulary, `rounded`), then a metric strip
   (`model · N steps · duration · in→out tok · N filtered`) rendering only present
-  parts. The count moved OUT of the strip into the pip (#111) because "must be
+  parts. The count moved OUT of the strip into the pip because "must be
   clearer" — buried in a `·`-joined mono strip it read as noise. **`returned_count`
   vs `results_count`**: the pip shows KEPT (post-dedup); `returned − kept` is the
   "N filtered" in the strip (cards that collapsed into another lane's via the
@@ -400,7 +429,7 @@ The trace surfaces read per-lane + run-level instrument data, all
   looked identical to a populated one); the rail suppresses entirely with ≤1 real
   kind.
 
-## Per-card confidence is honest-or-absent (#102)
+## Per-card confidence is honest-or-absent
 
 `SearchResult.confidence` (optional) is the EMITTING AGENT's per-card
 certainty from an `scg_results` entry — probe-emitted cards carry it,
@@ -430,7 +459,7 @@ connector-derived text; keep it that way.
   per-source `slot` maps to `--agent-N` tokens — reuse them, don't
   hand-pick agent colors.
 
-## Landing inertness + URL-as-source-of-truth (#80)
+## Landing inertness + URL-as-source-of-truth
 
 **The URL is the single source of truth for `{workspace, active run}`.** Canonical
 shape: `/search?ws=<workspace_id>&run=<run_id>`. `AgenticSearchView` DERIVES both
@@ -464,7 +493,7 @@ shared link renders the same run + workspace on ANY browser regardless of
 localStorage. `done`/`answerReady` pair with the AUTHORITATIVE status (live stream,
 else snapshot `status`) — a `running` snapshot never renders terminally.
 
-## Workspace editing is a graph-lifecycle event (#83)
+## Workspace editing is a graph-lifecycle event
 
 `WorkspaceModal` (edit mode) is reachable from EVERY workspace card — a `Pencil`
 button beside the graph button in `LandingPanel` (`onOpenConfig(w)`) — plus the
@@ -475,7 +504,7 @@ compares the prior workspace's instructions/desc/sources to the submitted values
 and fires a `sonner` re-index toast ONLY when one of those moved (a name-only
 edit stays quiet) — the smallest honest signal that the BE re-drove the map.
 
-## Workspace graph view (#79)
+## Workspace graph view
 
 `graph/` reuses the shared 3D `Graph3DView` engine (the SAME WebGL galaxy the
 wiki Knowledge Graph renders) via an injected `SCG_GRAPH_THEME` — no Cytoscape,
@@ -491,7 +520,7 @@ token family, no icon SVGs or node shapes (the 3D engine has neither).
 `node_id` (the API remaps from `source_key`); unmapped sources render as ghost
 nodes linking to the Sources map flow. Entry: workspace-card + results-rail.
 
-**Landing health band reads the SUMMARY, never the full graph (#139).** The
+**Landing health band reads the SUMMARY, never the full graph.** The
 `WorkspaceHealthBand` (LandingPanel) shows four numbers off `stats`
 (mapped-source coverage, node·edge size, memory notes), so it fetches the
 light `GET /workspaces/<id>/graph/summary` (`useWorkspaceGraphSummary` →

@@ -149,7 +149,7 @@ class ScgCore:
 
     @classmethod
     def router(cls, store: ScgStore) -> ScgRouter:
-        """Build a **memory-aware** :class:`ScgRouter` over *store* (#76).
+        """Build a **memory-aware** :class:`ScgRouter` over *store*.
 
         The router is DI'd with the wiki query embedder AND an
         :class:`ScgMemoryBridge` so routing biases toward pathways the learned
@@ -183,7 +183,7 @@ class ScgCore:
     def memory_bridge(cls, store: ScgStore) -> ScgMemoryBridge:
         """Build an :class:`ScgMemoryBridge` over the wiki memory substrate.
 
-        The bridge needs the wiki memory store (the shared #13 substrate) + an
+        The bridge needs the wiki memory store (the shared substrate) + an
         embedder. The store is built via the wiki STORE FACTORY directly, NOT
         read off ``wiki.routes._runtime`` — that module global is ``None`` for any
         deployment that never initialised the wiki API, which would make every

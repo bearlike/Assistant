@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for FleetPanel — the selectable hypervisor fleet (#161, epic #149).
+"""Tests for FleetPanel — the selectable hypervisor fleet.
 
 The acceptance bar: each agent is a SELECTABLE row whose content is a compact
 summary (``glyph · label · model · N tools · elapsed · in→out``) with NO
@@ -163,6 +163,32 @@ def test_state_glyphs_reflect_status() -> None:
             text = " ".join(_prompts(panel))
             assert "✓" in text
             assert "✗" in text
+
+    _run(go)
+
+
+def test_blocked_and_unmet_goal_never_render_a_green_checkmark() -> None:
+    """A blocked or unmet-goal root row must render its OWN glyph, never ✓.
+
+    Regression for the false-success bug: the fleet row's status used to be a
+    raw ``done_reason`` passthrough, so a ``blocked_code``-carrying completion
+    (whose ``done_reason`` stays ``"completed"``) resolved straight to the
+    ``completed`` glyph — a green ✓ on a run that never got past a wall.
+    """
+    rows = [
+        _row("blk00001", None, 0, status="blocked", started_at=1.0, stopped_at=2.0),
+        _row("ung00001", "blk00001", 1, status="unmet_goal", started_at=1.0, stopped_at=2.0),
+    ]
+
+    async def go() -> None:
+        app = _FleetApp(lambda: rows)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            panel = app.query_one("#fleet", FleetPanel)
+            text = " ".join(_prompts(panel))
+            assert "✓" not in text
+            assert "⚠" in text  # blocked
+            assert "◎" in text  # unmet_goal — distinct from blocked
 
     _run(go)
 

@@ -1,6 +1,6 @@
 """Golden byte-equality tests for the migrated ``structured.*`` prompts.
 
-Phase 1 of the central prompt registry (Gitea #89) is a VERBATIM extraction: the
+Phase 1 of the central prompt registry is a VERBATIM extraction: the
 hardcoded prompt constants/f-strings in ``structured_response.py`` and
 ``structured_synthesis.py`` move into ``prompts/registry/structured.yaml`` with
 ZERO behaviour change. Each ``EXPECTED`` below is the ORIGINAL literal copied

@@ -1,4 +1,4 @@
-"""Tests for :class:`GraphStructuredRunner` — the #77 graph-first structured path.
+"""Tests for :class:`GraphStructuredRunner` — the graph-first structured path.
 
 A structured run bound to a mapped Agentic Search workspace goes graph-first: the
 SAME agentic ``StructuredResponder`` / ``ToolUseLoop`` (NOT a separate execution
@@ -18,6 +18,7 @@ from mewbo_api.agentic_search.scg.graph_structured_runner import GraphStructured
 from mewbo_api.agentic_search.scg.workspace_binding import SCG_CAPABILITY
 from mewbo_api.agentic_search.schemas import Workspace, WorkspaceInput
 from mewbo_api.agentic_search.store import JsonAgenticSearchStore
+from mewbo_core.structured_response import StructuredResponseError
 from mewbo_graph.scg import store as scg_store_mod
 from mewbo_graph.scg.types import SourceDescriptor
 
@@ -136,3 +137,34 @@ def test_build_responder_caller_tools_narrow_never_widen(store, monkeypatch) -> 
     assert "scg_route" in allowed
     assert "mcp_linear_search" not in allowed  # narrowed away
     assert "not_granted" not in allowed  # caller can't widen past the grant
+
+
+def test_build_responder_refuses_when_tools_share_nothing_with_the_grant(
+    store, monkeypatch
+) -> None:
+    """An empty post-narrow intersection is REFUSED, never handed through as `[]`.
+
+    `orchestrator.py` reads an empty `allowed_tools` as UNRESTRICTED. Before this
+    fix, a caller `tools` list with zero overlap with the workspace's grant
+    (connector tools ∪ TRAVERSAL_TOOLS) intersected down to `[]`, which then
+    widened the run to the FULL tool registry -- the opposite of what "narrow,
+    never widen" (the docstring one line above `if tools:`) promises. This pins
+    the refusal instead.
+    """
+    _enable_scg(monkeypatch)
+    monkeypatch.setattr(
+        "mewbo_api.agentic_search.scg.graph_structured_runner.SourceCatalog.tools_for",
+        staticmethod(lambda sources, project: [f"mcp_{s}_search" for s in sources]),
+    )
+    ws = _ws(store, ["github"])
+    _map_source("github")
+    runner = GraphStructuredRunner(store=store)
+
+    with pytest.raises(StructuredResponseError):
+        runner.build_responder(
+            ws,
+            runtime=object(),
+            schema=_SCHEMA,
+            tools=["totally_unrelated_tool_id"],
+            source_platform=None,
+        )

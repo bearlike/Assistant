@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [RunPhase.isRunInFlight] is the ComposerOptionsSheet scope-freeze gate (Gitea #185 P5): the
+ * [RunPhase.isRunInFlight] is the ComposerOptionsSheet scope-freeze gate: the
  * Project/Tools picks freeze ONLY while a turn is actively Sending/Streaming, not for the entire
  * lifetime of an already-created session.
  */

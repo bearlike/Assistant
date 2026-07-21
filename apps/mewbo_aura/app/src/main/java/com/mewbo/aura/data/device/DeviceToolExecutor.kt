@@ -3,43 +3,69 @@ package com.mewbo.aura.data.device
 import com.mewbo.aura.data.api.DeviceToolErrorDto
 import com.mewbo.aura.data.api.DeviceToolResultRequest
 import com.mewbo.aura.data.model.DeviceToolCallPayload
-import com.mewbo.aura.data.model.SessionEvent
 import com.mewbo.aura.di.ApplicationScope
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /**
- * Dispatches `device_tool_call` events off whichever session's live SSE flow it's currently
- * [attach]ed to, per call: dedup ([DeviceToolCallLedger]) -> staleness (`now > expires_at`) ->
- * run the matching [DeviceToolHandler] -> POST the result ([DeviceToolResultReporter]) - order
- * fixed by the task brief. A Hilt singleton (data/ layer, zero Compose/UI imports): exactly one
- * [attach]ed session's worth of dispatch is live at a time, tracked by [job].
+ * Answers one `device_tool_call`: dedup ([DeviceToolCallLedger]) -> staleness (`now > expires_at`)
+ * -> run the matching [DeviceToolHandler] -> POST the result ([DeviceToolResultReporter]) - order
+ * fixed by the task brief. A Hilt singleton (data/ layer, zero Compose/UI imports).
  *
- * [attach] takes the caller's own already-multicast `Flow<SessionEvent>`
- * ([com.mewbo.aura.data.repo.RunRepository.live] is `shareIn`-backed per session id) rather than
- * subscribing to the session stream itself, so a session's device-tool servicing rides the SAME
- * underlying SSE connection the chat transcript collector uses instead of opening a second one
- * (task brief: "multicast if needed, don't fork chat rendering" - chat rendering itself,
- * [com.mewbo.aura.data.model.TranscriptReducer]/`ChatViewModel.applyEvent`, is untouched by this
- * class). Runs on [scope] (app-lifetime), not the caller's own coroutine scope, so a client-side
- * `ChatViewModel.stop()` - which explicitly leaves the backend run itself going (v1 semantics,
- * `ChatViewModel.stop` doc) - does not also stop servicing that still-live run's device tool
- * calls; only a genuine session switch ([attach] to a different id, or [detach]) does.
+ * **This class owns no subscription and no lifecycle - it is a pure dispatcher.** It is reached ONLY
+ * as the [DeviceToolDispatch] binding that `buildMulticastLiveFlow` wires into a session's event
+ * pipeline (an `onEach` UPSTREAM of the `shareIn`), so every path that follows a run - chat, the
+ * assist overlay, whatever comes next - services device tool calls by construction. That placement
+ * is load-bearing, and it replaced an earlier design where this class subscribed to the session's
+ * `SharedFlow` itself; being a second SUBSCRIBER is what made all of the following possible, and all
+ * of it is now structurally gone rather than defended against:
+ *
+ * - It pinned the subscriber count above zero forever, so `WhileSubscribed` could never reap an
+ *   abandoned run's upstream - and `SessionStreamClient` reconnects on the server's idle-close, so
+ *   that run would have gone on re-opening its SSE connection indefinitely.
+ * - Ending that subscription on the stream's terminal event looked like the fix, but isn't sound:
+ *   `SessionStreamClient` `trySend`s each frame and sets `terminated = true` REGARDLESS of whether
+ *   the send landed, so under buffer pressure the `stream_end` frame is DROPPED while the loop still
+ *   ends - no subscriber ever sees a terminal value, and the collector would leak anyway.
+ * - Tracking one collector per session flow needed a map, an identity key, and a teardown race
+ *   (an older collector's cleanup evicting the entry a newer one just installed => two collectors on
+ *   one flow => the same `call_id` dispatched twice, with only [callLedger] between that and a
+ *   duplicate SMS).
+ *
+ * A pipeline `onEach` has none of those failure modes: it lives and dies with the upstream itself,
+ * whatever way that upstream dies, and each session's flow carries its own - so one session can
+ * never cancel another's dispatch (the assist overlay opening mid-run must not stop a live chat
+ * run's tools being answered). Being upstream of the `shareIn` also means dispatch does not depend
+ * on WHO is subscribed at emit time, which a `replay = 0` `SharedFlow` otherwise makes racy.
+ *
+ * **A run's device tools are serviced exactly as long as somebody is following that run.** This
+ * REVERSES an earlier claim in this KDoc that app-scope servicing continued past a client-side
+ * `ChatViewModel.stop()`. It doesn't any more, deliberately: `stop()` and `bind()` both cancel the
+ * transcript collector, the subscriber count falls to zero, `WhileSubscribed` stops the upstream and
+ * the pipeline goes with it, so NEW calls on that run stop being answered (for `bind()` this is
+ * exactly what the old, now-deleted `ChatViewModel` detach did - a restoration, not a regression).
+ * That is the right trade: if the user pressed Stop, silently sending an SMS or launching the clock
+ * app afterwards is far worse than letting the call time out server-side. An ALREADY-dispatched call
+ * still runs to completion and reports - see [dispatch].
+ *
+ * Because a reconnect replays the FULL backlog (data/CLAUDE.md), the same `device_tool_call` reaches
+ * [dispatch] again on every re-collection of the upstream; [callLedger]'s `recordIfNew` is what makes
+ * that idempotent, and it always was - this placement doesn't add a new replay path, it inherits the
+ * existing one.
  */
 @Singleton
 class DeviceToolExecutor @Inject constructor(
     private val resultReporter: DeviceToolResultReporter,
     private val callLedger: DeviceToolCallLedger,
     private val clock: DeviceClock,
+    private val gate: DeviceToolGate,
     handlers: List<@JvmSuppressWildcards DeviceToolHandler>,
     @ApplicationScope private val scope: CoroutineScope,
-) {
+) : DeviceToolDispatch {
     /** Built from an injected [List] (assembled in [com.mewbo.aura.di.DeviceModule] for
      * production) rather than five named concrete handler constructor params - the concrete
      * handlers (`SetAlarmHandler` etc.) need a real Android `Context` and aren't constructible in
@@ -47,46 +73,30 @@ class DeviceToolExecutor @Inject constructor(
      * executor tests pass trivial in-memory fakes instead. */
     private val handlers: Map<String, DeviceToolHandler> = handlers.associateBy { it.toolId }
 
-    private var job: Job? = null
-
-    /** (Re)starts dispatch for [sessionId] off [events], cancelling whatever session was
-     * previously attached - callers never need to [detach] before a fresh [attach]. */
-    fun attach(sessionId: String, events: Flow<SessionEvent>) {
-        job?.cancel()
-        job = scope.launch {
-            events.collect { event ->
-                // [handle] (including its network result POST) runs on its OWN child coroutine of
-                // [scope] DIRECTLY - NOT `this@launch`/the collect job's own scope - for two
-                // distinct reasons layered on top of each other:
-                //
-                // (1) Not awaited inline: [events] is `RunRepository.live`'s zero-buffer `shareIn`
-                // `SharedFlow`, and a SharedFlow's emit() only advances once EVERY subscriber's
-                // collect body returns. Awaiting handle() here would stall delivery to the OTHER
-                // subscriber (ChatViewModel's transcript collector) for as long as a slow
-                // handler/POST takes, freezing live chat rendering mid-turn (review finding, fix
-                // round 1). Per-call ordering doesn't matter - calls are independent and
-                // [callLedger] already guards a replayed call_id from double-executing.
-                //
-                // (2) Not parented to the COLLECT job either: if it were a child of `job` (plain
-                // `launch{}`, implicitly `this@launch`), [detach]'s `job.cancel()` on a session
-                // switch would cancel an ALREADY-DISPATCHED call mid-flight - between the
-                // handler's real-world side effect (e.g. an SMS actually sent) and the result POST
-                // that tells the server it succeeded. The server, never hearing back, would then
-                // time out and have the model retry - a genuinely duplicate SMS (review finding
-                // F8). Launching on [scope] directly makes a started call a SIBLING of `job`, not
-                // its child, so it always runs to completion and reports regardless of what
-                // happens to the session it was dispatched under.
-                if (event is SessionEvent.DeviceToolCall) scope.launch { handle(sessionId, event.payload) }
-            }
-        }
-    }
-
-    /** Stops dispatch entirely - called on every real session switch/unbind (`ChatViewModel.bind`)
-     * so a previous session's device tool calls are never serviced once the user has navigated
-     * away from it. */
-    fun detach() {
-        job?.cancel()
-        job = null
+    /**
+     * Starts answering [call] and returns IMMEDIATELY. Two distinct properties ride on that, layered
+     * on top of each other - both were review findings, and neither survives making this suspend or
+     * parenting the work to the caller:
+     *
+     * (1) **Never awaited inline.** This is called from the shared upstream's `onEach`, and a
+     * `SharedFlow.emit` only advances once EVERY subscriber's collect body returns. Awaiting the
+     * handler here would stall delivery to the transcript collector for as long as a slow
+     * handler/result-POST takes, freezing live chat rendering mid-turn (review finding, fix round 1).
+     * Per-call ordering doesn't matter - calls are independent, and [callLedger] already guards a
+     * replayed `call_id` from double-executing.
+     *
+     * (2) **Launched on [scope] (app-lifetime), never on the caller's coroutine.** A started call
+     * MUST outlive the stream that delivered it. The pipeline dies whenever the last subscriber goes
+     * away (`WhileSubscribed`) - a Stop, a session switch, the overlay dismissing - and that can land
+     * while a call is genuinely in flight: between the handler's real-world side effect (an SMS
+     * actually SENT) and the result POST that tells the server it succeeded. Killed there, the server
+     * never hears back, times out, and has the model retry - a genuinely duplicate SMS (review
+     * finding F8). As a child of the pipeline's coroutine that is exactly what would happen; as a
+     * sibling on [scope] it always runs to completion and reports, whatever happens to the stream it
+     * arrived on.
+     */
+    override fun dispatch(sessionId: String, call: DeviceToolCallPayload) {
+        scope.launch { handle(sessionId, call) }
     }
 
     internal suspend fun handle(sessionId: String, call: DeviceToolCallPayload) {
@@ -129,6 +139,17 @@ class DeviceToolExecutor @Inject constructor(
     }
 
     private suspend fun executeOutcome(call: DeviceToolCallPayload): Outcome {
+        // the catalog already omits a user-disabled tool from advertisement, so a
+        // dispatch for one can only come from a stale/misbehaving server - refuse it here rather than
+        // silently running the handler. Checked BEFORE handler lookup: a disabled tool is by
+        // definition a known one, so `tool_disabled` is the honest code (never `unknown_tool`).
+        if (call.toolId in gate.disabledToolIds()) {
+            return Outcome(
+                status = "error",
+                result = null,
+                error = DeviceToolErrorDto(code = "tool_disabled", message = "Tool '${call.toolId}' is disabled in device settings"),
+            )
+        }
         val handler = handlers[call.toolId]
             ?: return Outcome(
                 status = "error",
@@ -140,10 +161,11 @@ class DeviceToolExecutor @Inject constructor(
         } catch (e: DeviceToolError) {
             Outcome(status = "error", result = null, error = DeviceToolErrorDto(code = e.code, message = e.message ?: "Error"))
         } catch (e: CancellationException) {
-            // Gitea #181 fix wave, finding 2: this call runs as a SIBLING of `job` on `scope`
-            // directly (see attach()'s own KDoc on why) - a genuine cancellation here means the
-            // whole executor/app scope is going down, not a per-call handler failure. Reporting it
-            // to the backend as a normal handler_error would be a lie; let it propagate instead.
+            // this call runs on [scope] directly, never under the
+            // stream that delivered it (see [dispatch]'s own KDoc on why) - so a genuine cancellation
+            // here means the whole executor/app scope is going down, NOT that the run was stopped or
+            // the session switched. Reporting that to the backend as a normal handler_error would be
+            // a lie; let it propagate instead.
             throw e
         } catch (e: Exception) {
             Outcome(

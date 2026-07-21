@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the per-turn workspace checkpointer (#157).
+"""Tests for the per-turn workspace checkpointer.
 
 Drives a real temp git repo (filesystem is the only boundary) so the git
 plumbing — non-destructive capture, safe reversible restore, graceful

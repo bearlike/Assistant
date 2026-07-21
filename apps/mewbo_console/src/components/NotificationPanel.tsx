@@ -2,53 +2,60 @@ import { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { NotificationItem } from '../types';
 import { getStatusConfig } from '../lib/notifications';
+import { RelativeTime } from '../utils/relativeTime';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 interface NotificationPanelProps {
   notifications: NotificationItem[];
-  onDismiss: (id: string) => void;
+  onClose: (id: string) => void;
   onClearAll: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The trigger element (e.g. the bell button). Wrapped via PopoverTrigger asChild. */
   trigger: ReactNode;
+  /** Popover direction. Defaults to a top-bar bell (`bottom`/`end`); the NavRail
+   *  footer bell sits bottom-left, so it opens to the right instead. */
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
 }
 
-function timeAgo(timestamp: string): string {
-  const diff = Date.now() - new Date(timestamp).getTime();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
+/**
+ * Bell popover: a 320px surface listing every live notification.
+ *
+ * Typography here is deliberately flat. The panel previously ran FOUR sizes
+ * (12 / 11 / 10 / 10px) inside one small popover, all at weight 500 — at that
+ * scale a 1px step is invisible, so four sizes read as one blurry size and the
+ * hierarchy did no work. It now uses exactly two adjacent steps (`text-xs` for
+ * content, `text-2xs` for the metadata line) and lets WEIGHT and COLOUR carry
+ * the hierarchy instead: title is medium/foreground, message is normal/muted,
+ * status keeps medium plus its state colour, timestamp is normal/muted.
+ * Adding a third size back is the regression to watch for.
+ */
 export function NotificationPanel({
   notifications,
-  onDismiss,
+  onClose,
   onClearAll,
   open,
   onOpenChange,
   trigger,
+  side = "bottom",
+  align = "end",
 }: NotificationPanelProps) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
-        side="bottom"
-        align="end"
+        side={side}
+        align={align}
         className="w-80 p-0 overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-[hsl(var(--border))]">
-          <span className="text-xs font-semibold text-[hsl(var(--foreground))]">
+          <span className="text-xs font-medium text-[hsl(var(--foreground))]">
             Notifications
           </span>
           {notifications.length > 0 && (
-            <span className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded-full">
+            <span className="text-2xs font-medium text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded-full">
               {notifications.length}
             </span>
           )}
@@ -69,33 +76,36 @@ export function NotificationPanel({
               return (
                 <div
                   key={n.id}
-                  className="group flex items-start gap-2.5 px-3 py-2.5 hover:bg-[hsl(var(--accent))] transition-colors border-b border-[hsl(var(--border))]/50 last:border-b-0">
+                  className="group flex items-start gap-2.5 px-3 py-2.5 hover:bg-[hsl(var(--accent))] transition-colors border-b border-[hsl(var(--border))] last:border-b-0">
                   <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${config.color}`} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-[hsl(var(--foreground))] font-medium truncate">
+                    <p className="text-xs font-medium text-[hsl(var(--foreground))] truncate">
                       {n.title}
                     </p>
                     {n.message && (
-                      <p className="text-[11px] text-[hsl(var(--muted-foreground))] truncate">
+                      <p className="text-xs font-normal text-[hsl(var(--muted-foreground))] truncate">
                         {n.message}
                       </p>
                     )}
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className={`text-[10px] font-medium ${config.color}`}>
+                      {/* Status is the semantic anchor of the row, so it keeps
+                          weight AND its state colour; the timestamp beside it
+                          drops to plain muted. Same size, different job. */}
+                      <span className={`text-2xs font-medium ${config.color}`}>
                         {config.label}
                       </span>
-                      <span className="text-[10px] text-[hsl(var(--muted-foreground))]">·</span>
-                      <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                        {timeAgo(n.created_at)}
+                      <span className="text-2xs font-normal text-[hsl(var(--muted-foreground))]">·</span>
+                      <span className="text-2xs font-normal text-[hsl(var(--muted-foreground))]">
+                        {RelativeTime.format(n.created_at)}
                       </span>
                     </div>
                   </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onDismiss(n.id);
+                      onClose(n.id);
                     }}
-                    className="p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                    className="p-0.5 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-all shrink-0"
                     aria-label="Dismiss notification">
                     <X className="w-3 h-3" />
                   </button>
@@ -110,7 +120,7 @@ export function NotificationPanel({
           <div className="border-t border-[hsl(var(--border))] px-3 py-2">
             <button
               onClick={onClearAll}
-              className="w-full text-center text-[11px] font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors py-0.5">
+              className="w-full text-center text-xs font-normal text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors py-0.5">
               Clear all notifications
             </button>
           </div>

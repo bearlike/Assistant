@@ -14,6 +14,9 @@
 import { useRef } from "react";
 import { FileText, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cardSurface } from "@/components/ui/card-surface";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { CatalogDocument } from "./api/types";
 
@@ -105,7 +108,7 @@ export function CatalogDocsForm({ docs, onChange, error }: CatalogDocsFormProps)
       {/* Empty state */}
       {docs.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20 py-8 px-4 text-center">
-          <FileText className="h-6 w-6 text-[hsl(var(--muted-foreground))]" />
+          <FileText className="size-5 text-[hsl(var(--muted-foreground))]" />
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
             No documents yet — add one below or upload files.
           </p>
@@ -114,7 +117,7 @@ export function CatalogDocsForm({ docs, onChange, error }: CatalogDocsFormProps)
 
       {/* Error */}
       {error && (
-        <p className="text-xs text-[hsl(var(--destructive))]">{error}</p>
+        <p className="text-xs text-[hsl(var(--destructive-text))]">{error}</p>
       )}
 
       {/* Action row */}
@@ -137,7 +140,7 @@ export function CatalogDocsForm({ docs, onChange, error }: CatalogDocsFormProps)
         >
           Upload files
         </Button>
-        <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
+        <span className="text-2xs text-[hsl(var(--muted-foreground))]">
           Accepts .txt and .md files
         </span>
         {/* Hidden file input */}
@@ -170,41 +173,39 @@ function DocCard({
 }) {
   return (
     <div
-      className={cn(
-        "rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden",
-      )}
+      className={cn(cardSurface({ radius: "left" }), "overflow-hidden")}
     >
       {/* Card header row */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/20">
+      <div className="flex items-center gap-2 px-3 py-2 bg-[hsl(var(--muted))]/20">
         <FileText className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))] shrink-0" />
-        <input
+        <Input
           type="text"
           placeholder={`Document ${idx + 1} title`}
           value={doc.title}
           onChange={(e) => onUpdate({ title: e.target.value })}
           aria-label={`Title for document ${idx + 1}`}
-          className="flex-1 bg-transparent text-sm outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+          className="flex-1 h-auto border-0 px-0 py-0 shadow-none bg-transparent placeholder:text-[hsl(var(--muted-foreground))] focus-visible:ring-0"
         />
         <button
           type="button"
           aria-label={`Remove document ${idx + 1}`}
           title="Remove"
           onClick={onRemove}
-          className="inline-flex items-center justify-center w-6 h-6 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))]/10 transition-colors"
+          className="inline-flex items-center justify-center w-6 h-6 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive-text))] hover:bg-[hsl(var(--destructive))]/10 transition-colors"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
       {/* Body */}
-      <textarea
+      <Textarea
         rows={6}
         spellCheck={false}
         placeholder="Paste or type document content…"
         value={doc.text}
         onChange={(e) => onUpdate({ text: e.target.value })}
         aria-label={`Content for document ${idx + 1}`}
-        className="w-full bg-transparent font-mono text-xs text-[hsl(var(--foreground))] px-3 py-2.5 outline-none resize-none placeholder:text-[hsl(var(--muted-foreground))]"
+        className="w-full min-h-0 border-0 shadow-none bg-transparent font-mono text-[hsl(var(--foreground))] px-3 py-2.5 resize-none placeholder:text-[hsl(var(--muted-foreground))] focus-visible:ring-0"
       />
     </div>
   );

@@ -506,13 +506,13 @@ def test_finalize_supersedes_stale_nonterminal_sibling_jobs(tmp_path: Path) -> N
     assert store.get_job("job-old-complete").status == "complete"
 
 
-# ── Terminal SessionTool contract (Gitea #58) ─────────────────────────────────
+# ── Terminal SessionTool contract ─────────────────────────────────
 
 
 def test_finalize_should_terminate_run_after_success(tmp_path: Path) -> None:
     """A successful finalize sets should_terminate_run() so the loop exits immediately.
 
-    This is the Gitea #58 primary fix: WikiFinalizeTool must signal loop
+    This is the primary fix: WikiFinalizeTool must signal loop
     termination on success (mirror EmitStructuredResponseTool) so no extra
     post-finalize LLM turn is taken — eliminating the wedge that prevented
     the terminal events from being emitted.

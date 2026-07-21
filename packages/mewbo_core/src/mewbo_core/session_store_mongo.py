@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import uuid
 
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
@@ -39,6 +39,7 @@ class MongoSessionStore(SessionStoreBase):
         database: str | None = None,
     ) -> None:
         """Initialize MongoDB connection and local attachment directory."""
+        super().__init__()
         # Local directory for attachment files.
         if root_dir is None:
             root_dir = get_config_value("runtime", "session_dir", default="./data/sessions")
@@ -84,13 +85,13 @@ class MongoSessionStore(SessionStoreBase):
 
     # -- abstract implementations -------------------------------------------
 
-    def create_session(self) -> str:
+    def create_session(self, owner: str | None = None) -> str:
         """Create a new session document and return its identifier."""
         session_id = uuid.uuid4().hex
-        self.ensure_session(session_id)
+        self.ensure_session(session_id, owner)
         return session_id
 
-    def ensure_session(self, session_id: str) -> None:
+    def ensure_session(self, session_id: str, owner: str | None = None) -> None:
         """Idempotently materialise the ``sessions`` document for a known id.
 
         ``append_event`` only writes the ``events`` collection, so a session
@@ -98,7 +99,9 @@ class MongoSessionStore(SessionStoreBase):
         has events but no ``sessions`` document — invisible to ``list_sessions``,
         which reads the ``sessions`` collection. This upsert creates the record
         once. ``$setOnInsert`` means a replay never resets ``created_at`` or
-        clears an ``archived_at`` already set on the existing doc (true no-op).
+        clears an ``archived_at`` already set on the existing doc (true no-op) —
+        and it is what makes ``owner_subject`` set-once for free, so a second
+        ``ensure_session`` can never re-point an existing session at a new owner.
         """
         self._col("sessions").update_one(
             {"_id": session_id},
@@ -106,6 +109,8 @@ class MongoSessionStore(SessionStoreBase):
                 "$setOnInsert": {
                     "created_at": _utc_now(),
                     "archived_at": None,
+                    "terminated_at": None,
+                    "owner_subject": owner,
                     "summary": None,
                     "summary_updated_at": None,
                     "title": None,
@@ -123,8 +128,8 @@ class MongoSessionStore(SessionStoreBase):
         os.makedirs(path, exist_ok=True)
         return path
 
-    def append_event(self, session_id: str, event: Event) -> None:
-        """Insert an event document into the events collection."""
+    def _write_event(self, session_id: str, event: Event) -> None:
+        """Insert an event document into the events collection, unconditionally."""
         record: EventRecord = {"ts": _utc_now(), **event}
         self._col("events").insert_one({"session_id": session_id, **record})
         self._publish_appended(session_id, record)
@@ -137,6 +142,37 @@ class MongoSessionStore(SessionStoreBase):
             .sort("ts", ASCENDING)
         )
         return list(cursor)
+
+    def load_recent_events(
+        self,
+        session_id: str,
+        limit: int = 8,
+        include_types: set[str] | None = None,
+    ) -> list[EventRecord]:
+        """Tail the events collection with a BOUNDED query.
+
+        Overrides the base template method, which materialises the whole
+        transcript before slicing — an O(transcript) read per call. A caller
+        that only wants the last ``limit`` events (the startup run sweep) instead
+        pays a single indexed range read: sort ``ts`` DESC + ``limit`` at the
+        store, then reverse to restore ascending order. ``include_types`` filters
+        server-side. Mirrors the targeted-query overrides below
+        (``last_attestation_hash``/``tags_for_session``).
+        """
+        if limit <= 0:
+            return []
+        query: dict[str, object] = {"session_id": session_id}
+        if include_types:
+            query["type"] = {"$in": list(include_types)}
+        cursor = (
+            self._col("events")
+            .find(query, {"_id": 0, "session_id": 0})
+            .sort("ts", DESCENDING)
+            .limit(limit)
+        )
+        events = list(cursor)
+        events.reverse()
+        return events
 
     def truncate_after(self, session_id: str, cutoff_ts: str) -> int:
         """Delete all events with ``ts > cutoff_ts``."""
@@ -186,10 +222,29 @@ class MongoSessionStore(SessionStoreBase):
         title = doc.get("title")
         return title if isinstance(title, str) and title else None
 
-    def list_sessions(self) -> list[str]:
-        """Return sorted session IDs from the sessions collection."""
-        ids = self._col("sessions").distinct("_id")
+    def list_sessions(self, owner: str | None = None) -> list[str]:
+        """Return sorted session IDs, narrowed to what *owner* may see.
+
+        The ``owner_subject: None`` arm of the filter is doing double duty:
+        Mongo equality to ``null`` also matches a MISSING field, so it selects
+        both a session explicitly stamped unowned and one whose document
+        predates the field entirely — the same property ``terminate_session``
+        relies on. Without it every session already on disk would disappear
+        from its own creator's list.
+        """
+        query: dict[str, object] = {}
+        if owner is not None:
+            query = {"$or": [{"owner_subject": owner}, {"owner_subject": None}]}
+        ids = self._col("sessions").distinct("_id", query)
         return sorted(str(sid) for sid in ids)
+
+    def get_owner(self, session_id: str) -> str | None:
+        """Return the session's ``owner_subject``, or ``None`` if unowned."""
+        doc = self._col("sessions").find_one({"_id": session_id}, {"owner_subject": 1})
+        if doc is None:
+            return None
+        subject = doc.get("owner_subject")
+        return subject if isinstance(subject, str) else None
 
     def tag_session(self, session_id: str, tag: str) -> None:
         """Upsert a tag → session_id mapping in the tags collection."""
@@ -212,6 +267,29 @@ class MongoSessionStore(SessionStoreBase):
             doc["_id"]: doc["session_id"]
             for doc in self._col("tags").find({}, {"_id": 1, "session_id": 1})
         }
+
+    def last_attestation_hash(self, session_id: str) -> str:
+        """Targeted query over the events collection.
+
+        Overrides the base reverse-scan so recovery issues one filtered/sorted
+        lookup instead of loading the whole transcript — mirrors the
+        ``tags_for_session`` override.
+        """
+        from mewbo_core.attestation import GENESIS_HASH
+
+        docs = list(
+            self._col("events")
+            .find({"session_id": session_id, "type": "attestation"})
+            .sort("ts", DESCENDING)
+            .limit(1)
+        )
+        if docs:
+            payload = docs[0].get("payload")
+            if isinstance(payload, dict):
+                record_hash = payload.get("record_hash")
+                if isinstance(record_hash, str) and record_hash:
+                    return record_hash
+        return GENESIS_HASH
 
     def tags_for_session(self, session_id: str) -> list[str]:
         """Tags pointing at a session via a targeted query.
@@ -244,6 +322,30 @@ class MongoSessionStore(SessionStoreBase):
         if doc is None:
             return False
         return doc.get("archived_at") is not None
+
+    def terminate_session(self, session_id: str) -> bool:
+        """Set ``terminated_at`` once, only while it is still unset.
+
+        The ``terminated_at: None`` filter clause makes the write set-once —
+        Mongo equality to ``null`` also matches a missing field, so a doc
+        predating this field still qualifies, while a second call finds the
+        stamp already present and no-ops (keeping the original time stable).
+        ``modified_count`` is the arbitration signal: it is 1 only for the
+        call whose filtered update actually flipped ``None`` -> a timestamp.
+        """
+        result = self._col("sessions").update_one(
+            {"_id": session_id, "terminated_at": None},
+            {"$set": {"terminated_at": _utc_now()}},
+        )
+        self._mark_terminated_cached(session_id)
+        return result.modified_count > 0
+
+    def get_terminated_at(self, session_id: str) -> str | None:
+        """Return the session's ``terminated_at`` timestamp, or ``None``."""
+        doc = self._col("sessions").find_one({"_id": session_id}, {"terminated_at": 1})
+        if doc is None:
+            return None
+        return doc.get("terminated_at")
 
 
 __all__ = ["MongoSessionStore"]

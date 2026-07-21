@@ -64,6 +64,10 @@ class TestFormatAssistantClosure:
         text = _format_assistant_closure("max_steps_reached", None)
         assert "step limit" in text.lower()
 
+    def test_budget_exhausted_closure(self) -> None:
+        text = _format_assistant_closure("budget_exhausted", None)
+        assert "step budget" in text.lower()
+
     def test_canceled_closure(self) -> None:
         text = _format_assistant_closure("canceled", None)
         assert "canceled" in text.lower()
@@ -125,20 +129,29 @@ class TestRunFailureEmitsClosure:
 
 
 class TestCompletionPayloadErrorGating:
-    """A stale ``last_error`` must not leak into a successful completion."""
+    """A sticky ``last_error`` is now CARRIED, bounded, even on a clean run."""
 
-    def test_successful_completion_drops_stale_error(self, tmp_path) -> None:
-        """``done_reason == "completed"`` must omit error/last_error keys."""
+    def test_successful_completion_still_reports_its_sticky_error(self, tmp_path) -> None:
+        """The emission is no longer gated on ``done_reason``.
+
+        Withholding the error keys on a "completed" run was meant to keep stale
+        residue off a successful wire, but the runs it silenced were
+        overwhelmingly the LAUNDERED ones — a halt or an unmet outcome
+        presenting as success — and dropping the one field that could contradict
+        the status is what made a wrong status unfalsifiable. The record is
+        carried; the status derivation stays the honesty layer above it.
+        """
         orch, store = _make_orchestrator(tmp_path)
         session_id = store.create_session()
 
         with patch.object(ToolUseLoop, "run", _successful_loop_run_with_stale_error):
             orch.run(user_query="go", session_id=session_id, max_iters=1)
 
-        completion = _completion_events(store, session_id)[0]
-        assert completion["payload"]["done_reason"] == "completed"
-        assert "error" not in completion["payload"]
-        assert "last_error" not in completion["payload"]
+        payload = _completion_events(store, session_id)[0]["payload"]
+        assert payload["done_reason"] == "completed"
+        # Carried, and bounded through RunError like every other emission path.
+        assert payload["last_error"] == payload["error"]
+        assert payload["error_detail"]["kind"] == "tool_failure"
 
     def test_non_success_completion_keeps_error(self, tmp_path) -> None:
         """A non-"completed" done_reason must still carry the error keys."""

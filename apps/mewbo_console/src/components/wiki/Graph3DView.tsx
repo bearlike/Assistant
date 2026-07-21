@@ -21,14 +21,15 @@
  * ``CONTAINS`` edges) flows through ``CollapseModel`` as a pure pass-through, so
  * there is no branch for "hierarchy vs flat" — KISS.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ForceGraph3D, { type ForceGraphMethods } from "react-force-graph-3d";
-import { Loader2, Maximize2, RotateCcw, Search, X } from "lucide-react";
+import { Loader2, Maximize2, RotateCcw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cardSurface } from "@/components/ui/card-surface";
 import { cn } from "@/lib/utils";
+
 import { CollapseModel } from "./collapseModel";
+import { Graph3DToolbar } from "./Graph3DToolbar";
 import { cssVarColor, cssVarColorAlpha, nodeSize } from "./graphTheme";
 import type { KnowledgeGraph, KnowledgeGraphEdge } from "./api/types";
 
@@ -286,8 +287,10 @@ export function Graph3DView({
     () => theme.allKinds.filter((k) => (kindCounts[k] ?? 0) > 0),
     [theme.allKinds, kindCounts],
   );
-  const kindsForLayer = (layer: string): string[] =>
-    theme.allKinds.filter((k) => theme.kindLayer[k] === layer);
+  const kindsForLayer = useCallback(
+    (layer: string): string[] => theme.allKinds.filter((k) => theme.kindLayer[k] === layer),
+    [theme],
+  );
   // Layer counts derive from the per-kind tallies (sum over the layer's kinds)
   // so a layer-only count never needs a separate stat — this also folds the
   // SCG "unmapped ghost rides the schema layer" rule in for free.
@@ -304,35 +307,87 @@ export function Graph3DView({
     [theme.layerOrder, layerCounts],
   );
 
-  const toggleKind = (k: string): void =>
+  const toggleKind = useCallback((k: string): void => {
     setHiddenKinds((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
       else next.add(k);
       return next;
     });
+  }, []);
 
-  const layerShown = (layer: string): boolean =>
-    kindsForLayer(layer).some((k) => !hiddenKinds.has(k));
+  const layerShown = useCallback(
+    (layer: string): boolean => kindsForLayer(layer).some((k) => !hiddenKinds.has(k)),
+    [kindsForLayer, hiddenKinds],
+  );
 
-  const toggleLayer = (layer: string): void => {
-    const kinds = kindsForLayer(layer);
-    const hide = layerShown(layer);
-    setHiddenKinds((prev) => {
-      const next = new Set(prev);
-      for (const k of kinds) {
-        if (hide) next.add(k);
-        else next.delete(k);
-      }
-      return next;
-    });
-  };
+  const toggleLayer = useCallback(
+    (layer: string): void => {
+      const kinds = kindsForLayer(layer);
+      const hide = layerShown(layer);
+      setHiddenKinds((prev) => {
+        const next = new Set(prev);
+        for (const k of kinds) {
+          if (hide) next.add(k);
+          else next.delete(k);
+        }
+        return next;
+      });
+    },
+    [kindsForLayer, layerShown],
+  );
 
   const filterLc = filter.trim().toLowerCase();
-  const isFiltered = (n: Graph3DNode): boolean =>
-    filterLc !== "" &&
-    !n.label.toLowerCase().includes(filterLc) &&
-    !(n.file ?? "").toLowerCase().includes(filterLc);
+  const isFiltered = useCallback(
+    (n: Graph3DNode): boolean =>
+      filterLc !== "" &&
+      !n.label.toLowerCase().includes(filterLc) &&
+      !(n.file ?? "").toLowerCase().includes(filterLc),
+    [filterLc],
+  );
+
+  // ── Per-frame ForceGraph3D accessors — memoized so identity is stable
+  // across renders (the file's own O(1)-accessor law: these run per element,
+  // per frame). Each already reads via an O(1) Map/lookup; the useCallback
+  // wrap is what keeps the accessor prop itself from being a fresh closure
+  // every render.
+  const nodeColor = useCallback(
+    (n: Graph3DNode) =>
+      isFiltered(n)
+        ? cssVarColor("--muted-foreground")
+        : cssVarColor(
+            n.kind === "Folder" && theme.folderVar
+              ? theme.folderVar
+              : theme.kindVar[n.kind] ?? "--graph-edge-soft",
+          ),
+    [isFiltered, theme],
+  );
+  const nodeVal = useCallback(
+    (n: Graph3DNode) => nodeSize(n.degree, n.kind === "Folder", folded.get(n.id) ?? 0),
+    [folded],
+  );
+  const linkColor = useCallback(
+    (l: Graph3DLink) =>
+      l.containment
+        ? // The 3D renderer multiplies the global linkOpacity (0.35) by the
+          // colour's alpha, so baking ~0.4 here lands the backbone at ~0.14 —
+          // clearly under the relationship edges.
+          cssVarColorAlpha(theme.edgeContainVar ?? "--graph-edge-contain", 0.4)
+        : cssVarColor(theme.edgeVar[l.kind] ?? "--graph-edge-soft"),
+    [theme],
+  );
+  const linkWidth = useCallback(
+    (l: Graph3DLink) => (l.containment ? 0.3 : Math.min(4, 0.5 + Math.log2(1 + (l.weight ?? 1)))),
+    [],
+  );
+  const linkVisibility = useCallback(
+    (l: Graph3DLink) => {
+      const s = kindById.get(endId(l.source));
+      const t = kindById.get(endId(l.target));
+      return !((s && hiddenKinds.has(s)) || (t && hiddenKinds.has(t)));
+    },
+    [kindById, hiddenKinds],
+  );
 
   const resetView = (): void => {
     if (graph) setExpanded(CollapseModel.initialExpanded(graph as unknown as KnowledgeGraph));
@@ -345,147 +400,21 @@ export function Graph3DView({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* Toolbar */}
-      <div className="border-b border-[hsl(var(--border))] px-4 sm:px-6 py-2 flex items-center gap-3 flex-wrap">
-        <div className="relative w-full max-w-[280px]">
-          <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
-          <input
-            type="search"
-            placeholder="Filter nodes by name…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="w-full pl-7 pr-8 h-8 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-xs placeholder:text-[hsl(var(--muted-foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/40"
-          />
-          {filter && (
-            <button
-              type="button"
-              onClick={() => setFilter("")}
-              aria-label="Clear filter"
-              className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-
-        {stats && (
-          <div className="flex items-center gap-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-            <span className="mr-1">
-              <span className="font-mono text-[hsl(var(--foreground))]">{stats.nodeCount}</span>{" "}
-              nodes
-              <span className="mx-1.5 opacity-30">·</span>
-              <span className="font-mono text-[hsl(var(--foreground))]">{stats.edgeCount}</span>{" "}
-              edges
-              {typeof stats.folderCount === "number" && (
-                <>
-                  <span className="mx-1.5 opacity-30">·</span>
-                  <span className="font-mono text-[hsl(var(--foreground))]">
-                    {stats.folderCount}
-                  </span>{" "}
-                  folders
-                </>
-              )}
-            </span>
-            <span className="opacity-30">|</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 px-2 h-6 rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[11px] hover:bg-[hsl(var(--muted))]/40"
-                >
-                  Node types
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-56 p-2">
-                <div className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] px-1 pb-1">
-                  Node types
-                </div>
-                <div className="flex flex-col">
-                  {visibleKinds.map((k) => {
-                    const isHidden = hiddenKinds.has(k);
-                    return (
-                      <button
-                        key={k}
-                        type="button"
-                        onClick={() => toggleKind(k)}
-                        aria-pressed={!isHidden}
-                        className={cn(
-                          "flex items-center gap-2 px-2 py-1.5 rounded text-[11px] text-left",
-                          "hover:bg-[hsl(var(--muted))]/40",
-                          isHidden && "opacity-40 line-through",
-                        )}
-                      >
-                        <span className={cn("w-2 h-2 rounded-full", theme.kindDot[k])} />
-                        <span className="text-[hsl(var(--foreground))] flex-1">
-                          {theme.kindLabel[k] ?? k}
-                        </span>
-                        <span className="font-mono text-[hsl(var(--muted-foreground))]">
-                          {kindCounts[k]}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </PopoverContent>
-            </Popover>
-
-            {presentLayers.length > 1 && (
-              <>
-                <span className="opacity-30">|</span>
-                <div
-                  role="group"
-                  aria-label="Toggle graph layers"
-                  className="inline-flex items-center rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden"
-                >
-                  {presentLayers.map((layer, i) => {
-                    const shown = layerShown(layer);
-                    return (
-                      <Button
-                        key={layer}
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toggleLayer(layer)}
-                        aria-pressed={shown}
-                        title={
-                          shown
-                            ? `Hide ${theme.layerLabel[layer]} layer`
-                            : `Show ${theme.layerLabel[layer]} layer`
-                        }
-                        className={cn(
-                          "h-6 gap-1.5 px-2.5 rounded-none text-[11px]",
-                          i > 0 && "border-l border-[hsl(var(--border))]",
-                          shown
-                            ? "bg-[hsl(var(--muted))]/40 text-[hsl(var(--foreground))]"
-                            : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]/20",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "w-2 h-2 rounded-full",
-                            theme.layerDot[layer],
-                            !shown && "opacity-40",
-                          )}
-                        />
-                        <span>{theme.layerLabel[layer]}</span>
-                        <span className="font-mono text-[hsl(var(--muted-foreground))]">
-                          {layerCounts[layer]}
-                        </span>
-                      </Button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        <div className="flex-1" />
-        {hint && (
-          <span className="text-[11px] text-[hsl(var(--muted-foreground))] hidden sm:inline">
-            {hint}
-          </span>
-        )}
-      </div>
+      <Graph3DToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        stats={stats}
+        theme={theme}
+        visibleKinds={visibleKinds}
+        kindCounts={kindCounts}
+        hiddenKinds={hiddenKinds}
+        onToggleKind={toggleKind}
+        presentLayers={presentLayers}
+        layerCounts={layerCounts}
+        isLayerShown={layerShown}
+        onToggleLayer={toggleLayer}
+        hint={hint}
+      />
 
       {/* Canvas + inspector */}
       <div className="flex-1 min-h-0 flex">
@@ -500,37 +429,16 @@ export function Graph3DView({
                 showNavInfo={false}
                 backgroundColor="rgba(0,0,0,0)"
                 nodeRelSize={4}
-                nodeColor={(n) =>
-                  isFiltered(n)
-                    ? cssVarColor("--muted-foreground")
-                    : cssVarColor(
-                        n.kind === "Folder" && theme.folderVar
-                          ? theme.folderVar
-                          : theme.kindVar[n.kind] ?? "--graph-edge-soft",
-                      )
-                }
-                nodeVal={(n) => nodeSize(n.degree, n.kind === "Folder", folded.get(n.id) ?? 0)}
+                nodeColor={nodeColor}
+                nodeVal={nodeVal}
                 nodeVisibility={(n) => !hiddenKinds.has(n.kind)}
                 nodeLabel={(n) =>
                   theme.nodeLabel ? theme.nodeLabel(n, folded.get(n.id) ?? 0) : n.label
                 }
                 nodeOpacity={0.95}
-                linkColor={(l) =>
-                  l.containment
-                    ? // The 3D renderer multiplies the global linkOpacity (0.35)
-                      // by the colour's alpha, so baking ~0.4 here lands the
-                      // backbone at ~0.14 — clearly under the relationship edges.
-                      cssVarColorAlpha(theme.edgeContainVar ?? "--graph-edge-contain", 0.4)
-                    : cssVarColor(theme.edgeVar[l.kind] ?? "--graph-edge-soft")
-                }
-                linkWidth={(l) =>
-                  l.containment ? 0.3 : Math.min(4, 0.5 + Math.log2(1 + (l.weight ?? 1)))
-                }
-                linkVisibility={(l) => {
-                  const s = kindById.get(endId(l.source));
-                  const t = kindById.get(endId(l.target));
-                  return !((s && hiddenKinds.has(s)) || (t && hiddenKinds.has(t)));
-                }}
+                linkColor={linkColor}
+                linkWidth={linkWidth}
+                linkVisibility={linkVisibility}
                 linkOpacity={0.35}
                 linkDirectionalArrowLength={(l) => (l.containment ? 0 : 2.5)}
                 linkDirectionalArrowRelPos={1}
@@ -548,7 +456,7 @@ export function Graph3DView({
           )}
 
           {/* Floating fit / reset controls. */}
-          <div className="absolute bottom-3 right-3 z-10 flex flex-col rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-md overflow-hidden">
+          <div className={cn(cardSurface({ radius: "right", elevation: "elev-2" }), "absolute bottom-3 right-3 z-10 flex flex-col overflow-hidden")}>
             <button
               type="button"
               onClick={() => fgRef.current?.zoomToFit(600, 60)}

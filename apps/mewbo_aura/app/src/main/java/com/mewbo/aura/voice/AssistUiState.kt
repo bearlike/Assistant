@@ -5,9 +5,9 @@ import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.ui.orb.OrbState
 
 /**
- * Voice-turn / overlay state machine states (v5, Gitea #181: voice-first overlay - auto-listen on
+ * Voice-turn / overlay state machine states (v5: voice-first overlay - auto-listen on
  * trigger, the first response streams IN the overlay as a reference-style card, the SECOND
- * interaction onward hands off to the app - supersedes v4/#178's text-first, handoff-only
+ * interaction onward hands off to the app - supersedes v4's text-first, handoff-only
  * contract). Exhaustive `when` everywhere - no `else` branch, so a hypothetical new state fails
  * compilation instead of silently losing a UI mapping (same discipline as [OrbState]).
  */
@@ -24,7 +24,7 @@ sealed interface AssistUiState {
      * The overlay's resting state ([AssistTurnMachine.show], fired from `AuraSession.onShow()`):
      * visible, no turn started yet. On a real invocation this is momentary - `AuraSession.onShow()`
      * immediately follows with [AssistTurnMachine.startListening] when `RECORD_AUDIO` is granted
-     * (auto-listen on trigger, Gitea #181); this is the landing state for a denied-grant cold start
+     * (auto-listen on trigger); this is the landing state for a denied-grant cold start
      * and for hosts (the debug preview activity) that opt out of auto-listen. [lastSessionTitle]
      * backs `ContinueLastSessionChip` - a session updated within the last 24h, refreshed once via
      * [AssistTurnMachine.refreshSessions] (best-effort; absent on a cold start before that
@@ -33,7 +33,7 @@ sealed interface AssistUiState {
     data class Ready(val lastSessionTitle: String?) : AssistUiState
 
     /**
-     * The mic-hot capture path - auto-entered from [Ready] on a granted trigger (Gitea #181), or
+     * The mic-hot capture path - auto-entered from [Ready] on a granted trigger, or
      * reachable via an explicit mic tap same as before. Cancellable back to [Ready] via the
      * composer's stop tile. A `Final` transcript here reaches the exact same
      * [AssistTurnMachine.beginTurn] path a typed send does - the machine doesn't care how the text
@@ -47,15 +47,15 @@ sealed interface AssistUiState {
     data object Sending : AssistUiState
 
     /**
-     * The FIRST turn's response, rendered IN the overlay as a card (Gitea #181 "overlay card
+     * The FIRST turn's response, rendered IN the overlay as a card ("overlay card
      * pattern" - supersedes v4's handoff-only contract). [items] folds
      * `RunRepository.live(sessionId)` through the SAME [com.mewbo.aura.data.model.TranscriptReducer]
      * the main chat surface uses (the pre-v4 machine's pattern, recovered from git history for
-     * #181 - never a fork), so the card reuses the shared `ChatTranscript` composable. [done] flips
+     * never a fork), so the card reuses the shared `ChatTranscript` composable. [done] flips
      * `true` once the run's `completion`/`stream_end` closes streaming, or the user taps the card's
      * stop control ([AssistTurnMachine.stopStreaming] - client-side detach only, the backend run
      * keeps going either way - v1 semantics, unchanged). [speaking] mirrors whether the voice
-     * speak-along (`SpeechController`, moved from `ui/chat` for Gitea #181) is actively playing -
+     * speak-along (`SpeechController`, moved from `ui/chat`) is actively playing -
      * forced `false` the moment [done] flips `true`; the machine doesn't chase the synthesizer's
      * own trailing-utterance tail once the transcript itself is finalized.
      */

@@ -291,7 +291,7 @@ def test_draft_stream_model_override_forwarded(client, auth_headers):
 
 
 # ===========================================================================
-# Session-backing + provenance (#78) — the synthesis mode and draft stream
+# Session-backing + provenance — the synthesis mode and draft stream
 # mint a real session, tagged with the right origin, with a single-turn
 # transcript persisted WRITE-BEHIND (after the response). We drive the real
 # route + store path and stub only the LLM seam; persistence is forced
@@ -414,15 +414,15 @@ def test_draft_wire_contract_token_frames_unchanged(client, auth_headers, sync_p
     frames = _parse_sse_frames(body)
     token_frames = [f for f in frames if "token" in f]
     # Token frames carry ONLY the token key — additive change is isolated to the
-    # terminal done frame, so existing SideStage consumers are unaffected.
+    # terminal done frame, so existing consumers are unaffected.
     assert all(set(f.keys()) == {"token"} for f in token_frames)
     assert [f["token"] for f in token_frames] == ["a", "b"]
 
 
 # ===========================================================================
-# Record existence + tag uniqueness through a REAL store (#87)
+# Record existence + tag uniqueness through a REAL store
 #
-# The #78 gap: tests stubbed the route's ``_runtime`` and asserted event
+# The gap: tests stubbed the route's ``_runtime`` and asserted event
 # PAYLOADS, never that a session RECORD exists. The recorder appended events
 # onto a pre-minted id but never created the record, so on Mongo (which lists
 # the ``sessions`` collection, not ``events``) the transcript was an orphan:

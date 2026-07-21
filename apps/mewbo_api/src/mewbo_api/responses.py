@@ -85,6 +85,11 @@ _ERROR_CATALOG: dict[int, tuple[str, str, bool]] = {
         True,
     ),
     500: ("Unexpected server error.", "internal error", True),
+    502: (
+        "An upstream collaborator (e.g. a pipeline runner) raised while handling the request.",
+        "pipeline execution failed: connection refused",
+        True,
+    ),
     503: (
         "The feature is not configured or is temporarily unavailable.",
         "structured responses are not configured on this server",
@@ -103,6 +108,26 @@ class ApiResponseKit:
     registry. State: two base models plus a per-(shape, code) cache of
     example-bearing error models.
     """
+
+    # The ONE wire body every mutating surface returns for a permanently
+    # terminated session. Both ``backend.py`` and ``triggers/routes.py``
+    # (and the structured GET) reject with this exact shape; the console's
+    # ``session_terminated`` sentinel matches it byte-for-byte, so it must never
+    # drift — hence it lives HERE, on the response kit both surfaces already
+    # import, rather than in a bare constant module that would re-open a
+    # backend↔routes import cycle. ``code`` is the semantic token (a string, not
+    # an HTTP status) and ``retryable`` is false: a terminated session never
+    # comes back.
+    TERMINATED_ERROR_BODY: dict[str, object] = {
+        "code": "session_terminated",
+        "reason": "Session is permanently terminated",
+        "retryable": False,
+    }
+
+    @classmethod
+    def terminated_response(cls) -> tuple[dict, int]:
+        """The ONE 410 Gone response for a permanently terminated session."""
+        return {"error": cls.TERMINATED_ERROR_BODY}, 410
 
     def __init__(self, registrar: Any, prefix: str = "") -> None:
         """Build the base error models on *registrar*, prefixed by *prefix*."""

@@ -2,7 +2,7 @@
 
 When the API process dies mid-index, the backing Mewbo session is gone, so the
 job can never finish on its own. Recovery now drives the SAME checkpoint-aware
-:class:`WikiResume` path the manual resume endpoint uses (Gitea #54, Part B):
+:class:`WikiResume` path the manual resume endpoint uses (Part B):
 re-clone + re-scan, but SKIP the expensive idempotent phases whose store
 artifacts already exist (graph / enrich / plan) and write only the remaining
 pages. The restored per-slug credential (``CredentialStore``) authenticates the
@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from mewbo_core.common import get_logger
+from mewbo_graph.wiki.resume import ResumeCountError
 
 from .resume import WikiResume
 
@@ -50,7 +51,7 @@ class JobRecovery:
         try:
             stranded = [j for j in store.list_jobs() if j.status in _RECOVERABLE]
         except Exception as exc:
-            logging.warning("wiki recovery: list_jobs failed (%s); skipping", exc)
+            logging.warning("wiki recovery: list_jobs failed ({}); skipping", exc)
             return []
         if not stranded:
             return []
@@ -65,7 +66,7 @@ class JobRecovery:
             # instead of re-marking it interrupted or re-driving it.
             if cls._over_cap(store, job.slug):
                 logging.warning(
-                    "wiki recovery: slug %s over retry cap; marking failed", job.slug
+                    "wiki recovery: slug {} over retry cap; marking failed", job.slug
                 )
                 cls._mark_failed(
                     store,
@@ -77,11 +78,10 @@ class JobRecovery:
                 try:
                     store.update_job(job.job_id, status="interrupted")
                 except Exception as exc:
-                    logging.warning("wiki recovery: mark %s interrupted: %s", job.job_id, exc)
+                    logging.warning("wiki recovery: mark {} interrupted: {}", job.job_id, exc)
             if job.slug in seen:
                 continue
             seen.add(job.slug)
-            cls._bump_attempts(store, job.slug)
             try:
                 # Checkpoint-aware resume reuses the SAME job_id and skips the
                 # expensive phases already done. ``user_initiated=False`` keeps the
@@ -91,10 +91,26 @@ class JobRecovery:
                     store, runtime, job.job_id, hook_manager=None, user_initiated=False
                 )
                 refreshed.append(job.slug)
+            except ResumeCountError as exc:
+                # A REFUSAL (a store read the checkpoint decision depends on
+                # failed), not a job FAILURE — the job never actually ran and
+                # nothing about it is known to be broken. Bumping the cap here
+                # would let three transient store glitches in a row exhaust
+                # MAX_RETRIES and terminally fail a job that never failed; the
+                # next restart gets a clean attempt at the SAME budget.
+                logging.warning(
+                    "wiki recovery: resume {} refused (store read failed) — "
+                    "not counted against the retry cap: {}", job.job_id, exc,
+                )
+                continue
             except Exception as exc:
-                logging.warning("wiki recovery: resume %s failed: %s", job.job_id, exc)
+                logging.warning("wiki recovery: resume {} failed: {}", job.job_id, exc)
+            # Reached only on a genuine attempt (success or a non-refusal
+            # failure) — see the ResumeCountError branch above for why a
+            # refusal must not reach here.
+            cls._bump_attempts(store, job.slug)
         if refreshed:
-            logging.info("wiki recovery: re-triggered %d slug(s)", len(refreshed))
+            logging.info("wiki recovery: re-triggered {} slug(s)", len(refreshed))
         return refreshed
 
     @staticmethod
@@ -111,7 +127,7 @@ class JobRecovery:
         try:
             store.bump_recovery_attempts(slug)
         except Exception as exc:  # pragma: no cover — best-effort bookkeeping
-            logging.warning("wiki recovery: bump attempts for %s failed: %s", slug, exc)
+            logging.warning("wiki recovery: bump attempts for {} failed: {}", slug, exc)
 
     @staticmethod
     def _mark_failed(store: WikiStoreBase, job_id: str, message: str) -> None:
@@ -123,7 +139,7 @@ class JobRecovery:
                 "error": {"code": "internal", "message": message},
             })
         except Exception as exc:  # pragma: no cover — best-effort
-            logging.warning("wiki recovery: mark %s failed: %s", job_id, exc)
+            logging.warning("wiki recovery: mark {} failed: {}", job_id, exc)
 
 
 __all__ = ["JobRecovery"]

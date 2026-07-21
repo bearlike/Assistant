@@ -9,7 +9,9 @@ from typing import Any
 from lsprotocol import types
 from mewbo_core.classes import AbstractTool, ActionStep
 from mewbo_core.common import MockSpeaker
+from mewbo_core.workspace import get_active_containment
 
+from mewbo_tools.core import resolve_safe_path
 from mewbo_tools.integration.lsp import get_lsp_manager, run_lsp_async
 
 # Tool metadata schema exposed to the LLM
@@ -65,8 +67,20 @@ class LSPTool(AbstractTool):
         if not file_path:
             return MockSpeaker(content="file_path is required.")
 
-        # Resolve relative paths against CWD
-        resolved = str(Path(file_path).resolve())
+        # Resolve relative paths against CWD. Under an ACTIVE workspace
+        # containment, the LSP tool — which otherwise bypasses the
+        # path guard entirely — is jailed: route through ``resolve_safe_path`` so
+        # a navigation/diagnostics query outside the workspace is denied with the
+        # firebreak's "name what's allowed" error. With no active containment the
+        # resolution is byte-identical to the historical unguarded ``resolve()``,
+        # keeping the staged-off behaviour unchanged.
+        if get_active_containment() is not None:
+            try:
+                resolved = str(resolve_safe_path(file_path))
+            except ValueError as exc:
+                return MockSpeaker(content=f"Path not permitted: {exc}")
+        else:
+            resolved = str(Path(file_path).resolve())
 
         manager = get_lsp_manager(os.getcwd())
 

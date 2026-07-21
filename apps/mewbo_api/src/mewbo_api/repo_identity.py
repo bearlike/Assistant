@@ -1,4 +1,4 @@
-"""Canonical git repository identity for a project (Gitea #43).
+"""Canonical git repository identity for a project.
 
 One atomic class, ``RepoIdentity`` — a frozen ``(host, owner, repo)`` triple
 parsed from a git remote URL or a free-form reference. It lets the API match

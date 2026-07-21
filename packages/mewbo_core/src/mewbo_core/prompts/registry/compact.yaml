@@ -1,4 +1,4 @@
-# Context-compaction prompts (Gitea #89, phase 1 — VERBATIM extraction).
+# Context-compaction prompts (VERBATIM extraction).
 #
 # Migrated from compact.py: COMPACT_PROMPT (base), CAVEMAN_COMPACT_PROMPT (the
 # `caveman` scenario override), and the `/compact <focus>` directive suffix.

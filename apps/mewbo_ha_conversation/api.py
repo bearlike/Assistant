@@ -35,6 +35,7 @@ class MewboApiClient:
     def __init__(
         self,
         base_url: str,
+        api_key: str,
         timeout: int,
         session: aiohttp.ClientSession,
     ) -> None:
@@ -42,11 +43,14 @@ class MewboApiClient:
 
         Args:
             base_url: Base URL for the Mewbo API.
+            api_key: Key sent as the ``X-API-KEY`` header on every request; must
+                match a token the server accepts (``api.master_token`` or a key
+                minted via ``POST /api/keys``).
             timeout: Request timeout in seconds.
             session: Shared aiohttp client session.
         """
         self._base_url = base_url.rstrip("/")
-        self._api_key = "msk-strong-password"
+        self._api_key = api_key
         self.timeout = timeout
         self._session = session
 

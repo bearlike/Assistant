@@ -18,7 +18,7 @@ class ModelRepository @Inject constructor(
 
     suspend fun catalog(): ModelCatalog? {
         cached?.let { return it }
-        // Gitea #181 fix wave, finding 2: runCatching catches Throwable, including
+        // runCatching catches Throwable, including
         // CancellationException - a caller cancelled mid-fetch (e.g. ChatViewModel's own
         // async{} callers) must still stop instead of quietly resolving to null and letting the
         // caller act on a "failure" that was really a cancellation. Rethrow before falling back

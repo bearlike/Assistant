@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pilot tests for the #157 modal screens + the session installer.
+"""Pilot tests for the modal screens + the session installer.
 
 The modal screens are driven by pushing them onto a tiny host ``App`` and
 reading the dismissed value; the installer is driven by mounting a real

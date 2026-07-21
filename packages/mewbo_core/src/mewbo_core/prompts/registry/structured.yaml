@@ -1,4 +1,4 @@
-# Structured-response + grounded-synthesis prompts (Gitea #89, phase 1).
+# Structured-response + grounded-synthesis prompts.
 #
 # VERBATIM extraction from structured_response.py / structured_synthesis.py — the
 # YAML reproduces each original literal byte-for-byte (golden tests in

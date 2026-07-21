@@ -13,7 +13,7 @@ that lists its tools in a different order is NOT a drift) and **schema-aware**
 (it folds in each tool's input/output property names + required set, so a renamed
 or newly-required argument IS a drift). It is stored on
 :attr:`SourceDescriptor.schema_version` at map time and recomputed from the live
-tool list on workspace save to gate an idempotent re-map (#81-C).
+tool list on workspace save to gate an idempotent re-map.
 
 Security invariant (spec §6): the hash is computed over schema field *names* and
 docs only — never an argument *value*, token, or credential.

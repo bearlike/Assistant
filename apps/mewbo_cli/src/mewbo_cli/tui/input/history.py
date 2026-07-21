@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptHistory — persistent prompt history + reverse search (#155).
+"""PromptHistory — persistent prompt history + reverse search.
 
 One atomic class backing the input area's history: most-recent-last, capped,
 persisted line-per-entry to ``~/.mewbo/cli_history`` (so it survives restarts,

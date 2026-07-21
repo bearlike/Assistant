@@ -10,7 +10,7 @@ the cause into a coarse, machine-filterable ``reason``.
 
 This is the single shared home for the unwrap + classify primitives: the MCP
 connection pool (`mcp_pool`) reuses them for its structured failure logs and
-its quarantine/backoff policy (Gitea #130/#132), and the legacy one-shot path
+its quarantine/backoff policy, and the legacy one-shot path
 (`mcp`) reuses them for its discovery/runtime failure logs.
 
 Duck-typed on the ``exceptions`` attribute (a tuple of sub-exceptions) rather
@@ -24,7 +24,7 @@ import asyncio
 
 # Coarse failure reasons, ordered roughly by how actionable they are. Consumed
 # by the failure logs here and by the quarantine/backoff policy in the
-# non-blocking-init work (Gitea #130): ``auth``/``config`` must never retry;
+# non-blocking-init work: ``auth``/``config`` must never retry;
 # ``dns``/``refused``/``timeout`` should back off.
 REASON_DNS = "dns"
 REASON_REFUSED = "refused"
@@ -91,7 +91,7 @@ def classify_connect_failure(exc: BaseException) -> str:
 
     Returns one of ``auth`` / ``config`` / ``dns`` / ``refused`` / ``timeout``
     / ``other``, computed on the UNWRAPPED cause. Drives the quarantine-vs-
-    backoff decision (Gitea #130) and feeds the structured log reason (#132).
+    backoff decision and feeds the structured log reason.
     """
     cause = unwrap_exception_group(exc)
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or isinstance(

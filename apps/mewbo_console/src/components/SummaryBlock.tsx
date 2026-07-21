@@ -10,7 +10,7 @@ export function SummaryBlock({ summary, testing }: SummaryBlockProps) {
   return (
     <div className="mt-4 space-y-4">
       <div>
-        <h4 className="text-sm font-bold text-[hsl(var(--foreground))] mb-2">
+        <h4 className="text-sm font-medium text-[hsl(var(--foreground))] mb-2">
           Summary
         </h4>
         <ul className="space-y-2">
@@ -27,7 +27,7 @@ export function SummaryBlock({ summary, testing }: SummaryBlockProps) {
       </div>
 
       <div>
-        <h4 className="text-sm font-bold text-[hsl(var(--foreground))] mb-2">
+        <h4 className="text-sm font-medium text-[hsl(var(--foreground))] mb-2">
           Testing
         </h4>
         <div className="space-y-2">

@@ -35,8 +35,9 @@ import { useSourceExcerpt, useWikiPage } from "./api/hooks";
 
 interface SourceCardProps {
   /**
-   * Accepts the legacy flat {@link Citation} (QAScreen's `fileCitations`) or the
-   * kind-tagged {@link ParsedCitation} (`parseCitations`) — both render.
+   * Accepts the legacy flat {@link Citation} or the kind-tagged
+   * {@link ParsedCitation} (`parseCitations`, what QAScreen actually feeds
+   * this component) — both render.
    */
   citation: Citation | ParsedCitation;
   slug: string;
@@ -86,7 +87,7 @@ function CardShell({
       <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none list-none bg-[hsl(var(--code-chrome))] hover:bg-[hsl(var(--muted))]/30">
         <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90 text-[hsl(var(--code-fg-muted))]" />
         {icon}
-        <span className="font-mono text-[11.5px] text-[hsl(var(--code-fg))] truncate" title={header}>
+        <span className="font-mono text-2xs text-[hsl(var(--code-fg))] truncate" title={header}>
           {header}
         </span>
         {href && (
@@ -112,7 +113,7 @@ function CardShell({
 /** Muted "couldn't resolve this source" line — never raw stderr-red text. */
 function Unavailable() {
   return (
-    <div className="px-3 py-3 text-[11px] text-[hsl(var(--code-fg-muted))]">
+    <div className="px-3 py-3 text-2xs text-[hsl(var(--code-fg-muted))]">
       Source unavailable.
     </div>
   );
@@ -120,7 +121,7 @@ function Unavailable() {
 
 function Loading() {
   return (
-    <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-[hsl(var(--code-fg-muted))]">
+    <div className="flex items-center gap-2 px-3 py-3 text-2xs text-[hsl(var(--code-fg-muted))]">
       <Loader2 className="h-3 w-3 animate-spin" />
       Loading excerpt…
     </div>
@@ -197,7 +198,7 @@ function PageSourceCard({
       ) : isError || !data ? (
         <Unavailable />
       ) : (
-        <p className="px-3 py-2.5 text-[11.5px] leading-[1.55] text-[hsl(var(--code-fg-muted))]">
+        <p className="px-3 py-2.5 text-2xs leading-[1.55] text-[hsl(var(--code-fg-muted))]">
           {pageExcerpt(data.body)}
         </p>
       )}
@@ -220,7 +221,7 @@ function GraphSourceCard({
       header={citationLabel(citation)}
       icon={<Network className="h-3.5 w-3.5 shrink-0 text-[hsl(var(--code-fg-muted))]" />}
     >
-      <p className="px-3 py-2.5 text-[11px] text-[hsl(var(--code-fg-muted))]">
+      <p className="px-3 py-2.5 text-2xs text-[hsl(var(--code-fg-muted))]">
         Code-graph node{" "}
         <span className="font-mono text-[hsl(var(--code-fg))]">{citation.nodeId}</span>
       </p>
@@ -263,7 +264,7 @@ function ExcerptBody({
   const gutterWidth = String(firstLine + lines.length - 1).length;
 
   return (
-    <pre className="overflow-x-auto text-[12px] font-mono leading-[1.55] text-[hsl(var(--code-fg))] py-1.5">
+    <pre className="overflow-x-auto text-2xs font-mono leading-[1.55] text-[hsl(var(--code-fg))] py-1.5">
       <code>
         {lines.map((line, i) => {
           const lineNo = firstLine + i;

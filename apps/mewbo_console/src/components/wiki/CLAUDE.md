@@ -65,7 +65,7 @@ the LLM-bound long tail. Don't widen `pages` past 95 — the 5% headroom
 at the end is what stops the bar from looking stuck at "100% but not
 done yet".
 
-**Adding a phase is a lock-step edit (Gitea #35 added `enrich`).** A new phase
+**Adding a phase is a lock-step edit (this is how `enrich` was added).** A new phase
 must land in `IndexingPhase` (`api/types.ts`) AND all four `progress.ts` lookup
 tables (`PHASE_RANGE`/`PHASE_LABEL`/`PHASE_ORDER`/`PHASE_BUDGET_S`) in the same
 change — each is a `Record<IndexingPhase, …>`, so `tsc` enforces exhaustiveness
@@ -98,7 +98,7 @@ renders all of them inside an `overflow-y-auto` container and
 auto-scrolls to the bottom via a `ref + useLayoutEffect` whenever the
 log count changes.
 
-Earlier code did `state.logs.slice(-20)` in the hook (`hooks.ts`).
+Earlier code did `state.logs.slice(-20)` in the hook (`api/streamHooks.ts`, where `useIndexingStream` lives — split out of `hooks.ts`, which stays the plain TanStack Query surface).
 Symptom: every page refresh appeared to "show different logs", because
 the visible last-20 shifted forward as the total grew. Replaying SSE
 from idx 0 was already free, the trim was the only thing breaking
@@ -109,7 +109,12 @@ to 9 — that surface is just a recent-activity blip, not an audit log.
 
 ## SSE consumer uses `fetch`, not `EventSource`
 
-`api/client.ts:sseStream` opens an SSE connection via `fetch(...,
+`api/client.ts:sseStream` is a thin wiki-scoped wrapper (base path + auth
+header) around the **shared** `src/api/sse.ts:sseStream` — the console's ONE
+generic SSE parser, also consumed by Agentic Search (`api/agenticSearch.ts`).
+⚠️ It reads like it belongs to a single feature and does not: `src/api/sse.ts`
+is shared infrastructure, and deleting it with a feature would silently break
+wiki indexing, wiki Q&A **and** search. It opens the connection via `fetch(...,
 { headers: { Accept: "text/event-stream" } })` and reads the
 `ReadableStream` body line-by-line. Not a native `EventSource`. Reasons:
 
@@ -196,9 +201,19 @@ re-derive them):
   `LAYER_ORDER`, `LAYER_LABEL`, `LAYER_DOT`). Both adapters draw from it via their
   `Graph3DTheme` (the wiki directly; the SCG theme mirrors the same token family).
   Don't re-duplicate the palette maps or the `cssVarColor` hsl-comma-normaliser.
-- **Per-frame accessors must be O(1).** `linkVisibility`/`nodeColor`/`nodeVal`
-  run per element every frame — look up via an id→node/kind `Map` built in the
-  `graphData` memo, never `nodes.find()` (that was O(N·E) per frame).
+- **Per-frame accessors must be O(1) — AND their identity must be stable
+  across renders (burn-down).** `linkVisibility`/`nodeColor`/`nodeVal`/
+  `linkColor`/`linkWidth` run per element every frame — look up via an
+  id→node/kind `Map` built in the `graphData` memo, never `nodes.find()` (that
+  was O(N·E) per frame), AND wrap each in `useCallback` keyed on its actual
+  deps (`theme`, `hiddenKinds`, `kindById`, `folded`, `isFiltered`) so
+  `<ForceGraph3D>` isn't handed a fresh closure prop every render.
+- **The toolbar strip lives in `Graph3DToolbar.tsx`**, a thin presentational
+  component — `Graph3DView.tsx` computes every derivation (kind/layer counts,
+  visibility) and hands them down as props; the toolbar owns no graph logic.
+  `Graph3DView.tsx`'s own exports (the component + all its types) are
+  imported directly by `agentic_search/graph/WorkspaceGraphDialog.tsx` and
+  `scgGraphConfig.ts` — never move or rename anything it currently exports.
 - **Selection → the typed `inspector/` registry** — exhaustive
   `Record<GraphSelectionKind,…>` (a missing kind is a `tsc` error, no silent
   default), one atomic panel per kind, reusing the old side-panel rendering +
@@ -271,7 +286,7 @@ reload in `UpdatePrompt.handleReload` is the consistent fix.
       `IndexingProgress` instead of computing it locally?
 - [ ] Did I add a new SSE event type? Did I extend the `IndexingEvent`
       / `QaEvent` discriminated union in `api/types.ts` AND handle it
-      in the reducer (`api/hooks.ts`)?
+      in the reducer (`api/streamHooks.ts` — `reduceIndexing`/`reduceQa`)?
 - [ ] Did I add a new route variant? Did I update `router.ts` AND
       `WikiApp.tsx`'s `<Route>`?
 - [ ] Did I render any color literal (`text-white`, `hsl(220 5% 12%)`,
@@ -281,14 +296,21 @@ reload in `UpdatePrompt.handleReload` is the consistent fix.
       did I check the primitive itself doesn't already accept the
       `className` / `asChild` I needed?
 
-## Catalog wizard + draft stream (SideStage FE)
+## ConfigureWizard's non-JSX logic lives in `configure-wizard/wizardState.ts`
+
+`useWizardMachine()` (burn-down) owns everything the wizard decides
+that isn't markup — state, model-seed effect, platform auto-detect effect,
+branch query, `gitSlug`/`catalogSlug` derivation, `validate`/`goNext`/
+`goBack`, and both submit paths — mirroring the `useQaConversation` pattern.
+`ConfigureWizard.tsx` calls it and renders what it returns; the three steps
+are their own files (`StepSource.tsx`, `StepGeneration.tsx`, `StepScope.tsx`)
+taking `{state, set}` as dumb consumers.
+
+## Catalog wizard (docs-only projects)
 
 `ConfigureWizard` has a `git|catalog` toggle; the catalog branch renders
 `CatalogDocsForm` and submits via `POST /v1/wiki/projects/{slug}/documents`
-(no git URL, no clone token). `DraftPanel` + `useDraftStream` consume
-`POST /v1/draft/stream` via the shared `sseStream` — render tokens on arrival,
-no synthetic timer. Route variant: `/draft` added to `WikiRoute` union +
-`router.ts` + `WikiApp.tsx` in lockstep.
+(no git URL, no clone token).
 
 ## Branch picker (generation step)
 
@@ -307,6 +329,94 @@ swallowed — no toast, no retry). `state.ref` is spread into the submission ONL
 when non-empty (mirrors how `graphOnly` is conditionally included), so an
 untouched picker submits no `ref` and the BE clones the default branch.
 
+## Freshness badge (`FreshnessBadge` + `useProjectFreshness`)
+
+**Deliberately NOT migrated onto the shared `Badge` (`components/agents.tsx`)
+(burn-down decision, not an oversight).** Two independent blockers: the
+`update` state's color (`--primary`) has no `BADGE_COLOR_MAP` key today, and
+`Badge`'s contract (`{children, color}` → a bare `<span>`) can't express what
+this component actually needs — an icon, a clickable-button variant when
+`onRefresh` is wired, and a responsive short/long label swap. Revisit only if
+`Badge` grows those affordances generally; don't force-fit this one component
+into it.
+
+How far a project's indexed wiki has drifted from its repo's remote HEAD. The
+badge owns its own `useProjectFreshness` query (`GET
+/v1/wiki/projects/<slug>/freshness`, `staleTime` 5 min, `retry: false`) rather
+than taking data as a prop — freshness is per-card, lazy, and never worth
+blocking a gallery render on.
+
+- **Render nothing unless there's something to say.** Error / absent /
+  indeterminate → `null`. The state table mirrors the API contract EXACTLY:
+  `behindBy === 0` → "Up to date"; `behindBy > 0` → "N commits behind";
+  `behindBy == null && remoteSha && remoteSha !== indexedSha` → "Update
+  available" (the BE knows the sha moved but couldn't count commits — never
+  collapse this into a false green); anything else → nothing.
+- **The freshness classes are derived by the shared `classifyFreshness`
+  kernel** (`wikiStatus.ts`), NOT re-implemented here — the wiki page's
+  index-status card (`RefreshThisWiki`, below) reads the same contract, and one
+  kernel keeps the two from ever disagreeing on what "behind" / "update" /
+  "fresh" mean. The badge keeps its "stay silent unless there's drift" stance by
+  rendering `null` for the kernel's `unknown` class; the card, which must always
+  speak, refines `unknown` further. Don't fork the three-rule table back into
+  this file.
+- **The badge does not own a refresh.** In a drift state it becomes the click
+  target for the project's EXISTING re-index CTA (`onRefresh`), so there is one
+  refresh path, not two.
+- **The per-card burst on gallery mount is deliberate and bounded SERVER-side**
+  (5-min TTL cache + `gthread` workers + the lazy credential chain — see the
+  api wiki `CLAUDE.md`), so `LandingScreen` mounts one badge per card with no
+  client-side throttle. Do NOT "fix" this with a bespoke client cache or a
+  request queue — that's the forbidden custom-TTL pattern. If galleries ever
+  grow enough to matter, the `enabled` prop is the intended seam (gate on
+  visibility, e.g. an IntersectionObserver). `WikiTopBar` passes `onRefresh` so
+  the in-wiki badge doubles as the re-index entry point.
+- `getProjectFreshness(slug, force)` sends `?force=1` to bust the server TTL —
+  reserve it for an explicit "check again" affordance; ordinary card renders
+  must let the cache serve.
+
+## Wiki index-status card (`RefreshThisWiki` + `wikiStatus.ts`)
+
+The card in the wiki page's right aside (and the mobile ToC Sheet — both mounts
+render the SAME component) answers ONE question at a glance: *is this wiki
+current, and do I need to re-index?* It is **verdict-first**: the judgment is
+made once, up top; the raw numbers are demoted below it.
+
+- **The verdict is derived, not presented raw, by `deriveWikiStatus`**
+  (`wikiStatus.ts`, pure + React-free + unit-tested). Seven verdicts: the five
+  the reader acts on — `up-to-date` / `behind` / `update-available` /
+  `indexing` / `failed` — plus two honest indeterminate ones, `checking`
+  (freshness probe still in flight) and `unknown` (remote couldn't be read).
+  `unknown` exists so the card NEVER shows a false green when it simply doesn't
+  know; a matched sha or an authoritative `upToDate` still resolves to
+  `up-to-date` even when the platform couldn't count commits.
+- **Precedence is operational, not by severity.** A running job dominates a
+  stale count (drift is meaningless mid-index); a terminal-but-incomplete job
+  dominates a clean freshness read (what you're reading is the older good
+  snapshot). So the card consults THREE contracts, not one: `useProjectFreshness`
+  for the drift comparison, `useActiveIndexingJobs`/`useRecoverableJobs` (filtered
+  to this slug) for the indexing/failed states. Those two job lists are the same
+  polled queries the landing page uses — no new endpoint, shared cache.
+- **State-aware prominence: calm when current, loud only when action is
+  needed.** Fresh/checking/unknown → a neutral re-index button; behind / update
+  / failed → a primary one; indexing → the button becomes a "View progress" link
+  to the indexing screen (you can't re-index a wiki mid-index). This is the
+  `AppFreshness` "always says something" precedent, NOT the FreshnessBadge
+  "silence when fine" one — a current wiki still states "Up to date", it just
+  doesn't raise its voice.
+- **Status is never colour alone** — every verdict pairs a glyph with the word,
+  and the verdict row is a `role="status"` live region carrying `data-kind`.
+  Tone paints from the status token families (`--success`/`--warning`/`--info`/
+  `--destructive`); the `-text` variants are used for text-on-tint, and because
+  the status tokens carry NO embedded alpha the `/12` glyph-tile tint is
+  legitimate (contrast verified in both themes).
+- **One refresh path, unchanged.** The re-index Button IS the project's single
+  re-index CTA — the same `useRequestWikiRefresh` + confirm/queued phase machine
+  the old card had, and the same one `FreshnessBadge` (in `WikiTopBar`) and the
+  settings dialog hand off to via `openSignal`. Branch + commit are demoted to
+  quiet muted-2xs mono reference links (machine text keeps the mono face; the
+  coloured pills are gone so nothing static competes with the action).
+
 ## Developer mode — graph-only onboarding + no-docs state
 
 When `config.runtime.developer_mode` is on (read via `useConfig`),
@@ -324,6 +434,76 @@ suppresses the `QADock` (nothing to ask). Reuses the shadcn `Switch`/`Button`
 primitives — no bespoke UI. A graph-only run's progress simply skips
 enrich/plan/pages (a `graph`→`finalize` jump); don't special-case the bar.
 
+## Editable project settings — `ProjectSettingsDialog`
+
+**The pure form model (zod `settingsSchema`, `FORM_FIELD_BY_WIRE`,
+`INDEX_TIME_FIELDS`/`needsReindex`, `EMPTY_FORM`/`seedFrom`/`splitLines`/
+`buildPatch`) lives in `projectSettingsForm.ts`** (burn-down) — no
+JSX, no React, unit-testable on its own. `ProjectSettingsDialog.tsx` imports
+from it and stays the rendering + rhf-wiring surface; the four select fields
+(Branch/Depth/Language/Filter mode) render through one shared
+`SettingsSelectField` wrapper instead of four hand-copied `FormField` blocks.
+`splitLines` is also the shared helper `ConfigureWizard.tsx`'s scope step
+reuses for its own dirs/files textareas — don't re-fork it there.
+
+Post-onboarding CRUD over a project's indexing settings: `GET
+/v1/wiki/projects/<slug>/settings` + `PATCH /v1/wiki/projects/<slug>`. Trigger =
+the `WikiTopBar` gear (`showSettings`, on every settled in-project screen) and
+the gallery card's hover cluster. **react-hook-form + zod in a shadcn `Dialog`**
+(the `GitCredentialsView` template) — NOT RJSF: that machinery is for the
+schema-driven global `AppConfig`; a Project is a fixed-shape REST resource.
+
+- **The server's `editable` map is the SOLE field gate, and it fails closed**
+  (`canEdit(f) === settings.editable?.[f] === true`). The server always emits
+  EVERY key with an explicit bool, so `graphOnly: false` (developer mode off) is
+  how the switch stays hidden — the client never provokes the 403. It's also why
+  the reduced `{kind:"catalog"}` payload collapses to just its description with
+  no branching: every index-time flag comes back `false`.
+- **`editable` also flags `repoUrl` + `platform` `true` — do NOT render them.**
+  The server accepts a *cosmetic* re-normalisation (`.git` suffix, scheme/host
+  case) but 409s a real `(host, owner, repo)` change, because the slug keys the
+  project's pages, jobs and credentials. Repo URL stays READ-ONLY identity; the
+  honest way to re-point a wiki is delete + recreate. `ProjectSettingsField`
+  excludes both so the field→form map can't accidentally grow an input for them.
+- **Only the DIRTY subset is PATCHed** (`buildPatch` over rhf's `dirtyFields`),
+  so an untouched field is never echoed back as a "change". `ref: null` is an
+  explicit "clear to the default branch"; an ABSENT `ref` means "leave the pin
+  alone" — the two are not interchangeable.
+- **Never name a form field `ref`.** It collides with the `ref` key on rhf's own
+  `field` object: the control renders and even records itself in `dirtyFields`,
+  but `formState.isDirty` never flips, so Save stays disabled and a real edit is
+  silently un-saveable. The form field is `branch`; only the WIRE key is `ref`.
+  (Cost us a debugging cycle — `useFormState` does NOT work around it.)
+- **The settings DTO is camelCase** (`filterMode`/`graphOnly`/`scopeType`), like
+  every other wiki wire shape; the server keeps snake_case internals behind
+  Pydantic aliases. An early issue draft specified snake_case — that text is WRONG
+  (lifted from the sessions/triggers API) and is not what shipped. The `editable`
+  map is keyed by the same camelCase field names.
+- **Errors stay inside the dialog, never a toast.** A 403 (dev-mode gate) pins to
+  the graph-only switch, per-field 400s pin to their inputs, everything else
+  (409 identity edit, 5xx) fills the dialog banner. Success = close + refresh.
+- **No inline token field, ever.** Credential coverage is a read-only line from
+  the server-resolved `credential` (the ONE credential chain), falling back to the
+  shared `matchCredential()` (`api/git.ts`, also used by the wizard's saved-cred
+  hint) only when the payload omits it. Changing a credential deep-links to
+  Settings → Security & Access.
+- **A changed `ref` invalidates `["wiki","freshness",slug]`** as well as the
+  projects list — otherwise `FreshnessBadge` keeps reporting drift against the
+  OLD branch.
+- **A PATCH re-indexes NOTHING, and `desc` is the one exception to that.** Every
+  other field takes effect at the next index; `desc` writes through to the
+  `Project` snapshot immediately (finalize reads the override back, so a reindex
+  won't clobber it). The footer copy switches between those two messages off the
+  dirty set, and an index-time save hands off to the screen's EXISTING re-index
+  CTA (`onRefresh`, the same one `FreshnessBadge` opens) instead of
+  minting a second refresh path. Auto-queuing a reindex from the PATCH was
+  deliberately NOT done — it's a contract change and drags in the per-IP indexing
+  rate limiter.
+- **Test trap:** `form.reset(seedFrom(dto))` runs in an effect AFTER the render
+  that first shows the form, so asserting/typing as soon as the Save button
+  appears races the seed and gets clobbered. Wait on a field whose DTO value
+  differs from the inert default (`awaitSeeded`).
+
 ## Q&A vs Indexing — distinct streams
 
 `useIndexingStream` and `useQaStream` look similar but have distinct
@@ -335,7 +515,7 @@ stream is one-shot per job, the Q&A stream is one-shot per question.
 Q&A doesn't have an explicit cancel endpoint — unmount = subscriber
 gone, server stops streaming when the connection closes.
 
-## Idempotent Q&A URL — `?answer=<id>` (Gitea #165)
+## Idempotent Q&A URL — `?answer=<id>`
 
 A completed answer is addressable, so a refresh/share replays it with ZERO LLM
 (was: every mount re-POSTed `/v1/wiki/qa` and re-ran the agent). The whole fix is
@@ -350,6 +530,71 @@ event's `answerId` is folded into the URL via `navigate(replace)`;
 mode, so the stream paints through without an abort/refetch flash. Known edge: a
 refresh mid-generation shows the partial persisted snapshot (still no LLM
 re-invoke), not a resumed stream.
+
+**The SAME `answer` id now addresses a whole multi-turn conversation, not one
+turn.** A follow-up does NOT mint a new answer id or navigate —
+see "Multi-turn follow-up" below. `publishedAnswerRef`'s job narrowed to
+exactly one thing: fold a COLD ask's freshly-minted id into the URL once. It
+no longer decides live-vs-snapshot mode (that's `liveInput === null` now) —
+don't conflate the two again, they used to be the same boolean and that's
+what made follow-up-without-navigation impossible to express.
+
+## Multi-turn follow-up
+
+**All of the state/effects this section describes now live in `useQaConversation.ts`
+(burn-down), not in `QAScreen.tsx` itself.** `QAScreen` calls the hook
+and renders `renderedTurns` + `onAsk` — read the hook file for the current
+source, this section documents the RULES it encodes. The hook is unit-tested
+directly (`__tests__/wiki/useQaConversation.test.tsx`) independent of mounting
+the two-column layout.
+
+`QADock`'s follow-up input used to be a dead end: `onAsk` navigated to a brand
+new `?question=` route, discarding the whole conversation (new `answerId`, new
+backend session). It now stacks turns in the SAME `QAScreen` instance instead:
+
+- **Wire contract (FE side).** `POST /v1/wiki/qa`'s new optional `answerId` and
+  the additive `QaAnswer.question`/`turns: QaTurn[]` are specified API-side (see
+  that `CLAUDE.md`). On the FE: `useQaStream`'s input gains a matching optional
+  `answerId`, threaded straight into `streamAnswer`'s POST body; and the new
+  `QaAnswer`/`QaTurn` fields are typed OPTIONAL (not required) specifically so an
+  older persisted answer / test fixture still validates.
+- **One instance, stacked turns, no route change.** `QAScreen` holds
+  `sessionTurns: RenderedTurn[]` (turns frozen at each follow-up) +
+  `liveInput: {question, answerId?} | null` (drives the live stream — `null`
+  ⇒ pure-snapshot render). `onAsk` (wired from `QADock`, whose own
+  `onAsk(question: string)` contract is UNCHANGED) no longer calls `navigate`
+  — it freezes the current turn into `sessionTurns` and re-points `liveInput`
+  at the SAME `answerId`, which changes `useQaStream`'s derived `key` and
+  reopens a fresh stream on the continued backend session. (The rendered turn
+  list — prior turns ∪ the live turn, `priorTurns` sourced from `sessionTurns`
+  or a snapshot's `QaAnswer.turns` — is spelled out in `QAScreen.tsx`'s header
+  JSDoc.) The single Q&A-block markup was extracted into an in-file `TurnView`
+  sub-component (no
+  new file — not complex enough to warrant one) so every turn — live or
+  historical — renders through the identical code path; turns stack with a
+  `border-t border-[hsl(var(--border))]` divider, no new visual language.
+  Follow-up is gated on the active turn being `done` — a mid-stream submit is
+  a silent no-op, so a partial turn can never freeze into history.
+- **`isSnapshot` decoupled from the publish-ref.** Earlier, "is this a
+  snapshot read" and "is this our own just-published id" were the same
+  check — that conflation is exactly what made "stay on this answer but ask a
+  NEW live turn" inexpressible. Now `isSnapshot = liveInput === null &&
+  Boolean(answerId)`; the id-fold effect only fires once per COLD ask
+  (guarded on the `answerId` PROP being absent, not on publish-tracking).
+- **`useQaStream` reducer is unchanged on purpose.** It still fully resets on
+  every `meta` event — correct, because each hook invocation is legitimately
+  ONE in-flight turn; accumulating turns across follow-ups is `QAScreen`'s
+  job, not the hook's. The one addition is a `settled` flag (`folded key ===
+  live key`) so `QAScreen` can paint a skeleton instead of flashing the
+  PREVIOUS turn's blocks in the round-trip window after swapping `liveInput`
+  but before the new turn's first `meta` lands.
+- **Organic orchestration — no FE-side "follow-up mode" branching on
+  behavior.** The FE doesn't decide whether the backend re-probes or reuses
+  prior context on a continuation turn — that's the hypervisor's call
+  (server-side, prompt-driven, see the API-side `CLAUDE.md`). The FE's only
+  job is: reuse the id, stack the render. No turn-count cap here either —
+  `sessionTurns`/`QaAnswer.turns` grow unbounded per conversation, same as the
+  backend relies on session compaction rather than a hard limit.
 
 ## Q&A answer rendering — cited-sources viewer (one renderer, one citation grammar)
 
@@ -382,8 +627,9 @@ blocks so a sources-only stream still hits the terminal branch.
   remote-repo file at its cited line range, and `SourceCard` file→repo-blob /
   page→wiki-route open in a new tab. `parseCitations()` builds the card set as a discriminated union
   (`{kind: file|page|graph}`, deduped, first-seen order) — it KEEPS the `wiki:`
-  page + `graph:` node refs that the legacy `fileCitations()` dropped (the latter
-  is still exported for file-only callers). #165.
+  page + `graph:` node refs that the deleted `fileCitations()` used to drop
+  silently — that flat file-only parser was removed as dead code (the
+  burn-down), so `parseCitations()` is now the only card-set builder.
 - **Inline citations are chips via the `src:` href scheme.** The generation
   prompt emits `[path:line](src:path#L<a>-<b>)`; the shared link renderer detects
   `href^="src:"` → accent chip (`bg-[hsl(var(--primary))]/10`, monospace). This
@@ -396,7 +642,7 @@ blocks so a sources-only stream still hits the terminal branch.
   prose it grounded on, not a 404); `graph` → a compact resolved label, no fetch.
   A failed excerpt reads a muted "source unavailable", never raw stderr-red.
   Accessed-files + model stay a small secondary footer.
-- **Cited page/graph sources now RENDER (supersedes the #70 "FE unchanged" rule — #165).**
+- **Cited page/graph sources now RENDER (supersedes the earlier "FE unchanged" rule).**
   A wiki PAGE cited by the model is re-schemed `wiki:<page-id>` server-side (now by
   page id OR slugified title — `tag_page_citations`); the FE no longer DROPS it —
   the `page` branch fetches that ONE page by id and shows its body. This is the
@@ -405,7 +651,7 @@ blocks so a sources-only stream still hits the terminal branch.
   refs in the FOOTER stay resolved server-side (`AccessedSourceResolver`, wire is
   `string[]`). Don't reintroduce a page-set fetch or a FE hash resolver.
 
-## Recovery UI (Gitea #54)
+## Recovery UI
 
 A failed/interrupted index is **resumable from the last good checkpoint**, not
 restart-only. `LandingScreen` shows a collapsible **"Incomplete indexes"** section

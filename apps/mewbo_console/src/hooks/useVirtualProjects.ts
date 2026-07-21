@@ -1,93 +1,126 @@
-import { useCallback, useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   listProjects,
   createVirtualProject,
   updateVirtualProject,
   deleteVirtualProject,
+  type ProjectSummary,
 } from "../api/client";
 import { VirtualProject } from "../types";
-import { logApiError } from "../utils/errors";
+import { getErrorMessage, logApiError } from "../utils/errors";
+
+/**
+ * Managed ("virtual") projects — the server-owned workspaces under
+ * `/api/projects` + `/api/v_projects`.
+ *
+ * This hook reads the SAME `['projects']` query as `useProjects()` and narrows
+ * it with `select` (re-calling a hook on a shared queryKey is not a second
+ * fetch). It used to be a hand-rolled `useState` + `useEffect` cache that ALSO
+ * invalidated `['projects']` for the rest of the app — a second cache sitting
+ * next to the real one, which the console's CLAUDE.md forbids outright. Writes
+ * are `useMutation`s that invalidate the one key, so the composer's project
+ * picker, the session list's `ProjectLabel` and this pane can never disagree.
+ */
+const PROJECTS_KEY = ["projects"] as const;
+
+/** Managed entries carry a `project_id`; config-defined ones never do. */
+function isManaged(p: ProjectSummary): p is ProjectSummary & { project_id: string } {
+  return p.source === "managed" && !!p.project_id;
+}
+
+/**
+ * `/api/projects` returns the union of config + managed entries. Carry the
+ * worktree flags through — earlier versions stripped them, which broke
+ * worktree detection downstream (ProjectCard, the composer's picker).
+ *
+ * `GET /api/projects` (`backend.py::Projects.get`) builds each managed entry
+ * from a fixed, narrower dict — `name`/`project_id`/`path`/`description`/
+ * `available`/`source`/`is_worktree`/`parent_project_id`/`branch` — and never
+ * includes `path_source`/`folder_created`/`created_at`/`updated_at`; those
+ * only exist on the FULL record `POST`/`PATCH /api/v_projects/<id>` return
+ * (`backend.py::_vproject_to_dict`). This used to fabricate them (`"auto"` /
+ * `true` / `""` / `""`) just to satisfy `VirtualProject`'s shape — a lie
+ * waiting for the first consumer that renders "Created {created_at}" and
+ * prints "Invalid Date". Omit them instead; `VirtualProject` declares them
+ * optional for exactly this reason.
+ */
+function toVirtualProject(p: ProjectSummary & { project_id: string }): VirtualProject {
+  return {
+    project_id: p.project_id,
+    name: p.name,
+    description: p.description ?? "",
+    path: p.path,
+    is_worktree: p.is_worktree ?? false,
+    parent_project_id: p.parent_project_id ?? null,
+    branch: p.branch ?? null,
+  };
+}
 
 export function useVirtualProjects() {
   const qc = useQueryClient();
-  const [projects, setProjects] = useState<VirtualProject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [fetchKey, setFetchKey] = useState(0);
 
-  useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    setError(null);
-    listProjects()
-      .then((all) => {
-        if (mounted) {
-          // Filter to managed projects and map to VirtualProject shape.
-          // Carry worktree flags through so consumers (ProjectCard, picker)
-          // can branch on them — earlier versions stripped these fields,
-          // which broke worktree detection downstream.
-          setProjects(
-            all
-              .filter(
-                (p): p is typeof p & { project_id: string } =>
-                  p.source === "managed" && !!p.project_id,
-              )
-              .map((p) => ({
-                project_id: p.project_id,
-                name: p.name,
-                description: p.description ?? "",
-                path: p.path,
-                path_source: "auto",
-                folder_created: true,
-                created_at: "",
-                updated_at: "",
-                is_worktree: p.is_worktree ?? false,
-                parent_project_id: p.parent_project_id ?? null,
-                branch: p.branch ?? null,
-              })),
-          );
-        }
-      })
-      .catch((err) => {
-        if (mounted) {
-          const message = logApiError("listVirtualProjects", err);
-          setError(message);
-          setProjects([]);
-        }
-      })
-      .finally(() => { if (mounted) setLoading(false); });
-    return () => { mounted = false; };
-  }, [fetchKey]);
+  const query = useQuery<ProjectSummary[], Error, VirtualProject[]>({
+    queryKey: PROJECTS_KEY,
+    queryFn: () => listProjects(),
+    select: (all) => all.filter(isManaged).map(toVirtualProject),
+  });
 
-  const invalidateProjects = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["projects"] });
-  }, [qc]);
+  const invalidate = () => qc.invalidateQueries({ queryKey: PROJECTS_KEY });
 
-  const refresh = useCallback(() => {
-    invalidateProjects();
-    setFetchKey((k) => k + 1);
-  }, [invalidateProjects]);
+  // Mutations previously had no `onError` at all, and the hook's `error`
+  // field reads only the QUERY (`query.error` below) — so a rejecting
+  // create/update/delete produced an unhandled promise rejection and no
+  // error anywhere a user could see (a stuck confirm dialog, a card wedged
+  // in edit mode). `usePlugins.ts` established the fix for this same
+  // refactor: surface mutation failures as `sonner` toasts fired from the
+  // HOOK, so every caller gets it for free without hand-rolling its own
+  // try/catch.
+  const createM = useMutation({
+    mutationFn: (input: { name: string; description: string; path?: string }) =>
+      createVirtualProject(input.name, input.description, input.path),
+    onSuccess: (_data, vars) => {
+      toast.success(`Created project "${vars.name}".`);
+      invalidate();
+    },
+    onError: (err, vars) => {
+      toast.error(`Failed to create "${vars.name}" — ${getErrorMessage(err)}`);
+    },
+  });
 
-  const create = useCallback(async (name: string, description: string, path?: string) => {
-    const proj = await createVirtualProject(name, description, path);
-    invalidateProjects();
-    setFetchKey((k) => k + 1);
-    return proj;
-  }, [invalidateProjects]);
+  const updateM = useMutation({
+    mutationFn: (input: { id: string; data: { name?: string; description?: string } }) =>
+      updateVirtualProject(input.id, input.data),
+    onSuccess: () => {
+      toast.success("Project updated.");
+      invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Failed to update project — ${getErrorMessage(err)}`);
+    },
+  });
 
-  const update = useCallback(async (id: string, data: { name?: string; description?: string }) => {
-    const proj = await updateVirtualProject(id, data);
-    invalidateProjects();
-    setProjects((prev) => prev.map((p) => (p.project_id === id ? { ...p, name: proj.name, description: proj.description } : p)));
-    return proj;
-  }, [invalidateProjects]);
+  const removeM = useMutation({
+    mutationFn: (id: string) => deleteVirtualProject(id),
+    onSuccess: () => {
+      toast.success("Project deleted.");
+      invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete project — ${getErrorMessage(err)}`);
+    },
+  });
 
-  const remove = useCallback(async (id: string) => {
-    await deleteVirtualProject(id);
-    invalidateProjects();
-    setProjects((prev) => prev.filter((p) => p.project_id !== id));
-  }, [invalidateProjects]);
-
-  return { projects, loading, error, refresh, create, update, remove };
+  return {
+    projects: query.data ?? [],
+    loading: query.isPending,
+    error: query.error ? logApiError("listVirtualProjects", query.error) : null,
+    create: (name: string, description: string, path?: string) =>
+      createM.mutateAsync({ name, description, path }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      updateM.mutateAsync({ id, data }),
+    remove: (id: string) => removeM.mutateAsync(id).then(() => undefined),
+    /** `true` while a delete is in flight — the confirm dialog reads it. */
+    removing: removeM.isPending,
+  };
 }

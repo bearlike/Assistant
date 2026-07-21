@@ -1,6 +1,6 @@
 """GraphStructuredRunner — route ``/v1/structured`` graph-first over the SCG.
 
-#77 centrepiece: a structured run that binds a *search workspace* should go
+Centrepiece: a structured run that binds a *search workspace* should go
 **graph-first** — route → spawn a probe per pathway → aggregate → emit — instead
 of the wiki-grounded single-agent default. Per ``docs/features-structured-outputs.md``
 the run stays an ORDINARY agentic session (the same ``StructuredResponder`` /
@@ -23,7 +23,7 @@ This atomic class is the thin app-side composition seam. Given a resolved
 
 Streaming is automatic and uses the SAME mechanism as everything else: the
 backing session publishes its ``sub_agent`` probe fan-out to the core
-``SessionEventBus`` (the SideStage seam), which the console's session SSE stream
+``SessionEventBus`` (the same streaming seam), which the console's session SSE stream
 tails live — no run-store projection needed (a structured run is read via the
 session transcript, not the search run event log).
 
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mewbo_core.common import get_logger
-from mewbo_core.structured_response import StructuredResponder
+from mewbo_core.structured_response import StructuredResponder, StructuredResponseError
 
 from ..catalog import SourceCatalog
 from ..mcp_config import WorkspaceMcpConfig
@@ -108,7 +108,7 @@ class GraphStructuredRunner:
     ) -> StructuredResponder:
         """Compose the graph-first :class:`StructuredResponder` for *workspace*.
 
-        The run grant resolves from the workspace's #75 virtual MCP config
+        The run grant resolves from the workspace's virtual MCP config
         (attached server names) first, falling back to the workspace's raw
         ``sources`` — identical to ``SearchRun.start``. The caller-supplied
         ``tools`` (if any) intersect the binding's allowed tools so a caller can
@@ -127,6 +127,23 @@ class GraphStructuredRunner:
             # the binding's order so the traversal verbs survive if requested.
             narrow = set(tools)
             allowed = [t for t in allowed if t in narrow]
+            if not allowed:
+                # The caller's `tools` shares NOTHING with this workspace's
+                # grant (connector tools ∪ TRAVERSAL_TOOLS) -- an empty
+                # intersection, not an absent one. Passing it through would
+                # start a run holding no tools at all, which answers a bad tool
+                # id with a silently useless run rather than telling the caller
+                # what was wrong. Refuse instead of collapsing "nothing in
+                # common" into a scope nobody asked for.
+                #
+                # This was a widening bug until `filter_specs` learned to
+                # distinguish `[]` from `None`: an empty list read as
+                # UNRESTRICTED downstream, so a caller narrowing to a typo'd
+                # tool id received the entire registry.
+                raise StructuredResponseError(
+                    "requested tools do not overlap with this workspace's "
+                    "connector grant"
+                )
 
         return StructuredResponder(
             runtime=runtime,

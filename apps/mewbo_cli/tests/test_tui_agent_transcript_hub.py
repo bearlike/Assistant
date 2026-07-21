@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for AgentTranscriptHub — the order-preserving transcript source (#161).
+"""Tests for AgentTranscriptHub — the order-preserving transcript source.
 
 The acceptance bar (the ORDERING INVARIANT): within one agent's transcript the
 materialised order MUST equal core emission order — text → tool start → tool
@@ -326,7 +326,56 @@ def test_completion_renders_task_result_when_nothing_streamed() -> None:
     assert hub.transcript(ROOT).status == "completed"  # type: ignore[union-attr]
 
 
-# --- fleet rollups (Phase 2, #161) --------------------------------------
+def test_completion_blocked_code_overrides_completed_done_reason() -> None:
+    """A ``blocked_code`` completion resolves to ``blocked``, never ``completed``.
+
+    The loop leaves ``done_reason`` at ``"completed"`` for a run that hit an
+    unrecovered repo/network/permission/quota wall, carrying the wall
+    separately as ``blocked_code`` — the false-success regression: reading
+    ``done_reason`` alone (the historical hub behaviour, a raw passthrough)
+    rendered this straight through to the fleet panel as a clean green ✓.
+    """
+    clock = _Clock()
+    hub = AgentTranscriptHub(clock=clock)
+    hub.observe("s", {"type": "llm_call_start", "payload": {"agent_id": ROOT, "depth": 0}})
+    clock.tick(2.0)
+    hub.observe("s", {"type": "completion",
+                      "payload": {"done": True, "done_reason": "completed",
+                                  "blocked_code": "repo_access"}})
+    assert hub.transcript(ROOT).status == "blocked"  # type: ignore[union-attr]
+    # ``blocked`` is not in the hypervisor's 4-state terminal set, so a naive
+    # gate on that set (the pre-fix code) would never stamp ``stopped_at``,
+    # leaving the fleet row's elapsed timer ticking forever on a dead run.
+    assert hub.fleet_rows()[0].stopped_at == 2.0
+
+
+def test_completion_unrecognized_blocked_code_is_ignored() -> None:
+    """A code outside the closed ``_BLOCKED_CODES`` set never widens the status."""
+    hub = AgentTranscriptHub()
+    hub.observe("s", {"type": "llm_call_start", "payload": {"agent_id": ROOT, "depth": 0}})
+    hub.observe("s", {"type": "completion",
+                      "payload": {"done": True, "done_reason": "completed",
+                                  "blocked_code": "not_a_real_code"}})
+    assert hub.transcript(ROOT).status == "completed"  # type: ignore[union-attr]
+
+
+def test_completion_halt_and_verification_failure_map_to_unmet_goal() -> None:
+    """``halted_no_progress``/``verification_failed`` both resolve to ``unmet_goal``.
+
+    Before this fix these rendered a bare "?" glyph (the fleet panel's
+    unmapped-status fallback) — not a false success, but not a clear signal
+    either. Mirrors the console's StatusBadge, which absorbs both into the
+    same "Goal not met" pill.
+    """
+    for reason in ("halted_no_progress", "verification_failed", "unmet_goal"):
+        hub = AgentTranscriptHub()
+        hub.observe("s", {"type": "llm_call_start", "payload": {"agent_id": ROOT, "depth": 0}})
+        hub.observe("s", {"type": "completion",
+                          "payload": {"done": True, "done_reason": reason}})
+        assert hub.transcript(ROOT).status == "unmet_goal"  # type: ignore[union-attr]
+
+
+# --- fleet rollups (Phase 2) --------------------------------------
 
 
 def test_llm_call_end_rolls_up_root_tokens() -> None:
@@ -345,7 +394,7 @@ def test_llm_call_end_rolls_up_root_tokens() -> None:
 
 def test_root_last_input_tokens_is_the_live_call_not_the_cumulative_total() -> None:
     """root_last_input_tokens() feeds the ctx gauge — the LAST call's size, not
-    the session's cumulative billed total (issue E8: the gauge was reading
+    the session's cumulative billed total (the gauge was reading
     ``cumulative_input_tokens`` and reporting ~100% instead of ~4%)."""
     hub = AgentTranscriptHub()
     assert hub.root_last_input_tokens() == 0  # no root yet
@@ -437,7 +486,7 @@ def test_items_for_projects_entries_in_order() -> None:
     assert hub.items_for("nonexistent") == []
 
 
-# --- #173: authoritative todos ingest + throughput + card suppression ----
+# --- authoritative todos ingest + throughput + card suppression ----
 
 
 def _todos(hub: AgentTranscriptHub, items: list[dict], *, agent: str = ROOT,

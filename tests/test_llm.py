@@ -539,3 +539,173 @@ def test_build_chat_model_omits_cache_injection_points_for_unsupported(monkeypat
     build_chat_model(model_name="openai/claude-via-mycorp-proxy")
     model_kwargs = captured.get("model_kwargs") or {}
     assert "cache_control_injection_points" not in model_kwargs
+
+
+# ── Usage normalization: litellm strands token usage in ─────────────
+# ``_hidden_params['usage']`` instead of ``response.usage``, and
+# langchain-litellm reads only the field — so ``usage_metadata`` (hence every
+# ``llm_call_end`` token count) collapses to zero. ``_UsageNormalizingLiteLLM``
+# copies it back. These tests drive the REAL ChatLiteLLM + real litellm response
+# types, stubbing only the I/O boundary (the ``completion``/``acompletion``
+# call), so they exercise the exact adapter path production uses.
+#
+# Ground truth at the installed stack (litellm 1.88.0, langchain-litellm 0.6.6,
+# langchain-core 1.4.1): ``bound.astream()`` falls back to ``ainvoke`` because
+# langchain-core disables streaming when ``streaming`` is in ``model_fields_set``
+# and False — so the non-streaming path is what fires in production. The
+# streaming test forces ``streaming=True`` to cover the other path a different
+# langchain-core version would take.
+_HIDDEN_USAGE = (11, 7, 18)  # prompt, completion, total
+
+
+def _make_usage(prompt, completion, total):
+    from litellm.types.utils import Usage
+
+    return Usage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
+
+
+def _nonstream_response(*, hidden_usage=None, field_usage=(0, 0, 0)):
+    """A non-streaming ModelResponse; usage optionally stranded in _hidden_params."""
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    resp = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="hello"),
+                finish_reason="stop",
+            )
+        ],
+        usage=_make_usage(*field_usage),
+    )
+    if hidden_usage is not None:
+        resp._hidden_params = {"usage": _make_usage(*hidden_usage)}
+    return resp
+
+
+def _stream_chunks(*, hidden_usage=None):
+    """Two streaming chunks; the terminal one strands usage in _hidden_params."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    first = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="he"))])
+    last = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="llo"), finish_reason="stop")]
+    )
+    if hidden_usage is not None:
+        last._hidden_params = {"usage": _make_usage(*hidden_usage)}
+    return [first, last]
+
+
+def _fake_litellm_client(*, response_factory=None, stream_factory=None):
+    """A stand-in for the litellm module exposing completion/acompletion only."""
+
+    async def acompletion(**kwargs):
+        if kwargs.get("stream"):
+
+            async def gen():
+                for chunk in stream_factory():
+                    yield chunk
+
+            return gen()
+        return response_factory()
+
+    def completion(**kwargs):
+        if kwargs.get("stream"):
+            return iter(stream_factory())
+        return response_factory()
+
+    return types.SimpleNamespace(acompletion=acompletion, completion=completion)
+
+
+def _real_chat_model(*, streaming=False):
+    from langchain_litellm import ChatLiteLLM
+
+    model = ChatLiteLLM(model="openai/x", api_base="http://x", api_key="k")
+    model.streaming = streaming
+    return model
+
+
+def _usage_metadata_from_astream(model):
+    import asyncio
+
+    tool = {
+        "type": "function",
+        "function": {"name": "f", "parameters": {"type": "object", "properties": {}}},
+    }
+
+    async def _run():
+        bound = model.bind_tools([tool])
+        accumulated = None
+        async for chunk in bound.astream("hi"):
+            accumulated = chunk if accumulated is None else accumulated + chunk
+        return getattr(accumulated, "usage_metadata", None)
+
+    return asyncio.run(_run())
+
+
+def test_hidden_usage_lost_without_normalizer_nonstream():
+    """Reproduce: usage stranded in _hidden_params reads as zero tokens.
+
+    This is the production path — ``astream`` falls back to ``ainvoke`` at the
+    installed langchain-core version.
+    """
+    model = _real_chat_model(streaming=False)
+    model.client = _fake_litellm_client(
+        response_factory=lambda: _nonstream_response(hidden_usage=_HIDDEN_USAGE)
+    )
+    usage = _usage_metadata_from_astream(model)
+    assert usage == {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+def test_hidden_usage_recovered_with_normalizer_nonstream():
+    """The normalizer surfaces _hidden_params usage onto usage_metadata."""
+    model = _real_chat_model(streaming=False)
+    model.client = llm_module._UsageNormalizingLiteLLM(
+        _fake_litellm_client(
+            response_factory=lambda: _nonstream_response(hidden_usage=_HIDDEN_USAGE)
+        )
+    )
+    usage = _usage_metadata_from_astream(model)
+    assert usage == {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
+
+
+def test_hidden_usage_recovered_with_normalizer_stream():
+    """Streaming chunks that strand usage in _hidden_params are also recovered."""
+    model = _real_chat_model(streaming=True)
+    model.client = llm_module._UsageNormalizingLiteLLM(
+        _fake_litellm_client(stream_factory=lambda: _stream_chunks(hidden_usage=_HIDDEN_USAGE))
+    )
+    usage = _usage_metadata_from_astream(model)
+    assert usage["input_tokens"] == 11
+    assert usage["output_tokens"] == 7
+    assert usage["total_tokens"] == 18
+
+
+def test_usage_normalizer_noop_when_usage_present():
+    """When usage is already on the field, the normalizer must not clobber it."""
+    model = _real_chat_model(streaming=False)
+    model.client = llm_module._UsageNormalizingLiteLLM(
+        _fake_litellm_client(
+            # Real counts on the field, a DIFFERENT (stale) value in _hidden_params.
+            response_factory=lambda: _nonstream_response(
+                field_usage=(11, 7, 18), hidden_usage=(999, 999, 1998)
+            )
+        )
+    )
+    usage = _usage_metadata_from_astream(model)
+    assert usage == {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
+
+
+def test_usage_normalizer_delegates_unknown_attributes():
+    """Non-completion attributes pass through to the wrapped litellm module."""
+    import litellm
+
+    wrapped = llm_module._UsageNormalizingLiteLLM(litellm)
+    assert wrapped.Usage is litellm.Usage
+
+
+def test_build_chat_model_installs_usage_normalizer():
+    """build_chat_model wraps the real ChatLiteLLM client with the normalizer."""
+    set_config_override({"llm": {"api_base": "", "api_key": ""}})
+    model = build_chat_model(model_name="openai/some-proxy-model", openai_api_base=None)
+    assert isinstance(model.client, llm_module._UsageNormalizingLiteLLM)

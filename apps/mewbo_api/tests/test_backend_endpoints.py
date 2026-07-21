@@ -131,6 +131,29 @@ class TestCors:
         assert resp.headers.get("Access-Control-Allow-Origin") is not None
         assert "Access-Control-Allow-Methods" in resp.headers
 
+    def test_cors_preflight_allows_app_token_and_authorization_headers(self, client):
+        # Cross-origin embeds of a served app (e.g. the Aura WebView) send
+        # X-Mewbo-App-Token on every data-plane call, and Authorization is the
+        # documented Bearer alternative; both must be echoed as allowed so the
+        # browser's preflight doesn't block the follow-up request.
+        resp = client.options(
+            "/api/sessions",
+            headers={"Access-Control-Request-Headers": "x-mewbo-app-token"},
+        )
+        allow_headers = resp.headers.get("Access-Control-Allow-Headers", "")
+        assert "X-Mewbo-App-Token" in allow_headers
+        assert "Authorization" in allow_headers
+
+    def test_cors_data_plane_request_carries_allow_origin(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        _reset_backend(tmp_path, monkeypatch)
+        resp = client.get(
+            "/api/sessions",
+            headers={**auth_headers, "X-Mewbo-App-Token": "tok-123"},
+        )
+        assert resp.headers.get("Access-Control-Allow-Origin") is not None
+
 
 # ---------------------------------------------------------------------------
 # /api/query (sync legacy)
@@ -221,7 +244,7 @@ class TestTools:
 
 
 # ---------------------------------------------------------------------------
-# /api/tools — product-tool catalog (Gitea #182 P1)
+# /api/tools — product-tool catalog (P1)
 # ---------------------------------------------------------------------------
 
 

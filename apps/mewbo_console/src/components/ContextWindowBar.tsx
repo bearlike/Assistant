@@ -56,7 +56,7 @@ export function ContextWindowBar({ usage, compact = false }: Props) {
   const trigger = (
     <button
       type="button"
-      className={`flex items-center ${compact ? 'gap-1.5' : 'gap-2'} font-mono text-[10px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors`}
+      className={`flex items-center ${compact ? 'gap-1.5' : 'gap-2'} text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors`}
       aria-label="Context window usage"
     >
       <div
@@ -81,7 +81,7 @@ export function ContextWindowBar({ usage, compact = false }: Props) {
           />
         )}
       </div>
-      <span>
+      <span className="tabular-nums">
         {formatTokens(used)}/{formatTokens(window_)}
       </span>
     </button>
@@ -90,7 +90,11 @@ export function ContextWindowBar({ usage, compact = false }: Props) {
   return (
     <Popover>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent className="w-80 text-xs font-mono p-3" side="bottom" align="end">
+      {/* `tabular-nums` without `font-mono`: the right column is not a pure
+          numeral stack — the values read "12.4k discounted", "root 88k · sub
+          12k", "3 · saved 41k" — so mono here would set prose in a code face to
+          buy an alignment that fixed-width figures already provide. */}
+      <PopoverContent className="w-80 text-xs tabular-nums p-3" side="bottom" align="end">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[hsl(var(--muted-foreground))]">Context window</span>
@@ -172,7 +176,7 @@ export function ContextWindowBar({ usage, compact = false }: Props) {
               </div>
             </>
           )}
-          <p className="text-[hsl(var(--muted-foreground))] text-[10px] pt-1 leading-snug">
+          <p className="text-[hsl(var(--muted-foreground))] pt-1 leading-snug">
             "Used" is the size of the most recent root prompt — what the model has in its window now. Peak shows the historical worst case.
           </p>
         </div>

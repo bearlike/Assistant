@@ -40,7 +40,7 @@ class ComposerScopeTest {
 
     @Test
     fun `projectDisplayName degrades to the raw key while the catalog hasn't loaded yet`() {
-        // Revisit-session race (Gitea #185 P6): commit 3add535 hydrates selectedProjectKey before
+        // Revisit-session race: commit 3add535 hydrates selectedProjectKey before
         // refreshComposerScope resolves the catalog - a non-null selection must never read "Temporary".
         val scope = ComposerScope(projects = null, selectedProjectKey = "Assistant")
         assertEquals("Assistant", scope.projectDisplayName)
@@ -98,7 +98,7 @@ class ComposerScopeTest {
         assertEquals(setOf(toolA.toolId, toolB.toolId, toolC.toolId), scope.mcpToolsForContext()?.toSet())
     }
 
-    // --- activeToolCount (pre-session scope indicator, Gitea #178 W1-B) ---
+    // --- activeToolCount (pre-session scope indicator) ---
 
     @Test
     fun `activeToolCount is null while the tools catalog hasn't loaded`() {
@@ -168,5 +168,119 @@ class ComposerScopeTest {
     fun `activeCountFor is zero-of-zero for an unknown group key`() {
         val scope = ComposerScope(tools = listOf(toolA, toolB, toolC))
         assertEquals(0 to 0, scope.activeCountFor("unknown-server"))
+    }
+
+    // --- provenance facets (scope row grouped counts, user directive 2026-07-14) ---
+
+    private fun scoped(id: String, scope: String?, enabled: Boolean = true) =
+        ToolSummary(toolId = id, name = id, kind = "mcp", enabled = enabled, scope = scope)
+
+    @Test
+    fun `activeToolFacets groups active tools by scope in FACET_ORDER, non-zero only`() {
+        // Input deliberately scrambled (plugin, system, project…) to prove the OUTPUT follows
+        // FACET_ORDER, not arrival order.
+        val scope = ComposerScope(
+            tools = listOf(
+                scoped("plug:a", "plugin"),
+                scoped("sys:a", "system"),
+                scoped("proj:a", "project"),
+                scoped("proj:b", "project"),
+                scoped("sys:b", "system"),
+            ),
+        )
+        assertEquals(
+            listOf(ToolFacet("project", 2), ToolFacet("system", 2), ToolFacet("plugin", 1)),
+            scope.activeToolFacets(),
+        )
+    }
+
+    @Test
+    fun `builtin sorts after project-system-plugin`() {
+        val scope = ComposerScope(
+            tools = listOf(scoped("core:a", "builtin"), scoped("proj:a", "project"), scoped("sys:a", "system")),
+        )
+        assertEquals(listOf("project", "system", "builtin"), scope.activeToolFacets().map { it.scope })
+    }
+
+    @Test
+    fun `toolsFacetSummary joins the faceted counts`() {
+        val scope = ComposerScope(
+            tools = listOf(scoped("proj:a", "project"), scoped("proj:b", "project"), scoped("sys:a", "system"), scoped("plug:a", "plugin")),
+        )
+        assertEquals("2 project · 1 system · 1 plugin", scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `null and unrecognized scope collapse into a single other facet`() {
+        val scope = ComposerScope(tools = listOf(scoped("a", null), scoped("b", "bogus")))
+        assertEquals(listOf(ToolFacet("other", 2)), scope.activeToolFacets())
+    }
+
+    @Test
+    fun `toolsFacetSummary falls back to the plain total when no active tool carries a recognized scope`() {
+        // Older backend that omits scope entirely: never a lone, meaningless "2 other".
+        val scope = ComposerScope(tools = listOf(scoped("a", null), scoped("b", null)))
+        assertEquals("2 tools", scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `an unscoped tool alongside a scoped one shows an other facet at the end`() {
+        val scope = ComposerScope(tools = listOf(scoped("proj:a", "project"), scoped("x", null)))
+        assertEquals("1 project · 1 other", scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `narrowing drops a tool from its facet`() {
+        val scope = ComposerScope(tools = listOf(scoped("proj:a", "project"), scoped("proj:b", "project"), scoped("sys:a", "system")))
+            .toggleTool("proj:a")
+        assertEquals(listOf(ToolFacet("project", 1), ToolFacet("system", 1)), scope.activeToolFacets())
+        assertEquals("1 project · 1 system", scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `a default-disabled tool is absent from the facets`() {
+        val scope = ComposerScope(tools = listOf(scoped("proj:a", "project"), scoped("sys:off", "system", enabled = false)))
+        assertEquals(listOf(ToolFacet("project", 1)), scope.activeToolFacets())
+    }
+
+    @Test
+    fun `facets are empty and summary null while the catalog hasn't loaded`() {
+        val scope = ComposerScope(tools = null)
+        assertTrue(scope.activeToolFacets().isEmpty())
+        assertNull(scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `facet counts sum to activeToolCount`() {
+        val scope = ComposerScope(
+            tools = listOf(scoped("proj:a", "project"), scoped("sys:a", "system"), scoped("x", null), scoped("off", "system", enabled = false)),
+        )
+        assertEquals(scope.activeToolCount, scope.activeToolFacets().sumOf { it.count })
+    }
+
+    // --- toolsCompactSummary (scope-row last-resort truncation ladder) ---
+
+    @Test
+    fun `toolsCompactSummary is null while the tools catalog hasn't loaded`() {
+        val scope = ComposerScope(tools = null)
+        assertNull(scope.toolsCompactSummary)
+    }
+
+    @Test
+    fun `toolsCompactSummary is the plain total even when facets are recognized`() {
+        val scope = ComposerScope(
+            tools = listOf(scoped("proj:a", "project"), scoped("proj:b", "project"), scoped("sys:a", "system"), scoped("plug:a", "plugin")),
+        )
+        assertEquals("4 tools", scope.toolsCompactSummary)
+        // The full form stays faceted - compact is a SEPARATE, deliberately shorter fallback, never
+        // a mutation of toolsFacetSummary.
+        assertEquals("2 project · 1 system · 1 plugin", scope.toolsFacetSummary)
+    }
+
+    @Test
+    fun `toolsCompactSummary tracks a narrowed selection via activeToolCount`() {
+        val scope = ComposerScope(tools = listOf(toolA, toolB, toolC)).toggleTool(toolA.toolId)
+        assertEquals("1 tools", scope.toolsCompactSummary)
+        assertEquals(1, scope.activeToolCount)
     }
 }

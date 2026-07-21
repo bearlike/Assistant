@@ -199,6 +199,41 @@ def test_interrupt_session_posts_interrupt(fake_rest):
 
 
 # ---------------------------------------------------------------------------
+# terminate — permanent, idempotent
+# ---------------------------------------------------------------------------
+
+
+def test_terminate_posts_terminate_and_shapes_result(fake_rest):
+    fake = fake_rest.on(
+        "POST",
+        "/api/sessions/s1/terminate",
+        {
+            "session_id": "s1",
+            "status": "terminated",
+            "terminated_at": "2026-07-13T18:24:10+00:00",
+            "cancelled_triggers": 2,
+        },
+    )
+    result = run(tools.SessionTools(fake.client()).terminate(session_id="s1"))
+    assert result == {
+        "session_id": "s1",
+        "status": "terminated",
+        "terminated_at": "2026-07-13T18:24:10+00:00",
+        "cancelled_triggers": 2,
+    }
+
+
+def test_terminate_defaults_cancelled_triggers_when_absent(fake_rest):
+    """A minimal API response still shapes to a well-formed result (defensive .get())."""
+    fake = fake_rest.on(
+        "POST", "/api/sessions/s1/terminate", {"session_id": "s1", "status": "terminated"}
+    )
+    result = run(tools.SessionTools(fake.client()).terminate(session_id="s1"))
+    assert result["cancelled_triggers"] == 0
+    assert result["terminated_at"] is None
+
+
+# ---------------------------------------------------------------------------
 # list_sessions (client-side filters)
 # ---------------------------------------------------------------------------
 
@@ -387,6 +422,68 @@ def test_history_full_omits_attachments_key_when_absent(fake_rest):
     assert "attachments" not in out
 
 
+def _history_events_with_trigger_and_termination():
+    events = [dict(e) for e in _history_events()["events"]]
+    # An armed trigger mid-turn-1 (between its "user" and "assistant" events).
+    events.insert(
+        1,
+        {
+            "type": "trigger_armed",
+            "ts": "t0b",
+            "payload": {"trigger_id": "tr1", "kind": "time.cron", "summary": "Armed a wake"},
+        },
+    )
+    events.append({"type": "session_terminated", "ts": "t6", "payload": {}})
+    return {"running": False, "events": events}
+
+
+def test_history_full_includes_trigger_marker_for_its_turn(fake_rest):
+    """A trigger armed mid-turn surfaces in that turn's full tier."""
+    fake = (
+        fake_rest
+        .on("GET", "/api/sessions/s1/events", _history_events_with_trigger_and_termination())
+        .on("GET", "/api/sessions/s1/agents", {"agents": [], "running": False})
+    )
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=1))
+    assert out["triggers"] == [
+        {
+            "action": "armed",
+            "kind": "time.cron",
+            "ts": "t0b",
+            "trigger_id": "tr1",
+            "summary": "Armed a wake",
+        }
+    ]
+
+
+def test_history_full_omits_triggers_key_for_a_turn_with_none(fake_rest):
+    fake = (
+        fake_rest
+        .on("GET", "/api/sessions/s1/events", _history_events_with_trigger_and_termination())
+        .on("GET", "/api/sessions/s1/agents", {"agents": [], "running": False})
+    )
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="full", turn=2))
+    assert "triggers" not in out
+
+
+def test_history_overview_terminated_fallback_from_transcript_marker(fake_rest):
+    """The overview tier reads `terminated` from the transcript's session_terminated
+    marker when the /events meta doesn't carry it yet (defensive read)."""
+    fake = fake_rest.on(
+        "GET", "/api/sessions/s1/events", _history_events_with_trigger_and_termination()
+    )
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="overview"))
+    assert out["terminated"] is True
+    assert out["terminated_at"] == "t6"
+
+
+def test_history_overview_terminated_false_by_default(fake_rest):
+    fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
+    out = run(tools.SessionTools(fake.client()).history(session_id="s1", level="overview"))
+    assert out["terminated"] is False
+    assert "terminated_at" not in out
+
+
 def test_history_steps_requires_turn_and_omits_full_result(fake_rest):
     fake = fake_rest.on("GET", "/api/sessions/s1/events", _history_events())
     out = run(
@@ -439,7 +536,7 @@ def _fat_turn_events(n_steps: int, result_len: int):
 
 
 def test_history_full_pages_steps_and_truncates_fat_result(fake_rest):
-    """#42: the full tier caps steps to FULL_STEPS_PAGE and trims a fat field.
+    """the full tier caps steps to FULL_STEPS_PAGE and trims a fat field.
 
     A turn with 25 steps + one 10k-char result must return at most 20 steps,
     ``next_step_offset:20``, the true ``step_count:25``, and the giant result
@@ -463,7 +560,7 @@ def test_history_full_pages_steps_and_truncates_fat_result(fake_rest):
 
 
 def test_history_full_second_page_has_no_next_offset(fake_rest):
-    """#42: paging from step_offset returns the tail and omits next_step_offset."""
+    """paging from step_offset returns the tail and omits next_step_offset."""
     fake = fake_rest.on("GET", "/api/sessions/s1/events", _fat_turn_events(25, 10))
     out = run(
         tools.SessionTools(fake.client()).history(
@@ -529,7 +626,7 @@ def test_read_wiki_structure(fake_rest):
 
 
 def test_read_wiki_structure_cytoscape_layer_filter(fake_rest):
-    """#63: nodes/edges are Cytoscape-shaped — ``layer`` lives under ``data``.
+    """nodes/edges are Cytoscape-shaped — ``layer`` lives under ``data``.
 
     The layer filter must read ``n['data']['layer']`` (not top-level), and the
     ``full`` tier must resolve edges via ``data.source``/``data.target``.
@@ -806,7 +903,7 @@ def test_ask_wiki_raises_when_no_meta_answer_id(fake_rest):
 
 
 def test_ask_wiki_transport_timeout_returns_resumable_handle(fake_rest):
-    """#41: a transport ReadTimeout mid-poll degrades to the resumable answer_id.
+    """a transport ReadTimeout mid-poll degrades to the resumable answer_id.
 
     The START SSE yields the answer_id; the snapshot GET raises ``httpx.ReadTimeout``
     (the front-proxy/httpx cut). ``poll_or_handle`` must return
@@ -1131,7 +1228,7 @@ def test_search_async_timeout_returns_running_partial(fake_rest):
 
 
 def test_search_transport_timeout_returns_resumable_handle(fake_rest):
-    """#41: a ReadTimeout mid-poll degrades to the resumable run_id, not a raise.
+    """a ReadTimeout mid-poll degrades to the resumable run_id, not a raise.
 
     POST /runs returns ``running`` + run_id; the snapshot GET raises
     ``httpx.ReadTimeout``. ``poll_or_handle`` must surface
@@ -1254,7 +1351,7 @@ def test_structured_query_omits_optional_fields(fake_rest):
 
 
 def test_get_structured_run_carries_graph_provenance(fake_rest):
-    """A graph-first run's pathway/probe ``provenance`` flows through the projection (#77)."""
+    """A graph-first run's pathway/probe ``provenance`` flows through the projection."""
     provenance = {
         "recipes_routed": 2,
         "probes_run": 3,
@@ -1349,8 +1446,9 @@ def test_get_wiki_answer_resumes_by_id(fake_rest):
 def test_history_overview_renders_tool_call_turn_from_steps(fake_rest):
     """A tool-call-only turn renders '→ called <tool>', never the leaked sentinel.
 
-    Guards #44.2: the assistant text is the upstream-sanitized placeholder plus a
-    model-leaked tool-call serialization; the summary must come from the steps.
+    Guards against a regression where the assistant text is the
+    upstream-sanitized placeholder plus a model-leaked tool-call
+    serialization; the summary must come from the steps.
     """
     events = {
         "running": False,
@@ -1472,7 +1570,7 @@ def test_structured_query_poll_timeout_returns_running_with_run_id(fake_rest):
 
 
 def test_structured_query_transport_timeout_returns_resumable_handle(fake_rest):
-    """#41: a ReadTimeout mid-poll degrades to the resumable run_id, not a raise.
+    """a ReadTimeout mid-poll degrades to the resumable run_id, not a raise.
 
     POST returns ``running`` + run_id; the snapshot GET raises ``httpx.ReadTimeout``.
     The tool must return ``{run_id, status:'running'}`` (resume via
@@ -1498,7 +1596,7 @@ def test_structured_query_transport_timeout_returns_resumable_handle(fake_rest):
 
 
 def test_get_structured_run_unknown_id_raises_404(fake_rest):
-    """#64 contract-lock: an unknown run id surfaces as a 404 RestError.
+    """an unknown run id surfaces as a 404 RestError.
 
     The API 404s an unknown id; the MCP must propagate a ``RestError`` with
     ``status_code == 404`` (the server's ``_enveloped`` then maps it to
@@ -1517,7 +1615,7 @@ def test_get_structured_run_unknown_id_raises_404(fake_rest):
 
 
 def test_long_running_timeout_budgets_below_proxy_ceiling(fake_rest):
-    """#41: every long-running tool's default budget < the transport/proxy ceiling.
+    """every long-running tool's default budget < the transport/proxy ceiling.
 
     The poll budget MUST be the tightest ceiling so the tool ALWAYS returns the
     resumable handle as ``status:'running'`` before httpx (30s read) or the
@@ -1589,3 +1687,214 @@ def test_structured_query_awaiting_approval_not_terminal(fake_rest):
     assert out["status"] == "completed"
     assert out["output"] == {"x": 1}
     assert call_count["n"] == 2  # polled twice: awaiting_approval → completed
+
+
+# ---------------------------------------------------------------------------
+# TriggerTools — external manage/observe surface
+# ---------------------------------------------------------------------------
+
+
+def _triggers_payload():
+    return {
+        "triggers": [
+            {
+                "id": "tr1",
+                "session_id": "s1",
+                "kind": "time.cron",
+                "status": "armed",
+                "wake_prompt": "check on the build",
+                "action": "message",
+                "fires": 0,
+                "max_fires": None,
+                "next_fire_at": "2026-07-14T00:00:00+00:00",
+                "expires_at": "2026-07-20T00:00:00+00:00",
+                "created_at": "2026-07-13T00:00:00+00:00",
+                "created_by": "agent",
+                "provenance": {"agent_id": "a1", "step": None},
+                "args": {"cron": "0 0 * * *"},
+            },
+            {
+                "id": "tr2",
+                "session_id": "s2",
+                "kind": "webhook",
+                "status": "failed",
+                "wake_prompt": "handle the payload",
+                "action": "start",
+                "fires": 3,
+                "max_fires": 5,
+                "next_fire_at": None,
+                "expires_at": None,
+                "created_at": "2026-07-12T00:00:00+00:00",
+                "created_by": "user",
+                "last_error": "webhook payload exceeded max bytes",
+            },
+        ]
+    }
+
+
+def test_list_triggers_no_filters(fake_rest):
+    fake = fake_rest.on("GET", "/api/triggers", _triggers_payload())
+    out = run(tools.TriggerTools(fake.client()).list_triggers())
+    assert out["count"] == 2
+    assert {t["id"] for t in out["triggers"]} == {"tr1", "tr2"}
+    # Compact projection: no raw "args"/"provenance"/"created_by" leak through.
+    assert "args" not in out["triggers"][0]
+    assert "provenance" not in out["triggers"][0]
+    assert "created_by" not in out["triggers"][0]
+    # last_error only present when set.
+    assert "last_error" not in out["triggers"][0]
+    assert out["triggers"][1]["last_error"] == "webhook payload exceeded max bytes"
+    # No query params were sent when every filter is omitted.
+    assert fake.find("GET", "/api/triggers").params == {}
+
+
+def test_list_triggers_forwards_filters_as_query_params(fake_rest):
+    fake = fake_rest.on("GET", "/api/triggers", _triggers_payload())
+    run(
+        tools.TriggerTools(fake.client()).list_triggers(
+            session_id="s1", kind="time.cron", status="armed", limit=5
+        )
+    )
+    req = fake.find("GET", "/api/triggers")
+    assert req.params == {"session_id": "s1", "kind": "time.cron", "status": "armed", "limit": "5"}
+
+
+def test_list_triggers_omits_nonpositive_limit(fake_rest):
+    fake = fake_rest.on("GET", "/api/triggers", _triggers_payload())
+    run(tools.TriggerTools(fake.client()).list_triggers(limit=0))
+    assert "limit" not in fake.find("GET", "/api/triggers").params
+
+
+def test_cancel_trigger_deletes_and_shapes_result(fake_rest):
+    fake = fake_rest.on("DELETE", "/api/triggers/tr1", {"id": "tr1", "status": "cancelled"})
+    out = run(tools.TriggerTools(fake.client()).cancel(trigger_id="tr1"))
+    assert out == {"id": "tr1", "status": "cancelled"}
+
+
+def test_cancel_trigger_idempotent_on_already_terminal(fake_rest):
+    """A repeat cancel just reports the current (already-terminal) status."""
+    fake = fake_rest.on(
+        "DELETE", "/api/triggers/tr1", {"id": "tr1", "status": "completed"}
+    )
+    out = run(tools.TriggerTools(fake.client()).cancel(trigger_id="tr1"))
+    assert out == {"id": "tr1", "status": "completed"}
+
+
+# ---------------------------------------------------------------------------
+# WikiTools.list_pages / graph_neighbors — the read + navigate additions
+# ---------------------------------------------------------------------------
+
+
+def test_list_wiki_pages_forwards_the_query_bounds(fake_rest):
+    """The bound rides the QUERY, so the server returns a small COMPLETE answer."""
+    fake = fake_rest.on(
+        "GET",
+        "/v1/wiki/projects/assistant/pages",
+        {
+            "pages": [{"id": "intro", "title": "Intro"}],
+            "count": 1,
+            "total": 9,
+            "truncated": True,
+            "nextOffset": 1,
+        },
+    )
+    out = run(
+        tools.WikiTools(fake.client()).list_pages(
+            project="assistant", title_contains="int", limit=1, offset=0
+        )
+    )
+    req = fake.find("GET", "/v1/wiki/projects/assistant/pages")
+    assert req.params == {"limit": "1", "offset": "0", "titleContains": "int"}
+    # The continuation handle is passed through — a caller can page forward.
+    assert out["truncated"] is True
+    assert out["nextOffset"] == 1
+    assert out["pages"] == [{"id": "intro", "title": "Intro"}]
+
+
+def test_list_wiki_pages_omits_an_empty_title_filter(fake_rest):
+    """An unset filter must not become `titleContains=` (which matches nothing)."""
+    fake = fake_rest.on("GET", "/v1/wiki/projects/assistant/pages", {"pages": []})
+    run(tools.WikiTools(fake.client()).list_pages(project="assistant"))
+    params = fake.find("GET", "/v1/wiki/projects/assistant/pages").params
+    assert "titleContains" not in params
+    assert params == {"limit": "50", "offset": "0"}
+
+
+def test_graph_neighbors_defaults_to_the_tightened_external_limit(fake_rest):
+    """The facade asks for 25 nodes; the shared args model's own default is 50.
+
+    An external caller's context is not ours to spend, and the internal default
+    must stay where it is — so the tightening lives HERE, at the request.
+    """
+    fake = fake_rest.on(
+        "GET",
+        "/v1/wiki/projects/assistant/graph/neighbors",
+        {"nodes": [{"node_id": "n1"}], "edges": [], "hops_reached": 1, "truncated": False},
+    )
+    run(tools.WikiTools(fake.client()).graph_neighbors(project="assistant", node_id="n1"))
+    params = fake.find("GET", "/v1/wiki/projects/assistant/graph/neighbors").params
+    assert params == {"node_id": "n1", "direction": "any", "hops": "1", "limit": "25"}
+    assert tools.WikiTools.NEIGHBOR_LIMIT == 25
+
+
+def test_graph_neighbors_forwards_an_explicit_limit_and_edge_kind(fake_rest):
+    fake = fake_rest.on(
+        "GET", "/v1/wiki/projects/assistant/graph/neighbors", {"nodes": [], "edges": []}
+    )
+    run(
+        tools.WikiTools(fake.client()).graph_neighbors(
+            project="assistant",
+            node_id="n1",
+            edge_kind="CALLS",
+            direction="in",
+            hops=3,
+            limit=100,
+        )
+    )
+    params = fake.find("GET", "/v1/wiki/projects/assistant/graph/neighbors").params
+    assert params == {
+        "node_id": "n1",
+        "direction": "in",
+        "hops": "3",
+        "limit": "100",
+        "edge_kind": "CALLS",
+    }
+
+
+def test_graph_neighbors_caps_a_hub_nodes_edge_list_explicitly(fake_rest):
+    """A hub's incident edges are NOT bounded by the node limit — cap them here.
+
+    The cut is announced (`edgesTruncated` + the true `edgeCount`) rather than
+    silent, and the node list stays complete, so the reply is still a correct
+    answer to a smaller question instead of a mangled prefix of a big one.
+    """
+    over = tools.WikiTools.NEIGHBOR_EDGE_LIMIT + 7
+    fake = fake_rest.on(
+        "GET",
+        "/v1/wiki/projects/assistant/graph/neighbors",
+        {
+            "nodes": [{"node_id": "hub"}],
+            "edges": [{"source": "hub", "target": f"n{i}", "kind": "CALLS"} for i in range(over)],
+            "hops_reached": 1,
+            "truncated": False,
+        },
+    )
+    out = run(tools.WikiTools(fake.client()).graph_neighbors(project="assistant", node_id="hub"))
+    assert len(out["edges"]) == tools.WikiTools.NEIGHBOR_EDGE_LIMIT
+    assert out["edgesTruncated"] is True
+    assert out["edgeCount"] == over
+    assert out["nodes"] == [{"node_id": "hub"}]  # nodes are never cut
+
+
+def test_graph_neighbors_leaves_a_small_edge_list_untouched(fake_rest):
+    """Under the ceiling there is no cut, so no `edgesTruncated` key at all."""
+    payload = {
+        "nodes": [{"node_id": "n1"}],
+        "edges": [{"source": "n1", "target": "n2", "kind": "CALLS"}],
+        "hops_reached": 1,
+        "truncated": False,
+    }
+    fake = fake_rest.on("GET", "/v1/wiki/projects/assistant/graph/neighbors", payload)
+    out = run(tools.WikiTools(fake.client()).graph_neighbors(project="assistant", node_id="n1"))
+    assert out == payload
+    assert "edgesTruncated" not in out

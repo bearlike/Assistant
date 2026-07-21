@@ -2,6 +2,7 @@ package com.mewbo.aura.ui.chat
 
 import android.net.Uri
 import androidx.compose.runtime.Immutable
+import com.mewbo.aura.data.api.QuestionAnswerItemDto
 import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.data.model.ComposerScope
 import com.mewbo.aura.data.model.ModelCatalog
@@ -15,7 +16,7 @@ enum class RunPhase { Idle, Sending, Streaming, Done, Error }
 /**
  * A turn is actively executing on the backend RIGHT NOW (the same {Sending, Streaming} predicate the
  * liveness cues read off `runPhase` — `ChatScreen.overWash`, `ChatTranscript.isRunLive`,
- * `ChatSurface.isRunning`). This is the ComposerOptionsSheet scope-freeze gate (Gitea #185 P5): the
+ * `ChatSurface.isRunning`). This is the ComposerOptionsSheet scope-freeze gate: the
  * Project/Tools picks are re-resolved from every `/query`'s own request body, so mutating them WHILE
  * a run is in flight would desync the live turn — but Idle/Done/Error carry no live run, so scope is
  * freely editable for the NEXT turn, including on an already-created, idle session.
@@ -24,7 +25,7 @@ val RunPhase.isRunInFlight: Boolean
     get() = this == RunPhase.Sending || this == RunPhase.Streaming
 
 /**
- * Composer mic state (Gitea #180 P2) - a UI-facing projection of the injected
+ * Composer mic state - a UI-facing projection of the injected
  * [com.mewbo.aura.voice.Transcriber]'s raw event stream ([DictationDecision.next] is the pure
  * mapping), driving [com.mewbo.aura.ui.composer.ComposerState.Dictation]'s existing waveform/
  * partial-text center content. NEVER the source of truth for the composer's real editable draft -
@@ -92,25 +93,25 @@ data class ChatUiState(
      * rather than eagerly at [ChatViewModel.bind] - `null` means "not loaded yet" (top bar falls
      * back to "Core"), not "offline forever". */
     val models: ModelCatalog? = null,
-    /** Composer "+" sheet's project/MCP-tool scoping for the next fresh-turn send (Gitea #177 W2) -
+    /** Composer "+" sheet's project/MCP-tool scoping for the next fresh-turn send -
      * catalogs load lazily on the sheet's first open ([ChatViewModel.refreshComposerScope]). */
     val composerScope: ComposerScope = ComposerScope(),
-    /** Files picked in the options sheet but not yet uploaded - rendered as chips above the input
-     * (Gitea #177 W2), cleared on a successful fresh-turn send. */
+    /** Files picked in the options sheet but not yet uploaded - rendered as chips above the input,
+     * cleared on a successful fresh-turn send. */
     val stagedAttachments: List<StagedAttachment> = emptyList(),
     /** `true` while [stagedAttachments] are being uploaded ahead of a `/query` call - the composer's
      * own Sending-phase stop-tile affordance already covers the visible "in progress" state (runPhase
      * flips before the upload starts); this flag exists for the options sheet to gate on. */
     val isUploadingAttachments: Boolean = false,
     /** Which input channel started the current (or most recently started) turn - a client-only hint
-     * (Gitea #180 P1) so a later phase can e.g. speak a voice-initiated reply aloud; never reaches
+     * so a later phase can e.g. speak a voice-initiated reply aloud; never reaches
      * the backend. Set by [ChatViewModel.send]'s `modality` param for a fresh turn opened in this
      * app, or by [ChatViewModel.bind]'s `handoffModality` when picking up an assist-overlay handoff
      * that was already streaming before this screen existed - a steer into an already-in-flight run
      * never overwrites it (see [SendDecision.modalityForSend]: only the turn that actually opened the
      * run tags it). Defaults to [InputModality.Text] and is not persisted across process death. */
     val activeTurnModality: InputModality = InputModality.Text,
-    /** See [DictationState]'s own KDoc (Gitea #180 P2). */
+    /** See [DictationState]'s own KDoc. */
     val dictation: DictationState = DictationState.Idle,
     /** Pull-up handoff draft (user directive 2026-07-04): text the user had typed in the assist
      * overlay's pill when they swiped it up into the app, awaiting one-shot application to the
@@ -122,10 +123,10 @@ data class ChatUiState(
     /** Latches `false` the first time the injected `Transcriber` reports
      * [TranscriberError.Unavailable] (no on-device recognizer - the real state on redroid with the
      * platform impl; the debug `FakeTranscriber` never reports it) - gates the composer's mic
-     * affordance disabled from then on (Gitea #180 P2 ruling), since the device's STT capability
+     * affordance disabled from then on (ruling), since the device's STT capability
      * isn't going to change mid-process. */
     val dictationAvailable: Boolean = true,
-    /** Per-conversation speak-along mute (Gitea #180 P3, #175 §7.1) - latched by
+    /** Per-conversation speak-along mute (§7.1) - latched by
      * [ChatViewModel.stopSpeaking] when the sticky stop control interrupts THIS turn's own live
      * voice-modality speech ([SendDecision.shouldMuteOnStopSpeaking]); reset by the next voice-
      * initiated [ChatViewModel.send] (fresh turn = fresh consent to speak) or by [ChatViewModel.bind]
@@ -140,7 +141,7 @@ data class ChatUiState(
  * unchanged until W3 wires real behavior for its own host.
  */
 data class ChatCallbacks(
-    /** [InputModality] (Gitea #180 P2) is `ChatSurface`'s own locally-tracked `pendingModality` -
+    /** [InputModality] is `ChatSurface`'s own locally-tracked `pendingModality` -
      * [InputModality.Voice] once a dictation Final/stop has landed text in the field, reset to
      * [InputModality.Text] by any subsequent real keystroke. */
     val onSend: (String, InputModality) -> Unit,
@@ -157,7 +158,7 @@ data class ChatCallbacks(
     val onDictationStop: (() -> Unit)? = null,
     /** A full voice turn (composer C1's rounded-square tile) - this app's existing
      * `AssistTurnMachine.startListening()` voice-capture path, which tags the resulting turn
-     * `InputModality.Voice` (Gitea #180 P1) via its private `beginTurn`, overlay-scoped. Nullable so
+     * `InputModality.Voice` via its private `beginTurn`, overlay-scoped. Nullable so
      * a host that genuinely can't reach that seam (the in-chat host, today) falls through to a KISS
      * notice in `ChatSurface` instead of rebuilding a second turn machine (brief: "do NOT... KISS"). */
     val onVoiceModeTap: (() -> Unit)? = null,
@@ -167,20 +168,44 @@ data class ChatCallbacks(
     /** Tap the action row's read-aloud glyph on this specific assistant message - toggles
      * speak/stop via the injected `Synthesizer` (spec §6.5). */
     val onReadAloudToggle: (ChatItem.AssistantMessage) -> Unit = {},
-    /** Tap the composer's leading "+" - opens the options sheet (Gitea #177 W2). Default no-op so
+    /** Tap the composer's leading "+" - opens the options sheet. Default no-op so
      * the pre-existing overlay host keeps compiling unchanged, same convention as [onMicTap]. */
     val onAttachTap: () -> Unit = {},
-    /** Tap the pre-session scope indicator row (Gitea #178 W1-B) - opens the SAME options sheet as
+    /** Tap the pre-session scope indicator row - opens the SAME options sheet as
      * [onAttachTap]; a distinct field (rather than reusing it) so a host can tell the two tap
      * origins apart later. Default no-op, same convention as [onAttachTap]. */
     val onScopeIndicatorTap: () -> Unit = {},
     /** Remove one staged attachment chip before it's sent. */
     val onRemoveAttachment: (Uri) -> Unit = {},
     /** [ChatSurface]'s `LaunchedEffect` ack once it's applied a [DictationState.Final] to the
-     * draft/pending-modality (Gitea #180 P2) - see [ChatViewModel.consumeDictationFinal]. */
+     * draft/pending-modality - see [ChatViewModel.consumeDictationFinal]. */
     val onDictationFinalConsumed: () -> Unit = {},
 
     /** One-shot ack once `ChatSurface` has applied a [ChatUiState.pendingHandoffDraft] to the
      * composer field — same replay-safety shape as [onDictationFinalConsumed]. */
     val onHandoffDraftConsumed: () -> Unit = {},
+
+    /**
+     * Long-press on a user message bubble — the HOST opens [MessageActionsSheet] on it (Retry from
+     * here / Branch in new chat / Fork session). Nullable, defaulting to `null`, and that `null` is
+     * load-bearing rather than a compile-convenience default: it says "this surface offers no
+     * message actions", which is the honest answer for the assist overlay (it renders one fresh
+     * turn, in a session it can neither rewind nor fork). A `null` here means `ChatTranscript`
+     * installs no long-press gesture at all, so those bubbles keep their select-to-copy behavior.
+     *
+     * Only the sheet's OPENING travels through the callback bundle. Its three ACTIONS don't: the
+     * sheet is a [ChatScreen]-hosted sibling of `ModelPickerSheet`/`ComposerOptionsSheet`, not part
+     * of the [ChatSurface] tree, so it reaches [ChatViewModel] and the nav callback directly rather
+     * than adding three more fields (and a session-id-shaped navigation concern) to this bundle.
+     */
+    val onUserMessageLongPress: ((ChatItem.UserBubble) -> Unit)? = null,
+
+    /**
+     * Submit a [ChatItem.Question] card's answer (ask-user questions) → [ChatViewModel.answerQuestion].
+     * The card owns callId/callToken/answers and its own local submitting state; `onResult(false)`
+     * (a genuine POST failure — not a 404/409 answered-elsewhere) tells it to re-enable and toast.
+     * Default no-op so the assist overlay's own `ChatTranscript` call site keeps compiling — it hands
+     * off to the app before a blocked question is answered, so it wires nothing.
+     */
+    val onSubmitQuestionAnswer: (callId: String, callToken: String, answers: List<QuestionAnswerItemDto>, onResult: (Boolean) -> Unit) -> Unit = { _, _, _, onResult -> onResult(false) },
 )

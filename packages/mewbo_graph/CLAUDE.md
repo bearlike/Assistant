@@ -10,7 +10,7 @@ decisions specific to this library that aren't obvious from the code.
 **Layering (see root CLAUDE.md → "Monorepo layering"):** this is a *capability
 library*. It imports **down** into `mewbo_core` + `pydantic` and **nothing
 else** — never `mewbo_tools`, never an app. It was extracted from inside the
-API (Gitea #25) precisely to make that DAG acyclic: the wiki/scg substrate and
+API precisely to make that DAG acyclic: the wiki/scg substrate and
 their plugin suites used to be reached by *upward* imports from `mewbo_core`
 and `mewbo_api`. If you find yourself adding `import mewbo_api` (or
 `mewbo_tools`) here, stop — that is the inversion this package exists to kill.
@@ -19,9 +19,9 @@ and `mewbo_api`. If you find yourself adding `import mewbo_api` (or
 
 | Submodule | Owns |
 |---|---|
-| `wiki/` | tree-sitter code graph (`graph.py` + `graph_queries/*.scm`), multiplex atomic-note memory (`memory.py`, `memory_types.py`, `structure_provider.py`, `retriever.py`), the dual JSON/Mongo `WikiStoreBase` (`store.py`), the wiki domain/wire models (`types.py`), the litellm `Embedder`, the ephemeral `CloneTokenCache` (`tokens.py`), and `QaFinalizer` (`qa.py` — reconcile a Q&A answer snapshot from its event log + close it; lives here, not the API, because it mutates `QaAnswer`+store, so the terminal `wiki_emit_answer` calls it down-layer alongside the API's session-end net). `resolve_qa_ctx` falls back to the latest `structured_workspace` context event when a session is not a registered QA answer, so a `StructuredResponder`-grounded run resolves a slug-only ctx and wiki grounding tools work instead of returning "wiki QA ctx not found" (#51 — `structured_workspace` was written but read by nothing until this fix). `QaMemoryDepositor` (also `qa.py`) closes the QA→memory flywheel: post-answer it distills the cited answer into atomic notes via `InsightIngestor.ingest(condense=True)` anchored to the cited code entities — best-effort, idempotent, fired from the API session-end net off the latency path (reuses the ingestor; no second fan-out). Three `qa.py`/`qa_access.py` statics own QA *citation/provenance* shape (#70, #165): `QaFinalizer.tag_page_citations` re-schemes a bare wiki-page ref in a `sources` block to `wiki:<page-id>` (a page id OR a slugified page TITLE is the authority — `_slugify` symmetric match, so the model citing a human title instead of the slug still resolves, #165 — called from `wiki_emit_answer` so live stream + snapshot agree); `AccessedSourceResolver.resolve_refs` maps `graph:<node_id>` provenance refs to readable labels at READ time (AST→`file#Symbol` via `entity_key_of`, entity→`name (type)` via `get_entity`, miss→`unknown(<hash[:8]>)`) NON-destructively — the snapshot keeps raw ids because `QaMemoryDepositor` anchors off them; and `qa_access.py:QaAccessRecord` makes `accessed_sources` a BOUNDED, score-ranked trail (#165) — tools emit `{ref,score,rank,tool,op,ok}`, graph-NAV tools (`wiki_query_graph`/`wiki_graph_neighbors`) record only their seed, ranked search tools score-floor their hits, and `QaFinalizer._accessed_from_events` folds → dedupe-by-ref → score-desc → top-N cap (default 12), killing the unranked ~200-node sprawl (`HybridRetriever` stays the one ranker). `catalog.py:CatalogIngestor` — programmatic non-git ingestion (pages + nodes + embeddings, deterministic upsert). |
+| `wiki/` | tree-sitter code graph (`graph.py` + `graph_queries/*.scm`), multiplex atomic-note memory (`memory.py`, `memory_types.py`, `structure_provider.py`, `retriever.py`), the dual JSON/Mongo `WikiStoreBase` (`store.py`), the wiki domain/wire models (`types.py`), the litellm `Embedder`, the durable git-auth seam (`credentials.py` — the `CredentialScope`/`CredentialSource`/`CredentialCandidate` domain models + `CredentialStore` + `resolve_chain` + `is_auth_failure`; the old ephemeral `tokens.py`/`CloneTokenCache` is **deleted**, see "Git auth" below), and `QaFinalizer` (`qa.py` — reconcile a Q&A answer snapshot from its event log + close it; lives here, not the API, because it mutates `QaAnswer`+store, so the terminal `wiki_emit_answer` calls it down-layer alongside the API's session-end net). `resolve_qa_ctx` falls back to the latest `structured_workspace` context event when a session is not a registered QA answer, so a `StructuredResponder`-grounded run resolves a slug-only ctx and wiki grounding tools work instead of returning "wiki QA ctx not found" (`structured_workspace` was written but read by nothing until this fix). `QaMemoryDepositor` (also `qa.py`) closes the QA→memory flywheel: post-answer it distills the cited answer into atomic notes via `InsightIngestor.ingest(condense=True)` anchored to the cited code entities — best-effort, idempotent, fired from the API session-end net off the latency path (reuses the ingestor; no second fan-out). Three `qa.py`/`qa_access.py` statics own QA *citation/provenance* shape: `QaFinalizer.tag_page_citations` re-schemes a bare wiki-page ref in a `sources` block to `wiki:<page-id>` (a page id OR a slugified page TITLE is the authority — `_slugify` symmetric match, so the model citing a human title instead of the slug still resolves — called from `wiki_emit_answer` so live stream + snapshot agree); `AccessedSourceResolver.resolve_refs` maps `graph:<node_id>` provenance refs to readable labels at READ time (AST→`file#Symbol` via `entity_key_of`, entity→`name (type)` via `get_entity`, miss→`unknown(<hash[:8]>)`) NON-destructively — the snapshot keeps raw ids because `QaMemoryDepositor` anchors off them; and `qa_access.py:QaAccessRecord` makes `accessed_sources` a BOUNDED, score-ranked trail — tools emit `{ref,score,rank,tool,op,ok}`, graph-NAV tools (`wiki_query_graph`/`wiki_graph_neighbors`) record only their seed, ranked search tools score-floor their hits, and `QaFinalizer._accessed_from_events` folds → dedupe-by-ref → score-desc → top-N cap (default 12), killing the unranked ~200-node sprawl (`HybridRetriever` stays the one ranker). `catalog.py:CatalogIngestor` — programmatic non-git ingestion (pages + nodes + embeddings, deterministic upsert). |
 | `entities/` | abstract-entity layer — `types` (Entity/EntityRelation/EntityMention/EntityRecommendation; deterministic id = `sha1(normalized_name\|type)`), the generalized `ResolutionLadder` + `EntityResolver`, `EntityMinter`, `EntityAnchorResolver`. Lives in the SAME multiplex store (`WikiStoreBase`) as code symbols + connector schemas + notes — NO parallel store/ER. |
-| `scg/` | the Source Capability Graph reachability engine — `types`, `store`, `providers/*`, `parser`, `router`, `entity_resolution`, `memory_bridge`, `scope` (#75), plus the `MapPhaseSink` DI seam (`map_phase.py`). The store stays GLOBAL per-source — flat `{source_id}#` keys, content-addressed node ids — **deliberately NOT partitioned by workspace** (`docs/features-search.md`: the SCG is one tenant of the shared multiplex graph; the wiki/search memory layers cross-pollinate). #75 makes a workspace a **scoped VIEW**, not a store copy: `ScgScope` (`scope.py`) carries a source-id allowlist on a `ContextVar` and `ScgRouter.route` drops any candidate recipe whose steps reach an out-of-scope source — so per-source mappings are shared (a re-map benefits every workspace) while routing/insights stay workspace-isolated. The ambient ContextVar is the seam BECAUSE the `scg` plugin tools (un-owned, call `ScgCore.store()`/`ScgCore.router()` with no scope arg) must stay untouched; the search drive binds the scope for its worker thread. |
+| `scg/` | the Source Capability Graph reachability engine — `types`, `store`, `providers/*`, `parser`, `router`, `entity_resolution`, `memory_bridge`, `scope`, plus the `MapPhaseSink` DI seam (`map_phase.py`). The store stays GLOBAL per-source — flat `{source_id}#` keys, content-addressed node ids — **deliberately NOT partitioned by workspace** (`docs/features-search.md`: the SCG is one tenant of the shared multiplex graph; the wiki/search memory layers cross-pollinate). A workspace is instead a **scoped VIEW**, not a store copy: `ScgScope` (`scope.py`) carries a source-id allowlist on a `ContextVar` and `ScgRouter.route` drops any candidate recipe whose steps reach an out-of-scope source — so per-source mappings are shared (a re-map benefits every workspace) while routing/insights stay workspace-isolated. The ambient ContextVar is the seam BECAUSE the `scg` plugin tools (un-owned, call `ScgCore.store()`/`ScgCore.router()` with no scope arg) must stay untouched; the search drive binds the scope for its worker thread. |
 | `plugins/{wiki,scg}/` | the capability-gated SessionTools + AgentDefs that drive the above. They ship **with the substrate they wrap** (not in the core wheel) so they import it **down**. |
 
 Product-level decisions stay in the subsystem docs — read them before editing
@@ -57,16 +57,13 @@ plugins import **down**. Don't reintroduce the reach-ups:
   resolve it via `_ctx.resolve_runtime()` (a `SimpleNamespace(wiki_store=…)`)
   instead of importing the API's `_runtime`. Tests still patch each tool's
   module-level `_resolve_runtime` alias.
-- **`CloneTokenCache`** (`wiki/tokens.py`): the ephemeral, never-persisted
-  clone token, shared between the API wizard (writes) and the clone/finalize
-  tools (read/forget). It carries zero deps so both layers import it down.
-- **`CredentialStore`** (`wiki/credentials.py`): the DURABLE, per-slug repo
-  credential (token or SSH key) — the persisted counterpart to the ephemeral
-  `CloneTokenCache`. Plaintext-at-rest behind an identity `_encode`/`_decode`
-  seam (the one place encryption lands), stored in an isolated backend surface
-  (`credentials/<slug>.json` mode 0600 / `wiki_credentials` collection) via the
-  new `WikiStoreBase.{save,get,delete}_credentials`. The API onboard writes it;
-  the clone tool reads it **down** through this class. Always redacted in-flight.
+- **`CredentialStore` + `resolve_chain`** (`wiki/credentials.py`): the ONE
+  git-auth seam — the durable, scope-keyed repo credential AND the resolution
+  order every consumer shares. The API onboard + the `/v1/git/credentials`
+  registry write it; clone / branches / freshness / the description fetch read
+  it **down** through here. Full contract in "Git auth" below. (There is no
+  longer a `CloneTokenCache`/`tokens.py` seam — deleted, deliberately; see the
+  no-cache rule below before you reach for one.)
 - **`MapPhaseSink`** (`scg/map_phase.py`): map-job phase progress is persisted
   in the API *run* store (so it rides the SSE plumbing) — a transport concern.
   The plugin can't write it without importing up, so the API **registers a
@@ -116,7 +113,7 @@ prefetch `RUN` step needs its OWN `WIKI_EXTRAS=1` guard (the module's own
 import-guard can't fire when `mewbo_graph` itself isn't installed) and pins
 `XDG_CACHE_HOME=/opt/mewbo-cache` so build-time root and runtime uid-1000
 share the cache. `get_tags_query()` exists at this pin (kotlin/java/python/
-js/go/rust non-`None`) — relevant to the #191 overlay.
+js/go/rust non-`None`) — relevant to the multi-language overlay.
 
 ## Two protocols named `StructureProvider` — never merge them
 
@@ -133,10 +130,10 @@ written then silently dropped on read — see the scg subsystem doc.
 `ScgAnchorResolver` resolves a `source_key` KIND-AGNOSTICALLY over
 `_ANCHORABLE_KINDS=(capability, entity_type)` because `node_id=sha1(source_key|kind)`
 — an MCP-tool-list source is `capability`-only, so a fixed-`entity_type` probe
-dropped every anchor (#81-A: notes written, ANCHORS edge never created, silently
+dropped every anchor (a real regression: notes written, ANCHORS edge never created, silently
 dropped on read). `ScgParser.parse_source` stamps `ManifestHash` (`manifest.py`)
-on `schema_version` so a workspace-save drift check can re-map (#81-C). #76 (LANDED) makes
-routing memory-aware: `ScgRouter` takes an OPTIONAL `memory_bridge` + blends a
+on `schema_version` so a workspace-save drift check can re-map. Routing is also
+memory-aware: `ScgRouter` takes an OPTIONAL `memory_bridge` + blends a
 `ScgMemoryBias` term into `cosine+edge` — a vector read + polarity-weighted sum,
 NO LLM (zero-LLM core preserved, best-effort/empty without embeddings,
 `ScgScope`-respecting). Polarity rides existing `MemoryNode.labels` as `scg:<pol>`
@@ -145,11 +142,11 @@ NO LLM (zero-LLM core preserved, best-effort/empty without embeddings,
 capped anchored HINTS. `ScgGraphView` (`graph_view.py`) = the SCG multiplex
 assembler mirroring `KnowledgeGraphView` (schema+memory for a source-id scope,
 cross-ANCHORS via `ScgAnchorResolver`, self-contained `to_wire` — no Flask,
-`auth_scope` redacted — for the #79 `…/workspaces/<id>/graph` route). Workspace
+`auth_scope` redacted — for the `…/workspaces/<id>/graph` route). Workspace
 is a `ws:<id>` attribution label (ambient `ScgScope.workspace()`), NEVER a
 partition.
 
-## Abstract entities — durable decisions (Gitea #35)
+## Abstract entities — durable decisions
 
 - **One substrate, one ladder.** Entities are new families on the existing
   `WikiStoreBase` (JSON + Mongo), embedded via the same `Embedder`, anchored via
@@ -233,6 +230,162 @@ the retriever / `QaFinalizer.tag_page_citations` walk it on deterministic
 internal paths; guarding it would break indexing itself). `KnowledgeGraphView`
 never calls `get_page`, so a graph-only project's graph stays fully explorable.
 
+## Git auth — one chain, one hardened executor, NO cache
+
+Every git-touching path in this library (clone, `ls-remote`/branches, freshness,
+the platform description fetch) authenticates through the same two modules. Do
+not add a third way.
+
+**`wiki/credentials.py` — the ONE resolution chain.** The domain is Pydantic
+end-to-end (`CredentialScope`, `CredentialSource`, `CredentialCandidate`): the
+rules below live ON the models, so a caller never re-derives them from a string.
+`resolve_chain(store, slug, *, arg_token=None)` defines git-auth precedence for
+every consumer: `arg` → `store:repo` → `store:host` → `ambient` → `anonymous`,
+yielding a `CredentialCandidate` per tier.
+
+- It is a **lazy generator**, and that laziness is load-bearing, not style: the
+  ambient tier forks `git credential fill` (a 10s-capped subprocess). Eager
+  resolution paid two store reads + that fork on EVERY call, even when a
+  repo-scoped token satisfied the request on the first candidate. A consumer
+  that authenticates immediately must never pay for tiers it didn't reach.
+- **`CredentialStore` is keyed by SCOPE, not by repo** — and the key is a
+  validated `CredentialScope`, never a bare `str`. A bare host
+  (`git.example.home`) is shared by every repo on that host; a full slug
+  (`host/owner/repo`) is repo-pinned. **`CredentialScope.covers(other)` IS the
+  sharing rule** (host covers every repo on its host; a repo covers only itself;
+  a different host is never covered) — one predicate, not a `"/" in scope` check
+  re-typed at each call site. `.kind` (`host|repo`) backs the `scopeType` wire
+  field; no migration, no new stored field.
+- **A malformed scope now fails FAST at the write boundaries** (`from_slug` /
+  the `<path:scope>` route → clean 400), instead of being written under a key
+  nothing could resolve and surfacing later as an opaque "the clone silently
+  fell back to anonymous". READ paths (`CredentialScope.coerce`) stay tolerant —
+  they degrade to "no scope" rather than blowing up a clone that would otherwise
+  succeed anonymously.
+- **Scope DEPTH is deliberately uncapped past `host/owner/repo`.** A GitLab
+  subgroup (`gitlab.com/group/sub/proj`) is a legitimate 4-segment slug and a
+  legacy `owner/repo` 2-segment slug is still in the wild, so `.owner`/`.repo`
+  read the LAST TWO segments (the rule `finalize._split_owner_repo` — which now
+  delegates here — has always used). Rejecting deeper scopes would make a
+  subgroup repo's credential unresolvable and silently downgrade its clone to
+  anonymous.
+- **Scope is stamped INSIDE the blob at save** (`CredentialStore.save` writes
+  `blob["scope"]`; `_decode` strips it back off, since `RepoCredential` is
+  `extra="forbid"`). Never reverse-engineer a scope from a filename: the JSON
+  driver's `credentials/<scope>.json` encodes `/` as `__`, and inverting that
+  corrupts any scope containing a literal `__`. `list_credentials` reads the
+  stamped scope and only falls back to the filename for legacy blobs.
+- **`is_auth_failure(stderr)` is the one auth classification.** Its markers are
+  ANCHORED (`error: 403`, `http 401`, `authentication failed`, …) because bare
+  `401`/`403` substrings misfired on unrelated network noise — a `port 8403:
+  Connection refused` read as a 403 rejection, burning the chain and emitting a
+  false "credential rejected" warning. `repository not found` stays in the set
+  deliberately (GitHub masks private repos as 404 to unauthorized clients).
+- **`CredentialScope.from_repo_url` parses three shapes** — URL, scp-style
+  `git@host:owner/repo`, and a bare slug (it replaced the old `host_of`). The scp
+  branch is reachable, not defensive: the wizard accepts an scp remote and, with
+  no slug chosen yet, that raw string arrives as the resolution scope (without
+  the branch it yielded a garbled `git@host:owner` host). Normalisation is part
+  of parsing — trailing `.git`/slashes dropped, host lowercased (owner/repo case
+  PRESERVED: it is significant on some forges, and lowercasing would re-key
+  existing credentials) — so a credential saved from a pasted remote URL keys the
+  same row the clone chain looks up.
+- **`CredentialCandidate` enforces "credential is None IFF source is
+  anonymous"**, so a consumer never has to check both; `.token`/`.ssh_key`/
+  `.username` project the credential (an ssh key's username never leaks into the
+  token-injection path). `CredentialSource.scope_for(scope)` names the scope a
+  STORED candidate came from (arg/ambient/anonymous → `None`) — that is how the
+  clone warns "credential for X was rejected" without re-deriving repo-vs-host.
+- Chain dedup keys on `RepoCredential.dedup_key` = `(kind, value, username)` — a
+  value shared by two usernames (a GitLab `oauth2` deploy token vs a PAT) must
+  try BOTH.
+- **`RepoCredential.value` is stripped at definition.** A PAT pasted with a
+  trailing newline silently 401s with no hint that an invisible character is the
+  cause; the `mode="before"` validator kills that footgun. Safe for SSH keys too
+  (internal newlines survive; `clone._ssh_env_for` re-appends the terminating
+  one the key file needs).
+
+**Why there is no token cache.** `CloneTokenCache` (`wiki/tokens.py`) was a
+THIRD source of truth alongside the store and the ambient credential, and it
+drifted: a revoked stored token permanently shadowed a still-valid ambient one
+with no fallback, which is what produced cascading re-index failures in
+production. The database and the ambient git credential are now the only two
+sources. If you find yourself caching a resolved token "to save a store read",
+you are rebuilding the bug — the chain is lazy precisely so you don't need to.
+
+**`plugins/wiki/clone.py` — the ONE hardened git executor.**
+`run_git_with_chain(store, slug, url, build_argv, …)` is the single
+credential-iterating subprocess runner: it walks `resolve_chain`, injects a
+token into the URL (or writes an SSH key to a 0600 temp file), runs the argv the
+caller builds, redacts every tried secret out of stderr, advances ONLY on an
+auth-class failure, and aborts the whole chain on anything else (a network error
+or bad ref will not succeed with a different credential — don't burn valid
+candidates on it). Its outcome carries the `winner` — which candidate actually
+authenticated — so a follow-up call can prefer it instead of re-resolving blind.
+`build_clone_command` / `build_ls_remote_command` / `hardened_git_env` are the
+shared argv+env builders. **EVERY git subprocess goes through them** — clone,
+`ls-remote` in `branches.py`, freshness, and the API's credential-validate route.
+
+**Advance on REFUSAL, abort on FAILURE — the same law on both sides.** The git
+executor advances the chain only on an auth-class stderr (`is_auth_failure`); the
+REST helper advances only on an auth REFUSAL status (`_AUTH_RETRY_STATUSES` =
+401/403/404 — 404 because platforms mask private repos from unauthorized
+clients). Anything else — a network error, a timeout, a 5xx — returns
+immediately in both: a different credential cannot fix a transport failure, and
+retrying one burns valid candidates against a dead endpoint while the user waits.
+
+**THE TRAP (verified live).** A container that inherits `credential.helper=store`
+with a READ-ONLY mounted `~/.git-credentials` makes git's post-auth `store`/
+`erase` fail with `fatal: unable to write credential store: Device or resource
+busy` — and that EBUSY **masks the real auth error**, killing an otherwise
+successful clone with a nonsense message that `is_auth_failure` doesn't even
+match (so the chain aborts instead of falling through). Hence `-c
+credential.helper=` on every git subprocess plus `GIT_TERMINAL_PROMPT=0`, and
+hence we read the ambient credential ourselves via read-only `git credential
+fill` and inject it into the URL — git is never allowed to touch that file. A new
+git call site that assembles its own argv reintroduces this; the un-hardened
+branch lister was exactly where the incident kept reproducing after the "fix".
+
+**THE SECOND TRAP: winning a git operation does NOT prove a credential is valid.**
+A PUBLIC repo serves `git ls-remote` and `clone` happily with a REVOKED token —
+the git layer never challenges it — so the chain never advances and
+`run_git_with_chain` returns a DEAD credential as its `winner`. Hand that winner
+to an AUTHENTICATED REST call and it 401s, and the caller silently degrades (no
+description; `behind_by=None`) even though a later chain credential would have
+worked. Verified live: a revoked repo-scoped token cloned a public repo fine,
+then 401'd the Gitea compare API that the ambient credential answered with
+`total_commits=155`. **Treat a git success as evidence about the REPO's
+visibility, not about the CREDENTIAL.**
+
+So every authenticated REST call re-walks the chain **itself**, through the ONE
+retry policy: `_platform_api.api_get_json_with_chain(...)`. It tries
+`preferred_token` first (the git winner — usually right, and free when it is),
+then each remaining token candidate on a refusal per the advance-vs-abort law
+above, capped at `_MAX_CRED_ATTEMPTS`. Anonymous is ALWAYS the terminal attempt
+and is never counted against the cap: when every stored token has been revoked, a
+public repo still answers unauthenticated. Its candidate walk is lazy for the
+same reason `resolve_chain` is — a winning `preferred_token` must never fork the
+10s `git credential fill`. Both callers go through it: freshness's compare passes
+the ls-remote winner as `preferred_token`; finalize's description fetch has no
+git step to inherit a winner from, so it passes none and lets the chain walk
+itself. Neither owns a retry loop of its own — if you add a third authenticated
+platform call, it doesn't get one either.
+
+**`plugins/wiki/_platform_api.py` — the ONE per-platform REST seam.** The auth
+header table (github `Bearer` / gitea `token` / gitlab `PRIVATE-TOKEN`), the GHE
+`api/v3` base-URL branch, the private-TLD TLS carve-out, the guarded fetch that
+never raises, AND the chain-retry policy above. Each caller supplies only its
+endpoint path + response key. Bitbucket is description-only on purpose (its
+app-password Basic scheme isn't portable from a bare token, and it has no
+portable compare shape).
+
+**`plugins/wiki/freshness.py` — `RepoFreshness.check`.** `ls-remote` through the
+chain → platform compare → `behind_by`. The three-state result is deliberate and
+honest: `up_to_date=None` = could not check (remote unreachable);
+`behind_by=None` with `up_to_date=False` = the sha MOVED but we can't count the
+commits ("differs but uncountable" is NOT "up to date"); `behind_by=0` = fresh.
+Never collapse the two `None`s into a false green.
+
 ## Remote branch listing + ref-pinned clone
 
 The wizard lets the user pick a branch to onboard. `RemoteBranchLister`
@@ -242,11 +395,15 @@ The wizard lets the user pick a branch to onboard. `RemoteBranchLister`
 by design** — `ls-remote` works identically on all six platforms, so we
 deliberately do NOT call per-platform REST branch APIs (GitHub `/branches`,
 GitLab `/repository/branches`, … each a different path + auth + pagination). It
-REUSES the clone tool's credential helpers (`_inject_token` / `_ssh_env_for` /
-`_is_private_host`) so token injection, the SSH temp-key env, and the private-TLD
-TLS carve-out are byte-for-byte the clone path. It is DI'd (url + token/ssh_key
-in, NO store) — resolving the durable `CredentialStore` is the API route's job,
-not the engine's. Failure raises `BranchListError`, stderr secret-scrubbed.
+builds its argv/env with the SHARED `build_ls_remote_command` + `hardened_git_env`
+(plus `_inject_token` / `_ssh_env_for` / `_is_private_host` / `_redact`), so token
+injection, the SSH temp-key env, the private-TLD TLS carve-out, the helper-disable,
+and the stderr scrubber are byte-for-byte the clone path — this endpoint is jobless
+and was the last place the EBUSY-masks-auth trap survived. `username` threads a
+stored credential's own username (GitLab `oauth2`/deploy tokens) rather than always
+injecting `x-access-token`. It is DI'd (url + token/ssh_key/username in, NO store) —
+iterating the durable chain is the API route's job, not the engine's. Failure raises
+`BranchListError`, stderr secret-scrubbed.
 
 The chosen branch rides `WizardSubmission.ref` (optional, null = default branch).
 `build_clone_command(clone_url, dir, *, ref, private_host)` is now the SINGLE
@@ -255,7 +412,7 @@ clone-argv builder — both `WikiCloneRepoTool` AND `GraphOnlyIndexer._clone` th
 in ONE place, never duplicated across the two clone paths). `ref` round-trips the
 submission sidecar like `graph_only`, so refresh/recovery preserve it.
 
-## Code graph schema v2 (`types.py`) — validated discriminated union (#187/#188)
+## Code graph schema v2 (`types.py`) — validated discriminated union
 
 Nodes are per-kind subclasses of `GraphNodeBase` (`FileNode`, `ClassNode`, …,
 `ObjectNode`/`PropertyNode`) discriminated on the LITERAL `type` field (wire

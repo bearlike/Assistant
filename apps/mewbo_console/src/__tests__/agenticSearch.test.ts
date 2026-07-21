@@ -24,7 +24,7 @@ import {
   reduceRun,
   toRunPayload,
   type RunStreamState,
-} from "../hooks/useAgenticSearch"
+} from "../hooks/runStream"
 import type { MapJobEvent, SearchEvent } from "../types/agenticSearch"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

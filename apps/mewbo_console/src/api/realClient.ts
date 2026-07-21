@@ -8,76 +8,47 @@ import {
   QueryMode,
   SessionContext,
   SessionExport,
+  SessionSpecResponse,
   SessionSummary,
   SessionUsage,
   ShareRecord
 } from "../types";
-import { AgentSummary, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, RecoverResponse, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
+import { QuestionAnswerItemPayload } from "../types";
+import { AgentSummary, AnswerQuestionResult, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, ForkResponse, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, RecoverResponse, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
+import { apiFetch, withBase, authHeaders, readError, readJson as handleJson } from "./httpBase";
 
-function withBase(baseUrl: string, path: string) {
-  if (!baseUrl) {
-    return path;
-  }
-  return `${baseUrl.replace(/\/$/, "")}${path}`;
-}
-
-// Capability ID can be overridden at build time via VITE_WIDGET_CAPABILITY_ID
-// to stay in sync with server-side agent.widget_builder.capability_id.
+// Capability IDs can be overridden at build time. Each must match the id in a
+// plugin manifest's requires-capabilities (hardcoded server-side; there is no
+// server config key for them):
+//   - `stlite`   → the widget-builder plugin (chat `widget_ready` cards).
+//   - `apps`     → the app-builder plugin (Mewbo Apps sub-product). Advertised
+//     on every session-driving request so a ROOT session can delegate to the
+//     app-builder AgentDef (two-surface gating: catalogs AND build_for).
+//   - `ask_user` → core's ASK_USER_CAPABILITY. The console renders the
+//     ask-user-question card and POSTs the answer, so it advertises this on
+//     the ordinary chat/query path. Headless product drives (wiki/search) use
+//     their own client and never send this — they must not bind the
+//     block-until-answered tool.
+// The header is a comma-separated list (backend.py splits on "," and strips),
+// so all three grants ride every session the console opens.
 const WIDGET_CAPABILITY_ID =
   (import.meta.env.VITE_WIDGET_CAPABILITY_ID as string | undefined) || "stlite";
-
-function authHeaders(apiKey?: string): HeadersInit {
-  return apiKey ? { "X-API-Key": apiKey } : {};
-}
+const APPS_CAPABILITY_ID =
+  (import.meta.env.VITE_APPS_CAPABILITY_ID as string | undefined) || "apps";
+const ASK_USER_CAPABILITY_ID = "ask_user";
+const CLIENT_CAPABILITIES = [
+  WIDGET_CAPABILITY_ID,
+  APPS_CAPABILITY_ID,
+  ASK_USER_CAPABILITY_ID
+].join(",");
 
 function headers(apiKey?: string): HeadersInit {
   return {
     ...authHeaders(apiKey),
     "Content-Type": "application/json",
-    "X-Mewbo-Capabilities": WIDGET_CAPABILITY_ID,
+    "X-Mewbo-Capabilities": CLIENT_CAPABILITIES,
     "X-Mewbo-Surface": "console",
   };
-}
-
-async function handleJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  const trimmed = text.trim();
-  let data: unknown;
-  if (trimmed) {
-    try {
-      data = JSON.parse(trimmed);
-    } catch {
-      data = undefined;
-    }
-  } else {
-    data = undefined;
-  }
-
-  if (!response.ok) {
-    let message = "";
-    if (data && typeof data === "object" && "message" in data) {
-      const maybeMessage = (data as { message?: unknown }).message;
-      if (typeof maybeMessage === "string") {
-        message = maybeMessage;
-      }
-    }
-    if (!message && data !== undefined) {
-      try {
-        message = JSON.stringify(data);
-      } catch {
-        message = String(data);
-      }
-    }
-    if (!message) {
-      message = text;
-    }
-    throw new Error(message || `Request failed: ${response.status}`);
-  }
-
-  if (data !== undefined) {
-    return data as T;
-  }
-  return {} as T;
 }
 
 export function createRealClient(config: ApiConfig): ApiClient {
@@ -87,7 +58,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
   return {
     async listSessions(includeArchived = false): Promise<SessionSummary[]> {
       const params = includeArchived ? "?include_archived=1" : "";
-      const response = await fetch(withBase(baseUrl, `/api/sessions${params}`), {
+      const response = await apiFetch(withBase(baseUrl, `/api/sessions${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ sessions: SessionSummary[] }>(response);
@@ -95,7 +66,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async createSession(context?: SessionContext): Promise<string> {
-      const response = await fetch(withBase(baseUrl, "/api/sessions"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/sessions"), {
         method: "POST",
         headers: headers(apiKey),
         body: JSON.stringify({ context })
@@ -111,7 +82,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       mode?: QueryMode,
       attachments?: AttachmentPayload[]
     ): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/query`),
         {
           method: "POST",
@@ -125,29 +96,48 @@ export function createRealClient(config: ApiConfig): ApiClient {
     async fetchEvents(
       sessionId: string,
       after?: string
-    ): Promise<{ events: EventRecord[]; running: boolean }> {
+    ): Promise<{
+      events: EventRecord[];
+      running: boolean;
+      status?: string;
+      done_reason?: string;
+      terminated?: boolean;
+      recoverable?: boolean;
+    }> {
       const params = after ? `?after=${encodeURIComponent(after)}` : "";
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/events${params}`),
         { headers: headers(apiKey) }
       );
       const payload = await handleJson<{
         events: EventRecord[];
         running: boolean;
+        status?: string;
+        done_reason?: string;
+        terminated?: boolean;
+        recoverable?: boolean;
       }>(response);
       return payload;
     },
 
     async fetchUsage(sessionId: string): Promise<SessionUsage> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/usage`),
         { headers: headers(apiKey) }
       );
       return handleJson<SessionUsage>(response);
     },
 
+    async getSessionSpec(sessionId: string): Promise<SessionSpecResponse> {
+      const response = await apiFetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/spec`),
+        { headers: headers(apiKey) }
+      );
+      return handleJson<SessionSpecResponse>(response);
+    },
+
     async archiveSession(sessionId: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/archive`),
         { method: "POST", headers: headers(apiKey) }
       );
@@ -155,7 +145,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async unarchiveSession(sessionId: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/archive`),
         { method: "DELETE", headers: headers(apiKey) }
       );
@@ -166,7 +156,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       sessionId: string,
       title: string
     ): Promise<{ session_id: string; title: string }> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/title`),
         {
           method: "PATCH",
@@ -180,7 +170,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     async regenerateTitle(
       sessionId: string
     ): Promise<{ session_id: string; title: string }> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/title`),
         { method: "POST", headers: headers(apiKey) }
       );
@@ -201,7 +191,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       if (model) {
         form.append("model", model);
       }
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/attachments`),
         {
           method: "POST",
@@ -216,7 +206,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async createShare(sessionId: string): Promise<ShareRecord> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/share`),
         { method: "POST", headers: headers(apiKey) }
       );
@@ -224,7 +214,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async exportSession(sessionId: string): Promise<SessionExport> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/export`),
         { headers: headers(apiKey) }
       );
@@ -232,14 +222,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async resolveShare(token: string): Promise<SessionExport> {
-      const response = await fetch(withBase(baseUrl, `/api/share/${token}`), {
+      const response = await apiFetch(withBase(baseUrl, `/api/share/${token}`), {
         headers: headers(apiKey)
       });
       return handleJson<SessionExport>(response);
     },
 
     async sendMessage(sessionId: string, text: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/message`),
         {
           method: "POST",
@@ -251,7 +241,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async interruptStep(sessionId: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/interrupt`),
         {
           method: "POST",
@@ -262,7 +252,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async approvePlan(sessionId: string, approved: boolean): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/plan/approve`),
         {
           method: "POST",
@@ -271,6 +261,36 @@ export function createRealClient(config: ApiConfig): ApiClient {
         }
       );
       await handleJson(response);
+    },
+
+    async answerQuestion(
+      sessionId: string,
+      callId: string,
+      body: { call_token: string; answers: QuestionAnswerItemPayload[] }
+    ): Promise<AnswerQuestionResult> {
+      const response = await apiFetch(
+        withBase(baseUrl, `/api/sessions/${sessionId}/questions/${callId}/answer`),
+        {
+          method: "POST",
+          headers: headers(apiKey),
+          body: JSON.stringify(body)
+        }
+      );
+      if (response.ok) return { ok: true };
+      // Classify the status so the card settles silently when the question was
+      // resolved elsewhere (404/409/410) vs. surfacing a correctable message.
+      const kind =
+        response.status === 404 || response.status === 409
+          ? "superseded"
+          : response.status === 422
+            ? "invalid"
+            : response.status === 403
+              ? "forbidden"
+              : response.status === 410
+                ? "terminated"
+                : "error";
+      const message = (await readError(response)).message;
+      return { ok: false, kind, message };
     },
 
     async recoverSession(
@@ -284,7 +304,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       if (fromTs) body.from_ts = fromTs;
       if (editedText) body.edited_text = editedText;
       if (model) body.model = model;
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/recover`),
         {
           method: "POST",
@@ -298,13 +318,13 @@ export function createRealClient(config: ApiConfig): ApiClient {
     async forkSession(
       sessionId: string,
       opts?: { fromTs?: string; model?: string; compact?: boolean; tag?: string }
-    ): Promise<{ session_id: string; forked_from: string; forked_at: string | null }> {
+    ): Promise<ForkResponse> {
       const body: Record<string, unknown> = {};
       if (opts?.fromTs) body.from_ts = opts.fromTs;
       if (opts?.model) body.model = opts.model;
       if (opts?.compact) body.compact = true;
       if (opts?.tag) body.tag = opts.tag;
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/fork`),
         {
           method: "POST",
@@ -316,7 +336,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async fetchPlanMarkdown(sessionId: string): Promise<string> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/plan.md`),
         { headers: headers(apiKey) }
       );
@@ -329,7 +349,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
 
     async listTools(project?: string): Promise<ToolSummary[]> {
       const params = project ? `?project=${encodeURIComponent(project)}` : "";
-      const response = await fetch(withBase(baseUrl, `/api/tools${params}`), {
+      const response = await apiFetch(withBase(baseUrl, `/api/tools${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ tools: ToolSummary[] }>(response);
@@ -366,14 +386,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listModels(): Promise<ModelInfo> {
-      const response = await fetch(withBase(baseUrl, "/api/models"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/models"), {
         headers: headers(apiKey)
       });
       return handleJson<ModelInfo>(response);
     },
 
     async listProjects(): Promise<ProjectSummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/projects"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/projects"), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ projects: ProjectSummary[] }>(response);
@@ -382,7 +402,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
 
     async listSkills(project?: string): Promise<SkillSummary[]> {
       const params = project ? `?project=${encodeURIComponent(project)}` : "";
-      const response = await fetch(withBase(baseUrl, `/api/skills${params}`), {
+      const response = await apiFetch(withBase(baseUrl, `/api/skills${params}`), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ skills: SkillSummary[] }>(response);
@@ -390,7 +410,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listNotifications(): Promise<NotificationItem[]> {
-      const response = await fetch(withBase(baseUrl, "/api/notifications"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/notifications"), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ notifications: NotificationItem[] }>(
@@ -400,7 +420,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async dismissNotification(ids: string[]): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, "/api/notifications/dismiss"),
         {
           method: "POST",
@@ -414,7 +434,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async clearNotifications(clearAll = false): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, "/api/notifications/clear"),
         {
           method: "POST",
@@ -434,7 +454,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       total_input_tokens: number;
       total_output_tokens: number;
     }> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/agents`),
         { headers: headers(apiKey) }
       );
@@ -448,14 +468,14 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async getConfigSchema(): Promise<Record<string, unknown>> {
-      const response = await fetch(withBase(baseUrl, "/api/config/schema"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/config/schema"), {
         headers: headers(apiKey)
       });
       return handleJson<Record<string, unknown>>(response);
     },
 
     async getConfig(): Promise<ConfigState> {
-      const response = await fetch(withBase(baseUrl, "/api/config"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/config"), {
         headers: headers(apiKey)
       });
       const data = await handleJson<Partial<ConfigState>>(response);
@@ -463,7 +483,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async patchConfig(patch: Record<string, unknown>): Promise<ConfigState> {
-      const response = await fetch(withBase(baseUrl, "/api/config"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/config"), {
         method: "PATCH",
         headers: headers(apiKey),
         body: JSON.stringify(patch)
@@ -473,7 +493,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listPlugins(): Promise<PluginSummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/plugins"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/plugins"), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ plugins: PluginSummary[] }>(response);
@@ -481,7 +501,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listMarketplacePlugins(): Promise<MarketplacePlugin[]> {
-      const response = await fetch(withBase(baseUrl, "/api/plugins/marketplace"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/plugins/marketplace"), {
         headers: headers(apiKey)
       });
       const payload = await handleJson<{ plugins: MarketplacePlugin[] }>(response);
@@ -489,7 +509,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async installPlugin(name: string, marketplace: string): Promise<void> {
-      const response = await fetch(withBase(baseUrl, "/api/plugins/marketplace"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/plugins/marketplace"), {
         method: "POST",
         headers: headers(apiKey),
         body: JSON.stringify({ name, marketplace })
@@ -498,7 +518,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async uninstallPlugin(name: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/plugins/${encodeURIComponent(name)}`),
         { method: "DELETE", headers: headers(apiKey) }
       );
@@ -506,7 +526,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async createVirtualProject(name: string, description: string, path?: string): Promise<VirtualProject> {
-      const response = await fetch(withBase(baseUrl, "/api/v_projects"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/v_projects"), {
         method: "POST",
         headers: headers(apiKey),
         body: JSON.stringify({ name, description, path })
@@ -515,7 +535,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async updateVirtualProject(id: string, data: Partial<Pick<VirtualProject, "name" | "description">>): Promise<VirtualProject> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/v_projects/${encodeURIComponent(id)}`),
         {
           method: "PATCH",
@@ -527,7 +547,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async deleteVirtualProject(id: string): Promise<void> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/v_projects/${encodeURIComponent(id)}`),
         { method: "DELETE", headers: headers(apiKey) }
       );
@@ -535,7 +555,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listProjectBranches(projectId: string): Promise<ProjectBranches> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(
           baseUrl,
           `/api/v_projects/${encodeURIComponent(projectId)}/branches`
@@ -546,7 +566,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listWorktrees(projectId: string): Promise<WorktreeSummary[]> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(
           baseUrl,
           `/api/v_projects/${encodeURIComponent(projectId)}/worktrees`
@@ -566,7 +586,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       // must already exist in the repo.
       const body: Record<string, unknown> = { branch: input.branch };
       if (input.base) body.base = input.base;
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(
           baseUrl,
           `/api/v_projects/${encodeURIComponent(projectId)}/worktrees`
@@ -582,7 +602,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
 
     async deleteWorktree(projectId: string, worktreeId: string, force = false): Promise<void> {
       const qs = force ? "?force=true" : "";
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(
           baseUrl,
           `/api/v_projects/${encodeURIComponent(projectId)}/worktrees/${encodeURIComponent(
@@ -595,7 +615,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async fetchCommands(): Promise<CommandSpec[]> {
-      const response = await fetch(withBase(baseUrl, "/api/commands"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/commands"), {
         headers: headers(apiKey),
       });
       const payload = await handleJson<{ commands: CommandSpec[] }>(response);
@@ -607,7 +627,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
       name: string,
       args: string[],
     ): Promise<CommandResult> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/sessions/${sessionId}/command`),
         {
           method: "POST",
@@ -619,7 +639,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async listApiKeys(): Promise<ApiKeySummary[]> {
-      const response = await fetch(withBase(baseUrl, "/api/keys"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/keys"), {
         headers: headers(apiKey),
       });
       const payload = await handleJson<{ keys: ApiKeySummary[] }>(response);
@@ -627,7 +647,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async createApiKey(label: string): Promise<ApiKeyCreated> {
-      const response = await fetch(withBase(baseUrl, "/api/keys"), {
+      const response = await apiFetch(withBase(baseUrl, "/api/keys"), {
         method: "POST",
         headers: headers(apiKey),
         body: JSON.stringify({ label }),
@@ -636,7 +656,7 @@ export function createRealClient(config: ApiConfig): ApiClient {
     },
 
     async revokeApiKey(id: string): Promise<ApiKeyRevoked> {
-      const response = await fetch(
+      const response = await apiFetch(
         withBase(baseUrl, `/api/keys/${encodeURIComponent(id)}`),
         { method: "DELETE", headers: headers(apiKey) }
       );

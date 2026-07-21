@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ContextMeter — tokens → context-window % and tokens → cost (issue #156).
+"""ContextMeter — tokens → context-window % and tokens → cost.
 
 One atomic class that turns a live token count into the two honest numbers the
 status bar shows:

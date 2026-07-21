@@ -7,7 +7,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -87,16 +89,43 @@ import kotlinx.serialization.json.Json
  * User's own message (spec §6.3): right-aligned stadium bubble, max-width a FRACTION of the
  * available width (not a fixed cap - [BoxWithConstraints] reads the real constraint so a short
  * message doesn't stretch). [overWash] swaps the fill while an aurora wash is active behind the
- * transcript. Long-press = system copy via [SelectionContainer] (brief: "simplest correct thing").
+ * transcript.
+ *
+ * **Long-press is EITHER the actions sheet OR system text-selection, never both** — the two gestures
+ * are the same gesture, and [SelectionContainer] is a CHILD of the bubble, so it wins the pointer
+ * event and a parent `combinedClickable` would simply never fire. [onLongPress] non-null (the
+ * transcript passes it whenever [MessageAction.anyAvailableFor] says the bubble has any action at
+ * all) therefore swaps the selection wrapper OUT for the gesture; `null` (only a host that wires
+ * nothing — the assist overlay) keeps the original select-to-copy behavior exactly as it was.
+ *
+ * **Displacing select-to-copy is precisely why [MessageAction.Copy] exists**, and why it is the one
+ * action nothing can withhold: the sheet must give back the capability the gesture takes away, or
+ * long-press is a net accessibility LOSS. Do not remove that row without restoring the
+ * [SelectionContainer] here.
+ *
+ * The gesture carries no tap action of its own ([indication] `null`, so no ripple on a stray tap —
+ * a message bubble is not a button); `combinedClickable`'s own `hapticFeedbackEnabled` (default
+ * `true` on this Compose Foundation version) fires the one long-press haptic, exactly as
+ * `AuraDrawerContent`'s Recents row does.
  *
  * [ChatItem.UserBubble.attachments], when non-empty, renders as its own right-aligned
  * [AttachmentTileRow] ABOVE the bubble, sharing the bubble's own [AuraSpacing.UserBubble.rightMargin]
  * so both edges line up - metadata-only tiles (filename + type), never a real thumbnail.
  */
 @Composable
-fun UserBubbleRow(item: ChatItem.UserBubble, modifier: Modifier = Modifier, overWash: Boolean = false) {
+fun UserBubbleRow(
+    item: ChatItem.UserBubble,
+    modifier: Modifier = Modifier,
+    overWash: Boolean = false,
+    // Takes the item-level callback (not a pre-bound `() -> Unit`) so ChatTranscript's per-item
+    // dispatch passes this reference straight through unchanged instead of allocating a fresh
+    // `{ onLongPress(item) }` closure on every invocation - the exact per-row stability trap
+    // AssistantMessageRow's onReadAloudToggle documents (ui/CLAUDE.md "Compose stability").
+    onLongPress: ((ChatItem.UserBubble) -> Unit)? = null,
+) {
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val maxBubbleWidth = maxWidth * AuraSpacing.UserBubble.maxWidthFraction
+        val interactionSource = remember { MutableInteractionSource() }
         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             if (item.attachments.isNotEmpty()) {
                 AttachmentTileRow(
@@ -114,23 +143,46 @@ fun UserBubbleRow(item: ChatItem.UserBubble, modifier: Modifier = Modifier, over
                     modifier = Modifier
                         .widthIn(max = maxBubbleWidth)
                         .padding(end = AuraSpacing.UserBubble.rightMargin)
-                        .alpha(if (item.pending) QueuedSendAlpha else 1f),
+                        .alpha(if (item.pending) QueuedSendAlpha else 1f)
+                        .then(
+                            if (onLongPress == null) {
+                                Modifier
+                            } else {
+                                Modifier.combinedClickable(
+                                    interactionSource = interactionSource,
+                                    indication = null,
+                                    onLongClickLabel = "Message actions",
+                                    onLongClick = { onLongPress(item) },
+                                    onClick = {},
+                                )
+                            },
+                        ),
                 ) {
-                    SelectionContainer {
-                        Text(
-                            text = item.text,
-                            style = AuraType.bodyMessage,
-                            color = AuraColors.textPrimary,
-                            modifier = Modifier.padding(
-                                horizontal = AuraSpacing.UserBubble.paddingHorizontal,
-                                vertical = AuraSpacing.UserBubble.paddingVertical,
-                            ),
-                        )
+                    if (onLongPress == null) {
+                        SelectionContainer { UserBubbleText(item.text) }
+                    } else {
+                        UserBubbleText(item.text)
                     }
                 }
             }
         }
     }
+}
+
+/** The bubble's text, factored out ONLY so the selection-vs-long-press swap above wraps one shared
+ * declaration instead of duplicating it (Compose has no way to conditionally apply a wrapper
+ * composable without either duplicating the content or hoisting it like this). */
+@Composable
+private fun UserBubbleText(text: String) {
+    Text(
+        text = text,
+        style = AuraType.bodyMessage,
+        color = AuraColors.textPrimary,
+        modifier = Modifier.padding(
+            horizontal = AuraSpacing.UserBubble.paddingHorizontal,
+            vertical = AuraSpacing.UserBubble.paddingVertical,
+        ),
+    )
 }
 
 /** Right-aligned, horizontally-scrolling row of [AttachmentTile]s (wrap/scroll for multiples) -
@@ -354,7 +406,7 @@ private fun SelectTextDialog(text: String, onDismiss: () -> Unit) {
 private val SelectTextDialogMaxHeight = 480.dp
 
 /**
- * Minimal, cardless fold group for one turn's `tool_result`s (Gitea #177 W1-B; restyled 2026-07-03
+ * Minimal, cardless fold group for one turn's `tool_result`s (restyled 2026-07-03
  * per the "no fat tool cards" brief) - a plain row, never a filled Surface/card. Collapsed header
  * always shows the tool count ("Using N tools…" while [isRunActive], "Used N tools" once the run
  * settles) so the count stays visible without expanding; tapping it reveals one [ToolCallRow] per
@@ -583,8 +635,8 @@ fun PlanCard(item: ChatItem.TodoList, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
     val done = item.items.count { it.status.equals("completed", ignoreCase = true) || it.status.equals("done", ignoreCase = true) }
 
-    // Same 24dp assistant gutter as ToolCallGroupCard/AssistantMessageRow (Gitea #177 W1-B
-    // alignment fix) - previously edge-to-edge, unlike every other chip-family row.
+    // Same 24dp assistant gutter as ToolCallGroupCard/AssistantMessageRow
+    // (alignment fix) - previously edge-to-edge, unlike every other chip-family row.
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = AuraSpacing.AssistantText.gutter)) {
         Surface(
             color = AuraColors.surfaceInput,
@@ -650,7 +702,7 @@ fun AgentChipRow(item: ChatItem.AgentChip, modifier: Modifier = Modifier) {
     Surface(
         color = AuraColors.surfaceInput,
         shape = AuraShape.radiusPill,
-        // Same 24dp assistant gutter as ToolCallGroupCard/PlanCard (Gitea #177 W1-B alignment fix).
+        // Same 24dp assistant gutter as ToolCallGroupCard/PlanCard (alignment fix).
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = AuraSpacing.AssistantText.gutter)

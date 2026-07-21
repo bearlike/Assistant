@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pilot tests for MewboApp — the foundation shell (issue #150).
+"""Pilot tests for MewboApp — the foundation shell.
 
 Drive the app through Textual's ``Pilot`` (``app.run_test()``), mirroring the
 ``asyncio.run(_run())`` wrapper used by the other TUI tests. The TurnEngine is
@@ -65,6 +65,10 @@ class _FakeEngine:
             return False
         self.emit(TranscriptItem("assistant", {"text": f"echo:{text}"}))
         return True
+
+    def last_turn_outcome(self) -> str | None:
+        """Stand-in for TurnEngine.last_turn_outcome — no real run, no outcome."""
+        return None
 
 
 def _make_app(
@@ -271,7 +275,7 @@ def test_busy_gate_closes_before_pre_turn_checkpoint() -> None:
     """The input must be marked busy BEFORE the (blocking) pre-turn checkpoint.
 
     Regression for the cross-feature window where a second Enter during the git
-    checkpoint could start a concurrent turn (#155 gate vs #157 checkpoint).
+    checkpoint could start a concurrent turn (gate vs checkpoint).
     """
 
     async def _run() -> None:

@@ -34,6 +34,10 @@ def _runtime(store) -> MagicMock:
     rt.wiki_store = store
     rt.resolve_session.return_value = "sess-recovery"
     rt.start_async.return_value = True
+    # In-flight guard: WikiResume.resume checks runtime.is_running(session_id)
+    # before mutating anything. A bare MagicMock() would be truthy here, making
+    # every re-drive in this file look like it's racing an in-flight run.
+    rt.is_running.return_value = False
     return rt
 
 
@@ -113,7 +117,7 @@ def test_recovery_counter_does_not_corrupt_submission(tmp_path):
     automatic path does NOT reset the cap (user_initiated=False)."""
     from mewbo_api.wiki import resume as resume_mod
 
-    slug = "git.home/org/repo"
+    slug = "git.example.com/org/repo"
     store = _store(tmp_path)
     _project(store, slug)
     # An original job whose submission has NON-default dirs/files/depth.
@@ -161,7 +165,7 @@ def test_recovery_counter_does_not_corrupt_submission(tmp_path):
 def test_recovery_counter_caps_across_generations(tmp_path):
     """The slug-keyed cap bounds automatic re-drives — once at MAX_RETRIES,
     recovery stops re-driving the slug (the automatic path never resets it)."""
-    slug = "git.home/org/loop"
+    slug = "git.example.com/org/loop"
     store = _store(tmp_path)
     _project(store, slug)
     _job(store, "j0", slug, "scanning")

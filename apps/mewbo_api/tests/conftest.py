@@ -19,3 +19,23 @@ def auth_headers() -> dict[str, str]:
 def client():
     """A Flask test client bound to the API app."""
     return backend.app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _reset_schedule_trigger_provider():
+    """Reset the process-wide schedule_trigger provider between tests.
+
+    Mirror of the fixture in the root ``tests/conftest.py`` (which does not
+    reach this directory): importing ``backend`` above already ran
+    ``init_triggers`` and set the process-wide provider, so without a reset
+    ``schedule_trigger`` leaks into every un-scoped session this suite builds
+    and reorders events under random collection order (bit
+    ``test_commands_api`` first). A test that wants the provider registers it
+    in its own body.
+    """
+    from mewbo_core.triggers import session_tool as _st
+
+    saved = _st._TRIGGER_TOOL_PROVIDER
+    _st._TRIGGER_TOOL_PROVIDER = None
+    yield
+    _st._TRIGGER_TOOL_PROVIDER = saved

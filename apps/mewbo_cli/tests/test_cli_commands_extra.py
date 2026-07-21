@@ -297,6 +297,18 @@ def test_cmd_fork_positional_tag(tmp_path):
     assert ctx.store.resolve_tag("mytag") == ctx.state.session_id
 
 
+def test_cmd_fork_refuses_terminated_session(tmp_path):
+    """/fork on a permanently terminated session refuses instead of resurrecting it."""
+    ctx = _make_context(tmp_path)
+    original = ctx.state.session_id
+    ctx.store.terminate_session(original)
+    registry = get_registry()
+    assert registry.execute("/fork", ctx, ["mytag"]) is True
+    assert ctx.state.session_id == original
+    assert "terminated" in ctx.console.export_text().lower()
+    assert ctx.store.resolve_tag("mytag") is None
+
+
 # ---------------------------------------------------------------------------
 # /edit command
 # ---------------------------------------------------------------------------
@@ -368,6 +380,25 @@ def test_cmd_edit_run_sync_error(monkeypatch, tmp_path):
     monkeypatch.setattr(ctx.runtime, "run_sync", fake_run_sync)
     assert registry.execute("/edit", ctx, ["something"]) is True
     assert "Edit failed: LLM refused" in ctx.console.export_text()
+
+
+def test_cmd_edit_refuses_terminated_session(monkeypatch, tmp_path):
+    """/edit on a terminated session refuses before prompting or resolving."""
+    ctx = _make_context(tmp_path)
+    ctx.store.terminate_session(ctx.state.session_id)
+    registry = get_registry()
+
+    called = False
+
+    def _should_not_run(*a, **kw):
+        nonlocal called
+        called = True
+        return "replacement query"
+
+    monkeypatch.setattr(ctx.runtime, "resolve_recovery_query", _should_not_run)
+    assert registry.execute("/edit", ctx, ["new", "message"]) is True
+    assert called is False
+    assert "Cannot edit" in ctx.console.export_text()
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +479,46 @@ def test_cmd_retry_run_sync_error(monkeypatch, tmp_path):
     monkeypatch.setattr(ctx.runtime, "run_sync", lambda *a, **kw: _DummyQueue(error="boom"))
     assert registry.execute("/retry", ctx, []) is True
     assert "Retry failed: boom" in ctx.console.export_text()
+
+
+def test_cmd_retry_refuses_terminated_session(monkeypatch, tmp_path):
+    """/retry on a terminated session refuses without touching resolve_recovery_query."""
+    ctx = _make_context(tmp_path)
+    ctx.store.terminate_session(ctx.state.session_id)
+    registry = get_registry()
+
+    called = False
+
+    def _should_not_run(*a, **kw):
+        nonlocal called
+        called = True
+        return "re-query"
+
+    monkeypatch.setattr(ctx.runtime, "resolve_recovery_query", _should_not_run)
+    assert registry.execute("/retry", ctx, []) is True
+    assert called is False
+    output = ctx.console.export_text()
+    assert "Cannot retry" in output
+    assert "terminated" in output.lower()
+
+
+def test_cmd_continue_refuses_terminated_session(monkeypatch, tmp_path):
+    """/continue on a terminated session refuses instead of steering it."""
+    ctx = _make_context(tmp_path)
+    ctx.store.terminate_session(ctx.state.session_id)
+    registry = get_registry()
+
+    called = False
+
+    def _should_not_run(*a, **kw):
+        nonlocal called
+        called = True
+        return "recover-query"
+
+    monkeypatch.setattr(ctx.runtime, "resolve_recovery_query", _should_not_run)
+    assert registry.execute("/continue", ctx, []) is True
+    assert called is False
+    assert "Cannot continue" in ctx.console.export_text()
 
 
 # ---------------------------------------------------------------------------
@@ -1122,7 +1193,7 @@ def test_render_mcp_no_mcp_tools(tmp_path):
 
 
 def test_render_mcp_shows_tool_scope(tmp_path):
-    """Each row is labeled with its classify_tool_scope() result (Gitea #185)."""
+    """Each row is labeled with its classify_tool_scope() result."""
     ctx = _make_context(tmp_path)
     config_path = tmp_path / "mcp.json"
     config_path.write_text(json.dumps({"servers": {"sys_srv": {"transport": "stdio"}}}))

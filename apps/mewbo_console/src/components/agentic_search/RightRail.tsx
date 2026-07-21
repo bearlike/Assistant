@@ -7,6 +7,9 @@ import {
   Workflow,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { cardSurface } from "@/components/ui/card-surface"
+import { FOCUS_RING, RAIL_PAD_X, RailRow, RailSection } from "../nav-rail/rows"
+import { formatDuration, formatTokens } from "../../utils/time"
 
 import type {
   RelatedPerson,
@@ -15,13 +18,7 @@ import type {
   TraceAgent,
 } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
-import {
-  agentSnapshot,
-  compactTokens,
-  humanizeMs,
-  laneSource,
-  runProgress,
-} from "./utils"
+import { agentSnapshot, laneSource, runProgress } from "./utils"
 
 interface RightRailProps {
   agents: TraceAgent[]
@@ -35,7 +32,7 @@ interface RightRailProps {
   traceActive: boolean
   onShowTrace: () => void
   onAsk: (query: string) => void
-  /** Open the workspace's capability graph (#79). */
+  /** Open the workspace's capability graph. */
   onShowGraph?: () => void
 }
 
@@ -54,12 +51,23 @@ export function RightRail({
   const progress = runProgress(agents, done)
 
   return (
-    <aside className="hidden min-[1100px]:flex flex-col gap-3 w-[340px] flex-none sticky top-4 self-start">
-      <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
+    <aside
+      aria-label="Search run details"
+      className="hidden min-[1100px]:flex flex-col gap-3 w-[340px] flex-none sticky top-4 self-start"
+    >
+      <div
+        className={cn(
+          cardSurface({ radius: "right", elevation: "elev-2" }),
+          "overflow-hidden hover:[box-shadow:var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow",
+        )}
+      >
         <button
           type="button"
           onClick={onShowTrace}
-          className="w-full flex items-center gap-2 px-4 py-3 hover:bg-[hsl(var(--accent))] transition-colors text-left"
+          className={cn(
+            "w-full flex items-center gap-2 px-4 py-3 hover:bg-[hsl(var(--accent))] transition-colors text-left",
+            FOCUS_RING,
+          )}
         >
           <Layers className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
           <span className="text-sm font-medium flex-1">Agent trace</span>
@@ -86,7 +94,10 @@ export function RightRail({
           <button
             type="button"
             onClick={onShowGraph}
-            className="w-full flex items-center gap-2 px-4 py-2.5 border-t border-[hsl(var(--border))] hover:bg-[hsl(var(--accent))] transition-colors text-left"
+            className={cn(
+              "w-full flex items-center gap-2 px-4 py-2.5 border-t border-[hsl(var(--border))] hover:bg-[hsl(var(--accent))] transition-colors text-left",
+              FOCUS_RING,
+            )}
           >
             <Workflow className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
             <span className="text-sm font-medium flex-1">Capability graph</span>
@@ -98,55 +109,75 @@ export function RightRail({
       {/* Hide-when-empty: related questions arrive on the dedicated
           `related_questions` event (a parallel structured call at settle). */}
       {related.length > 0 && (
-        <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
-          <div className="flex items-center gap-2 mb-1.5">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span className="text-sm font-medium">Related questions</span>
-          </div>
-          <ul className="space-y-0.5">
-            {related.map((q, i) => (
-              <li key={i}>
-                <button
-                  type="button"
-                  onClick={() => onAsk(q)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[13px] hover:bg-[hsl(var(--accent))] transition-colors group"
-                >
-                  <span className="flex-1">{q}</span>
-                  <ArrowUpRight className="h-3 w-3 opacity-40 group-hover:opacity-100 group-hover:text-[hsl(var(--primary))] transition-opacity flex-none" />
-                </button>
-              </li>
-            ))}
-          </ul>
+        <div
+          className={cn(
+            cardSurface({ radius: "right", elevation: "elev-2" }),
+            "overflow-hidden hover:[box-shadow:var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow",
+          )}
+        >
+          {/* Shared rail vocabulary (nav-rail/rows.tsx) — the same section
+              chrome + row decision as every other rail in the app, not a
+              parallel one. `divider={false}`: this card's own border already
+              bounds the zone, so the header's built-in top rule would double
+              it. */}
+          <RailSection label="Related questions" icon={Sparkles} divider={false}>
+            <ul>
+              {related.map((q, i) => (
+                <li key={i}>
+                  <RailRow
+                    label={q}
+                    onClick={() => onAsk(q)}
+                    trailing={<ArrowUpRight className="h-3 w-3 opacity-50 flex-none" />}
+                  />
+                </li>
+              ))}
+            </ul>
+          </RailSection>
         </div>
       )}
 
       {people.length > 0 && (
-        <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-[var(--elev-2)] hover:shadow-[var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow">
-          <div className="flex items-center gap-2 mb-1.5">
-            <Users className="h-3.5 w-3.5" />
-            <span className="text-sm font-medium">People</span>
-          </div>
-          <ul className="space-y-1.5">
-            {people.map((p, i) => (
-              <li key={i} className="flex items-center gap-2 text-xs">
-                <span
-                  className="inline-flex items-center justify-center h-7 w-7 rounded-full font-mono font-semibold text-[10px]"
-                  style={{
-                    background: `hsl(var(--agent-${p.color}) / 0.18)`,
-                    color: `hsl(var(--agent-${p.color}))`,
-                  }}
-                >
-                  {p.initials}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[13px] font-medium truncate">{p.name}</div>
-                  <div className="text-[11px] text-[hsl(var(--muted-foreground))] truncate">
-                    {p.role}
+        <div
+          className={cn(
+            cardSurface({ radius: "right", elevation: "elev-2" }),
+            "overflow-hidden hover:[box-shadow:var(--elev-3)] hover:border-[hsl(var(--border-strong))] transition-shadow",
+          )}
+        >
+          {/* Shared section chrome — see the "Related questions" card above.
+              The rows below stay bespoke (two-line, non-interactive, leading
+              avatar): this is the documented instrument-row boundary in
+              nav-rail/rows.tsx — `RailRow` is a single-line navigation
+              control and can't host it without nesting interactive elements
+              or reflowing to two lines by design. `RAIL_PAD_X` keeps the rows
+              flush with the header above them. */}
+          <RailSection label="People" icon={Users} divider={false}>
+            <ul className={cn(RAIL_PAD_X, "space-y-1.5")}>
+              {people.map((p, i) => (
+                <li key={i} className="flex items-center gap-2 text-sm">
+                  {/* Initials in a 28px identity tile: the single rail size (its
+                      container is far larger than a count pip, so a word-sized
+                      glyph doesn't balloon it — not the numeric-pill exception). */}
+                  <span
+                    className="inline-flex items-center justify-center h-7 w-7 rounded-full font-medium text-sm"
+                    style={{
+                      background: `hsl(var(--agent-${p.color}) / 0.18)`,
+                      color: `hsl(var(--agent-${p.color}))`,
+                    }}
+                  >
+                    {p.initials}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{p.name}</div>
+                    {/* Role reads at the single rail size; its lower rank than
+                        the name is the muted tone, not a smaller font. */}
+                    <div className="text-sm text-[hsl(var(--muted-foreground))] truncate">
+                      {p.role}
+                    </div>
                   </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          </RailSection>
         </div>
       )}
     </aside>
@@ -171,9 +202,9 @@ function LaneRow({
   // The lane's role: explicit `kind` if the BE sent one, else the name (which
   // becomes the kind on the wire), else the catalog source name.
   const kindLabel = agent.kind ?? agent.name ?? src?.name ?? "lane"
-  const duration = humanizeMs(agent.duration_ms)
-  const tokensIn = compactTokens(agent.input_tokens)
-  const tokensOut = compactTokens(agent.output_tokens)
+  const duration = agent.duration_ms != null ? formatDuration(agent.duration_ms) : ""
+  const tokensIn = formatTokens(agent.input_tokens)
+  const tokensOut = formatTokens(agent.output_tokens)
   const tokens =
     tokensIn || tokensOut ? `${tokensIn || "0"}→${tokensOut || "0"} tok` : ""
   // The lane's result contribution: KEPT (its own count) + how many it emitted
@@ -210,11 +241,11 @@ function LaneRow({
       <div className="flex-1 min-w-0">
         <div
           className={cn(
-            "flex items-center gap-1.5 text-xs",
+            "flex items-center gap-1.5 text-sm",
             done
               ? "text-[hsl(var(--foreground))]"
               : running
-              ? "text-[hsl(var(--primary))]"
+              ? "text-[hsl(var(--primary-text))]"
               : "text-[hsl(var(--muted-foreground))]"
           )}
         >
@@ -226,12 +257,13 @@ function LaneRow({
               dim={!done && !running}
             />
           )}
-          <span className="font-mono text-[11px] flex-none">
+          {/* Status glyph inherits the lane's single rail size (no text-2xs). */}
+          <span className="flex-none">
             {done ? "✓" : running ? "…" : "·"}
           </span>
         </div>
         {metrics.length > 0 && (
-          <div className="mt-0.5 text-[10.5px] text-[hsl(var(--muted-foreground))] font-mono tabular-nums truncate">
+          <div className="mt-0.5 text-sm text-[hsl(var(--muted-foreground))] tabular-nums truncate">
             {metrics.join(" · ")}
           </div>
         )}
@@ -242,8 +274,14 @@ function LaneRow({
 
 /**
  * Per-lane result-count pip — the headline "how many results this tool
- * contributed". The right-surface count-pip vocabulary (`rounded`, mono); the
- * tooltip spells out kept vs. filtered so the dedup work is legible.
+ * contributed". The right-surface count-pip vocabulary (`rounded`,
+ * `tabular-nums` for a stable single-digit column — NOT `font-mono`, which the
+ * mono law strips from a lone count); the tooltip spells out kept vs. filtered
+ * so the dedup work is legible.
+ *
+ * Its `text-2xs tabular-nums` is the numeric STATE-PILL exception to the rail's
+ * single-size law: a 13px numeral balloons this overlay pill, and the pip is a
+ * bare count, never a word.
  */
 function ResultCountPip({
   kept,
@@ -262,9 +300,9 @@ function ResultCountPip({
     <span
       title={title}
       className={cn(
-        "flex-none inline-flex items-center justify-center min-w-[1.25rem] px-1 h-4 rounded font-mono tabular-nums text-[10px] font-medium",
+        "flex-none inline-flex items-center justify-center min-w-[1.25rem] px-1 h-4 rounded tabular-nums text-2xs font-medium",
         kept > 0
-          ? "bg-[hsl(var(--primary)/0.14)] text-[hsl(var(--primary))]"
+          ? "bg-[hsl(var(--primary)/0.14)] text-[hsl(var(--primary-text))]"
           : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]",
         dim && "opacity-60"
       )}
@@ -284,11 +322,11 @@ function RunStatsBlock({ stats }: { stats?: RunStats | null }) {
   if (!stats) return null
   const tokens =
     stats.input_tokens > 0 || stats.output_tokens > 0
-      ? `${compactTokens(stats.input_tokens)}→${compactTokens(stats.output_tokens)} tok`
+      ? `${formatTokens(stats.input_tokens)}→${formatTokens(stats.output_tokens)} tok`
       : ""
   const phaseParts: string[] = []
-  if (stats.setup_ms != null) phaseParts.push(`setup ${humanizeMs(stats.setup_ms)}`)
-  if (stats.search_ms != null) phaseParts.push(`search ${humanizeMs(stats.search_ms)}`)
+  if (stats.setup_ms != null) phaseParts.push(`setup ${formatDuration(stats.setup_ms)}`)
+  if (stats.search_ms != null) phaseParts.push(`search ${formatDuration(stats.search_ms)}`)
 
   // Top row: probes + tool calls (each only when > 0).
   const headParts: string[] = []
@@ -299,7 +337,7 @@ function RunStatsBlock({ stats }: { stats?: RunStats | null }) {
   if (headParts.length === 0 && !tokens && phaseParts.length === 0) return null
 
   return (
-    <div className="px-4 py-2.5 border-t border-[hsl(var(--border))] space-y-1 text-[11px] text-[hsl(var(--muted-foreground))] font-mono tabular-nums">
+    <div className="px-4 py-2.5 border-t border-[hsl(var(--border))] space-y-1 text-sm text-[hsl(var(--muted-foreground))] tabular-nums">
       {headParts.length > 0 && <div>{headParts.join(" · ")}</div>}
       {tokens && <div>{tokens}</div>}
       {phaseParts.length > 0 && <div>{phaseParts.join(" · ")}</div>}

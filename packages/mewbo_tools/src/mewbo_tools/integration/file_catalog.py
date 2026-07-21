@@ -67,7 +67,7 @@ class FileCatalog:
                 )
                 self._is_repo = proc.returncode == 0 and proc.stdout.strip() == "true"
             except OSError as exc:  # git not on PATH
-                logging.debug("git probe failed for %s: %s", self._cwd, exc)
+                logging.debug("git probe failed for {}: {}", self._cwd, exc)
         return self._is_repo
 
     def tracked_files(self) -> frozenset[str]:
@@ -90,7 +90,7 @@ class FileCatalog:
                         line for line in proc.stdout.splitlines() if line.strip()
                     }
             except OSError as exc:
-                logging.debug("git ls-files failed for %s: %s", self._cwd, exc)
+                logging.debug("git ls-files failed for {}: {}", self._cwd, exc)
         self._tracked = frozenset(files)
         return self._tracked
 

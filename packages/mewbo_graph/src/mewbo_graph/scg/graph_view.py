@@ -1,4 +1,4 @@
-"""ScgGraphView — the SCG multiplex assembler (#76, the search-side mirror).
+"""ScgGraphView — the SCG multiplex assembler (the search-side mirror).
 
 ``docs/features-search.md``: the SCG "is a tenant of the same three-layer
 multiplex graph that powers the Agentic Wiki", holding **schema**, **entity**,
@@ -20,7 +20,7 @@ Layers, per ``docs/features-search.md`` (the "shared multiplex graph" table):
   empty, but the assembler surfaces them when a future enrich path populates it.
 
 Wire shape (``to_wire``) — self-contained, NO Flask / app import (an API route
-will wrap it for ``GET /api/agentic_search/workspaces/<id>/graph``, #79):
+will wrap it for ``GET /api/agentic_search/workspaces/<id>/graph``):
 
     {
       "scope": [<source_id>, ...],
@@ -194,7 +194,7 @@ class ScgGraphView:
     def to_wire(self) -> dict[str, Any]:
         """Layer-tagged ``{scope, nodes, edges, stats}`` — no Flask, no app dep.
 
-        Self-contained so an API route can wrap it verbatim (#79). Every node /
+        Self-contained so an API route can wrap it verbatim. Every node /
         edge is ``{data: {...}}`` with a ``layer`` tag; ``auth_scope`` is dropped
         (redaction invariant). The schema endpoints of cross edges are the SCG
         ``node_id`` — already a real schema node in ``nodes`` — so the FE never

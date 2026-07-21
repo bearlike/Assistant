@@ -398,7 +398,7 @@ def test_create_raises_branch_in_use_when_branch_already_checked_out(
 def test_create_branch_in_use_independent_of_git_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression guard for issue #27: the structured pre-check — NOT git's
+    """Regression guard for issue: the structured pre-check — NOT git's
     translatable stderr — is what raises ``WorktreeBranchInUseError``.
 
     Git reworded this message (``already checked out at`` →

@@ -1,4 +1,4 @@
-"""ResumePlan.build — checkpoint detection from real store artifacts (Gitea #54)."""
+"""ResumePlan.build — checkpoint detection from real store artifacts."""
 from __future__ import annotations
 
 import pytest
@@ -86,7 +86,7 @@ def test_pages_done_and_remaining_computed_from_plan_and_store(store):
 
 
 def test_the_6_of_7_interrupted_at_pages_scenario(store):
-    """The exact #54 failure: interrupted at ``pages`` with graph populated +
+    """The exact failure: interrupted at ``pages`` with graph populated +
     6/7 plan pages written → skip graph/enrich/plan; only the 1 missing page
     remains; finalize follows."""
     job = _job(store, status="interrupted")

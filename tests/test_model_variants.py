@@ -1,4 +1,4 @@
-"""Unit tests for the controllable model→tool-variant map (Gitea #113).
+"""Unit tests for the controllable model→tool-variant map.
 
 Covers the contract the edit-tool selector relies on: longest-prefix matching,
 the conservative default, the shipped data file loading + validating in CI, the

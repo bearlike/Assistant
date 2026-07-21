@@ -25,10 +25,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { FieldProps, RJSFSchema } from "@rjsf/utils";
 import { Plus, Trash2 } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
+import { cardSurface } from "../../ui/card-surface";
 import { FieldHelp } from "./FieldHelp";
 import { FieldLabel } from "./FieldLabel";
-import { helpCls, inputBase } from "../styles";
+import { ScalarInput } from "./ScalarInput";
+import { helpCls, inputBase, inputTextCls } from "../styles";
 
 /** A single hook entry — loosely typed; the backend owns the strict schema. */
 type HookEntry = Record<string, unknown>;
@@ -106,7 +109,7 @@ export function RecordListField(props: FieldProps<Array<HookEntry>>) {
             return (
               <li
                 key={rowId}
-                className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 space-y-3"
+                className={cn(cardSurface({ radius: "left" }), "p-4 space-y-3")}
               >
                 {/* Header: type switch + remove */}
                 <div className="flex items-center gap-2">
@@ -147,15 +150,12 @@ export function RecordListField(props: FieldProps<Array<HookEntry>>) {
                     label={meta.command?.title ?? "Command"}
                     help={meta.command?.description}
                   >
-                    <input
+                    <ScalarInput
                       id={`${rowId}_command`}
                       type="text"
-                      className={inputBase}
-                      value={String(item.command ?? "")}
+                      value={item.command ?? ""}
                       disabled={!editable}
-                      onChange={(e) =>
-                        updateItem(index, { command: e.target.value })
-                      }
+                      onChange={(v) => updateItem(index, { command: v as string })}
                     />
                   </Field>
                 )}
@@ -168,16 +168,13 @@ export function RecordListField(props: FieldProps<Array<HookEntry>>) {
                     help={meta.url?.description}
                     required
                   >
-                    <input
+                    <ScalarInput
                       id={`${rowId}_url`}
                       type="text"
-                      className={inputBase}
-                      value={String(item.url ?? "")}
+                      value={item.url ?? ""}
                       disabled={!editable}
                       required
-                      onChange={(e) =>
-                        updateItem(index, { url: e.target.value })
-                      }
+                      onChange={(v) => updateItem(index, { url: v as string })}
                     />
                   </Field>
                 )}
@@ -197,46 +194,46 @@ export function RecordListField(props: FieldProps<Array<HookEntry>>) {
                   />
                 )}
 
-                {/* both: Matcher */}
+                {/* both: Matcher — optional (`str | None`); empty commits null. */}
                 <Field
                   id={`${rowId}_matcher`}
                   label={meta.matcher?.title ?? "Matcher"}
                   help={meta.matcher?.description}
                 >
-                  <input
+                  <ScalarInput
                     id={`${rowId}_matcher`}
                     type="text"
-                    className={inputBase}
-                    value={item.matcher == null ? "" : String(item.matcher)}
+                    value={item.matcher ?? ""}
                     disabled={!editable}
-                    onChange={(e) =>
-                      updateItem(index, {
-                        matcher: e.target.value === "" ? null : e.target.value,
-                      })
+                    onChange={(v) =>
+                      updateItem(index, { matcher: v === "" ? null : (v as string) })
                     }
                   />
                 </Field>
 
-                {/* both: Timeout */}
+                {/* both: Timeout — backend `timeout: int` is NOT optional (default
+                    30), so an empty field must fall back to a number, never `null`
+                    (which would 422 on save). Fall back to the schema's own default
+                    rather than hardcoding one here. */}
                 <Field
                   id={`${rowId}_timeout`}
                   label={meta.timeout?.title ?? "Timeout"}
                   help={meta.timeout?.description}
                 >
-                  <input
+                  <ScalarInput
                     id={`${rowId}_timeout`}
                     type="number"
-                    className={inputBase}
-                    value={
-                      item.timeout == null ? "" : String(item.timeout)
-                    }
+                    value={item.timeout ?? ""}
                     disabled={!editable}
-                    onChange={(e) =>
+                    onChange={(v) => {
+                      const raw = v as string;
                       updateItem(index, {
                         timeout:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                          raw === ""
+                            ? ((meta.timeout?.default as number | undefined) ?? 0)
+                            : Number(raw),
+                      });
+                    }}
                   />
                 </Field>
               </li>
@@ -281,7 +278,7 @@ function Field({
       <div className="flex items-center gap-0.5">
         <FieldLabel htmlFor={id}>{label}</FieldLabel>
         {required ? (
-          <span aria-hidden className="text-[hsl(var(--destructive))]">
+          <span aria-hidden className="text-[hsl(var(--destructive-text))]">
             *
           </span>
         ) : null}
@@ -347,7 +344,7 @@ function HeadersField({
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <textarea
         id={id}
-        className={inputBase}
+        className={inputTextCls}
         rows={3}
         value={draft}
         disabled={disabled}
@@ -356,7 +353,7 @@ function HeadersField({
         onChange={(e) => handle(e.target.value)}
       />
       {error && (
-        <p id={errorId} role="alert" className="text-xs text-[hsl(var(--destructive))]">
+        <p id={errorId} role="alert" className="text-xs text-[hsl(var(--destructive-text))]">
           {error}
         </p>
       )}

@@ -3,7 +3,7 @@
  *
  * MIRRORS the backend resolver
  * `packages/mewbo_core/src/mewbo_core/plugins.py::_resolve_git_url`
- * (cross-ref Gitea #9 / #14 — the host-agnostic marketplace backend) so the
+ * (the host-agnostic marketplace backend) so the
  * console accepts exactly the forms the backend can clone:
  *
  *   - a full git URL (https / http / ssh / git scheme), used verbatim;

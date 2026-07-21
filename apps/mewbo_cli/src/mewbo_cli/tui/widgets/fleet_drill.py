@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FleetDrillView + FleetDrillController — in-place fleet drill-in (#161).
+"""FleetDrillView + FleetDrillController — in-place fleet drill-in.
 
 Selecting a fleet row swaps the MAIN transcript region (in place — NOT a
 separate fullscreen screen) for the chosen agent's transcript, read from the

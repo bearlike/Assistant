@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ``<source_id>#<Qualified.Name>``. Flat MCP tool lists map to
 # ``<source_id>#<tool_name>``. This is the stable anchor the learned
-# memory layer (#13) hangs connector insights off.
+# memory layer hangs connector insights off.
 SourceKey = str
 
 

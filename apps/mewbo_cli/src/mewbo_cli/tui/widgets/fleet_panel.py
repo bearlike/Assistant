@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FleetPanel — the selectable hypervisor fleet (issue #161, epic #149).
+"""FleetPanel — the selectable hypervisor fleet.
 
 Replaces the read-only fleet tree (the old ``AgentPanel``, which dumped each
 sub-agent's tool-call *names*). Every agent in the hypervisor tree — root plus
@@ -8,8 +8,10 @@ compact one-glance summary, never a tool-name dump::
 
     <glyph> <label/type> · <model> · <N tools> · <elapsed> · <in→out tokens>
 
-The state glyph is ``●`` running · ``✓`` completed · ``✗`` failed (the documented
-6-state map in :data:`ICONS`). All of it is read off the
+The state glyph is ``●`` running · ``✓`` completed · ``✗`` failed · ``⚠`` blocked ·
+``◎`` goal not met (the documented state map in :data:`ICONS` — the hypervisor's
+6-state lifecycle for a sub-agent row, plus the two honest session-outcome states
+a ROOT row's completion can resolve to). All of it is read off the
 :class:`~mewbo_cli.tui.agent_transcript_hub.AgentTranscriptHub` rollups via the
 injected ``rows_provider`` — nothing is recomputed here except *elapsed* (the one
 time-relative facet, frozen at ``stopped_at``).
@@ -42,17 +44,6 @@ from mewbo_cli.tui.status.throughput_meter import Phase, ThroughputMeter
 # Refresh cadence while agents run — keeps elapsed / token facets live without
 # burning a tick on an idle fleet (demand-driven: paused when nothing runs).
 _REFRESH_INTERVAL = 0.5
-
-# Per-state glyph color role on the injected palette. Running is the accent
-# (the eye lands on live work); terminals carry their semantic color.
-_STATE_STYLE: dict[str, str] = {
-    "submitted": "muted",
-    "running": "accent",
-    "completed": "success",
-    "failed": "error",
-    "cancelled": "warning",
-    "rejected": "error",
-}
 
 
 class FleetPanel(OptionList):
@@ -187,7 +178,7 @@ class FleetPanel(OptionList):
     def _row_text(self, row: FleetRow, prefix: str) -> Text:
         """Compose one fleet summary row (NO tool-name dump — counts only)."""
         glyph = ICONS.agent_state.get(row.status, "?")
-        glyph_style = getattr(self._palette, _STATE_STYLE.get(row.status, "muted"))
+        glyph_style = getattr(self._palette, ICONS.agent_state_style.get(row.status, "muted"))
         label_style = f"bold {self._palette.accent}" if row.is_root else "bold"
 
         text = Text()
@@ -207,7 +198,7 @@ class FleetPanel(OptionList):
             facets.append(f"{fmt_tokens(row.input_tokens)}→{fmt_tokens(row.output_tokens)}")
         if facets:
             text.append("  " + " · ".join(facets), style=self._palette.muted)
-        # Live throughput facet (#173) — chiefly a STALL (the sub-agent-hang case);
+        # Live throughput facet — chiefly a STALL (the sub-agent-hang case);
         # rendered in the warning color so a hung agent draws the eye.
         if row.throughput is not None:
             facet = ThroughputMeter.format_facet(row.throughput)

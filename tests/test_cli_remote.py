@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the CLI local-first remote seam (Gitea #171).
+"""Tests for the CLI local-first remote seam.
 
 Covers the ``cli_remote`` atomic units — the transcript mirror, the synthesized
 Mewbo MCP server entry, and the honest sink strings — plus the ``cli.remote``

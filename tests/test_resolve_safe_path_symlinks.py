@@ -66,6 +66,25 @@ def test_rejects_direct_path_outside_all_tmp_and_roots(tmp_path: Path) -> None:
         resolve_safe_path("/etc/hostname", root=str(project))
 
 
+def test_rejection_error_names_the_allowed_roots(tmp_path: Path) -> None:
+    """A rejection must tell the model what IS allowed, not only what isn't.
+
+    The bare "resolves outside all allowed project roots" message left the
+    model no way to self-correct — it retried via shell workarounds instead
+    of restaging under an allowed root (13 sessions of thrash in the event
+    corpus). Naming the roots turns the denial into a one-turn recovery.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+
+    with pytest.raises(ValueError, match="outside all allowed project roots") as excinfo:
+        resolve_safe_path("/etc/hostname", root=str(project))
+
+    message = str(excinfo.value)
+    assert str(project) in message  # the caller-supplied root is named
+    assert "/tmp/mewbo" in message  # the scratch root is named
+
+
 def test_accepts_when_root_itself_traverses_symlink(tmp_path: Path) -> None:
     """If the configured root is reached via a symlink, paths under it must work.
 

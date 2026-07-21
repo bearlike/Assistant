@@ -16,7 +16,7 @@ export function useMcpTools(project?: string | null) {
     queryKey: ["mcp-tools", project ?? ""] as const,
     queryFn: () => listTools(project ?? undefined),
     // Plugin-scoped product tools (wiki/agentic search) ride the same
-    // picker as MCP servers (#182) — `kind` stays "builtin" for these, so
+    // picker as MCP servers — `kind` stays "builtin" for these, so
     // `scope === "plugin"` is the second admission path alongside "mcp".
     select: (all) =>
       all.filter((t): t is McpTool => t.kind === "mcp" || t.scope === "plugin"),

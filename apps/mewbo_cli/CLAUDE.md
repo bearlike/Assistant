@@ -10,9 +10,9 @@ Scope: this file applies to the `apps/mewbo_cli/` package only. It covers the te
 - Stay DRY/KISS: build reusable UI helpers instead of ad‑hoc formatting.
 - Preserve terminal scrollback (no full-screen takeovers).
 
-## North Star — full-Textual TUI (epic #149)
+## North Star — full-Textual TUI
 
-Direction (decided 2026-06-20): migrate this package from **four coexisting I/O stacks** (Rich `Live` + Textual + prompt_toolkit + raw `termios`) to **ONE `MewboApp(textual.App)`**. The "do not run Rich Live and Textual concurrently" rule below is exactly why the permission prompt is bad — one Textual loop removes the constraint and makes every interaction a first-class widget. Trade-off: full-screen alternate buffer, no native scrollback. Children #150–#157; sections below describe the **current Rich-based** implementation until each child lands.
+Direction: migrate this package from **four coexisting I/O stacks** (Rich `Live` + Textual + prompt_toolkit + raw `termios`) to **ONE `MewboApp(textual.App)`**. The "do not run Rich Live and Textual concurrently" rule below is exactly why the permission prompt is bad — one Textual loop removes the constraint and makes every interaction a first-class widget. Trade-off: full-screen alternate buffer, no native scrollback. Landed in a series of child efforts; sections below describe the **current Rich-based** implementation until each child lands.
 
 Durable design rules carried into the rewrite (don't re-research — full notes in memory `project_cli_tui_overhaul`):
 - **Semantic `Palette` (≈12 roles) → `build_theme()` factory → injected** Textual CSS vars (`$primary`…); never a style global. One `ICONS` module.
@@ -52,7 +52,7 @@ to it when touching `transcript_render.py` / `transcript.py` / `fleet_panel.py`:
 - **Approval modal shows the REAL payload** (DiffView for edits / `$ command` for
   exec) under a risk badge; `esc` = deny (safe default). Risk tier via
   `RiskTier.classify` (shell ⇒ EXEC by name pattern).
-- **A proposed plan is ONE decision surface, never raw JSON (#159).** A plan-mode
+- **A proposed plan is ONE decision surface, never raw JSON.** A plan-mode
   run that halts awaiting approval renders `plan.md` through the `plan_proposal`
   renderer — a bordered "📋 Proposed plan" card (`$accent` `.t-plan_proposal`
   rail, full `render_markdown` fidelity, long plans capped to a bounded preview) —
@@ -68,7 +68,7 @@ to it when touching `transcript_render.py` / `transcript.py` / `fleet_panel.py`:
 - **Never leak raw logs or a usage footer into the transcript** — vitals live in
   the footer status line + sidebar gauge.
 
-### Theme system (#151) & DiffView (#153) — landed components
+### Theme system & DiffView — landed components
 
 These are standalone modules for the rewrite; nothing wires them into the live
 Rich loop yet (the foundation child does that). Import them; never reach for raw
@@ -90,7 +90,7 @@ colors or bespoke diff rendering.
 - **`cli_gradient.py`** — `gradient_text(text, colors)` → Rich `Text`, per-char
   interpolation. Splash + dialog titles only.
 - **`cli_diffview.py`** — ONE reusable `DiffView(Widget)` for BOTH the approval modal
-  (#154) and the transcript (#152). Constructor:
+  and the transcript. Constructor:
   `DiffView(old_text, new_text, *, palette, file_path=None, line_numbers=True,
   layout="auto", split_min_width=120, context_lines=3, syntax_theme="ansi_dark", …)`.
   Colors via the injected `Palette` (no hardcoded hex). difflib hunks → per-side Rich
@@ -99,7 +99,7 @@ colors or bespoke diff rendering.
   truncation (`e`/`enter` expands, `←/→` h-scroll). API: `set_palette()`, `expand_all()`,
   `collapse_all()`; props `effective_layout`, `expanded`, `diff_lines`, `visible_rows`.
 
-## Foundation landed (#150) — `tui/` package
+## Foundation landed — `tui/` package
 
 The keystone of the rewrite lives in `apps/mewbo_cli/src/mewbo_cli/tui/`:
 - `app.py` — `MewboApp(textual.App)` with a `ScreenState` enum
@@ -117,24 +117,24 @@ The keystone of the rewrite lives in `apps/mewbo_cli/src/mewbo_cli/tui/`:
 - `seams.py` — the FOUR stable extension seams Wave-2 children mount into
   **without editing `app.py`**, exposed as `app.messages` / `app.sidebar_slots`
   / `app.permission` / `app.input`:
-  - `MessageRendererRegistry` — keyed message/tool renderers + generic fallback (transcript #152)
-  - `SidebarSlotRegistry` — ordered sidebar slot factories (agent panel/status #156)
-  - `PermissionGateway` — the `approval_callback` threaded into `run_sync` (modal #154)
-  - `InputGateway` — input completion source (input/completion #155)
+  - `MessageRendererRegistry` — keyed message/tool renderers + generic fallback (transcript)
+  - `SidebarSlotRegistry` — ordered sidebar slot factories (agent panel/status)
+  - `PermissionGateway` — the `approval_callback` threaded into `run_sync` (modal)
+  - `InputGateway` — input completion source (input/completion)
 - `widgets/` — placeholders mounted at the seams: `HeaderView`/`HeaderWidget`
   (one responsive renderer that replaced the three width-variant header free
   functions), `TranscriptView` (RichLog), `SidebarView`, `InputArea`.
 - `cli_notices.py` — resilience/recovery/token-usage replay shared by the App
   and the plain fallback.
 
-**Removed in #150:** the Rich-`Live` agent-display path inside `_run_query`, the
+**Removed:** the Rich-`Live` agent-display path inside `_run_query`, the
 `KeyListener` cbreak bridge + its hard-coded 0.2s race sleep (`cli_keys.py`
 deleted), and the three width-variant header functions. A plain non-interactive
 fallback (`_run_plain_repl`; also the `--query` one-shot) bypasses the App for
 no-TTY / `MEWBO_DISABLE_TEXTUAL=1` (CI/pipes). The Rich sections documented below
 still apply to the plain fallback.
 
-## Wave-2 landed (#155 input · #156 fleet/status · #157 session)
+## Wave-2 landed (input · fleet/status · session)
 
 The input, sidebar and session children are wired at the foundation seams via a
 single **post-mount `installers` hook**: `MewboApp(..., installers=[...])` runs
@@ -143,7 +143,7 @@ each `AppInstaller` (`Callable[[MewboApp], None]`) at the tail of `on_mount`
 breaks the App). `cli_master._build_installers` assembles them so `app.py` stays
 closed. This is the extension path — add an installer, never edit `app.py`.
 
-- **#155 input** (`tui/input/` + `tui/widgets/input_area.py`) — ONE sigil-dispatched
+- **Input** (`tui/input/` + `tui/widgets/input_area.py`) — ONE sigil-dispatched
   field: `@`→files (caret-anchored OptionList overlay, tiered name-priority via
   `FileCatalog`: exact-stem > basename-prefix > path-segment > substring;
   shift-arrow = insert-without-dismiss), `/`→commands+skills+custom+MCP-prompts
@@ -156,7 +156,7 @@ closed. This is the extension path — add an installer, never edit `app.py`.
   `ctrl+p`, instance-level `COMMANDS` — never the class global). Queued-while-busy:
   `Enter` during a run queues, `esc` pulls the latest back; the App `_run_turn`
   flips `set_busy()` and drains `drain_next()` after the turn.
-- **#161 fleet/sidebar (Phases 2+4) — supersedes #156's `AgentPanel`.** The
+- **Fleet/sidebar (Phases 2+4) — supersedes the old status-only `AgentPanel`.** The
   combined read-only `AgentPanel` (deleted) split into a **selectable**
   `FleetPanel` (`tui/widgets/fleet_panel.py`) + an extracted `TodoPanel`
   (`tui/widgets/todo_panel.py`, home of `TodoState`/`TodoItem`) + a faceted
@@ -177,7 +177,7 @@ closed. This is the extension path — add an installer, never edit `app.py`.
   **Context** (30). `FleetBridge` no longer projects `AgentHandle` rows; it just
   marshals a UI refresh (fleet/plan/drill) on each run event — the hub (a bus
   observer) holds the rollups, and `FleetPanel` self-ticks while agents run.
-- **#156 fleet/status (status half — still current).** **Status split (no facet
+- **Fleet/status (status half — still current).** **Status split (no facet
   shown twice between sidebar & footer):** `StatusBar` (sidebar slot) is now ONLY
   the context/cost gauge —
   `󰓅 ctx %` (>80% warn, `~` estimate) · cost; `model`/tokens on its `StatusState`
@@ -195,10 +195,10 @@ closed. This is the extension path — add an installer, never edit `app.py`.
   per-run `HookManager` (`on_agent_start/stop` + `pre/post_tool_use`) that, on
   each run event, marshals a sidebar refresh onto the UI thread; wired as the
   `TurnEngine` hook_factory. (The todo dock's source moved to the authoritative
-  `todos` event in #173 — see "Faithful live progress" above; the old
+  `todos` event — see "Faithful live progress" above; the old
   `TodoTracker` is gone.) The Rich `cli_agent_display.AgentDisplayManager` now
   serves the **plain fallback only**.
-- **#157 session** (`tui/screens/`, `tui/session/`, `tui/keybindings.py`) —
+- **Session** (`tui/screens/`, `tui/session/`, `tui/keybindings.py`) —
   `ResumeScreen` (`ctrl+s`/`/resume`) over `list_sessions()`; `TranscriptScreen`
   (`ctrl+o`, reuses `DiffView`); `RewindCheckpointer`/`/rewind` reverts code +
   conversation together (pre-restore safety snapshot of tracked **and** untracked
@@ -210,12 +210,12 @@ closed. This is the extension path — add an installer, never edit `app.py`.
   shows them; globals owned: `ctrl+o`/`ctrl+s`/`ctrl+l`. **`shift+tab` (permission
   modes), `ctrl+p` (palette), `ctrl+r` (history) are owned elsewhere — do not bind.**
 
-## Transcript (#152) & Permissions (#154) — landed at the seams
+## Transcript & Permissions — landed at the seams
 
 Both mount into the foundation seams (`tui/seams.py`) — the App is not rewired
 beyond the registration done in `cli_master._run_app`.
 
-- **Transcript (#152)** — `tui/transcript_render.py` + `tui/widgets/transcript.py`.
+- **Transcript** — `tui/transcript_render.py` + `tui/widgets/transcript.py`.
   `register_transcript_renderers(registry, *, palette)` registers the `user` /
   `assistant` / `tool` / `error` renderers on the `MessageRendererRegistry`; the
   controller calls it **before `app.run()`** so they win the App's `has`-guarded
@@ -231,7 +231,7 @@ beyond the registration done in `cli_master._run_app`.
   is a 3-mode `ThinkingCollapser` (collapsed / tail-window / expanded); tool
   output truncates via `ToolOutputCollapser` with a per-edit diffstat. Sub-agent
   deltas stream too (label-prefixed), not just the root.
-- **Orchestration cards (#161-C)** — `tui/widgets/orchestration_cards.py`. The
+- **Orchestration cards** — `tui/widgets/orchestration_cards.py`. The
   hypervisor tools render as dedicated cards instead of raw JSON:
   `spawn_agent`/`spawn_agents` → an agent-launch card (task truncated + model +
   agent_type, sourced from `result` + `args_summary`), `check_agents` → a fleet
@@ -242,7 +242,7 @@ beyond the registration done in `cli_master._run_app`.
   `cli_master._run_app`) that draws the card for those ids and delegates every
   other tool to the canonical base renderer via a private staging registry —
   additive, never edits the render dispatch.
-- **Permissions (#154)** — `tui/permission_service.py` + `tui/widgets/permission_modal.py`.
+- **Permissions** — `tui/permission_service.py` + `tui/widgets/permission_modal.py`.
   `PermissionService.decide(step)` is the layered chain (never raises → deny on
   error): skip-predicate → mode auto-accept-edits (READ/WRITE tiers) → persisted
   **deny** rule → persisted **allow** rule → in-memory session-grant → modal.
@@ -262,8 +262,28 @@ beyond the registration done in `cli_master._run_app`.
   **Permission modes** (`PermissionMode`: normal → auto-accept-edits → plan)
   cycle on **shift+tab** (`MewboApp.action_cycle_permission_mode`), shown in the
   `Footer` via `sub_title`.
+- **Ask-user questions** — `tui/question_dispatcher.py` + `tui/widgets/ask_user_modal.py`.
+  When the ROOT agent calls `ask_user_question`, core dispatches through the
+  process-wide `mewbo_core.ask_user.QuestionDispatcher` seam. `_run_app` registers
+  ONE `TuiQuestionDispatcher` into it and binds `AskUserQuestionTool(session_id)`
+  per run via the `TurnEngine` `extra_session_tools_factory` (a FACTORY — the id
+  changes under `/new`/`/resume`/fork) — **interactive-TTY only**: the plain-REPL /
+  `--query` / no-TTY paths never reach `_run_app`, so they register nothing and the
+  tool does not exist there (nothing ever blocks on an absent human). The
+  dispatcher's `dispatch` is `async`/awaited in the loop but bridges to the App
+  loop with the SAME `call_from_thread(push_screen_wait, modal)` blocking pattern
+  as the permission/plan resolvers, wrapped in `asyncio.to_thread` so the worker's
+  event loop stays responsive. `AskUserModal(ModalScreen[list[QuestionAnswerItem]
+  | None])` renders 1-4 questions (header chip + text; `OptionList` radio for
+  single-select, `SelectionList` checkboxes for multi-select — the `cli_dialogs`
+  widgets — plus an ever-present "Other" `Input`); digits `1-4` pick in the focused
+  question, `ctrl+s`/Enter-in-a-field submit, **esc = decline** (dismiss `None` →
+  outcome `declined`). The answer mapping is the pure, unit-tested `collect_answers`
+  (free text WINS over a selection; ANY unanswered question → `None` keeps the
+  modal open rather than dismissing a half-answer). Registration is cleared in a
+  `finally` after `app.run()` so a later non-TTY run can't dispatch into a dead App.
 
-## Live streaming transcript (#161) — the order-preserving keystone
+## Live streaming transcript — the order-preserving keystone
 
 The App path renders the turn **live, in core emission order** — not a post-run
 batch dump bucketed by type. `tui/agent_transcript_hub.py:AgentTranscriptHub` is
@@ -284,7 +304,7 @@ event arrives; `sub_agent` appends a `Spawn` marker to the PARENT's log. The roo
 test in `tests/test_tui_agent_transcript_hub.py`). `TurnEngine(live=True)`
 SUPPRESSES the legacy batch tool+assistant dump (it would duplicate + reorder
 what streamed); the plain-REPL / `--query` / no-TTY path keeps `live=False` and
-the batch dump. Tool cards carry THREE weights (#161): `running` = accent glyph +
+the batch dump. Tool cards carry THREE weights: `running` = accent glyph +
 full weight; `done`/`error` = settled, muted (`.t-settled` lowers `text-opacity`)
 with `✓`/`✗` + elapsed (`✓ ran bash · 1.2s`). The foot spinner shows the live
 step label (hub `set_status`) and on turn-settle COLLAPSES into a muted
@@ -304,7 +324,7 @@ enqueue time (a `ToolCall` mutates running→settled in place). Guards:
 `tests/test_tui_agent_transcript_hub.py` — the foreign-thread lock probe + the
 gated two-thread ordering test.
 
-## Local-first + opt-in remote (#171) — `cli_remote.py`
+## Local-first + opt-in remote — `cli_remote.py`
 
 The CLI is a **strictly-local engine** (core+tools only, never imports
 `mewbo_api`): it runs `SessionRuntime`→`ToolUseLoop` in-process and the local
@@ -340,7 +360,7 @@ relocation:
   `source_platform` context event — `SessionOrigin.classify` reads it as CHANNEL.
 - **Honest indicator** — `HeaderContext.transcript_sink` (`local-only` /
   `remote: <base_url>`) renders one `sink` row in the wide/normal header.
-## Faithful live progress (#173) — authoritative todos + throughput meter
+## Faithful live progress — authoritative todos + throughput meter
 
 Two truth-in-progress upgrades, both riding the `AgentTranscriptHub` (the single
 bus observer) — **zero core change on the CLI side**:
@@ -385,7 +405,7 @@ bus observer) — **zero core change on the CLI side**:
   - **Integrated spinner**: Braille spinner animates inside the Live renderable at 4 fps. Root tool activity (via `pre_tool_use`/`post_tool_use` hooks) drives the spinner when no sub-agents exist.
   - **Status footer**: Shows the deepest running agent's task label + elapsed time below the tree.
   - **Elapsed time**: Each agent line shows time since start; token count renders when the core surfaces it.
-  - **KeyListener** (`cli_keys.py`): REMOVED in #150 (the cbreak bridge + 0.2s race sleep are gone with the single Textual event loop). This bullet describes the historical Rich-`Live` path only.
+  - **KeyListener** (`cli_keys.py`): REMOVED (the cbreak bridge + 0.2s race sleep are gone with the single Textual event loop). This bullet describes the historical Rich-`Live` path only.
   - **Lifecycle states**: Agent display shows 6 states: submitted (⏳), running (●), completed (✓), failed (✗), cancelled (⊘), rejected (⊘ red). Failed agents show inline error details truncated to 80 chars.
   - **Step budget**: `session_step_budget` is threaded from config through to the orchestrator.
   - Falls back to legacy `console.status()` spinners when output is piped or `--no-color` is set.
@@ -432,7 +452,7 @@ and mixing it with live Rich rendering/spinners can deadlock or break terminal s
 
 Location: `apps/mewbo_cli/src/mewbo_cli/cli_dialogs.py`
 
-> **Fixed for the App path (#154 landed).** The Textual `MewboApp` now routes
+> **Fixed for the App path (landed).** The Textual `MewboApp` now routes
 > tool approval through `tui/permission_service.py` + the `tui/widgets/permission_modal.py`
 > modal (see "Permissions landed" below). `_confirm_rich_panel` survives **only** as
 > the non-interactive plain-REPL fallback (`--query` / no-TTY / `MEWBO_DISABLE_TEXTUAL=1`);
@@ -459,7 +479,7 @@ Key behaviors:
 If you add a new interactive flow, use `DialogFactory` instead of writing custom prompts.
 
 ## Prompt completion
-**Textual App (#155):** `tui/input/completion.py:CompletionEngine` drives the
+**Textual App:** `tui/input/completion.py:CompletionEngine` drives the
 caret-anchored overlay — `@` tiered file ranking via `FileCatalog`, `/` fuzzy over
 commands + skills + markdown custom commands + MCP prompts (match-highlighted,
 arg-hints), `!` bash. Injected post-mount by `make_input_installer`. See
@@ -489,23 +509,23 @@ commands **and** user-invocable skills. Never raises out of `get_completions`.
 - `/init`: scaffold both config and MCP example files.
 - `/models`: model wizard (interactive only).
 - `/automatic`: auto-approve all tool actions in this session.
-- `/context`: token-attribution context breakdown (#156).
-- `/resume`: open the session switcher (also `ctrl+s`) (#157).
-- `/rewind [N]`: revert workspace + conversation to a checkpoint (#157).
-- `/keybindings`: show the effective key bindings + override-file path (#157).
+- `/context`: token-attribution context breakdown.
+- `/resume`: open the session switcher (also `ctrl+s`).
+- `/rewind [N]`: revert workspace + conversation to a checkpoint.
+- `/keybindings`: show the effective key bindings + override-file path.
 - `/retry`, `/continue`: recover a halted/incomplete run (retry the last step / resume with context). In the no-TTY / `--query` plain fallback, when a plan proposal is pending `/continue` instead **approves** it (the interactive App approves via the plan-approval modal — see below).
 - `/edit`: edit the last user message.
 - `/mode [plan|act]`: set the run mode (plan-approval vs act).
 - `/tokens`, `/budget`: report token usage / step budget for the session.
 
-### Keybindings (Textual App, #157)
+### Keybindings (Textual App)
 Global: `ctrl+o` transcript view · `ctrl+s` session switcher · `ctrl+l` clear+redraw
-(corruption escape hatch) · `ctrl+p` command palette (#155) · `ctrl+r` reverse
-history search (#155) · `shift+tab` permission-mode cycle (owned by #154). Bindings
+(corruption escape hatch) · `ctrl+p` command palette · `ctrl+r` reverse
+history search · `shift+tab` permission-mode cycle. Bindings
 are declarative (carry help text → `Footer`) and user-overridable via
 `~/.mewbo/keybindings.json` (`KeybindingConfig`, bad file skipped).
 
-## Console logging vs the alt-screen (#160)
+## Console logging vs the alt-screen
 The Textual `MewboApp` owns the alternate buffer, so **no loguru sink may write
 to the terminal while it runs** — a live stderr sink interleaves with Textual's
 rendering and corrupts the composer/footer (acute under `-vv`). `_run_app` calls
@@ -521,9 +541,9 @@ core's `session_log_context` file sink. No-op when `--log-file` is explicit
 ## Core Files (UI-related)
 - `apps/mewbo_cli/src/mewbo_cli/cli_master.py`: main loop, output sections, startup panel, Rich Live agent display.
 - `apps/mewbo_cli/src/mewbo_cli/cli_agent_display.py`: `AgentDisplayManager` — thread-safe bridge between agent lifecycle hooks and Rich Live rendering. Handles collapsed/expanded tree, spinner, footer, elapsed time.
-- `apps/mewbo_cli/src/mewbo_cli/tui/`: the Textual App foundation (#150) — `app.py` (`MewboApp`), `turn_engine.py`, `seams.py` (4 extension seams), `widgets/`. See "Foundation landed (#150)" above.
+- `apps/mewbo_cli/src/mewbo_cli/tui/`: the Textual App foundation — `app.py` (`MewboApp`), `turn_engine.py`, `seams.py` (4 extension seams), `widgets/`. See "Foundation landed" above.
 - `apps/mewbo_cli/src/mewbo_cli/cli_notices.py`: resilience/recovery/usage replay shared by the App and the plain fallback.
-- `apps/mewbo_cli/src/mewbo_cli/cli_keys.py`: REMOVED in #150 (the `KeyListener` cbreak bridge is gone; the single Textual loop makes every keystroke a first-class widget event).
+- `apps/mewbo_cli/src/mewbo_cli/cli_keys.py`: REMOVED (the `KeyListener` cbreak bridge is gone; the single Textual loop makes every keystroke a first-class widget event).
 - `apps/mewbo_cli/src/mewbo_cli/cli_commands.py`: commands, model wizard, MCP listing.
 - `apps/mewbo_cli/src/mewbo_cli/cli_dialogs.py`: dialog factory.
 - `apps/mewbo_cli/src/mewbo_cli/cli_context.py`: state shared across commands.
@@ -532,17 +552,17 @@ core's `session_log_context` file sink. No-op when `--log-file` is explicit
 ## Config knobs (UI-relevant)
 - `llm.api_base`: printed in the ready panel.
 - `llm.default_model` / `llm.action_plan_model`: used when `--model` is not set.
-- `cli.remote.base_url` / `cli.remote.token`: opt-in remote seam (#171) — enables
+- `cli.remote.base_url` / `cli.remote.token`: opt-in remote seam — enables
   transcript sync + the Mewbo MCP product tools. CLI-only, `extra="forbid"`; empty
   ⇒ fully local. See "Local-first + opt-in remote" above.
 - `cli.disable_textual`: disable dialogs (force fallback).
 - `runtime.cli_log_style`: default log styling for the CLI.
 - `configs/mcp.json`: MCP server config used for discovery.
 - `cli.statusline.script`: path to a user statusLine script (JSON session-state on
-  stdin → stdout rendered as the status line); unset ⇒ disabled (#156).
+  stdin → stdout rendered as the status line); unset ⇒ disabled.
 - `cli.statusline.interval_seconds`: statusLine refresh cadence (default 5.0, floor 1.0).
 
-## Interaction design — converge on the proven affordance, don't invent (#159)
+## Interaction design — converge on the proven affordance, don't invent
 
 Before adding a **command, mode, or widget** for any user-facing interaction
 (approval, confirm, pick-one, diff, progress), do BOTH of these — in this order —
@@ -565,7 +585,7 @@ reject / choose belongs in the one inline selectable dialog the reference tools
 all use (and that we already have as a modal) — not a bespoke `/approve`+`/reject`
 pair. Novelty in an already-solved interaction is a regression, not a feature.
 
-> Caught in #159: the first spec invented `/approve` + `/reject` slash commands
+> Caught in review: the first spec invented `/approve` + `/reject` slash commands
 > for plan approval. Both checks above would have rejected it up front — the
 > `PermissionModal` already exists (check 1) and Claude Code/Codex use a single
 > yes/no selectable dialog with no plan commands (check 2). It was reverted to

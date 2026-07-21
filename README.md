@@ -28,8 +28,7 @@ https://github.com/user-attachments/assets/78754e8f-828a-4c54-9e97-29cbeacbc3bc
         <td align="center"><img src="docs/assets/img/mewbo-console-07-widgets.png" alt="Stock ticker and GitHub repo card widgets rendered inline in the Mewbo Console" height="280px"></td>
     </tr>
     <tr>
-        <td align="center"><img src="docs/assets/img/mewbo-wiki-03-graph.jpg" alt="MewboWiki interactive knowledge graph of a repository" height="280px"></td>
-        <td align="center"><img src="docs/assets/img/mewbo-search-02-results.jpg" alt="Agentic Search: one ranked list of results across connected sources, topped by a synthesised overview" height="280px"></td>
+        <td colspan="2" align="center"><img src="docs/assets/img/mewbo-search-02-results.jpg" alt="Agentic Search: one ranked list of results across connected sources, topped by a synthesised overview" height="280px"></td>
     </tr>
 </table>
 

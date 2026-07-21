@@ -1,10 +1,10 @@
-"""Route-level tests for the workspace SCG graph view (#79).
+"""Route-level tests for the workspace SCG graph view.
 
 Drives the real Flask app through its test client, with the run store + SCG
 structure store swapped to fresh JSON backends under tmp dirs. The graph
 namespace's captured ``_runtime`` is pointed at a fresh JSON wiki store so the
 memory layer assembles for real. NOTHING is mocked at the view seam — the route
-exercises the real ``ScgGraphView.for_scope(...).to_wire()`` path (#76).
+exercises the real ``ScgGraphView.for_scope(...).to_wire`` path.
 
 Covers:
 
@@ -206,7 +206,7 @@ def test_disabled_scg_degrades_to_all_unmapped(monkeypatch):
     assert body["edges"] == []
 
 
-# ── summary projection (#139) ────────────────────────────────────────────────
+# ── summary projection ────────────────────────────────────────────────
 
 
 def test_graph_summary_returns_stats_without_node_edge_arrays(_scg_on):

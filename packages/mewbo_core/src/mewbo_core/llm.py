@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable
-from typing import Any, Protocol, cast
+from collections.abc import AsyncIterator, Iterable, Iterator
+from typing import Any, ClassVar, Protocol, cast
 
 from langchain_core.messages import BaseMessage
 
@@ -80,7 +80,7 @@ def model_prefers_structured_patch(model_name: str | None) -> bool:
     are trained on diff/patch text formats and work better with
     ``aider_edit_block_tool`` (search_replace_block).
 
-    Precedence (Gitea #113 — the model→tool-variant map is now controllable data):
+    Precedence (the model→tool-variant map is now controllable data):
     1. ``llm.structured_patch_models`` config allowlist (runtime override layer).
     2. The operator-tunable ``prompts/model_variants.yaml`` map, loaded through
        ``ModelVariantRegistry`` — this is where the built-in defaults now live
@@ -244,6 +244,221 @@ def _resolve_litellm_model(
     return f"{prefix}/{model_name}"
 
 
+class _ToolNameNormalizer:
+    """Map a returned tool name back onto the name that was actually bound.
+
+    Some providers do not round-trip the declared function name verbatim: the
+    observed shapes are a namespace prefix leaking into the name
+    (``default_api_search`` / ``default_api:search``) and case drift. Downstream
+    every one of those is simply an unknown tool, so the call is wasted and the
+    model is told it asked for something that does not exist.
+
+    Per the cross-model normalization law this is fixed at the adapter seam and
+    never by pattern-matching a model's text in the orchestration loop. It sits
+    on the litellm client because that is the one place BOTH halves of the round
+    trip are in scope: the request's ``tools`` list is the authoritative set of
+    bound names, and the response is what has to be reconciled against it.
+
+    Matching is against those bound names only — never a blind prefix strip. A
+    name folds to lowercase alphanumerics, which collapses prefix, separator and
+    case drift into one lookup; a fold shared by two bound tools is dropped from
+    the index, so an ambiguous match resolves to nothing rather than to the
+    wrong tool. An unresolved name passes through UNCHANGED (reported once per
+    process, since a systematic mangling would otherwise log per call): renaming
+    to a tool that was not bound would manufacture a call the caller never made.
+    """
+
+    # The namespace some providers prepend, in folded form. Applied only after
+    # an exact and a folded lookup have both missed, so a tool genuinely named
+    # ``default_api_*`` still resolves to itself.
+    _LEAKED_NAMESPACE_FOLD = "defaultapi"
+    _warned: ClassVar[set[str]] = set()
+
+    def __init__(self, bound_names: Iterable[str]) -> None:
+        self._exact: set[str] = {n for n in bound_names if n}
+        by_fold: dict[str, set[str]] = {}
+        for name in self._exact:
+            by_fold.setdefault(self._fold(name), set()).add(name)
+        self._by_fold = {k: next(iter(v)) for k, v in by_fold.items() if len(v) == 1}
+
+    @classmethod
+    def for_request(cls, tools: Any) -> _ToolNameNormalizer | None:
+        """Build a normalizer from a request's ``tools``, or ``None`` if unbound."""
+        if not isinstance(tools, (list, tuple)) or not tools:
+            return None
+        names: list[str] = []
+        for entry in tools:
+            fn = (
+                entry.get("function")
+                if isinstance(entry, dict)
+                else getattr(entry, "function", None)
+            )
+            name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+            if isinstance(name, str) and name:
+                names.append(name)
+        return cls(names) if names else None
+
+    @staticmethod
+    def _fold(name: str) -> str:
+        return "".join(ch for ch in name.lower() if ch.isalnum())
+
+    def resolve(self, name: str) -> str:
+        """Return the bound name *name* refers to, or *name* itself when unknown."""
+        if not name or name in self._exact:
+            return name
+        fold = self._fold(name)
+        bound = self._by_fold.get(fold)
+        if bound is None and fold.startswith(self._LEAKED_NAMESPACE_FOLD):
+            bound = self._by_fold.get(fold[len(self._LEAKED_NAMESPACE_FOLD) :])
+        if bound is None:
+            if name not in self._warned:
+                self._warned.add(name)
+                _logger.warning(
+                    "Tool name '%s' returned by the model matches no bound tool; "
+                    "passing it through unchanged.",
+                    name,
+                )
+            return name
+        if bound != name:
+            _logger.debug("Normalized returned tool name '%s' to bound '%s'.", name, bound)
+        return bound
+
+    @staticmethod
+    def _read(obj: Any, key: str) -> Any:
+        """Read *key* off a mapping or an object — litellm returns either shape."""
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    def apply(self, obj: Any) -> Any:
+        """Rewrite every tool-call name on a response or streaming chunk, in place."""
+        try:
+            for choice in self._read(obj, "choices") or ():
+                # A streaming chunk carries ``delta``; a complete response carries
+                # ``message``. Both hold the same tool-call shape.
+                for holder in (self._read(choice, "message"), self._read(choice, "delta")):
+                    if holder is None:
+                        continue
+                    for call in self._read(holder, "tool_calls") or ():
+                        self._rewrite(self._read(call, "function"))
+                    self._rewrite(self._read(holder, "function_call"))
+        except Exception as exc:  # pragma: no cover - never break the model call over a name
+            _logger.debug("Tool name normalization failed: %s", exc, exc_info=True)
+        return obj
+
+    def _rewrite(self, fn: Any) -> None:
+        name = self._read(fn, "name")
+        # A streaming delta can carry a partial name; it resolves to nothing and
+        # is left alone rather than guessed at.
+        if not isinstance(name, str) or not name:
+            return
+        resolved = self.resolve(name)
+        if resolved == name:
+            return
+        if isinstance(fn, dict):
+            fn["name"] = resolved
+        else:
+            fn.name = resolved
+
+
+class _UsageNormalizingLiteLLM:
+    """Normalize a litellm response before the LangChain adapter reads it.
+
+    Two normalizations ride this one seam — token usage (below) and tool NAMES
+    (:class:`_ToolNameNormalizer`) — because both are defects in what the
+    provider/proxy returns rather than in how the engine drives it, and this
+    wrapper is the last point before ``langchain-litellm`` converts the raw
+    response into an ``AIMessage``. Rewriting the name here fixes BOTH slots the
+    adapter populates from it (``AIMessage.tool_calls`` and
+    ``additional_kwargs.tool_calls``) with one write.
+
+    Surface token usage that litellm strands in ``_hidden_params``.
+
+    litellm can leave the real token counts in ``response._hidden_params``
+    instead of ``response.usage``: streaming chunks have usage *stripped* from
+    the emitted chunk and re-attached only to ``_hidden_params``
+    (``streaming_handler.py``, the ``stream_options is None`` path), and some
+    proxy/provider non-streaming shapes never populate the field either.
+    ``langchain-litellm`` then builds ``usage_metadata`` from ``model_dump()``
+    /``response.get("usage")`` — both of which read empty because
+    ``_hidden_params`` is a private attribute — so every ``llm_call_end`` token
+    count collapses to zero (upstream litellm#12233 /
+    litellm#17476, no fix release as of litellm 1.88.0).
+
+    This shim copies the stranded usage back onto the field the adapter reads,
+    for both the non-streaming response and every streaming chunk. It is
+    feature-detecting, not version-sniffing: it acts ONLY when ``usage`` is
+    absent/all-zero, so it is a no-op the moment upstream (or the proxy) puts
+    usage on the field — remove it once that ships. ``client`` is injected (the
+    real ``litellm`` module), and every other attribute delegates through.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    @staticmethod
+    def _usage_is_empty(usage: Any) -> bool:
+        """True when ``usage`` carries no token counts (missing or all-zero)."""
+        if usage is None:
+            return True
+
+        def _get(key: str) -> int:
+            raw = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+            try:
+                return int(raw or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        return (_get("prompt_tokens") + _get("completion_tokens") + _get("total_tokens")) == 0
+
+    @classmethod
+    def _surface_hidden_usage(cls, obj: Any) -> Any:
+        """Copy ``obj._hidden_params['usage']`` onto ``obj.usage`` when empty."""
+        try:
+            hidden = getattr(obj, "_hidden_params", None)
+            hidden_usage = hidden.get("usage") if isinstance(hidden, dict) else None
+            if hidden_usage is not None and cls._usage_is_empty(getattr(obj, "usage", None)):
+                obj.usage = hidden_usage
+        except Exception:  # pragma: no cover - never break the model call over usage
+            pass
+        return obj
+
+    def completion(self, **kwargs: Any) -> Any:
+        result = self._inner.completion(**kwargs)
+        names = _ToolNameNormalizer.for_request(kwargs.get("tools"))
+        if kwargs.get("stream"):
+            return self._normalize_sync_stream(result, names)
+        return self._normalize(result, names)
+
+    async def acompletion(self, **kwargs: Any) -> Any:
+        result = await self._inner.acompletion(**kwargs)
+        names = _ToolNameNormalizer.for_request(kwargs.get("tools"))
+        if kwargs.get("stream"):
+            return self._normalize_async_stream(result, names)
+        return self._normalize(result, names)
+
+    @classmethod
+    def _normalize(cls, obj: Any, names: _ToolNameNormalizer | None) -> Any:
+        if names is not None:
+            names.apply(obj)
+        return cls._surface_hidden_usage(obj)
+
+    def _normalize_sync_stream(
+        self, stream: Any, names: _ToolNameNormalizer | None
+    ) -> Iterator[Any]:
+        for chunk in stream:
+            yield self._normalize(chunk, names)
+
+    async def _normalize_async_stream(
+        self, stream: Any, names: _ToolNameNormalizer | None
+    ) -> AsyncIterator[Any]:
+        async for chunk in stream:
+            yield self._normalize(chunk, names)
+
+
 def build_chat_model(
     model_name: str,
     *,
@@ -312,7 +527,15 @@ def build_chat_model(
     if model_kwargs:
         kwargs["model_kwargs"] = model_kwargs
 
-    return cast(ChatModel, ChatLiteLLM(**kwargs))
+    chat = ChatLiteLLM(**kwargs)
+    # Rescue token usage that litellm strands in ``_hidden_params`` so it
+    # reaches ``usage_metadata`` (see ``_UsageNormalizingLiteLLM``). ChatLiteLLM
+    # sets ``client`` to the ``litellm`` module at construction; wrap that. Skip
+    # when absent (test doubles that stub ChatLiteLLM never set a client).
+    inner_client = getattr(chat, "client", None)
+    if inner_client is not None:
+        chat.client = _UsageNormalizingLiteLLM(inner_client)
+    return cast(ChatModel, chat)
 
 
 def sanitize_tool_schema(schema: Any) -> Any:

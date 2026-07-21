@@ -1,7 +1,7 @@
 /**
- * ConversationTimeline — the Show-Traces regression guard (Gitea #174).
+ * ConversationTimeline — the Show-Traces regression guard.
  *
- * Commit 9e29fc5 (#137) flipped the in-flight row to `StreamingAssistantRow`
+ * Commit 9e29fc5 flipped the in-flight row to `StreamingAssistantRow`
  * the instant the first token streamed, and that row had no Trace pill — so
  * mid-run access to the logs panel vanished for the rest of the turn. The fix
  * extracts a shared `<TracePill>` and mounts it on BOTH in-flight rows. These
@@ -52,13 +52,13 @@ function renderTimeline(streamingText: string, onShowActiveTrace = vi.fn()) {
   return onShowActiveTrace;
 }
 
-describe("ConversationTimeline — Trace pill on in-flight rows (#174)", () => {
+describe("ConversationTimeline — Trace pill on in-flight rows", () => {
   it("shows the Trace pill before any token streams (pending row)", () => {
     renderTimeline("");
     expect(screen.getByTitle("Open trace")).toBeInTheDocument();
   });
 
-  it("KEEPS the Trace pill once streaming begins (the #137 regression)", async () => {
+  it("KEEPS the Trace pill once streaming begins (the streaming regression)", async () => {
     const spy = renderTimeline("Hello, I am streaming a live answer…");
     const pill = screen.getByTitle("Open trace");
     expect(pill).toBeInTheDocument();

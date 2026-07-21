@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -24,6 +25,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.mewbo.aura.ui.apps.AppCreateScreen
+import com.mewbo.aura.ui.apps.AppDetailScreen
+import com.mewbo.aura.ui.apps.AppDetailViewModel
+import com.mewbo.aura.ui.apps.AppsGalleryScreen
 import com.mewbo.aura.ui.aurora.LivenessShowcase
 import com.mewbo.aura.ui.chat.ChatScreen
 import com.mewbo.aura.ui.chat.ChatViewModel
@@ -34,6 +39,7 @@ import com.mewbo.aura.ui.orb.OrbShowcase
 import com.mewbo.aura.ui.search.SearchChatsScreen
 import com.mewbo.aura.ui.settings.SettingsScreen
 import com.mewbo.aura.ui.theme.AuraColors
+import com.mewbo.aura.ui.theme.AuraSpacing
 import kotlinx.coroutines.launch
 
 /** Route names + argument keys — the single source of truth for the nav graph below. */
@@ -42,8 +48,17 @@ private object AuraRoutes {
     const val SEARCH = "search"
     const val ORB_GALLERY = "orb-gallery"
     const val LIVENESS_GALLERY = "liveness-gallery"
+
+    // Mewbo Apps (design spec §4D) — a peer destination to Search/Settings, pushed WITHOUT the
+    // drawer (see this object's own KDoc precedent below).
+    const val APPS_GALLERY = "apps"
+    const val APPS_CREATE = "apps/new"
+    const val APP_ID_ARG = AppDetailViewModel.APP_ID_ARG
+    const val APPS_DETAIL = "apps/detail/{$APP_ID_ARG}"
+    fun appDetail(appId: String) = "apps/detail/$appId"
+
     const val SESSION_ID_ARG = "sessionId"
-    /** Gitea #180 P1 - the assist-overlay handoff's raw `InputModality.name` ("Voice"/"Text"),
+    /** the assist-overlay handoff's raw `InputModality.name` ("Voice"/"Text"),
      * baked into the route itself (not re-read off `pendingHandoffModality` after navigation) so it
      * survives `MainActivity`'s `onHandoffConsumed` nulling that prop out right after `navigate()`
      * fires below - the exact same reason [SESSION_ID_ARG] itself is a route arg, not a raw prop. */
@@ -87,12 +102,12 @@ const val HANDOFF_DRAFT_KEY = "com.mewbo.aura.handoffDraft"
 fun AuraNavHost(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
-    /** Assist-overlay handoff target (Gitea #178 W2, `MainActivity.EXTRA_HANDOFF_SESSION_ID`) - a
+    /** Assist-overlay handoff target (`MainActivity.EXTRA_HANDOFF_SESSION_ID`) - a
      * session id to navigate to on cold AND warm start, reusing the drawer's own
      * `onOpenSession` navigate call below. `null` (the default) is a no-op, so every other
      * `AuraNavHost` caller (previews, tests) is unaffected. */
     pendingHandoffSessionId: String? = null,
-    /** Paired with [pendingHandoffSessionId] (Gitea #180 P1, `MainActivity.EXTRA_HANDOFF_MODALITY`) -
+    /** Paired with [pendingHandoffSessionId] (`MainActivity.EXTRA_HANDOFF_MODALITY`) -
      * the raw `InputModality.name` string; baked into the navigated route below (see
      * [AuraRoutes.MODALITY_ARG]'s KDoc), never re-read after that. `null` (the default) is a no-op,
      * same as [pendingHandoffSessionId]. */
@@ -170,6 +185,7 @@ fun AuraNavHost(
                         handoffModality = handoffModality,
                         onOpenSearch = { navController.navigate(AuraRoutes.SEARCH) },
                         onOpenSettings = { navController.navigate(AuraRoutes.SETTINGS) },
+                        onOpenApps = { navController.navigate(AuraRoutes.APPS_GALLERY) },
                         onOpenSession = { id ->
                             navController.navigate(AuraRoutes.chat(id)) {
                                 popUpTo(AuraRoutes.CHAT) { inclusive = true }
@@ -201,6 +217,34 @@ fun AuraNavHost(
                         onBack = navController::popBackStack,
                     )
                 }
+                // Mewbo Apps (design spec §4D): gallery -> detail / create, pushed WITHOUT the
+                // drawer, same "drawer only on home" pattern as Search/Settings above.
+                composable(AuraRoutes.APPS_GALLERY) {
+                    AppsGalleryScreen(
+                        onBack = navController::popBackStack,
+                        onOpenApp = { appId -> navController.navigate(AuraRoutes.appDetail(appId)) },
+                        onCreateApp = { navController.navigate(AuraRoutes.APPS_CREATE) },
+                    )
+                }
+                composable(AuraRoutes.APPS_CREATE) {
+                    AppCreateScreen(
+                        onBack = navController::popBackStack,
+                        onAppReady = { appId ->
+                            // Replace the creation entry with the new app's detail screen (spec §5
+                            // flow 1: "gallery card live" -> open it) - a completed build has
+                            // nothing left to resume by navigating back to.
+                            navController.navigate(AuraRoutes.appDetail(appId)) {
+                                popUpTo(AuraRoutes.APPS_CREATE) { inclusive = true }
+                            }
+                        },
+                    )
+                }
+                composable(
+                    route = AuraRoutes.APPS_DETAIL,
+                    arguments = listOf(navArgument(AuraRoutes.APP_ID_ARG) { type = NavType.StringType }),
+                ) {
+                    AppDetailScreen(onBack = navController::popBackStack)
+                }
                 if (IS_DEBUG_BUILD) {
                     composable(AuraRoutes.ORB_GALLERY) {
                         OrbShowcase()
@@ -223,11 +267,12 @@ fun AuraNavHost(
 @Composable
 private fun ChatHomeDestination(
     sessionId: String?,
-    /** Gitea #180 P1 - forwarded straight to [ChatScreen] as the raw handoff-modality string; see
+    /** forwarded straight to [ChatScreen] as the raw handoff-modality string; see
      * [AuraRoutes.MODALITY_ARG]'s KDoc for why this travels via the nav route. */
     handoffModality: String?,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenApps: () -> Unit,
     onOpenSession: (String) -> Unit,
     onNewChat: () -> Unit,
 ) {
@@ -239,8 +284,14 @@ private fun ChatHomeDestination(
         scrimColor = AuraColors.surfaceCanvas.copy(alpha = DRAWER_SCRIM_ALPHA),
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.fillMaxWidth(DRAWER_WIDTH_FRACTION),
-                drawerContainerColor = AuraColors.surfaceCanvas,
+                // material3 1.4.0's ModalDrawerSheet forwards drawerTonalElevation into an inner
+                // Surface that never sets shadowElevation, so it casts no shadow by default
+                // (byte-verified against NavigationDrawer.kt — see AuraSpacing.DrawerSheet's KDoc).
+                // Modifier.shadow(...) reaches the same built-in Surface primitive one layer down.
+                modifier = Modifier
+                    .fillMaxWidth(DRAWER_WIDTH_FRACTION)
+                    .shadow(elevation = AuraSpacing.DrawerSheet.shadowElevation, shape = RectangleShape, clip = false),
+                drawerContainerColor = AuraColors.surfaceDrawer,
                 drawerShape = RectangleShape,
             ) {
                 AuraDrawerContent(
@@ -262,6 +313,10 @@ private fun ChatHomeDestination(
                         scope.launch { drawerState.close() }
                         onOpenSettings()
                     },
+                    onOpenApps = {
+                        scope.launch { drawerState.close() }
+                        onOpenApps()
+                    },
                 )
             }
         },
@@ -276,6 +331,10 @@ private fun ChatHomeDestination(
                 onMenuTap = { scope.launch { drawerState.open() } },
                 onNewChat = onNewChat,
                 onNotice = noticeController::show,
+                // The SAME lambda the drawer's session rows use - a fork lands in a brand-new
+                // session and MessageActionsSheet navigates to it exactly the way opening one from
+                // Recents does (replace this entry, never push a second chat onto the back stack).
+                onOpenSession = onOpenSession,
             )
         }
     }

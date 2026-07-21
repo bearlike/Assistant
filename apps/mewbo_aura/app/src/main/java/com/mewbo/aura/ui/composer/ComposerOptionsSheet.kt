@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,6 +45,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mewbo.aura.data.model.ComposerScope
@@ -59,7 +66,7 @@ private sealed interface OptionsPane {
 }
 
 /**
- * The composer "+" sheet (Gitea #177 W2). Anatomy per the reference plus-menu/tools-sheet captures:
+ * The composer "+" sheet. Anatomy per the reference plus-menu/tools-sheet captures:
  * top = "Photos"/"Files" attach pills; below a divider, "Session" rows ([scope]'s Project/Tools)
  * each drill into an in-sheet sub-list (back-arrow header, mirrors the tools-sheet's
  * section-header -> row rhythm). [scope]'s catalogs are `null` until
@@ -69,7 +76,7 @@ private sealed interface OptionsPane {
  * mid-session.
  *
  * Project/Tools are editable whenever no run is in flight - including on an already-created, IDLE
- * session (Gitea #185 P5). [runInFlight] freezes them ONLY while a turn is actively Sending/Streaming:
+ * session. [runInFlight] freezes them ONLY while a turn is actively Sending/Streaming:
  * the backend re-resolves both from THAT running query's own request body, so mutating them mid-run
  * would desync the live turn - but between turns there is no live run to desync, and the resend-context
  * mechanism carries the new pick into the NEXT turn (mirrors the freely re-pickable ModelPickerSheet).
@@ -315,17 +322,22 @@ private fun ProjectPane(
         // sheet to full height.
         LazyColumn(modifier = Modifier.weight(1f, fill = false), contentPadding = paneContentPadding()) {
             item(key = TemporaryProjectKey) {
-                ProjectRow(label = "Temporary", selected = selectedKey == null, onClick = { onSelect(null) })
+                ProjectRow(label = "Temporary", temporary = true, selected = selectedKey == null, onClick = { onSelect(null) })
+            }
+            // Divider BELOW the ephemeral temp-dir cwd, setting it apart from real, saved projects
+            // (user directive 2026-07-14) — same treatment as the settings ProjectPickerSheet.
+            item(key = TemporaryDividerKey) {
+                HorizontalDivider(color = AuraColors.outlineHairline)
             }
             items(projects, key = { it.contextKey }) { project ->
-                ProjectRow(label = project.name, selected = selectedKey == project.contextKey, onClick = { onSelect(project.contextKey) })
+                ProjectRow(label = project.name, temporary = false, selected = selectedKey == project.contextKey, onClick = { onSelect(project.contextKey) })
             }
         }
     }
 }
 
 @Composable
-private fun ProjectRow(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ProjectRow(label: String, temporary: Boolean, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
@@ -334,6 +346,16 @@ private fun ProjectRow(label: String, selected: Boolean, onClick: () -> Unit, mo
             .clickable(onClick = onClick)
             .padding(horizontal = AuraSpacing.screenGutter),
     ) {
+        // Leading scope glyph: the ephemeral "date_range" for the temporary scratch cwd (muted tint),
+        // the "project" glyph (scopeProject accent) for a real project. A FILLED slot on every row,
+        // so this is not the §7.13 empty-icon-slot indent regression.
+        Icon(
+            imageVector = if (temporary) ChatIcons.TemporaryProjectScope else ChatIcons.ProjectScope,
+            contentDescription = null,
+            tint = if (temporary) AuraColors.textSecondary else AuraColors.scopeProject,
+            modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
+        )
+        Spacer(modifier = Modifier.width(AuraSpacing.DrawerRow.iconToLabelGap))
         Text(text = label, style = AuraType.listItem, color = AuraColors.textPrimary, modifier = Modifier.weight(1f))
         if (selected) {
             Icon(
@@ -347,14 +369,20 @@ private fun ProjectRow(label: String, selected: Boolean, onClick: () -> Unit, mo
 }
 
 /**
- * Tools pane (renamed back from "MCP Servers", Gitea #182 P3 - the catalog now legitimately mixes
+ * Tools pane (renamed back from "MCP Servers" - the catalog now legitimately mixes
  * MCP servers with capability-gated product-tool groups like "Wiki"/"Agentic Search", see
  * [com.mewbo.aura.data.repo.SessionScopeRepository.tools]; "MCP Servers" stopped being accurate the
  * moment a non-MCP group could appear here). [ToolSummary.groupKey] groups collapse to one
  * switch-bearing header row each (stable alphabetical order), expanding to their member [ToolRow]s
  * on tap - the catalog runs 300+ entries, so both the grouping and the [LazyColumn] below are
- * load-bearing, not cosmetic. [expanded] is local, transient UI state (Gitea #178 review:
+ * load-bearing, not cosmetic. [expanded] is local, transient UI state (per review:
  * persisting it beyond this pane's own composition isn't part of the brief).
+ *
+ * Provenance sections (user directive 2026-07-14): the server/product groups are LAYERED under
+ * [ScopeSectionHeader]s by [ToolSummary.scope] (project → system → plugin → builtin → other,
+ * [ComposerScope.FACET_ORDER]) — an accessible, TalkBack-navigable heading per provenance, with the
+ * existing per-server expand/collapse + bulk toggle untouched beneath it. Ordering is scope-section
+ * first, then alphabetical within a section (the prior stable order).
  */
 @Composable
 private fun ToolsPane(
@@ -365,21 +393,24 @@ private fun ToolsPane(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val grouped = scope.tools.orEmpty().groupBy { it.groupKey }.toSortedMap()
+    val ordered = scope.tools.orEmpty().groupBy { it.groupKey }.entries
+        .sortedWith(compareBy({ scopeSectionRank(sectionScopeOf(it.value)) }, { it.key }))
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
 
     Column(modifier = modifier.fillMaxWidth()) {
         PaneHeader(title = "Tools", onBack = onBack, onRefresh = onRefresh)
         LazyColumn(modifier = Modifier.weight(1f, fill = false), contentPadding = paneContentPadding()) {
-            grouped.forEach { (server, tools) ->
+            var lastSection: String? = null
+            ordered.forEach { (server, tools) ->
+                val section = sectionScopeOf(tools)
+                if (section != lastSection) {
+                    lastSection = section
+                    item(key = "section:$section") { ScopeSectionHeader(scope = section) }
+                }
                 val (active, total) = scope.activeCountFor(server)
                 item(key = "header:$server") {
                     ServerGroupHeader(
                         server = server,
-                        // Tools within one group share an origin (all from one MCP server, or one
-                        // product-tool group like "Wiki") so a single representative scope is honest;
-                        // null when the backend omitted scope for the whole group.
-                        scope = tools.firstNotNullOfOrNull { it.scope },
                         active = active,
                         total = total,
                         expanded = expanded[server] == true,
@@ -408,6 +439,75 @@ private fun ToolsPane(
     }
 }
 
+/** Provenance section bucket for a server/product group — its first tool's recognized
+ * [ToolSummary.scope], or [ComposerScope.FACET_OTHER] when the backend omitted it (tools in one
+ * group share an origin, so a single representative is honest). */
+private fun sectionScopeOf(tools: List<ToolSummary>): String =
+    tools.firstNotNullOfOrNull { it.scope }?.takeIf { it in ComposerScope.FACET_ORDER } ?: ComposerScope.FACET_OTHER
+
+private val SCOPE_SECTION_ORDER: List<String> = ComposerScope.FACET_ORDER + ComposerScope.FACET_OTHER
+
+private fun scopeSectionRank(scope: String): Int =
+    SCOPE_SECTION_ORDER.indexOf(scope).let { if (it < 0) SCOPE_SECTION_ORDER.size else it }
+
+private fun scopeSectionLabel(scope: String): String = when (scope) {
+    "project" -> "Project"
+    "system" -> "System"
+    "plugin" -> "Plugin"
+    "builtin" -> "Built-in"
+    else -> "Other"
+}
+
+private fun scopeSectionIcon(scope: String): ImageVector = when (scope) {
+    "project" -> ChatIcons.ProjectScope // folder / workspace
+    "system" -> Icons.Filled.Settings // gear
+    "plugin" -> Icons.Filled.Extension // puzzle piece — the canonical plugin glyph
+    "builtin" -> ChatIcons.ToolScope // wrench (core tooling)
+    else -> Icons.Filled.MoreHoriz // misc / unlabeled
+}
+
+/**
+ * Provenance section header in the Tools pane (user directive 2026-07-14): an icon + capitalized
+ * scope label ("Project" / "System" / …), marked as a semantic HEADING so TalkBack announces it and
+ * lets the user jump between provenance sections. Quiet chrome (sectionHeader type + textSecondary),
+ * distinct from the interactive [ServerGroupHeader] rows beneath it.
+ *
+ * Spacing: asymmetric, top-heavy - full [AuraSpacing.DrawerRow.sectionHeaderTopPad]
+ * above, no explicit gap below - the same rhythm [com.mewbo.aura.ui.navigation.AuraDrawerContent]'s
+ * `RecentsHeader` and `SettingsScreen`'s section headers already use (and the same "headings cling to
+ * what follows" ~2:1 shape as [AuraSpacing.Markdown.headingTopGap]/`headingBottomGap`). The prior
+ * `sectionHeaderTopPad / 2` SYMMETRIC padding (still correct for the one-off, non-repeating headers in
+ * `ActionSheet.SheetHeader`/`ModelPickerSheet`) put this header exactly as close to the PREVIOUS
+ * section's last row as to its own content beneath it, so a provenance boundary read with the same
+ * weight as an ordinary intra-section row gap - the reported "boundaries unclear" bug. [ServerGroupHeader]
+ * and [ToolRow] are still bare fixed-height rows with zero explicit inter-row gap, so this header's own
+ * top/bottom asymmetry is what carries the whole boundary signal.
+ */
+@Composable
+private fun ScopeSectionHeader(scope: String, modifier: Modifier = Modifier) {
+    val label = scopeSectionLabel(scope)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AuraSpacing.Composer.gapTight),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(
+                start = AuraSpacing.screenGutter,
+                top = AuraSpacing.DrawerRow.sectionHeaderTopPad,
+                end = AuraSpacing.screenGutter,
+            )
+            .semantics(mergeDescendants = true) { heading() },
+    ) {
+        Icon(
+            imageVector = scopeSectionIcon(scope),
+            contentDescription = null, // the label beside it carries the meaning for TalkBack
+            tint = AuraColors.textSecondary,
+            modifier = Modifier.size(AuraSpacing.Composer.scopeRowIconSize),
+        )
+        Text(text = label, style = AuraType.sectionHeader, color = AuraColors.textSecondary)
+    }
+}
+
 /** One tool group's (an MCP server, or a product-tool group like "Wiki") collapsed/expandable row:
  * name + "N of M on" caption, a switch that bulk
  * toggles every tool in the group, and a chevron that rotates to indicate expansion. Tapping the
@@ -416,7 +516,6 @@ private fun ToolsPane(
 @Composable
 private fun ServerGroupHeader(
     server: String,
-    scope: String?,
     active: Int,
     total: Int,
     expanded: Boolean,
@@ -438,22 +537,10 @@ private fun ServerGroupHeader(
             .padding(horizontal = AuraSpacing.screenGutter),
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(AuraSpacing.Composer.gapTight),
-            ) {
-                Text(text = server, style = AuraType.listItem, color = AuraColors.textPrimary)
-                // Scope provenance label (Gitea #185 P4): a subtle tertiary tag, cardless per the
-                // Tools-pane aesthetic (no filled pill/nested surface). Capitalized, never all-caps
-                // (DESIGN.md §4). Absent entirely when the group carried no scope.
-                if (scope != null) {
-                    Text(
-                        text = scope.replaceFirstChar { it.uppercase() },
-                        style = AuraType.caption,
-                        color = AuraColors.textTertiary,
-                    )
-                }
-            }
+            // The per-server provenance tag moved UP to the enclosing
+            // [ScopeSectionHeader] (user directive 2026-07-14) — showing it here too would
+            // double-label every row, so the group row is now just its name + "N of M on".
+            Text(text = server, style = AuraType.listItem, color = AuraColors.textPrimary)
             Text(text = "$active of $total on", style = AuraType.caption)
         }
         Switch(checked = active > 0, onCheckedChange = onToggleAll)
@@ -496,3 +583,6 @@ private val AttachPillCaptionGap: Dp = 4.dp
 /** [ProjectPane]'s synthetic "Temporary" row has no [ProjectSummary.contextKey] to key off - a
  * sentinel unlikely to collide with a real one. */
 private const val TemporaryProjectKey = "__temporary__"
+
+/** LazyColumn key for the divider that sets the ephemeral "Temporary" row apart from real projects. */
+private const val TemporaryDividerKey = "__temporary_divider__"

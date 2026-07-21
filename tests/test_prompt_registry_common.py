@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden tests for the ``common``/``spawn``/``title`` prompt migration (Gitea #89).
+"""Golden tests for the ``common``/``spawn``/``title`` prompt migration.
 
 Phase 1 is a VERBATIM extraction with ZERO behaviour change: every literal
 moved into the central prompt registry must render byte-for-byte identical to

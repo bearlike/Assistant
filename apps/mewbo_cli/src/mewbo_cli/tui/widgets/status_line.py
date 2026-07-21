@@ -14,7 +14,7 @@ deliberately the *tokens consumed this session*, never a subscription quota.
 
 The widget is dumb and pure: it renders whatever :class:`StatusLineData` it is
 handed via :meth:`apply`. The host/cwd are filled in by :meth:`StatusLineData.local`
-so a bare App (no installer) still shows a useful line; the #156 installer drives
+so a bare App (no installer) still shows a useful line; the sidebar installer drives
 the live facets (branch/stash/tokens) on a refresh interval. Colors come from
 theme CSS vars (``$accent`` / ``$success`` / ``$warning`` / ``$text-muted``) —
 never hex. One atomic class.

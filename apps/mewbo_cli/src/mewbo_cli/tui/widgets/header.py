@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Header widget for the Mewbo TUI (issue #150).
+"""Header widget for the Mewbo TUI.
 
 Provides three public symbols:
 
@@ -48,7 +48,7 @@ class HeaderContext:
     external_enabled: int
     external_disabled: int
     skill_count: int = 0
-    # Honest local-vs-remote transcript indicator (Gitea #171): "local-only" when
+    # Honest local-vs-remote transcript indicator: "local-only" when
     # the CLI is fully local, "remote: <base_url>" when session sync is opted in.
     transcript_sink: str = "local-only"
 

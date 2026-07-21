@@ -26,6 +26,7 @@ from mewbo_core.session_tools import DEFAULT_SESSION_TOOL_MODES
 from pydantic import BaseModel, ValidationError
 
 from mewbo_graph.plugins.wiki._ctx import (
+    SessionProject,
     WikiJobCtx,
     WikiQaCtx,
     resolve_job_ctx,
@@ -84,7 +85,7 @@ class WikiSessionTool:
         accept-state) signal a *successful* terminal state, so the base
         default is ``"completed"`` — never the exit_plan_mode approval gate. A
         terminal tool can no longer override ``should_terminate_run`` while
-        lacking a ``terminal_reason`` (the #61 contract violation).
+        lacking a ``terminal_reason`` (a contract violation).
         """
         return "completed"
 
@@ -110,6 +111,19 @@ class WikiSessionTool:
         """Resolve the QA ctx for this session, or ``None``."""
         runtime = self._runtime()
         return resolve_qa_ctx(self._session_id, runtime) if runtime is not None else None
+
+    def _ungrounded_result(self) -> MockSpeaker:
+        """Return the envelope for "this session has no wiki to read".
+
+        The read/navigate tools bind to ORDINARY sessions, so failing to resolve
+        a slug is an EXPECTED outcome, not a fault — hence ``not_found`` rather
+        than ``internal``, and hence a message that names the project it looked
+        for. An agent must be able to learn from ONE call that there is nothing
+        here and move on, instead of re-trying against what reads as a transient
+        internal error. Resolved lazily, on the miss path only.
+        """
+        label = SessionProject.for_session(self._session_id, self._runtime()).label
+        return _err_result("not_found", f"no wiki indexed for {label}")
 
     @staticmethod
     def _record_qa_access(ctx: Any, records: list[QaAccessRecord]) -> None:

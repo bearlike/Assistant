@@ -5,9 +5,9 @@ way regardless of caller (see ``session_store``). Provenance is therefore
 reconstructed from two durable signals written at creation time:
 
 * the session's **tags** (e.g. ``wiki:job:<id>``, ``agentic_search:scg:<id>``,
-  ``nextcloud-talk:room:<token>``) — the robust signal, present for every
-  internally-spawned session and surviving even when the context event is
-  empty (older wiki jobs stored no capabilities);
+  ``nextcloud-talk:room:<token>``, ``app:<app_id>``) — the robust signal,
+  present for every internally-spawned session and surviving even when the
+  context event is empty (older wiki jobs stored no capabilities);
 * the first ``context`` event's ``client_capabilities`` / ``source_platform``
   — the fallback when a tag is absent.
 
@@ -26,6 +26,50 @@ from enum import Enum
 # ``mobile:<platform>`` at session creation, so the two never drift.
 MOBILE_TAG_PREFIX = "mobile:"
 MOBILE_SURFACES: frozenset[str] = frozenset({"android", "ios", "aura-android"})
+
+# Owned here, not api-side, so the app-tagging seam
+# (``apps/mewbo_api/src/mewbo_api/apps/lifecycle.py:MAINTAINER_TAG_PREFIX``) and this
+# classifier read the SAME literal and can never drift — mirroring exactly why
+# ``MOBILE_TAG_PREFIX`` exists above.
+APPS_TAG_PREFIX = "app:"
+
+# The vocabulary of every surface string ACTUALLY stamped today — the one home
+# for "what can ``surface`` be", read by the operator-facing variable reference
+# (``system_instructions.values.InstructionValueCatalog``). Every entry traces to
+# a real stamp site, so this list can be trusted as a branch target:
+#
+# * ``api`` — the ``X-Mewbo-Surface`` reader's own default when a caller sends
+#   no header (``mewbo_api.request_context.request_surface``);
+# * ``console`` / ``mcp`` / ``android`` / ``home-assistant`` — clients that DO
+#   send that header (the console's api client, the MCP facade's REST client,
+#   Aura's OkHttp interceptor, the Home Assistant conversation agent);
+# * ``cli`` / ``trigger`` / ``agent`` — in-process callers passing
+#   ``source_platform=`` (the CLI, a trigger-driven wake, the search launcher);
+# * ``email`` / ``nextcloud-talk`` — the channel adapters, which stamp their own
+#   platform;
+# * ``github`` / ``gitea`` — derived from the forge host by vcs-pickup;
+# * ``vcs`` / ``unknown`` — the fallbacks ``TraceProvenance._resolve_surface``
+#   derives below when nothing else stamped one.
+#
+# DELIBERATELY NOT a closed set and enforced nowhere: ``surface`` stays a plain
+# ``str`` so a new client that stamps its own string keeps working. This is the
+# current vocabulary, not a validator — treat it as such.
+KNOWN_SURFACES: tuple[str, ...] = (
+    "agent",
+    "android",
+    "api",
+    "cli",
+    "console",
+    "email",
+    "gitea",
+    "github",
+    "home-assistant",
+    "mcp",
+    "nextcloud-talk",
+    "trigger",
+    "unknown",
+    "vcs",
+)
 
 
 def is_mobile_surface(surface: object) -> bool:
@@ -46,6 +90,7 @@ class SessionOrigin(str, Enum):
     MOBILE = "mobile"
     STRUCTURED = "structured"
     DRAFT = "draft"
+    APPS = "apps"
 
     @classmethod
     def classify(cls, tags: list[str], context: dict[str, object]) -> SessionOrigin:
@@ -61,6 +106,7 @@ class SessionOrigin(str, Enum):
             ("structured:", cls.STRUCTURED),
             ("draft:", cls.DRAFT),
             (MOBILE_TAG_PREFIX, cls.MOBILE),
+            (APPS_TAG_PREFIX, cls.APPS),
         )
         for tag in tags:
             for prefix, origin in tag_prefixes:
@@ -83,6 +129,8 @@ class SessionOrigin(str, Enum):
                 return cls.WIKI
             if "scg" in capabilities:
                 return cls.SEARCH
+            if "apps" in capabilities:
+                return cls.APPS
         return cls.USER
 
 
@@ -150,6 +198,7 @@ class TraceProvenance:
         SessionOrigin.MOBILE: "mobile",
         SessionOrigin.STRUCTURED: "structured",
         SessionOrigin.DRAFT: "draft",
+        SessionOrigin.APPS: "apps",
     }
 
     @classmethod
@@ -208,11 +257,11 @@ class TraceProvenance:
                 # The SCG MAP-source (indexing) job session is tagged
                 # ``scg:map:<job_id>`` — distinct from a search RUN
                 # (``agentic_search:run:``). Both are the ``search`` product, but
-                # the auditor must tell a map apart from a run (#77).
+                # the auditor must tell a map apart from a run.
                 return {"product": "search", "session_type": "scg_map", "search_id": parts[2]}
             if head == "structured" and len(parts) >= 2:
                 # ``structured:run`` (agentic /v1/structured) and ``structured:fast``
-                # (its no-loop ``mode:"synthesis"`` lane, #85) share the
+                # (its no-loop ``mode:"synthesis"`` lane) share the
                 # ``structured`` product; the second segment is the session_type so
                 # the two execution strategies stay distinguishable in a trace filter.
                 return {"product": "structured", "session_type": f"structured_{parts[1]}"}
@@ -223,6 +272,13 @@ class TraceProvenance:
                 # ``mobile:<platform>`` — stamped by the api tagging seam for a
                 # mobile-created session (e.g. ``mobile:android`` from Aura).
                 return {"product": "mobile", "session_type": f"mobile_{parts[1]}"}
+            if head == "app" and len(parts) >= 2:
+                # ``app:<app_id>`` — stamped on both the builder and maintainer
+                # session for a Mewbo App (``apps/lifecycle.py:MAINTAINER_TAG_PREFIX``).
+                # One session_type for both roles: a builder session is retired
+                # once submit mints/reuses the maintainer, so distinguishing them
+                # here would add a filter dimension with no query behind it.
+                return {"product": "apps", "session_type": "app_agent", "app_id": parts[1]}
             if head == "vcs" and len(parts) >= 4:
                 return {
                     "product": "vcs",
@@ -263,7 +319,7 @@ class TraceProvenance:
             value = cls._as_str(context.get(key))
             if value:
                 out[key] = value
-        # ``transcript_sink`` is the CLI's local-vs-synced facet (Gitea #171):
+        # ``transcript_sink`` is the CLI's local-vs-synced facet:
         # ``local-only`` vs ``synced`` — a low-cardinality chip that distinguishes
         # a purely-local CLI session from one mirrored to a remote API, so console/
         # wiki/search never cross-operate on a synced CLI transcript.

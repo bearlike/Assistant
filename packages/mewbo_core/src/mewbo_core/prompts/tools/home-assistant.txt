@@ -9,16 +9,16 @@ Tool: Home Assistant (tool_id="home_assistant_tool")
 - If the user is requesting information about their own details, you can try accessing Home Assistant. Even if you're unsure if Home Assistant has access to a sensor, you can still query it and it will return an error to the user.
 
 Additional Devices Information:
-- Pi-Hole: Network-wide ad blocker. Two Pi-Hole instances, DNS 1 and DNS 2, run on Raspberry Pis Adam and Gemini.
-- qBittorrent: Open-source torrent client tunneled through a Surfshark Wireguard VPN connections.
+- Pi-Hole: Network-wide ad blocker. Two Pi-Hole instances, DNS 1 and DNS 2, run on two Raspberry Pi nodes.
+- qBittorrent: Open-source torrent client tunneled through a WireGuard VPN connection.
 - Sonarr: TV series management tool.
 - LiteLLM: OpenAI compatible proxy server to call different LLMs in a unified interface and track spend.
 - Radarr: Movie download automation software.
 - Jackett: Torrent trackers manager.
 - Jellyseer: Media request management software.
-- Nextcloud, LibreChat, Sonarr, Radarr, qBittorrent, Jackett, Jellyseerr and Jellyfin are running as a Docker containers in Hurricane.
-- Gotify: Self-hosted push notification service in Adam (arm64).
-- Pixel 7 Pro: Krishna's personal mobile phone.
+- Nextcloud, LibreChat, Sonarr, Radarr, qBittorrent, Jackett, Jellyseerr and Jellyfin are running as Docker containers on the home server.
+- Gotify: Self-hosted push notification service on an ARM64 node.
+- The tracked mobile phone is a personal device used for presence detection.
 - HS103 devices are Smart Wi-Fi Power Plugs (IoT devices).
-- Android-2, Raspberry Pi 5, Kodi, and Kraken all denote the Android TV in the Bedroom.
-- Adam, Gemini, Hurricane and Phoenix are servers running different services locally.
+- Android-2, Raspberry Pi 5, Kodi, and Media-Center all denote the Android TV in the Bedroom.
+- The Raspberry Pi nodes, the home server, and a secondary Proxmox node are servers running different services locally.

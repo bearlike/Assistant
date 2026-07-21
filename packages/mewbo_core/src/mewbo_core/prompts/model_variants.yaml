@@ -1,4 +1,4 @@
-# Controllable model → tool-variant map (Gitea #113, Phase A).
+# Controllable model → tool-variant map.
 #
 # OPERATOR-TUNABLE DATA, NOT CODE. This file is the single home for the
 # model-capability profiles that decide which *variant of a tool* a model gets —

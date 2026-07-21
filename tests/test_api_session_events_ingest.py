@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Route tests for POST /api/sessions/<id>/events — the CLI transcript-mirror
-ingest seam (Gitea #171).
+ingest seam.
 
 Drives the real Flask backend test client against a temp-store runtime so the
 append actually lands (no over-mocking); only auth + storage root are swapped.

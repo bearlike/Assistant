@@ -50,7 +50,7 @@ export function RunTelemetry({ data, variant, className }: RunTelemetryProps) {
     return (
       <div
         className={cn(
-          'flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]',
+          'flex items-center gap-2 text-2xs text-[hsl(var(--muted-foreground))]',
           className,
         )}
       >
@@ -59,12 +59,12 @@ export function RunTelemetry({ data, variant, className }: RunTelemetryProps) {
           aria-hidden
         />
         <span
-          className="font-medium text-[hsl(var(--foreground))]/85 truncate"
+          className="font-medium text-[hsl(var(--foreground))] truncate"
           title={phase}
         >
           {phase}
         </span>
-        <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[10.5px] tabular-nums shrink-0">
+        <span className="ml-auto inline-flex items-center gap-1.5 tabular-nums shrink-0">
           <MetaRow
             items={[
               agentLabel && <span>{agentLabel}</span>,
@@ -87,7 +87,7 @@ export function RunTelemetry({ data, variant, className }: RunTelemetryProps) {
       >
         {phase}
       </span>
-      <div className="flex items-center gap-2 text-[11px] font-mono tabular-nums text-[hsl(var(--muted-foreground))]">
+      <div className="flex items-center gap-2 text-2xs tabular-nums text-[hsl(var(--muted-foreground))]">
         <MetaRow
           items={[
             agentLabel && (

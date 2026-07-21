@@ -1632,26 +1632,6 @@ def test_context_builder_build_anchors_first_user_event(tmp_path: Path) -> None:
 # tool_registry.py
 # ---------------------------------------------------------------------------
 
-# ToolSpec.is_plan_safe (lines 74-76)
-
-
-def test_tool_spec_is_plan_safe_via_read_only() -> None:
-    spec = ToolSpec(tool_id="t", name="T", description="", factory=lambda: None, read_only=True)
-    assert spec.is_plan_safe() is True
-
-
-def test_tool_spec_is_plan_safe_via_metadata() -> None:
-    spec = ToolSpec(
-        tool_id="t", name="T", description="", factory=lambda: None, metadata={"plan_safe": True}
-    )
-    assert spec.is_plan_safe() is True
-
-
-def test_tool_spec_is_not_plan_safe_by_default() -> None:
-    spec = ToolSpec(tool_id="t", name="T", description="", factory=lambda: None)
-    assert spec.is_plan_safe() is False
-
-
 # ToolRegistry.disable — removes cached instance (line 109-110)
 
 
@@ -1670,35 +1650,6 @@ def test_tool_registry_disable_removes_cached_instance() -> None:
 def test_tool_registry_disable_noop_for_unknown() -> None:
     registry = ToolRegistry()
     registry.disable("unknown", "reason")  # Must not raise
-
-
-# ToolRegistry.list_specs_for_mode (lines 148-153)
-
-
-def test_list_specs_for_mode_plan_filters_to_plan_safe() -> None:
-    registry = ToolRegistry()
-    read_only_spec = ToolSpec(
-        tool_id="safe", name="Safe", description="", factory=lambda: None, read_only=True
-    )
-    write_spec = ToolSpec(
-        tool_id="unsafe", name="Unsafe", description="", factory=lambda: None, read_only=False
-    )
-    registry.register(read_only_spec)
-    registry.register(write_spec)
-    plan_specs = registry.list_specs_for_mode("plan")
-    ids = {s.tool_id for s in plan_specs}
-    assert "safe" in ids
-    assert "unsafe" not in ids
-
-
-def test_list_specs_for_mode_non_plan_returns_all_enabled() -> None:
-    registry = ToolRegistry()
-    for i in range(3):
-        registry.register(
-            ToolSpec(tool_id=f"t{i}", name=f"T{i}", description="", factory=lambda: None)
-        )
-    act_specs = registry.list_specs_for_mode("act")
-    assert len(act_specs) == 3
 
 
 # is_always_load / is_deferred (lines 178-204)

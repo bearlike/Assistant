@@ -40,7 +40,7 @@ The agent tracks each conversation in memory rather than through server-side ses
    `custom_components/mewbo_conversation/`.
 3. In Home Assistant, add the "Mewbo" conversation integration and set:
    - Base URL: the API base URL, for example `http://host:5125`. The Docker stack publishes the API on host port 5125. A local `uv run mewbo-api` dev server listens on 5124.
-   - API key: the setup form asks for one, but the current build ignores it and authenticates with a fixed placeholder token in [`api.py`](repo:apps/mewbo_ha_conversation/api.py), sent as the `X-API-KEY` header. Before a real deployment, edit that token in `api.py` so it matches a key your server accepts. Do not weaken the server's `api.master_token` to match the placeholder.
+   - API key: the key you enter is stored with the config entry and sent as the `X-API-KEY` header on every request. It must match a token your server accepts — the server's `api.master_token`, or a revocable key minted via [`POST /api/keys`](endpoint:POST /api/keys). Legacy entries created before the key was wired carry no stored key; they fall back to the old placeholder token and log a deprecation warning, so re-add the integration to set your key.
    - Timeout: how long to wait for a reply, in seconds.
 
 ## Optional: enable the Home Assistant tool

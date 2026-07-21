@@ -8,12 +8,12 @@ Scope: `docs/` — the MkDocs site (`mkdocs.yml`, theme `shadcn`/mkdocs-shadcn-m
 
 **Rule (KISS/DRY):** any reference to an artifact **we own** renders as a badge, never a bare hyperlink or inline code. Two kinds, and *only* these two:
 
-1. **A file/artifact in our repo** (`bearlike/Assistant`, GitHub or the Gitea mirror):
+1. **A file/artifact in this repo** (`bearlike/Assistant`):
    `[`backend.py`](repo:apps/mewbo_api/src/mewbo_api/backend.py)` — optional line range `…#L12-L20`.
 2. **One of our REST endpoints** (`/api/...` or `/v1/...`):
    `[POST /api/sessions](endpoint:POST /api/sessions)` — method optional.
 
-You write a normal markdown link with a `repo:` or `endpoint:` URI; the MkDocs hook `docs/hooks/code_refs.py` rewrites it to the badge at build time (file badge = GitHub octicon + path, SHA-pinned to the build commit; endpoint badge = method-tinted, deep-linked into the Scalar reference). Styling lives in `docs/assets/code-refs.css` (bound to the theme's design tokens, light + dark). **Never hand-write badge HTML** — just use the scheme.
+You write a normal markdown link with a `repo:` or `endpoint:` URI; the theme (`mkdocs-shadcn-mewbo` >= 1.4.0, the installed `shadcn` theme wheel, configured via `code_refs:` in `mkdocs.yml`) rewrites it to the badge at build time (file badge = GitHub octicon + path, SHA-pinned to the build commit; endpoint badge = method-tinted, deep-linked into the Scalar reference). Badge styling and the rewrite logic both ship with the theme — this is no longer a local `docs/hooks/` script. **Never hand-write badge HTML** — just use the scheme.
 
 ### Do NOT badge (leave as plain inline `code`)
 - **Anything we don't own:** third-party API endpoints (Gitea/GitHub `/repos/...`, `/api/v1/users/...`; LiteLLM `/v1/models`), external URLs, package names.

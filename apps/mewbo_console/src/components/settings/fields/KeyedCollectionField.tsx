@@ -23,21 +23,15 @@ import { useState } from "react";
 import type { FieldProps, RJSFSchema } from "@rjsf/utils";
 import { Plus, Trash2 } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../ui/dialog";
-import { Input } from "../../ui/input";
-import { Switch } from "../../ui/switch";
+import { cardSurface } from "../../ui/card-surface";
+import { AddEntryDialog } from "./AddEntryDialog";
 import { FieldHelp } from "./FieldHelp";
 import { FieldLabel } from "./FieldLabel";
 import { JsonValueEditor } from "./JsonValueEditor";
-import { helpCls, inputBase } from "../styles";
+import { ScalarInput } from "./ScalarInput";
+import { helpCls, inputTextCls } from "../styles";
 
 type Obj = Record<string, unknown>;
 
@@ -130,7 +124,7 @@ export function KeyedCollectionField(props: FieldProps<Record<string, unknown>>)
             return (
               <li
                 key={key}
-                className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 space-y-3"
+                className={cn(cardSurface({ radius: "left" }), "p-4 space-y-3")}
               >
                 {/* Headline: the KEY, editable via an uncontrolled rename input. */}
                 <div className="flex items-end gap-2">
@@ -139,7 +133,7 @@ export function KeyedCollectionField(props: FieldProps<Record<string, unknown>>)
                     <input
                       id={`${rowId}_key`}
                       type="text"
-                      className={inputBase}
+                      className={inputTextCls}
                       // Uncontrolled + `key={key}` so the input re-mounts when the
                       // key changes (so its draft never goes stale). Commit on
                       // blur/Enter; revert when the new name is empty/dup/unchanged.
@@ -186,7 +180,7 @@ export function KeyedCollectionField(props: FieldProps<Record<string, unknown>>)
                   <input
                     id={`${rowId}_value`}
                     type="number"
-                    className={inputBase}
+                    className={inputTextCls}
                     value={value == null ? "" : String(value)}
                     disabled={!editable}
                     aria-label={`Value for ${key}`}
@@ -299,123 +293,32 @@ function renderScalar(
   if (type === "boolean") {
     return (
       <div>
-        <Switch
-          id={id}
-          checked={Boolean(val)}
-          disabled={disabled}
-          onCheckedChange={(checked) => onChange(checked)}
-        />
+        <ScalarInput id={id} type="boolean" value={val} disabled={disabled} onChange={onChange} />
       </div>
     );
   }
   if (type === "integer" || type === "number") {
     return (
-      <input
+      <ScalarInput
         id={id}
         type="number"
-        className={inputBase}
-        value={val == null ? "" : String(val)}
+        value={val}
         disabled={disabled}
-        onChange={(e) =>
-          onChange(e.target.value === "" ? null : Number(e.target.value))
-        }
+        onChange={(raw) => {
+          const v = raw as string;
+          onChange(v === "" ? null : Number(v));
+        }}
       />
     );
   }
   // string (and any other scalar) → text input
   return (
-    <input
+    <ScalarInput
       id={id}
       type="text"
-      className={inputBase}
-      value={val == null ? "" : String(val)}
+      value={val}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(raw) => onChange(raw as string)}
     />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Add-entry dialog — name input + Create (validate non-empty + not duplicate).
-// ---------------------------------------------------------------------------
-
-function AddEntryDialog({
-  open,
-  onOpenChange,
-  labelText,
-  existing,
-  onCreate,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  labelText: string;
-  existing: Obj;
-  onCreate: (name: string) => void;
-}) {
-  const [name, setName] = useState("");
-  const trimmed = name.trim();
-  const duplicate = trimmed !== "" && trimmed in existing;
-  const valid = trimmed !== "" && !duplicate;
-
-  const reset = (next: boolean) => {
-    if (!next) setName("");
-    onOpenChange(next);
-  };
-
-  const submit = () => {
-    if (valid) {
-      onCreate(trimmed);
-      setName("");
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={reset}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Add entry</DialogTitle>
-          <DialogDescription>
-            Enter a unique {labelText.toLowerCase()} for the new entry.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-1">
-          <FieldLabel htmlFor="keyed-collection-add-name">{labelText}</FieldLabel>
-          <Input
-            id="keyed-collection-add-name"
-            type="text"
-            value={name}
-            autoFocus
-            aria-label={`${labelText} for new entry`}
-            aria-invalid={duplicate ? true : undefined}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                submit();
-              }
-            }}
-          />
-          {duplicate && (
-            <p role="alert" className="text-[hsl(var(--destructive))] text-xs">
-              An entry with this {labelText.toLowerCase()} already exists.
-            </p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" size="md" onClick={() => reset(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            size="md"
-            disabled={!valid}
-            onClick={submit}
-            leadingIcon={<Plus className="w-4 h-4" />}
-          >
-            Create
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

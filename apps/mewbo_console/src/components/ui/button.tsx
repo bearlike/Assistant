@@ -3,6 +3,7 @@ import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
+import { FOCUS_RING } from "@/components/ui/focus-ring"
 
 /**
  * Console Button — shadcn cva structure with our pill-shaped variant matrix.
@@ -17,7 +18,7 @@ import { cn } from "@/lib/utils"
  * variant so resting state stays calm; semantic colors only appear on hover.
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 rounded-full font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/40",
+  `inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none ${FOCUS_RING}`,
   {
     variants: {
       variant: {
@@ -30,9 +31,9 @@ const buttonVariants = cva(
       },
       tone: {
         default: "",
-        info: "hover:text-blue-500 hover:bg-blue-500/10 hover:border-blue-500/30",
-        warn: "hover:text-amber-500 hover:bg-amber-500/10 hover:border-amber-500/30",
-        danger: "hover:text-red-500 hover:bg-red-500/10 hover:border-red-500/30",
+        info: "hover:text-[hsl(var(--info))] hover:bg-[hsl(var(--info)/0.1)] hover:border-[hsl(var(--info)/0.3)]",
+        warn: "hover:text-[hsl(var(--warning))] hover:bg-[hsl(var(--warning)/0.1)] hover:border-[hsl(var(--warning)/0.3)]",
+        danger: "hover:text-[hsl(var(--destructive-text))] hover:bg-[hsl(var(--destructive)/0.1)] hover:border-[hsl(var(--destructive)/0.3)]",
       },
       size: {
         sm: "h-7 px-3 text-xs",

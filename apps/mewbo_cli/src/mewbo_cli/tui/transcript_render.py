@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transcript renderers, streaming cache, and helper classes for issue #152.
+"""Transcript renderers, streaming cache, and helper classes.
 
 This module provides the concrete rendering logic for the Mewbo TUI transcript.
 It is wired into the transcript via the ``MessageRendererRegistry`` seam — the
@@ -391,7 +391,7 @@ def _result_is_error(result: object) -> bool:
 def _elapsed_suffix(payload: Mapping[str, Any]) -> str:
     """Return a ``· {N}s`` elapsed suffix for a settled tool card, else ``""``.
 
-    The mutable tool card (#161) carries ``elapsed`` once it settles; the running
+    The mutable tool card carries ``elapsed`` once it settles; the running
     card has none, so this is empty while in flight and appears only on the
     settled (muted) line — e.g. ``✓ ran bash · 1.2s``.
     """

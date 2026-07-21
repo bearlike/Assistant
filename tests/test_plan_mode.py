@@ -155,7 +155,6 @@ def _tool_call_response(tool_id: str, args: dict, call_id: str = "call_1") -> AI
 def _patch_plan_config(
     *,
     shell_allowlist: list[str] | None = None,
-    allow_mcp: bool = True,
     edit_tool: str = "search_replace_block",
 ):
     """Context manager that patches ``get_config_value`` in ``tool_use_loop``.
@@ -168,7 +167,6 @@ def _patch_plan_config(
     real_get = _tul.get_config_value
     overrides = {
         ("agent", "plan_mode_shell_allowlist"): shell_allowlist or [],
-        ("agent", "plan_mode_allow_mcp"): allow_mcp,
         ("agent", "edit_tool"): edit_tool,
     }
 
@@ -451,7 +449,7 @@ class TestPlanModeSchemaFiltering:
         read_spec = _make_spec("read_file", read_only=True)
         shell_spec = _make_spec("aider_shell_tool", read_only=False)
         loop = self._make_loop(current_mode="plan")
-        with _patch_plan_config(shell_allowlist=["ls"], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=["ls"]):
             schemas = loop._build_tool_schemas_for_mode(
                 [read_spec, shell_spec],
                 "plan",
@@ -464,7 +462,7 @@ class TestPlanModeSchemaFiltering:
         read_spec = _make_spec("read_file", read_only=True)
         shell_spec = _make_spec("aider_shell_tool", read_only=False)
         loop = self._make_loop(current_mode="plan")
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=[]):
             schemas = loop._build_tool_schemas_for_mode(
                 [read_spec, shell_spec],
                 "plan",
@@ -472,11 +470,16 @@ class TestPlanModeSchemaFiltering:
         names = {s["function"]["name"] for s in schemas}
         assert "aider_shell_tool" not in names
 
-    def test_plan_mode_includes_mcp_when_flag_true(self):
+    def test_plan_mode_includes_mcp_unconditionally(self):
+        """MCP tools are never mode-filtered: Mewbo cannot classify a
+        third-party MCP tool's effect (the wire protocol carries no
+        read-only signal), so plan mode admits every MCP tool regardless
+        of the shell allowlist or any other plan-mode config.
+        """
         read_spec = _make_spec("read_file", read_only=True)
         mcp_spec = _make_mcp_spec("mcp__devin__ask_question")
         loop = self._make_loop(current_mode="plan")
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=True):
+        with _patch_plan_config(shell_allowlist=[]):
             schemas = loop._build_tool_schemas_for_mode(
                 [read_spec, mcp_spec],
                 "plan",
@@ -484,34 +487,23 @@ class TestPlanModeSchemaFiltering:
         names = {s["function"]["name"] for s in schemas}
         assert "mcp__devin__ask_question" in names
 
-    def test_plan_mode_excludes_mcp_when_flag_false(self):
-        read_spec = _make_spec("read_file", read_only=True)
-        mcp_spec = _make_mcp_spec("mcp__devin__ask_question")
-        loop = self._make_loop(current_mode="plan")
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
-            schemas = loop._build_tool_schemas_for_mode(
-                [read_spec, mcp_spec],
-                "plan",
-            )
-        names = {s["function"]["name"] for s in schemas}
-        assert "mcp__devin__ask_question" not in names
-
     def test_v1_strict_behaviour_regression_guard(self):
-        """Regression guard: empty allowlist + allow_mcp=False for root
-        now yields read-only only (edit excluded for root by depth guard).
+        """Regression guard: an empty shell allowlist for root now yields
+        read-only + MCP tools only (edit excluded for root by the depth
+        guard, shell excluded by the empty allowlist, MCP unconditional).
         """
         read_spec = _make_spec("read_file", read_only=True)
         edit_spec = _make_edit_spec()
         shell_spec = _make_spec("aider_shell_tool", read_only=False)
         mcp_spec = _make_mcp_spec("mcp__some__tool")
         loop = self._make_loop(current_mode="plan")
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=[]):
             schemas = loop._build_tool_schemas_for_mode(
                 [read_spec, edit_spec, shell_spec, mcp_spec],
                 "plan",
             )
         names = {s["function"]["name"] for s in schemas}
-        assert names == {"read_file"}
+        assert names == {"read_file", "mcp__some__tool"}
 
     def test_plan_mode_root_gets_agent_management_tools(self):
         """Plan-mode root (depth=0) gets spawn_agent, check_agents, steer_agent via _bind_model."""
@@ -605,7 +597,7 @@ class TestPlanModePermission:
             operation="set",
             tool_input={"command": "rm -rf /"},
         )
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=[]):
             assert loop._check_permission(step) is False
         msg = str(step.result.content) if step.result else ""
         assert "Plan mode" in msg
@@ -617,7 +609,7 @@ class TestPlanModePermission:
             operation="set",
             tool_input={"command": "git log --oneline -n 5"},
         )
-        with _patch_plan_config(shell_allowlist=["git log"], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=["git log"]):
             assert loop._check_permission(step) is True
 
     def test_non_allowlisted_shell_command_denied_with_allowlist_in_message(self):
@@ -629,7 +621,6 @@ class TestPlanModePermission:
         )
         with _patch_plan_config(
             shell_allowlist=["ls", "git log"],
-            allow_mcp=False,
         ):
             assert loop._check_permission(step) is False
         msg = str(step.result.content) if step.result else ""
@@ -646,7 +637,7 @@ class TestPlanModePermission:
             operation="set",
             tool_input={"command": "ls | xargs rm"},
         )
-        with _patch_plan_config(shell_allowlist=["ls"], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=["ls"]):
             assert loop._check_permission(step) is False
         msg = str(step.result.content) if step.result else ""
         assert "shell command blocked" in msg
@@ -661,10 +652,14 @@ class TestPlanModePermission:
             operation="set",
             tool_input={"command": 'grep -n "a|b" file.py'},
         )
-        with _patch_plan_config(shell_allowlist=["grep"], allow_mcp=False):
+        with _patch_plan_config(shell_allowlist=["grep"]):
             assert loop._check_permission(step) is True
 
-    def test_mcp_tool_allowed_when_flag_true(self):
+    def test_mcp_tool_allowed_unconditionally(self):
+        """MCP tools execute in plan mode with no flag involved: Mewbo
+        cannot classify a third-party MCP tool's effect, so plan mode
+        trusts the user's mcp.json rather than mode-filtering it.
+        """
         mcp_spec = _make_mcp_spec("mcp__devin__ask_question")
         ctx = _make_agent_context()
         registry = _make_registry(mcp_spec)
@@ -681,28 +676,7 @@ class TestPlanModePermission:
             operation="get",
             tool_input={"query": "x"},
         )
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=True):
-            assert loop._check_permission(step) is True
-
-    def test_mcp_tool_denied_when_flag_false(self):
-        mcp_spec = _make_mcp_spec("mcp__devin__ask_question")
-        ctx = _make_agent_context()
-        registry = _make_registry(mcp_spec)
-        loop = ToolUseLoop(
-            agent_context=ctx,
-            tool_registry=registry,
-            permission_policy=_allow_all_policy(),
-            hook_manager=_make_hook_manager(),
-            session_id="mcp_perm_sid",
-        )
-        loop._current_mode = "plan"
-        step = ActionStep(
-            tool_id="mcp__devin__ask_question",
-            operation="get",
-            tool_input={"query": "x"},
-        )
-        with _patch_plan_config(shell_allowlist=[], allow_mcp=False):
-            assert loop._check_permission(step) is False
+        assert loop._check_permission(step) is True
 
     def test_exit_plan_mode_tool_allowed(self):
         loop = self._make_loop()

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +26,7 @@ from mewbo_core.exit_plan_mode import session_temp_dir
 from mewbo_core.permissions import auto_approve
 from mewbo_core.token_budget import get_token_budget
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.channels.base import (
     ChannelRegistry,
     DeduplicationGuard,
@@ -235,6 +236,24 @@ def _process_inbound(
             },
         )
 
+    # --- Gate: a permanently terminated session accepts no new work ---
+    # A room/thread tag can outlive its session's termination (the user keeps
+    # chatting in the same channel). Don't create a run; reply once so the
+    # sender knows why nothing happens, then acknowledge.
+    if _runtime.is_terminated(session_id):
+        logger.info(
+            "Ignoring channel message for terminated session {} (tag {}).",
+            session_id,
+            tag,
+        )
+        adapter.send_response(
+            channel_id=message.channel_id,
+            text="This conversation has been permanently terminated and can no longer respond.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return {}, 200
+
     # --- Check for slash commands (no LLM needed) ---
     cmd_match = _COMMAND_RE.match(user_text.strip())
     if cmd_match:
@@ -299,6 +318,11 @@ def _process_inbound(
 
 
 @channel_bp.route("/api/webhooks/<platform>", methods=["POST"])
+@guard.public(
+    "platform webhook; a webhook-capable adapter's own HMAC signature check is "
+    "the proof. Platforms with no push surface (e.g. email, polled via IMAP) "
+    "carry supports_webhook=False and 404 here before either adapter method runs."
+)
 def webhook_receive(platform: str) -> tuple[dict[str, str], int]:
     """Receive an inbound webhook from a chat platform.
 
@@ -309,7 +333,7 @@ def webhook_receive(platform: str) -> tuple[dict[str, str], int]:
         return {"error": "Channel system not initialised"}, 500
 
     adapter = _registry.get(platform)
-    if not adapter:
+    if not adapter or not adapter.supports_webhook:
         return {"error": "Unknown platform"}, 404
 
     body = request.get_data()
@@ -398,7 +422,8 @@ def _channel_completion_hook(session_id: str, error: str | None = None) -> None:
     if not adapter:
         return
 
-    final_text = extract_final_answer(events, error)
+    outcome = _runtime.summarize_session(session_id, events=events)
+    final_text = extract_final_answer(events, error, outcome=outcome)
     if not final_text:
         return
 
@@ -426,26 +451,78 @@ def _find_channel_context(
     return None
 
 
-def extract_final_answer(events: list[EventRecord], error: str | None) -> str:
+# Presentation-only labels for a completion's ``blocked_code``. The CODE itself
+# is derived exactly once, in core's ``session_runtime._completion_status``
+# table — this only prettifies a known value for a chat/CI reply; an
+# unrecognised one (a future core addition) falls back to its raw spelling
+# rather than a lookup failure, so this can never mask a wall it doesn't
+# recognise yet.
+_BLOCKED_CODE_LABELS: dict[str, str] = {
+    "repo_access": "repository access",
+    "network": "a network problem",
+    "forbidden": "a permission restriction",
+    "quota_exceeded": "a usage quota",
+}
+
+
+def _frame_blocked_reply(outcome: Mapping[str, object], final_text: str) -> str:
+    """Reframe a blocked run's reply so it reads as blocked, not finished."""
+    code = outcome.get("blocked_code")
+    label = _BLOCKED_CODE_LABELS.get(str(code), str(code)) if code else "an unresolved wall"
+    header = f"⚠️ This run was blocked on {label} before it could finish."
+    return f"{header}\n\n{final_text}" if final_text else header
+
+
+def _frame_unmet_goal_reply(outcome: Mapping[str, object], final_text: str) -> str:
+    """Reframe a run that never reached its goal so it reads as incomplete."""
+    reason = outcome.get("unmet_goal_reason") or outcome.get("done_reason")
+    header = "⚠️ This run ended without completing its goal."
+    if reason:
+        header = f"{header} ({reason})"
+    return f"{header}\n\n{final_text}" if final_text else header
+
+
+def extract_final_answer(
+    events: list[EventRecord],
+    error: str | None,
+    *,
+    outcome: Mapping[str, object] | None = None,
+) -> str:
     """Walk the transcript backwards to find the final answer text.
 
     Shared by every reply-capable inbound surface (chat channels here,
     ``vcs_pickup`` for CI) — the "what do we send back" rule must not fork.
+
+    ``outcome`` is the caller's own ``SessionRuntime.summarize_session()``
+    result — core's ONE status derivation (see ``session_runtime.py``), never
+    re-derived here. When supplied and the derived ``status`` is ``blocked``
+    or ``unmet_goal``, the reply is reframed so a stopped run can never read
+    as a clean success; omitted, a caller gets exactly today's behavior.
     """
     if error:
         return f"Session ended with an error: {error}"
+    final_text = ""
     for event in reversed(events):
         etype = event.get("type", "")
         payload = event.get("payload", {})
         if etype == "completion":
             result = payload.get("task_result")
             if result:
-                return str(result)
+                final_text = str(result)
+                break
         if etype == "assistant":
             text = payload.get("text")
             if text:
-                return str(text)
-    return ""
+                final_text = str(text)
+                break
+    if outcome is None:
+        return final_text
+    status = outcome.get("status")
+    if status == "blocked":
+        return _frame_blocked_reply(outcome, final_text)
+    if status == "unmet_goal":
+        return _frame_unmet_goal_reply(outcome, final_text)
+    return final_text
 
 
 # ------------------------------------------------------------------
@@ -510,7 +587,7 @@ def init_channels(
         )
         poller.start()
         logger.info(
-            "Email channel registered (polling %s every %ds)",
+            "Email channel registered (polling {} every {}s)",
             email_cfg["imap_host"],
             email_cfg.get("poll_interval_seconds", 30),
         )
@@ -519,6 +596,6 @@ def init_channels(
 
     app.register_blueprint(channel_bp)
     logger.info(
-        "Channel webhook routes registered (platforms: %s)",
+        "Channel webhook routes registered (platforms: {})",
         _registry.platforms() or "none",
     )

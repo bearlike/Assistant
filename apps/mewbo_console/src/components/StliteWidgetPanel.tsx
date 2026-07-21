@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef } from "react";
 import { LayoutDashboard, Maximize2, X } from "lucide-react";
 import { StliteAppWithToast, useKernel } from "@stlite/react";
 import { wheelUrls } from "@stlite/react/vite-utils";
@@ -11,84 +11,27 @@ import "@stlite/react/stlite.css";
 
 import { WidgetReadyPayload } from "../types";
 import { cn } from "../lib/utils";
-
-type Theme = "dark" | "light";
-
-/**
- * Keep stlite from hijacking the browser tab title. When a widget's
- * `app.py` doesn't call `st.set_page_config(page_title=...)`, Streamlit
- * forces `document.title = "Streamlit"` during Pyodide boot. We observe
- * `<title>` and revert to the last non-"Streamlit" value — which lets
- * legitimate App.tsx updates (session renames, etc.) flow through while
- * pinning stlite's default out.
- */
-function useTitleGuard() {
-  useEffect(() => {
-    const titleEl = document.querySelector("title");
-    if (!titleEl) return;
-    let lastGood = document.title;
-    const obs = new MutationObserver(() => {
-      if (document.title === "Streamlit") {
-        document.title = lastGood;
-      } else {
-        lastGood = document.title;
-      }
-    });
-    obs.observe(titleEl, { childList: true });
-    return () => obs.disconnect();
-  }, []);
-}
-
-/**
- * Inject console fonts into every stlite widget. stlite renders directly into
- * the main-page DOM (no iframe), so a `<style>` element in `<head>` applies to
- * `.stApp` immediately. We can't use `streamlitConfig` for this because
- * Streamlit only resolves custom font names declared via `[[theme.fontFaces]]`,
- * which requires a server-served file URL — not available in stlite/WASM.
- * Injecting CSS is the canonical workaround. Runs once per page load (guarded
- * by `[data-stlite-font]`) so multiple simultaneous widgets don't duplicate it.
- */
-function useFontInjection() {
-  useEffect(() => {
-    if (document.querySelector("[data-stlite-font]")) return;
-    const style = document.createElement("style");
-    style.setAttribute("data-stlite-font", "");
-    // Inter is already loaded by the console via Google Fonts (index.css).
-    // JetBrains Mono likewise. We override Streamlit's Source-Sans/Source-Code
-    // defaults by targeting .stApp directly with !important.
-    style.textContent =
-      ".stApp { font-family: 'Inter', 'Source Sans', sans-serif !important; }" +
-      ".stApp pre, .stApp code { font-family: 'JetBrains Mono', 'Source Code Pro', monospace !important; }";
-    document.head.appendChild(style);
-    // Don't clean up on unmount — the style is page-scoped, not widget-scoped.
-  }, []);
-}
-
-/**
- * Subscribe to the Mewbo console's theme. App.tsx toggles by
- * adding/removing the `light` class on `<html>` (dark is the default, with
- * no class); a MutationObserver on that single attribute is cheaper than a
- * React context + provider and fires exactly once per toggle.
- */
-function useConsoleTheme(): Theme {
-  const read = (): Theme =>
-    document.documentElement.classList.contains("light") ? "light" : "dark";
-  const [theme, setTheme] = useState<Theme>(read);
-  useEffect(() => {
-    const obs = new MutationObserver(() => setTheme(read()));
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => obs.disconnect();
-  }, []);
-  return theme;
-}
+import { buildKernelOptions } from "../widget/stliteBoot";
+// The theme/title/scrollbar chrome lives in `stlitePanel.ts`. This is now the
+// ONLY in-document stlite surface — the app renderer moved into an iframe
+// (`apps/AppFrame.tsx`), where a frame's own document makes the title guard and
+// style scoping unnecessary. Those guards still matter HERE, because this panel
+// really does mount Streamlit into the console's document.
+// See `stlitePanel.ts`. Font injection was removed in a later change (it was
+// inert for visible text and mis-fonted code chips) — this panel intentionally
+// does not import `useFontInjection`.
+import {
+  PYODIDE_URL,
+  STLITE_STREAMLIT_OVERRIDES,
+  useConsoleTheme,
+  useStliteStyleScope,
+  useTitleGuard,
+  type StliteTheme as Theme,
+} from "./stlitePanel";
 
 interface StliteWidgetPanelProps {
   widget: WidgetReadyPayload;
   className?: string;
-  zoom?: number;
   onMaximize?: () => void;
   onClose?: () => void;
 }
@@ -103,7 +46,6 @@ interface StliteWidgetPanelProps {
 export function StliteWidgetPanel(props: StliteWidgetPanelProps) {
   const theme = useConsoleTheme();
   useTitleGuard();
-  useFontInjection();
   return <StliteWidgetPanelInner theme={theme} {...props} />;
 }
 
@@ -130,57 +72,36 @@ interface InnerProps extends StliteWidgetPanelProps {
  *     so the widget reads as part of the same design system.
  */
 
-// Per-mode colors from warm_terracotta.toml — single source of truth for the palette.
-const STLITE_THEME: Record<"dark" | "light", Record<string, string>> = {
-  light: {
-    "theme.primaryColor":             "#d97757",
-    "theme.backgroundColor":          "#faf9f5",
-    "theme.secondaryBackgroundColor": "#f0efe7",
-    "theme.codeBackgroundColor":      "#e8e6dc",
-    "theme.textColor":                "#3d3a2a",
-    "theme.linkColor":                "#d97757",
-    "theme.borderColor":              "#b8b5a8",
-  },
-  dark: {
-    "theme.primaryColor":             "#d97757",
-    "theme.backgroundColor":          "#30302e",
-    "theme.secondaryBackgroundColor": "#262624",
-    "theme.codeBackgroundColor":      "#1f1e1d",
-    "theme.textColor":                "#faf9f5",
-    "theme.linkColor":                "#d97757",
-    "theme.borderColor":              "#706d68",
-  },
-};
-
-function StliteWidgetPanelInner({ widget, className, theme, zoom = 0.85, onMaximize, onClose }: InnerProps) {
+function StliteWidgetPanelInner({ widget, className, theme, onMaximize, onClose }: InnerProps) {
+  // Theme + kernel-option construction now lives in `widget/stliteBoot.ts` so
+  // the framework-free `widget-host.html` page shares the exact same logic.
+  // `wheelUrls` (from @stlite/react's vite-utils) and `pyodideUrl` (our
+  // self-hosted runtime) are the only surface-specific inputs.
   const kernelOptions = useMemo(
-    () => ({
-      entrypoint: "app.py",
-      files: Object.fromEntries(
-        Object.entries(widget.files).map(([name, content]) => [name, { data: content }]),
-      ),
-      requirements: widget.requirements,
-      prebuiltPackageNames: [] as string[],
-      archives: [] as never[],
-      wheelUrls,
-      streamlitConfig: {
-        "client.toolbarMode": "viewer",
-        "theme.base": theme,
-        "theme.font": "sans serif",
-        "theme.showWidgetBorder": true,
-        "theme.baseRadius": "0.75rem",
-        "theme.buttonRadius": "full",
-        ...STLITE_THEME[theme],
-      },
-    }),
+    () => {
+      // `wheelUrls` is typed optional (vite-utils resolves the asset imports at
+      // build time) but is always present at runtime; guard it so the type
+      // narrows and a broken build fails loudly rather than booting without the
+      // bundled streamlit/stlite wheels.
+      if (!wheelUrls) throw new Error("stlite wheelUrls unavailable");
+      return buildKernelOptions(widget, { theme, wheelUrls, pyodideUrl: PYODIDE_URL });
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [], // options are only read on mount per useKernel contract
   );
 
   const kernel = useKernel(kernelOptions);
 
+  // Confine facade / widget-author `<style>` tags to THIS portalled wrapper.
+  // The whole panel is portalled to `document.body` by `WidgetCard`, so this
+  // div is the container that holds the stlite mount + its injected styles —
+  // observe it, not the inline placeholder. See `stlitePanel.ts`.
+  const scopeRef = useRef<HTMLDivElement>(null);
+  useStliteStyleScope(scopeRef);
+
   return (
     <div
+      ref={scopeRef}
       className={cn(
         // NOTE: this outer wrapper is deliberately NOT `position: relative`.
         // streamlit's `.stApp` is `position: absolute; inset: 0`, so it
@@ -189,47 +110,25 @@ function StliteWidgetPanelInner({ widget, className, theme, zoom = 0.85, onMaxim
         // — and paint over the macOS chrome. Instead the inner widget-area
         // div below owns `relative`, which anchors stApp below the title bar.
         "flex flex-col h-full bg-[hsl(var(--widget-panel-bg))]",
-        // Belt-and-braces chrome hiding: `client.toolbarMode: "viewer"`
-        // drops most widgets but Streamlit still ships a sticky
-        // `<header data-testid="stHeader">` (Running indicator) and a
-        // `<div data-testid="stDecoration">` (top gradient bar) that
-        // visually overlap the first line of our content. Nuking them
-        // here reclaims the space and makes WidgetCard's
-        // `scrollHeight` measurement honest.
-        "[&_[data-testid='stHeader']]:!hidden",
-        "[&_[data-testid='stToolbar']]:!hidden",
-        "[&_[data-testid='stDecoration']]:!hidden",
-        // Force Streamlit's block container to use the full card width.
-        // By default Streamlit caps `.stMainBlockContainer` at ~736px
-        // (equivalent to st.set_page_config(layout="centered")). Removing
-        // that cap and zeroing the side padding makes widgets fill the card
-        // edge-to-edge so the `zoom: 0.85` wrapper uses all available space.
-        "[&_.stMainBlockContainer]:!max-w-none",
-        "[&_.stMainBlockContainer]:!w-full",
-        "[&_.stMainBlockContainer]:!px-4",
-        "[&_.stMainBlockContainer]:!pt-4",
-        "[&_.stMainBlockContainer]:!pb-4",
-        // Kill the INNER scrollbar. Streamlit's <section data-testid="stMain">
-        // ships with `overflow: auto` on both axes, so a tall widget ends up
-        // with two nested scrollbars (stMain + stAppViewContainer). Users
-        // scroll the inner one, hit its end, and don't realize the outer
-        // still has more content. Letting stMain overflow visibly passes
-        // the scroll up to .stAppViewContainer, leaving exactly one
-        // (styled, always-visible) scrollbar at the card edge.
-        "[&_[data-testid='stMain']]:!overflow-visible",
-        "[&_.stAppViewContainer]:!overflow-y-scroll",
+        // The Streamlit-DOM overrides (hide the leftover header/toolbar/
+        // decoration chrome, un-cap the block container, collapse the double
+        // scrollbar) live in `stlitePanel.ts`. The iframed app renderer gets
+        // them from the host page instead. See that constant for the rationale.
+        STLITE_STREAMLIT_OVERRIDES,
         className,
       )}
     >
-      {/* macOS-style chrome title bar — same pattern as TerminalCard */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[hsl(var(--code-chrome))] border-b border-[hsl(var(--border))] shrink-0">
+      {/* macOS-style chrome title bar — same pattern as TerminalCard.
+          `data-widget-chrome` is WidgetCard's measurement hook: the card
+          reserves content height + this bar's height (see WidgetCard). */}
+      <div data-widget-chrome className="flex items-center gap-2 px-3 py-1.5 bg-[hsl(var(--code-chrome))] border-b border-[hsl(var(--border))] shrink-0">
         {/* macOS traffic-light dots — fixed brand colors, same in both themes */}
         <div className="flex items-center gap-1.5 shrink-0">
           <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F57]" />
           <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
           <span className="w-2.5 h-2.5 rounded-full bg-[#28C840]" />
         </div>
-        <span className="flex-1 text-[11px] text-[hsl(var(--code-fg-muted))] truncate min-w-0">
+        <span className="flex-1 text-2xs text-[hsl(var(--code-fg-muted))] truncate min-w-0">
           {widget.summary || widget.widget_id}
         </span>
         {onClose ? (
@@ -254,16 +153,17 @@ function StliteWidgetPanelInner({ widget, className, theme, zoom = 0.85, onMaxim
       </div>
 
       {/*
-        Widget area — `zoom: 0.85` scales the whole stlite subtree down
-        so the widget reads as a *component inside* the chat, not a page
-        rendered at the same weight as the surrounding UI. Chosen over
-        `transform: scale(0.85)` because `zoom` is part of the CSS layout
-        tree: descendant `scrollHeight` values come back already scaled,
-        so WidgetCard's ResizeObserver measures what the user sees.
-        `transform` would paint smaller but keep the natural layout,
-        leaving the card oversized by ~15%.
+        Widget area — rendered at NATURAL scale, deliberately unscaled.
+        An earlier revision applied `zoom: 0.85` here to make the widget
+        read "smaller than the page". Fractional zoom lays glyphs out at
+        fractional pixel positions (worse under devicePixelRatio 2 → an
+        effective 1.7× raster), which made every word in the widget render
+        with subtly irregular intra-word spacing next to the crisp console
+        text. Streamlit at native scale looks like Streamlit in a browser
+        — that fidelity is the product requirement; size containment is
+        the card cap's job (WidgetCard), not a scale hack's.
       */}
-      <div className="relative flex-1 overflow-hidden" style={{ zoom }}>
+      <div className="relative flex-1 overflow-hidden">
         {kernel ? (
           // stlite's boot emits a cascade of Toastify progress notifications
           // ("Loading Pyodide", "Mounting files", …) into a position:absolute

@@ -13,6 +13,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from mewbo_core.classes import ActionStep
 from mewbo_core.common import MockSpeaker, get_logger
 from mewbo_core.permissions import PermissionDecision
@@ -23,6 +25,113 @@ if TYPE_CHECKING:
     from mewbo_core.hypervisor import AgentHandle
 
 logger = get_logger(name="core.hooks")
+
+# Shared bound for any hook payload value derived from tool/event content —
+# a tool result or an event field can be arbitrarily large (a file read, a
+# big context payload); this caps it the same way everywhere it's exposed to
+# a hook, whether via env var, HTTP preview, or a full event record.
+_HOOK_VALUE_CAP = 2000
+
+# Minimal env a command-hook subprocess needs to run a shell command at all.
+# Command hooks execute unsandboxed on the host (see HookEntry.command's
+# docstring); inheriting the FULL process environment would leak every
+# secret the API/CLI process holds (LLM keys, DB URIs, proxy tokens) into a
+# hook the operator merely pointed at a trusted script. Only these plus the
+# documented MEWBO_* payload variables (added by each env builder below) are
+# passed through.
+_ALLOWED_ENV_KEYS = ("PATH", "HOME", "LANG", "TERM")
+
+
+# An outcome-assertion token is an identifier and a detail is one line beside a
+# status pill — both are clamped rather than rejected, mirroring ``RunError``:
+# a hook reporting an over-long detail must still get its assertion through,
+# because dropping it would silently restore the very laundering it exists to
+# report.
+_ASSERTION_TOKEN_MAX_CHARS = 64
+_ASSERTION_DETAIL_MAX_CHARS = 500
+
+
+class OutcomeAssertion(BaseModel):
+    """A session-end hook's report that the session's PURPOSE was not achieved.
+
+    The return channel a session-end hook needs in order to CONTRADICT a clean
+    terminal. A session can end with no exception, no halt and no blocked
+    envelope — every signal the loop owns says success — while the job it
+    existed to perform never reached its terminal state. Nothing the loop can
+    see distinguishes that from a real completion. Only the hook holding the
+    owning job can, and until this existed it had no way to say so: the return
+    value of ``run_on_session_end`` was discarded, so the one component able to
+    evaluate a session's real outcome could write a warning to its own job log
+    and nothing more.
+
+    **Absence is not an assertion.** A hook that returns ``None`` — every
+    command hook, every http hook, every hook written before this channel —
+    reports nothing, which is why the contract is an OPTIONAL RETURN and not a
+    boolean: "did not report" and "reported success" must never collapse into
+    each other, or adding the channel would itself invent an assertion for
+    every existing hook.
+
+    ``reason`` is a PRODUCT-OWNED token and deliberately not a ``Literal``:
+    core would otherwise have to learn every product's vocabulary before that
+    product could tell the truth about itself. It never drives dispatch — the
+    status this produces comes from the TYPE of this object, never from parsing
+    the string — so it stays data, not a magic string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(
+        min_length=1,
+        description="Short product-owned token naming the outcome that was not met.",
+    )
+    detail: str = Field(
+        default="",
+        description="One-line factual detail. Reaches clients, so it is bounded.",
+    )
+    source: str = Field(
+        default="",
+        description="Which hook asserted; stamped by the manager for forensics.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bound_fields(cls, data: object) -> object:
+        """Normalize and CLAMP at definition, so no call site can over-run a cap.
+
+        Clamping rather than rejecting is the ``RunError`` precedent: these
+        values are bounded because they are persisted and replayed to clients,
+        but an assertion is an honesty signal and refusing an over-long one
+        would discard the report entirely.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for key, cap in (
+            ("reason", _ASSERTION_TOKEN_MAX_CHARS),
+            ("source", _ASSERTION_TOKEN_MAX_CHARS),
+            ("detail", _ASSERTION_DETAIL_MAX_CHARS),
+        ):
+            raw = data.get(key)
+            if not isinstance(raw, str):
+                continue
+            # A token is one bare word; a detail is one line.
+            joiner = "_" if key != "detail" else " "
+            data[key] = joiner.join(raw.split())[:cap]
+        return data
+
+
+def _scrubbed_env() -> dict[str, str]:
+    """Build the minimal base env for a command-hook subprocess.
+
+    Keeps ``PATH``/``HOME``/``LANG``/``TERM`` and any ``LC_*`` locale
+    variable from the current process env; drops everything else. Callers
+    layer their own ``MEWBO_*`` payload variables on top.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in _ALLOWED_ENV_KEYS or key.startswith("LC_")
+    }
 
 
 @dataclass
@@ -42,7 +151,12 @@ class HookManager:
     on_agent_start: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_agent_stop: list[Callable[[AgentHandle], None]] = field(default_factory=list)
     on_session_start: list[Callable[[str], None]] = field(default_factory=list)
-    on_session_end: list[Callable[[str, str | None], None]] = field(default_factory=list)
+    # Returns an ``OutcomeAssertion`` to report an unmet purpose, or ``None``
+    # to report nothing. Widened from ``None`` — every existing hook satisfies
+    # the new signature unchanged, since returning nothing IS returning None.
+    on_session_end: list[Callable[[str, str | None], OutcomeAssertion | None]] = field(
+        default_factory=list
+    )
     on_event: list[Callable[[str, EventRecord], None]] = field(default_factory=list)
     on_compact: list[Callable[..., None]] = field(default_factory=list)
 
@@ -139,13 +253,50 @@ class HookManager:
             except Exception:
                 logger.warning("on_session_start hook failed", exc_info=True)
 
-    def run_on_session_end(self, session_id: str, error: str | None = None) -> None:
-        """Notify hooks that a session has ended."""
+    def run_on_session_end(
+        self, session_id: str, error: str | None = None
+    ) -> list[OutcomeAssertion]:
+        """Notify hooks a session ended; collect any outcome assertions they report.
+
+        A hook MAY return an :class:`OutcomeAssertion` to report that the
+        session's purpose was not achieved. Returning ``None`` asserts nothing
+        — see that class for why absence must stay distinguishable from success.
+
+        This return value used to be discarded, which is why a job that never
+        reached its terminal state still presented as a clean completion: the
+        hook could SEE the failure and had nowhere to put it.
+
+        Failure-isolated per hook like every other lifecycle dispatch, and
+        deliberately strict about what it accepts: a hook returning something
+        that is not an assertion is logged and IGNORED rather than coerced,
+        because a truthy stray return would otherwise invent a failure.
+        """
+        assertions: list[OutcomeAssertion] = []
         for hook in self.on_session_end:
             try:
-                hook(session_id, error)
+                reported = hook(session_id, error)
             except Exception:
                 logger.warning("on_session_end hook failed", exc_info=True)
+                continue
+            if reported is None:
+                continue
+            if not isinstance(reported, OutcomeAssertion):
+                logger.warning(
+                    "on_session_end hook returned {}, not an OutcomeAssertion; ignoring",
+                    type(reported).__name__,
+                )
+                continue
+            if not reported.source:
+                # Re-CONSTRUCTED rather than ``model_copy``d: the stamp is a
+                # function name of unbounded length, and model_copy skips the
+                # validator that bounds it.
+                reported = OutcomeAssertion(
+                    reason=reported.reason,
+                    detail=reported.detail,
+                    source=getattr(hook, "__name__", "") or type(hook).__name__,
+                )
+            assertions.append(reported)
+        return assertions
 
     def run_on_event(self, session_id: str, event: EventRecord) -> None:
         """Notify hooks that an event was appended to a session transcript.
@@ -212,24 +363,30 @@ def _matches(matcher: str | None, tool_id: str) -> bool:
 
 
 def _hook_env(action_step: ActionStep, result_content: str | None = None) -> dict[str, str]:
-    """Build env vars to pass to command hooks."""
-    env = dict(os.environ)
+    """Build env vars to pass to command hooks (scrubbed base + MEWBO_* payload)."""
+    env = _scrubbed_env()
     env["MEWBO_TOOL_ID"] = action_step.tool_id or ""
     env["MEWBO_OPERATION"] = action_step.operation or ""
     if result_content is not None:
-        env["MEWBO_TOOL_RESULT"] = result_content[:2000]
+        env["MEWBO_TOOL_RESULT"] = result_content[:_HOOK_VALUE_CAP]
     return env
 
 
 def _session_env(session_id: str, error: str | None = None) -> dict[str, str]:
-    """Build env vars for session lifecycle command hooks."""
-    env = dict(os.environ)
+    """Build env vars for session lifecycle command hooks (scrubbed base + MEWBO_* payload)."""
+    env = _scrubbed_env()
     env["MEWBO_SESSION_ID"] = session_id
     if error is not None:
         env["MEWBO_ERROR"] = error
     return env
 
 
+# shell=True is intentional across every command-hook factory below: ``entry.command``
+# is operator/plugin-author config (trusted, version-controlled scripts pointed at by
+# app.json / a plugin's hooks.json), never runtime input. Untrusted tool/session data
+# reaches the subprocess only through the scrubbed env (``_hook_env``/``_session_env``)
+# and, for on_event, JSON on stdin — never spliced into the command string, so there is
+# no interpolation surface to quote away.
 def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
     """Create a pre-tool-use hook from a config entry."""
 
@@ -246,7 +403,7 @@ def _make_command_hook(entry: HookEntry) -> Callable[[ActionStep], ActionStep]:
                 env=_hook_env(action_step),
             )
         except (subprocess.TimeoutExpired, OSError):
-            logger.warning("Command hook timed out or failed: %s", entry.command)
+            logger.warning("Command hook timed out or failed: {}", entry.command)
         return action_step
 
     return hook
@@ -269,7 +426,7 @@ def _make_post_tool_hook(entry: HookEntry) -> Callable[[ActionStep, MockSpeaker]
                 env=_hook_env(action_step, str(content) if content else None),
             )
         except (subprocess.TimeoutExpired, OSError):
-            logger.warning("Command hook timed out or failed: %s", entry.command)
+            logger.warning("Command hook timed out or failed: {}", entry.command)
         return result
 
     return hook
@@ -289,7 +446,7 @@ def _make_session_hook(entry: HookEntry) -> Callable[[str], None]:
                 env=_session_env(session_id),
             )
         except (subprocess.TimeoutExpired, OSError):
-            logger.warning("Session hook timed out or failed: %s", entry.command)
+            logger.warning("Session hook timed out or failed: {}", entry.command)
 
     return hook
 
@@ -308,7 +465,7 @@ def _make_session_end_hook(entry: HookEntry) -> Callable[[str, str | None], None
                 env=_session_env(session_id, error),
             )
         except (subprocess.TimeoutExpired, OSError):
-            logger.warning("Session end hook timed out or failed: %s", entry.command)
+            logger.warning("Session end hook timed out or failed: {}", entry.command)
 
     return hook
 
@@ -332,7 +489,7 @@ def _run_event_command(session_id: str, event: EventRecord, entry: HookEntry) ->
             env=env,
         )
     except (subprocess.TimeoutExpired, OSError):
-        logger.warning("Event hook timed out or failed: %s", entry.command)
+        logger.warning("Event hook timed out or failed: {}", entry.command)
 
 
 def _make_event_command_hook(entry: HookEntry) -> Callable[[str, EventRecord], None]:
@@ -371,7 +528,7 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         )
         urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
     except Exception:
-        logger.warning("HTTP hook POST failed: %s", url, exc_info=True)
+        logger.warning("HTTP hook POST failed: {}", url, exc_info=True)
 
 
 def _fire_http(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> None:
@@ -411,7 +568,7 @@ def _make_http_post_tool_hook(
             "operation": action_step.operation,
         }
         if content is not None:
-            payload["result_preview"] = str(content)[:2000]
+            payload["result_preview"] = str(content)[:_HOOK_VALUE_CAP]
         _fire_http(entry.url, payload, entry.headers, entry.timeout)
         return result
 
@@ -444,11 +601,31 @@ def _make_http_session_end_hook(entry: HookEntry) -> Callable[[str, str | None],
     return hook
 
 
+def _truncate_event_values(value: Any, cap: int = _HOOK_VALUE_CAP) -> Any:
+    """Recursively cap string values inside an event record for HTTP hook payloads.
+
+    An ``EventRecord`` can carry an arbitrarily large tool result or context
+    payload; POSTing it unbounded to an operator-configured URL leaks as much
+    as the largest value in the transcript. Only string VALUES are shortened
+    — every key and every dict/list shape is preserved, so a receiver's
+    parsing code never breaks on a truncated payload.
+    """
+    if isinstance(value, str):
+        return value if len(value) <= cap else value[:cap]
+    if isinstance(value, dict):
+        return {key: _truncate_event_values(item, cap) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_truncate_event_values(item, cap) for item in value]
+    return value
+
+
 def _make_http_event_hook(entry: HookEntry) -> Callable[[str, EventRecord], None]:
     """Create a fire-and-forget ``on_event`` HTTP hook from a config entry.
 
-    POSTs ``{"event": "session_event", "session_id": ..., "record": event}``.
-    The ``matcher`` fnmatches the event ``type``.
+    POSTs ``{"event": "session_event", "session_id": ..., "record": event}``,
+    with the record's string values truncated to ``_HOOK_VALUE_CAP`` (mirrors
+    the command variant's ``MEWBO_TOOL_RESULT`` bound). The ``matcher``
+    fnmatches the event ``type``.
     """
 
     def hook(session_id: str, event: EventRecord) -> None:
@@ -457,7 +634,7 @@ def _make_http_event_hook(entry: HookEntry) -> Callable[[str, EventRecord], None
         payload: dict[str, Any] = {
             "event": "session_event",
             "session_id": session_id,
-            "record": event,
+            "record": _truncate_event_values(event),
         }
         _fire_http(entry.url, payload, entry.headers, entry.timeout)
 

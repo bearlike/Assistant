@@ -10,7 +10,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from mewbo_core.classes import ActionStep, set_available_tools
 from mewbo_core.common import MockSpeaker, get_logger
@@ -24,6 +24,48 @@ logging = get_logger(name="core.tool_registry")
 # spec with metadata.deferred=True) are stripped from the initial bind
 # and discovered through this tool when ``agent.tool_search.mode == "on"``.
 TOOL_SEARCH_TOOL_ID = "tool_search"
+
+# Coarse delegation privilege tier ([DeepMind-Delegation §4.7]
+# privilege attenuation). A spawn declares the
+# ceiling its sub-tree may reach; it is a pre-filter LAYERED UNDER
+# ``allowed_tools``/``denied_tools`` — it can only remove more tools, never
+# resurrect one the allow/deny gates dropped. The three tiers form a monotone
+# chain ``read_only`` ⊆ ``execute`` ⊆ ``all``:
+#   * ``read_only`` — only tools whose declared capability is ``read`` survive
+#     (plus ``always_load``/``tool_search``, harmless discovery a scoped child
+#     must keep).
+#   * ``execute`` — every DECLARED tool survives (read/write/execute); an
+#     undeclared tool is withheld (safe-deny — undeclared ≠ safe).
+#   * ``all`` — no capability filtering (the historical, unrestricted default).
+CapabilityMode = Literal["read_only", "execute", "all"]
+
+# The tool-capability tiers each mode admits. ``all`` (and any unrecognised
+# string — the authoritative validation is the ``Literal`` at the
+# ``SpawnAgentTask`` boundary) has NO entry, so ``.get()`` returns ``None`` and
+# the capability gate is skipped entirely, keeping the default path
+# byte-identical. Mirrors the ordering encoded in
+# ``AgentContext._CAPABILITY_MODE_RANK``; the two stay consistent by a test.
+_CAPABILITY_MODE_TIERS: dict[str, frozenset[str]] = {
+    "read_only": frozenset({"read"}),
+    "execute": frozenset({"read", "write", "execute"}),
+}
+
+
+def capability_mode_admits(capability_mode: str, tier: str | None) -> bool:
+    """True if a tool of privilege *tier* survives *capability_mode*.
+
+    The ONE home of the mode→tier law, shared by the registry filter
+    (:func:`filter_specs`) AND the session-tool build
+    (``SessionToolRegistry.ids_for``) so the two enforcement surfaces can never
+    drift (the two-surface trap). ``all`` — and any unrecognised mode, since
+    the authoritative validation is the ``Literal`` at the ``SpawnAgentTask``
+    boundary — admits everything (the gate is skipped). An undeclared tier
+    (``None``) is admitted ONLY by ``all``: safe-deny under any restrictive mode.
+    """
+    allowed_tiers = _CAPABILITY_MODE_TIERS.get(capability_mode)
+    if allowed_tiers is None:
+        return True
+    return tier in allowed_tiers
 
 
 def _load_mcp_support():
@@ -64,17 +106,48 @@ class ToolSpec:
     interrupt_behavior: str = "block"  # "cancel" or "block" on user interrupt
     max_result_chars: int = 2000  # Per-tool result size cap (0 = unlimited)
     timeout: float = 120.0  # Per-tool execution timeout in seconds
+    # POLL-CLASS: this tool's documented contract is "call me again until the
+    # thing I front settles" (a nested run's status probe, a wait primitive).
+    # Repeated identical calls to it are honest waiting, so ``DoomLoopGuard``
+    # drops them from the no-progress signature. Declared HERE rather than as
+    # another hardcoded id in ``llm_resilience``: two sub-second "processing"
+    # answers from a self-polling run are indistinguishable from a stuck loop
+    # by repetition alone, and only the tool knows which it is.
+    #
+    # ``poll`` exempts EVERY call (a pure wait primitive). ``poll_when_args``
+    # exempts only calls carrying one of the named arguments, which is what a
+    # tool that both STARTS and POLLS the same work needs — one tool id, two
+    # meanings, told apart by argument shape alone. Exempting such an id
+    # outright would blind the guard to an agent re-issuing the same start
+    # forever.
+    poll: bool = False
+    poll_when_args: tuple[str, ...] = ()
+    # Declared privilege tier for delegation ``capability_mode`` filtering
+    #. ``None`` = undeclared (treated as NOT read — safe-deny).
+    # Distinct from ``metadata["capabilities"]`` (a permission-subsystem tag):
+    # this is the coarse read/write/execute privilege a spawn's
+    # ``capability_mode`` gates on. A ``read_only`` tool needs no explicit
+    # value — ``capability_tier`` reads it as ``read`` — so only write/execute
+    # tools declare one here.
+    capability: Literal["read", "write", "execute"] | None = None
 
-    def is_plan_safe(self) -> bool:
-        """Return True if the tool is safe to use in plan mode.
+    def capability_tier(self) -> str | None:
+        """Resolve this tool's privilege tier for ``capability_mode`` filtering.
 
-        A tool is plan-safe when it does not mutate state — i.e., its
-        ``read_only`` field is True. The legacy ``plan_safe`` metadata key
-        is still honoured as a fallback for external tool manifests.
+        Returns ``"read"`` / ``"write"`` / ``"execute"``, or ``None`` when the
+        tool makes no declaration. A ``read_only`` tool is read-tier by
+        construction (no side effects), so the fallback keeps ``read_only`` and
+        ``capability`` in lockstep — a new read-only tool is correctly admitted
+        under ``read_only`` mode without a second annotation, and the failure
+        mode for a *forgotten* declaration is safe-deny, not silent grant.
+        ``None`` is deliberately NOT treated as read: an undeclared tool is
+        withheld from a ``read_only`` child ([DeepMind-Delegation §4.7]).
         """
+        if self.capability is not None:
+            return self.capability
         if self.read_only:
-            return True
-        return bool(self.metadata.get("plan_safe"))
+            return "read"
+        return None
 
 
 class ToolRegistry:
@@ -106,6 +179,9 @@ class ToolRegistry:
             interrupt_behavior=spec.interrupt_behavior,
             max_result_chars=spec.max_result_chars,
             timeout=spec.timeout,
+            capability=spec.capability,
+            poll=spec.poll,
+            poll_when_args=spec.poll_when_args,
         )
         if tool_id in self._instances:
             self._instances.pop(tool_id, None)
@@ -145,13 +221,6 @@ class ToolRegistry:
         if include_disabled:
             return specs
         return [spec for spec in specs if spec.enabled]
-
-    def list_specs_for_mode(self, mode: str, *, include_disabled: bool = False) -> list[ToolSpec]:
-        """List specs filtered by orchestration mode."""
-        specs = self.list_specs(include_disabled=include_disabled)
-        if mode != "plan":
-            return specs
-        return [spec for spec in specs if spec.is_plan_safe()]
 
     def tool_catalog(self) -> list[dict[str, str]]:
         """Return a serialized catalog of registered tool metadata."""
@@ -293,6 +362,7 @@ def _all_edit_tool_specs() -> list[ToolSpec]:
         factory=_import_factory("mewbo_tools.integration.file_edit_tool", "FileEditTool"),
         prompt_path="tools/file-edit",
         concurrency_safe=False,
+        capability="write",
         metadata={
             "reflect": True,
             "capabilities": ["file_write"],
@@ -306,6 +376,7 @@ def _all_edit_tool_specs() -> list[ToolSpec]:
         factory=_import_factory("mewbo_tools.integration.aider_edit_blocks", "AiderEditBlockTool"),
         prompt_path="tools/aider-edit-blocks",
         concurrency_safe=False,
+        capability="write",
         metadata={
             "reflect": True,
             "capabilities": ["file_write"],
@@ -328,6 +399,7 @@ def _all_edit_tool_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/file-edit",
             "reflect": True,
+            "capability": "write",
             "capabilities": ["file_write"],
             "schema": _FILE_EDIT_SCHEMA,
         },
@@ -341,6 +413,7 @@ def _all_edit_tool_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-edit-blocks",
             "reflect": True,
+            "capability": "write",
             "capabilities": ["file_write"],
             "schema": _AIDER_EDIT_SCHEMA,
         },
@@ -404,6 +477,7 @@ def _default_registry() -> ToolRegistry:
             ),
             enabled=ha_status.enabled,
             prompt_path="tools/home-assistant",
+            capability="execute",
             metadata=ha_metadata,
         )
     )
@@ -473,6 +547,7 @@ def _default_registry() -> ToolRegistry:
             ),
             prompt_path="tools/aider-shell",
             concurrency_safe=False,
+            capability="execute",
             metadata={
                 "reflect": True,
                 "schema": {
@@ -626,6 +701,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "kind": "local",
             "enabled": ha_status.enabled,
             "prompt": "tools/home-assistant",
+            "capability": "execute",
             "schema": {
                 "type": "object",
                 "properties": {"task": {"type": "string", "description": "Task to perform"}},
@@ -688,6 +764,7 @@ def _built_in_manifest_entries() -> list[dict[str, object]]:
             "enabled": True,
             "prompt": "tools/aider-shell",
             "reflect": True,
+            "capability": "execute",
             "schema": {
                 "type": "object",
                 "properties": {
@@ -736,7 +813,7 @@ def _resolve_mcp_config(
     """Return the normalized, merged MCP config used for discovery + hashing.
 
     Centralizes the global-vs-merged-vs-extra-servers branch so the startup
-    config hash (the non-blocking gate, Gitea #130) is computed against the
+    config hash (the non-blocking gate) is computed against the
     exact same config the discovery path would connect with. Returns ``None``
     when MCP support is unavailable or the config can't be read.
     """
@@ -841,7 +918,7 @@ def _ensure_auto_manifest(
         except Exception as exc:
             logging.warning("Failed to read existing MCP manifest: {}", exc)
 
-    # Non-blocking startup (Gitea #130 Phase 1): when the cached manifest was
+    # Non-blocking startup: when the cached manifest was
     # built from the SAME MCP config we have now, reuse it instead of doing a
     # blocking live connect. A slow/dead server in an unchanged config thus
     # never stalls the ready banner — its tools come from cache and the pool
@@ -1033,6 +1110,9 @@ def load_registry(
             kind=kind,
             prompt_path=prompt_path,
             read_only=bool(tool.get("read_only", False)),
+            capability=tool.get("capability"),
+            poll=bool(tool.get("poll", False)),
+            poll_when_args=tuple(tool.get("poll_when_args") or ()),
             metadata={
                 key: value
                 for key, value in tool.items()
@@ -1047,6 +1127,9 @@ def load_registry(
                     "kind",
                     "prompt",
                     "read_only",
+                    "capability",
+                    "poll",
+                    "poll_when_args",
                 }
             },
         )
@@ -1085,7 +1168,7 @@ class ToolRegistryCache:
     ``ToolSpec``, probing Home-Assistant/LSP status — *before* the run emits its
     first event. That work is identical across runs whose inputs are identical, so
     the result is cached and the SAME registry handed back on the next run within a
-    session (Gitea #138 — kill the blank-shell wait).
+    session (kill the blank-shell wait).
 
     The key is exactly the set of inputs that change what ``load_registry``
     produces: the project ``cwd``, any plugin-contributed ``extra_mcp_servers``,
@@ -1166,21 +1249,47 @@ def filter_specs(
     *,
     allowed: list[str] | None = None,
     denied: list[str] | None = None,
+    capability_mode: str = "all",
 ) -> list[ToolSpec]:
-    """Filter tool specs by allowlist and/or denylist.
+    """Filter tool specs by allowlist, capability mode, and/or denylist.
 
-    If *allowed* is non-empty only specs whose ``tool_id`` is in the list
-    are kept — EXCEPT ``always_load`` specs (the ``tool_search`` tool),
+    *allowed* is THREE-STATE and tested with ``is None``, never truthiness:
+    ``None`` is unrestricted (no allowlist gate), ``[]`` grants NOTHING, and a
+    non-empty list grants exactly those ids. Collapsing ``[]`` into ``None``
+    would turn "this principal gets no tools" into "this principal gets every
+    tool" — the fail-open direction, on the gate that binds an agent's whole
+    tool surface.
+
+    When the gate applies, only specs whose ``tool_id`` is in the list are
+    kept — EXCEPT ``always_load`` specs (the ``tool_search`` tool),
     which are exempt from the allowlist gate so a scoped sub-agent never
-    loses the means to fetch its deferred MCP tools (#131).  Then any spec
-    whose ``tool_id`` appears in *denied* (merged with the config
-    ``agent.default_denied_tools``) is removed.  Deny always takes
-    precedence over allow — an explicit deny removes even an
+    loses the means to fetch its deferred MCP tools.
+
+    *capability_mode* is a coarse privilege pre-filter
+    applied AFTER the allowlist and layered UNDER it: it can only remove more
+    tools, never resurrect one the allowlist dropped. Only specs whose
+    :meth:`ToolSpec.capability_tier` is admitted by the mode survive — see
+    ``CapabilityMode`` for the tier law. ``always_load`` is exempt here too
+    (harmless discovery), mirroring the allowlist gate; ``"all"`` (the default)
+    and any unrecognised mode skip the gate entirely, so the historical path
+    is byte-identical.
+
+    Then any spec whose ``tool_id`` appears in *denied* (merged with the config
+    ``agent.default_denied_tools``) is removed.  Deny always takes precedence
+    over allow AND capability_mode — an explicit deny removes even an
     ``always_load`` tool.
     """
-    if allowed:
+    if allowed is not None:
         allowed_set = set(allowed)
         specs = [s for s in specs if s.tool_id in allowed_set or is_always_load(s)]
+
+    if _CAPABILITY_MODE_TIERS.get(capability_mode) is not None:
+        specs = [
+            s
+            for s in specs
+            if is_always_load(s)
+            or capability_mode_admits(capability_mode, s.capability_tier())
+        ]
 
     denied_set: set[str] = set(denied or [])
     config_denied_raw = get_config_value("agent", "default_denied_tools", default=[])
@@ -1196,9 +1305,11 @@ def filter_specs(
 
 __all__ = [
     "TOOL_SEARCH_TOOL_ID",
+    "CapabilityMode",
     "ToolRegistry",
     "ToolRegistryCache",
     "ToolSpec",
+    "capability_mode_admits",
     "classify_tool_scope",
     "filter_specs",
     "get_or_build_registry",

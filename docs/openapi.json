@@ -257,6 +257,775 @@
       },
       "type": "object"
     },
+    "AppCreateRequest": {
+      "properties": {
+        "intent": {
+          "example": "Summarize my unread email into a task list every morning.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace binding; defaults to a private own-workspace.",
+          "example": {
+            "key": "default",
+            "kind": "own"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "intent"
+      ],
+      "type": "object"
+    },
+    "AppCreated": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The builder session to stream build progress from.",
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppDataResult": {
+      "properties": {
+        "collection": {
+          "example": "tasks",
+          "type": "string"
+        },
+        "documents": {
+          "description": "Full AppDataDoc envelopes; the SDK unwraps `row['doc']`.",
+          "items": {
+            "example": {
+              "app_id": "app-1a2b3c4d5e6f",
+              "collection": "tasks",
+              "doc": {
+                "done": false,
+                "title": "Reply to invoice thread"
+              },
+              "key": "t-001",
+              "updated_at": "2026-07-17T09:00:00+00:00"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppDetail": {
+      "properties": {
+        "spec": {
+          "$ref": "#/definitions/AppSpec"
+        },
+        "versions": {
+          "items": {
+            "$ref": "#/definitions/AppVersion"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppFreshness": {
+      "properties": {
+        "last_run_status": {
+          "example": "succeeded",
+          "type": "string"
+        },
+        "last_success_at": {
+          "example": "2026-07-17T09:00:08+00:00",
+          "type": "string"
+        },
+        "next_fire_at": {
+          "example": "2026-07-18T09:00:00+00:00",
+          "type": "string"
+        },
+        "stale": {
+          "example": false,
+          "type": "boolean"
+        },
+        "unwritten_collections": {
+          "description": "Declared collection names the most recent run recorded zero writes to (empty when it wrote to all of them, or hasn't run).",
+          "example": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppList": {
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppPatchRequest": {
+      "properties": {
+        "icon": {
+          "example": "\ud83d\udce5",
+          "type": "string"
+        },
+        "summary": {
+          "example": "Groups my unread email into tasks.",
+          "type": "string"
+        },
+        "title": {
+          "example": "Inbox digest",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelineFireResult": {
+      "properties": {
+        "cache": {
+          "description": "'hit'/'miss' (code fire only).",
+          "example": "miss",
+          "type": "string"
+        },
+        "docs_written": {
+          "description": "Per-collection counts this fire wrote (code only).",
+          "example": {
+            "tasks": 4
+          },
+          "type": "object"
+        },
+        "evaluated_at": {
+          "description": "When the code fire evaluated.",
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "mode": {
+          "description": "'code' (ran synchronously) or 'agentic' (woke the maintainer).",
+          "example": "code",
+          "type": "string"
+        },
+        "pipeline": {
+          "example": "weekly-report",
+          "type": "string"
+        },
+        "status": {
+          "description": "'succeeded' for a code fire; the landed signal ('started'/'steered') for an agentic fire.",
+          "example": "succeeded",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelineInvokeRequest": {
+      "additionalProperties": true,
+      "description": "The pipeline's own params \u2014 validated against ITS declared params_schema (per-pipeline JSON Schema data, not a fixed shape; unknown keys or a pipeline with no params_schema both 400).",
+      "example": {
+        "since": "2026-07-01"
+      },
+      "type": "object"
+    },
+    "AppPipelineInvokeResult": {
+      "properties": {
+        "cache": {
+          "description": "'hit' or 'miss'.",
+          "example": "miss",
+          "type": "string"
+        },
+        "docs_written": {
+          "description": "Per-collection document counts this invocation wrote.",
+          "example": {
+            "tasks": 4
+          },
+          "type": "object"
+        },
+        "evaluated_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "output": {
+          "description": "The runner's materialized output.",
+          "example": {
+            "count": 12
+          },
+          "type": "object"
+        },
+        "pipeline": {
+          "example": "weekly-report",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelineRow": {
+      "properties": {
+        "armed": {
+          "description": "Whether trigger_ref is currently armed on the maintainer.",
+          "example": true,
+          "type": "boolean"
+        },
+        "mode": {
+          "description": "'agentic' (wakes the maintainer; the legacy default) or 'code' (synchronously invocable via GET/POST .../pipelines/<name>).",
+          "example": "agentic",
+          "type": "string"
+        },
+        "name": {
+          "example": "morning-organize",
+          "type": "string"
+        },
+        "on_demand": {
+          "example": false,
+          "type": "boolean"
+        },
+        "schedule": {
+          "description": "The declared schedule union (time.cron/time.at), or null for on-demand.",
+          "example": {
+            "cron": "0 7 * * *",
+            "kind": "time.cron"
+          },
+          "type": "object"
+        },
+        "trigger_ref": {
+          "description": "Platform-stamped id of the armed trigger (null when unscheduled).",
+          "example": "3f8c1e9a2b7d4c05",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelineRun": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "docs_written": {
+          "example": {
+            "tasks": 4
+          },
+          "type": "object"
+        },
+        "ended_at": {
+          "example": "2026-07-17T09:00:08+00:00",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "pipeline_name": {
+          "example": "ingest-email",
+          "type": "string"
+        },
+        "run_key": {
+          "example": "run-9f8e7d6c5b4a",
+          "type": "string"
+        },
+        "started_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "status": {
+          "example": "succeeded",
+          "type": "string"
+        },
+        "unwritten_collections": {
+          "description": "Declared collection names THIS run recorded zero writes to (empty unless the run succeeded and skipped one).",
+          "example": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelineSurfaceRow": {
+      "properties": {
+        "armed": {
+          "description": "Whether this pipeline's trigger is currently armed.",
+          "example": false,
+          "type": "boolean"
+        },
+        "cache_ttl_seconds": {
+          "description": "How long a materialized result may be served from cache.",
+          "example": 300,
+          "type": "integer"
+        },
+        "mode": {
+          "description": "'agentic' (not synchronously invocable) or 'code' (materialized).",
+          "example": "code",
+          "type": "string"
+        },
+        "name": {
+          "example": "weekly-report",
+          "type": "string"
+        },
+        "on_demand": {
+          "example": true,
+          "type": "boolean"
+        },
+        "params_schema": {
+          "description": "JSON Schema for invoke params, or null (no params accepted).",
+          "example": {
+            "properties": {
+              "since": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "object"
+        },
+        "schedule": {
+          "description": "The declared schedule union (time.cron/time.at), or null for on-demand.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "AppPipelines": {
+      "properties": {
+        "pipelines": {
+          "items": {
+            "$ref": "#/definitions/AppPipelineSurfaceRow"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppReadToken": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "expires_at": {
+          "example": "2026-07-17T09:30:00+00:00",
+          "type": "string"
+        },
+        "scope": {
+          "description": "'read' (default) or 'write' (master-key-only to mint).",
+          "example": "read",
+          "type": "string"
+        },
+        "token_id": {
+          "description": "The presented bearer credential (X-Mewbo-App-Token header).",
+          "example": "app-1a2b3c4d5e6f:1752742800:read:9f3a...:AbC-...",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppRearmRequest": {
+      "properties": {
+        "seed": {
+          "description": "Also fire each re-armed pipeline once immediately (default false).",
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppRearmResult": {
+      "properties": {
+        "armed": {
+          "description": "Pipelines whose schedule trigger was (re-)minted, with the new id.",
+          "items": {
+            "example": {
+              "pipeline": "morning-organize",
+              "trigger_id": "3f8c1e9a2b7d4c05"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "seeded": {
+          "description": "Re-armed pipelines fired once immediately (only when seed=true).",
+          "example": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unchanged": {
+          "description": "Scheduled pipelines already armed (no action taken).",
+          "example": [
+            "already-armed-pipeline"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppRollbackRequest": {
+      "properties": {
+        "version": {
+          "example": 2,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "type": "object"
+    },
+    "AppSpec": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "created_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "frontend": {
+          "example": {
+            "entrypoint": "app.py",
+            "files": {
+              "app.py": "..."
+            }
+          },
+          "type": "object"
+        },
+        "icon": {
+          "example": "\ud83d\udce5",
+          "type": "string"
+        },
+        "maintainer_session_id": {
+          "example": "7c1f0a84b2c39e2d",
+          "type": "string"
+        },
+        "owner_session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        },
+        "status": {
+          "description": "draft, building, live, paused, broken, or archived.",
+          "example": "live",
+          "type": "string"
+        },
+        "summary": {
+          "example": "Groups my unread email into tasks each morning.",
+          "type": "string"
+        },
+        "title": {
+          "example": "Inbox digest",
+          "type": "string"
+        },
+        "updated_at": {
+          "example": "2026-07-17T09:05:00+00:00",
+          "type": "string"
+        },
+        "version": {
+          "example": 1,
+          "type": "integer"
+        },
+        "workspace_ref": {
+          "example": {
+            "key": "default",
+            "kind": "own"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "AppSummary": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "created_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "icon": {
+          "example": "\ud83d\udce5",
+          "type": "string"
+        },
+        "status": {
+          "example": "live",
+          "type": "string"
+        },
+        "summary": {
+          "example": "Groups my unread email into tasks.",
+          "type": "string"
+        },
+        "title": {
+          "example": "Inbox digest",
+          "type": "string"
+        },
+        "updated_at": {
+          "example": "2026-07-17T09:05:00+00:00",
+          "type": "string"
+        },
+        "version": {
+          "example": 1,
+          "type": "integer"
+        },
+        "workspace_ref": {
+          "example": {
+            "key": "default",
+            "kind": "own"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "AppSystemHealth": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "freshness": {
+          "$ref": "#/definitions/AppFreshness"
+        },
+        "maintainer": {
+          "example": {
+            "session_id": "7c1f0a84b2c39e2d",
+            "status": "active"
+          },
+          "type": "object"
+        },
+        "pipelines": {
+          "description": "The declared per-pipeline tier: schedule union, on_demand, trigger_ref, and armed \u2014 so a client renders 'refreshes hourly' vs 'on-demand' vs the unscheduled warning.",
+          "items": {
+            "$ref": "#/definitions/AppPipelineRow"
+          },
+          "type": "array"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/definitions/AppPipelineRun"
+          },
+          "type": "array"
+        },
+        "status": {
+          "example": "live",
+          "type": "string"
+        },
+        "triggers": {
+          "items": {
+            "$ref": "#/definitions/AppTriggerDTO"
+          },
+          "type": "array"
+        },
+        "unscheduled_pipelines": {
+          "description": "Names of pipelines with no trigger currently armed on the maintainer (on-demand by design, or a schedule that never took).",
+          "example": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppTokenMintRequest": {
+      "properties": {
+        "scope": {
+          "description": "'read' (default) or 'write'. Minting 'write' requires the literal master token \u2014 an issued key may mint read only.",
+          "example": "read",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppTriggerDTO": {
+      "properties": {
+        "action": {
+          "example": "message",
+          "type": "string"
+        },
+        "args": {
+          "example": {
+            "cron": "0 9 * * *"
+          },
+          "type": "object"
+        },
+        "created_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "created_by": {
+          "example": "user",
+          "type": "string"
+        },
+        "expires_at": {
+          "example": "2026-07-24T09:00:00+00:00",
+          "type": "string"
+        },
+        "fires": {
+          "example": 3,
+          "type": "integer"
+        },
+        "id": {
+          "example": "3f8c1e9a2b7d4c05",
+          "type": "string"
+        },
+        "kind": {
+          "example": "time.cron",
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "last_fired_at": {
+          "example": "2026-07-17T09:00:00+00:00",
+          "type": "string"
+        },
+        "max_fires": {
+          "type": "integer"
+        },
+        "next_fire_at": {
+          "example": "2026-07-18T09:00:00+00:00",
+          "type": "string"
+        },
+        "session_id": {
+          "example": "7c1f0a84b2c39e2d",
+          "type": "string"
+        },
+        "status": {
+          "example": "armed",
+          "type": "string"
+        },
+        "wake_prompt": {
+          "example": "Ingest new email and regroup tasks.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppTriggers": {
+      "properties": {
+        "triggers": {
+          "items": {
+            "$ref": "#/definitions/AppTriggerDTO"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "AppVersion": {
+      "properties": {
+        "app_id": {
+          "example": "app-1a2b3c4d5e6f",
+          "type": "string"
+        },
+        "author": {
+          "example": "builder",
+          "type": "string"
+        },
+        "note": {
+          "example": "app submitted",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/AppSpec"
+        },
+        "version": {
+          "example": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError400": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "query is required",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError401": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "API token is not provided.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError403": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "master token required",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError404": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "session 9e2d47c1 not found",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError409": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "a structured run is already active for this session",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError429": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "rate limited",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError502": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "pipeline execution failed: connection refused",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppsMessageError503": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "structured responses are not configured on this server",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AttachmentDescriptor": {
       "properties": {
         "content_type": {
@@ -509,6 +1278,93 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "CreateTriggerRequest": {
+      "properties": {
+        "action": {
+          "description": "message (default) or start.",
+          "example": "message",
+          "type": "string"
+        },
+        "at": {
+          "description": "kind=time.at: ISO wall-clock instant.",
+          "type": "string"
+        },
+        "conclusion_filter": {
+          "example": [
+            "success",
+            "failure"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cron": {
+          "description": "kind=time.cron: 5-field cron expression.",
+          "example": "0 9 * * *",
+          "type": "string"
+        },
+        "events": {
+          "description": "kind=forge.pr: which PR events fire.",
+          "example": [
+            "merged"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expires_at": {
+          "description": "ISO deadline; omit for the deployment default.",
+          "type": "string"
+        },
+        "hmac_header": {
+          "description": "kind=webhook: optional HMAC signature header.",
+          "type": "string"
+        },
+        "kind": {
+          "example": "time.cron",
+          "type": "string"
+        },
+        "max_fires": {
+          "description": "Cap on fires; omit for unlimited (policy-bounded).",
+          "type": "integer"
+        },
+        "number": {
+          "description": "kind=forge.pr: the PR number.",
+          "example": 42,
+          "type": "integer"
+        },
+        "ref": {
+          "description": "kind=ci.workflow: restrict to a ref.",
+          "example": "main",
+          "type": "string"
+        },
+        "repo": {
+          "description": "kind=ci.workflow/forge.pr: owner/name.",
+          "example": "acme/widgets",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "kind=ci.workflow: a specific run id.",
+          "type": "integer"
+        },
+        "wake_prompt": {
+          "example": "Summarize the nightly deploy.",
+          "type": "string"
+        },
+        "workflow": {
+          "description": "kind=ci.workflow: workflow name.",
+          "example": "ci.yml",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "wake_prompt"
+      ],
       "type": "object"
     },
     "DeviceToolError": {
@@ -1195,6 +2051,56 @@
       },
       "type": "object"
     },
+    "QuestionAnswerItem": {
+      "properties": {
+        "selected_indexes": {
+          "description": "0-based indexes into the question's options (XOR `text`).",
+          "example": [
+            0
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "text": {
+          "description": "Free-text answer \u2014 always accepted, even with options (XOR `selected_indexes`).",
+          "example": "Use the staging cluster instead",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "QuestionAnswerRequest": {
+      "properties": {
+        "answers": {
+          "description": "One item per question, in the question order.",
+          "items": {
+            "$ref": "#/definitions/QuestionAnswerItem"
+          },
+          "type": "array"
+        },
+        "call_token": {
+          "description": "Single-use token carried on the `user_question` event this answers.",
+          "example": "Q1sT9x...redacted",
+          "type": "string"
+        }
+      },
+      "required": [
+        "answers",
+        "call_token"
+      ],
+      "type": "object"
+    },
+    "QuestionAnswered": {
+      "properties": {
+        "resolved": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "RepoIdentity": {
       "properties": {
         "host": {
@@ -1395,6 +2301,43 @@
       },
       "type": "object"
     },
+    "SearchRecentRun": {
+      "properties": {
+        "created_at": {
+          "example": "2026-06-15T09:30:00Z",
+          "type": "string"
+        },
+        "query": {
+          "example": "Which services call the billing API?",
+          "type": "string"
+        },
+        "run_id": {
+          "example": "r-1a2b3c4d-1",
+          "type": "string"
+        },
+        "status": {
+          "example": "completed",
+          "type": "string"
+        },
+        "workspace_id": {
+          "example": "ws-7f3a91",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SearchRecentRunsResponse": {
+      "properties": {
+        "runs": {
+          "description": "Recent run summaries across all workspaces, newest first.",
+          "items": {
+            "$ref": "#/definitions/SearchRecentRun"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "SearchResultCard": {
       "properties": {
         "id": {
@@ -1444,6 +2387,17 @@
     },
     "SearchRunCreateRequest": {
       "properties": {
+        "fallback_models": {
+          "description": "Optional cross-model fallback ladder for this run, as LiteLLM model names in try-order. Omit to inherit the configured fallback policy; an empty list is treated the same as omitting it.",
+          "example": [
+            "anthropic/claude-haiku-4-5",
+            "openai/gpt-oss-120b"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "model": {
           "description": "Optional model override for this run, as a LiteLLM model name. Wins over the tier's configured model (`scg.traversal.tier_models`); probes inherit it. Omit to let the tier pick.",
           "type": "string"
@@ -1507,6 +2461,11 @@
         "model": {
           "description": "Per-run model override, or null for the tier default.",
           "type": "string"
+        },
+        "partial": {
+          "description": "True when a FAILED run's `results`/`trace` still carry grounded evidence gathered before the failure, rather than being empty.",
+          "example": false,
+          "type": "boolean"
         },
         "query": {
           "example": "Which services call the billing API?",
@@ -1589,6 +2548,13 @@
         },
         "error": {
           "type": "string"
+        },
+        "fallback_models": {
+          "description": "Per-run cross-model fallback ladder; null inherits the configured fallback policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "model": {
           "type": "string"
@@ -2329,6 +3295,115 @@
       },
       "type": "object"
     },
+    "SessionSpecBinding": {
+      "properties": {
+        "allowed_tools": {
+          "description": "MCP tool ceiling. THREE-STATE: null unrestricted, [] grants no MCP tool, non-empty grants exactly those.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capabilities": {
+          "description": "Capabilities the purpose requires.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "example": "/srv/projects/assistant",
+          "type": "string"
+        },
+        "fallback_models": {
+          "description": "Opted-in fallback ladder; null defers to the configured policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "example": "act",
+          "type": "string"
+        },
+        "model": {
+          "example": "openai/claude-sonnet-5",
+          "type": "string"
+        },
+        "origin": {
+          "description": "Provenance of the creating surface: user/wiki/search/channel/mobile/structured/draft/apps.",
+          "example": "wiki",
+          "type": "string"
+        },
+        "project": {
+          "description": "Bound project name.",
+          "example": "Assistant",
+          "type": "string"
+        },
+        "purpose_bound": {
+          "description": "True when the session was created FOR a narrower purpose than open chat \u2014 a product surface created it, or its tool scope is authoritative. A bound session refuses tool/scope overrides.",
+          "example": true,
+          "type": "boolean"
+        },
+        "session_step_budget": {
+          "example": 50,
+          "type": "integer"
+        },
+        "skill_instructions_present": {
+          "description": "Whether a playbook is bound. The text itself is not projected.",
+          "example": true,
+          "type": "boolean"
+        },
+        "slug": {
+          "description": "Product-scoped identifier.",
+          "example": "acme/beacon",
+          "type": "string"
+        },
+        "strict_tool_scope": {
+          "example": true,
+          "type": "boolean"
+        },
+        "surface": {
+          "description": "Client surface the session was created from.",
+          "example": "console",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionSpecResponse": {
+      "properties": {
+        "editable": {
+          "description": "Server-declared per-field modifiability, keyed by the binding's field names. Fail-closed and authoritative: a false field is refused server-side rather than silently ignored.",
+          "example": {
+            "allowed_tools": false,
+            "cwd": false,
+            "fallback_models": true,
+            "mode": true,
+            "model": true,
+            "project": false,
+            "session_step_budget": false,
+            "skill_instructions": false,
+            "slug": false,
+            "strict_tool_scope": false
+          },
+          "type": "object"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        },
+        "source": {
+          "description": "`spec` when a durable binding was recorded, `legacy_context` when it was reconstructed from a session predating them.",
+          "example": "spec",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/SessionSpecBinding"
+        }
+      },
+      "type": "object"
+    },
     "SessionStatusResponse": {
       "properties": {
         "done_reason": {
@@ -2365,7 +3440,17 @@
           "type": "string"
         },
         "origin": {
-          "description": "`user`, `wiki`, `search`, or `channel`.",
+          "description": "What created the session, derived from its tags and first context event.",
+          "enum": [
+            "user",
+            "wiki",
+            "search",
+            "channel",
+            "mobile",
+            "structured",
+            "draft",
+            "apps"
+          ],
           "example": "user",
           "type": "string"
         },
@@ -2378,8 +3463,17 @@
           "type": "string"
         },
         "status": {
-          "description": "`idle`, `running`, `completed`, or `incomplete`.",
+          "description": "`idle`, `running`, `completed`, `incomplete`, or `terminated`.",
           "example": "completed",
+          "type": "string"
+        },
+        "terminated": {
+          "description": "True once the session is permanently terminated.",
+          "example": false,
+          "type": "boolean"
+        },
+        "terminated_at": {
+          "description": "ISO termination time, or null if the session is live.",
           "type": "string"
         },
         "title": {
@@ -2389,6 +3483,88 @@
         "updated_at": {
           "example": "2026-06-15T18:31:42.108551+00:00",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionTerminateResponse": {
+      "properties": {
+        "cancelled_triggers": {
+          "description": "Downstream artifacts (e.g. scheduled triggers) cancelled by this call.",
+          "example": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        },
+        "status": {
+          "example": "terminated",
+          "type": "string"
+        },
+        "terminated_at": {
+          "example": "2026-07-13T18:24:10.882001+00:00",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionTerminatedError": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SessionTerminatedErrorBody"
+        }
+      },
+      "type": "object"
+    },
+    "SessionTerminatedErrorBody": {
+      "properties": {
+        "code": {
+          "example": "session_terminated",
+          "type": "string"
+        },
+        "reason": {
+          "example": "Session is permanently terminated",
+          "type": "string"
+        },
+        "retryable": {
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SessionTimelineResponse": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/TimelineEntry"
+          },
+          "type": "array"
+        },
+        "open_turn": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TimelineTurn"
+            }
+          ],
+          "description": "The still-running turn, absent once every turn has concluded."
+        },
+        "running": {
+          "example": false,
+          "type": "boolean"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        },
+        "status": {
+          "example": "completed",
+          "type": "string"
+        },
+        "terminated": {
+          "example": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2879,6 +4055,164 @@
       ],
       "type": "object"
     },
+    "SystemInstructionsDoc": {
+      "properties": {
+        "enabled": {
+          "example": true,
+          "type": "boolean"
+        },
+        "id": {
+          "example": "global",
+          "type": "string"
+        },
+        "lastError": {
+          "type": "string"
+        },
+        "template": {
+          "example": "{% if surface == 'android' %}Keep replies short; the user is on a phone.{% else %}You are Mewbo, running via {{ surface }}.{% endif %}",
+          "type": "string"
+        },
+        "updatedAt": {
+          "example": "2026-07-14T09:00:00+00:00",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsErrorBody400": {
+      "properties": {
+        "code": {
+          "example": 400,
+          "type": "integer"
+        },
+        "reason": {
+          "example": "query is required",
+          "type": "string"
+        },
+        "retryable": {
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsErrorEnvelope400": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SystemInstructionsErrorBody400"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsMessageError401": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "API token is not provided.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsPreviewRequest": {
+      "properties": {
+        "context": {
+          "description": "Partial InstructionContext override merged onto a representative sample.",
+          "example": {
+            "surface": "android"
+          },
+          "type": "object"
+        },
+        "template": {
+          "description": "Optional template override; omit to preview the STORED template.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsPreviewResponse": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "rendered": {
+          "example": "Keep replies short; the user is on a phone.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsPutRequest": {
+      "properties": {
+        "enabled": {
+          "description": "Defaults to true.",
+          "example": true,
+          "type": "boolean"
+        },
+        "template": {
+          "example": "{% if is_mobile %}Prefer short replies.{% endif %} You are on {{ surface }}.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "type": "object"
+    },
+    "SystemInstructionsVariable": {
+      "properties": {
+        "description": {
+          "example": "Capabilities granted to this session (e.g. wiki, scg). Available to the template as a list.",
+          "type": "string"
+        },
+        "name": {
+          "example": "capabilities",
+          "type": "string"
+        },
+        "type": {
+          "example": "array",
+          "type": "string"
+        },
+        "values": {
+          "description": "Values this variable can take, or null when nothing on this deployment can source them.",
+          "example": [
+            "scg",
+            "stlite",
+            "wiki"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "valuesKind": {
+          "description": "`closed`: a session's value is ALWAYS one of `values` (e.g. origin). `known`: the values installed/observed on THIS deployment \u2014 real, but not exhaustive.",
+          "enum": [
+            "closed",
+            "known"
+          ],
+          "example": "known",
+          "type": "string"
+        },
+        "valuesNote": {
+          "description": "One-line prose explaining where these values came from.",
+          "example": "Capabilities declared by the plugins and agents installed here.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SystemInstructionsVariablesResponse": {
+      "properties": {
+        "variables": {
+          "items": {
+            "$ref": "#/definitions/SystemInstructionsVariable"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "TaskQueue": {
       "properties": {
         "action_steps": {
@@ -2910,6 +4244,137 @@
         "human_message",
         "task_result"
       ],
+      "type": "object"
+    },
+    "TimelineEntry": {
+      "properties": {
+        "attachments": {
+          "description": "Descriptors for files sent with a `user` row.",
+          "type": "object"
+        },
+        "content": {
+          "example": "Here is the summary you asked for.",
+          "type": "string"
+        },
+        "id": {
+          "example": "assistant-3",
+          "type": "string"
+        },
+        "plan": {
+          "description": "Present on `plan` rows: revision, status, content.",
+          "type": "object"
+        },
+        "question": {
+          "description": "Present on `question` rows. Never carries the answer credential \u2014 answering goes through the questions endpoint.",
+          "type": "object"
+        },
+        "recovery": {
+          "description": "Present on `recovery` rows: retry or continue.",
+          "type": "object"
+        },
+        "role": {
+          "description": "One of: user, assistant, run_failed, plan, widget, todos, question, trigger, session_terminated, recovery.",
+          "example": "assistant",
+          "type": "string"
+        },
+        "run_failure": {
+          "description": "Present on `run_failed` rows: reason plus the classified error detail.",
+          "type": "object"
+        },
+        "todos": {
+          "description": "Present on `todos` rows: the checklist items.",
+          "type": "object"
+        },
+        "trigger": {
+          "description": "Present on `trigger` rows: kind, action, summary.",
+          "type": "object"
+        },
+        "ts": {
+          "example": "2026-06-15T18:24:10.882001+00:00",
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/definitions/TimelineTurn"
+        },
+        "turn_id": {
+          "example": "turn-3",
+          "type": "string"
+        },
+        "widget": {
+          "description": "Present on `widget` rows: the widget_ready payload.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "TimelineTokenUsage": {
+      "properties": {
+        "billed_input_tokens": {
+          "description": "Cumulative billable input (root sum + sub sum).",
+          "example": 88120,
+          "type": "integer"
+        },
+        "cache_creation_tokens": {
+          "example": 800,
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "example": 19400,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "description": "Peak root input \u2014 context pressure, not a sum.",
+          "example": 24110,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "example": 5102,
+          "type": "integer"
+        },
+        "reasoning_tokens": {
+          "example": 640,
+          "type": "integer"
+        },
+        "sub_agent_count": {
+          "example": 3,
+          "type": "integer"
+        },
+        "sub_input_tokens": {
+          "description": "Sum of per-sub-agent peak input.",
+          "example": 18200,
+          "type": "integer"
+        },
+        "sub_output_tokens": {
+          "example": 1200,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TimelineTurn": {
+      "properties": {
+        "done_reason": {
+          "description": "The closing completion's reason; absent when an assistant event closed the turn.",
+          "example": "completed",
+          "type": "string"
+        },
+        "duration_ms": {
+          "description": "Prompt-to-closure span; absent when not measurable.",
+          "example": 18400,
+          "type": "integer"
+        },
+        "id": {
+          "example": "turn-3",
+          "type": "string"
+        },
+        "model": {
+          "example": "some-model",
+          "type": "string"
+        },
+        "token_usage": {
+          "$ref": "#/definitions/TimelineTokenUsage"
+        }
+      },
       "type": "object"
     },
     "TitlePatchRequest": {
@@ -2948,7 +4413,7 @@
           "type": "string"
         },
         "requires_capability": {
-          "description": "Set only on capability-gated internal/product tools (wiki_*, scg_*, agentic_search): the session capability that must be granted for the tool to actually bind. Selecting the tool via a session's `mcp_tools` allowlist grants this capability for that request (Gitea #182).",
+          "description": "Set only on capability-gated internal/product tools (wiki_*, scg_*, agentic_search): the session capability that must be granted for the tool to actually bind. Selecting the tool via a session's `mcp_tools` allowlist grants this capability for that request.",
           "type": "string"
         },
         "scope": {
@@ -2972,6 +4437,115 @@
         "tools": {
           "items": {
             "$ref": "#/definitions/ToolSpec"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Trigger": {
+      "properties": {
+        "action": {
+          "description": "message re-engages the session; start opens a fresh turn.",
+          "example": "message",
+          "type": "string"
+        },
+        "args": {
+          "description": "Kind config (cron/at/repo/number/events/hmac_header; secret on create).",
+          "example": {
+            "cron": "0 9 * * *"
+          },
+          "type": "object"
+        },
+        "created_at": {
+          "example": "2026-07-13T18:24:10.882001+00:00",
+          "type": "string"
+        },
+        "created_by": {
+          "description": "agent (via schedule_trigger) or user (console).",
+          "example": "user",
+          "type": "string"
+        },
+        "expires_at": {
+          "example": "2026-07-20T09:00:00+00:00",
+          "type": "string"
+        },
+        "fires": {
+          "example": 0,
+          "type": "integer"
+        },
+        "id": {
+          "example": "3f8c1e9a2b7d4c05",
+          "type": "string"
+        },
+        "kind": {
+          "description": "One of time.at, time.cron, ci.workflow, forge.pr, webhook.",
+          "example": "time.cron",
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "last_fired_at": {
+          "type": "string"
+        },
+        "max_fires": {
+          "type": "integer"
+        },
+        "next_fire_at": {
+          "example": "2026-07-14T09:00:00+00:00",
+          "type": "string"
+        },
+        "provenance": {
+          "example": {
+            "agent_id": null,
+            "step": null
+          },
+          "type": "object"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        },
+        "status": {
+          "description": "armed, paused, completed, failed, cancelled, or expired.",
+          "example": "armed",
+          "type": "string"
+        },
+        "wake_prompt": {
+          "example": "Check the nightly deploy and summarize failures.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TriggerCancelResponse": {
+      "properties": {
+        "id": {
+          "example": "3f8c1e9a2b7d4c05",
+          "type": "string"
+        },
+        "status": {
+          "example": "cancelled",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TriggerHookResponse": {
+      "properties": {
+        "accepted": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TriggerList": {
+      "properties": {
+        "triggers": {
+          "items": {
+            "$ref": "#/definitions/Trigger"
           },
           "type": "array"
         }
@@ -3535,6 +5109,37 @@
   },
   "paths": {
     "/api/agentic_search/runs": {
+      "get": {
+        "description": "Returns the most recent search runs across ALL workspaces, newest first \u2014 use it to populate a global recent-searches list. `limit` caps the count (default 30, capped at 100).\nReturns run summaries (id, workspace, query, created time, status)\nnewest first, capped at `limit`. Projects the same `RunRecord` the\nper-workspace endpoint returns down to these summary fields \u2014 fetch\n`GET /runs/{run_id}` for the full snapshot.",
+        "operationId": "list_recent_runs",
+        "parameters": [
+          {
+            "default": 30,
+            "description": "Max number of runs to return.",
+            "in": "query",
+            "name": "limit",
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent run summaries, newest first.",
+            "schema": {
+              "$ref": "#/definitions/SearchRecentRunsResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SearchMessageError401"
+            }
+          }
+        },
+        "summary": "List recent search runs across all workspaces",
+        "tags": [
+          "Workspaces & Runs"
+        ]
+      },
       "post": {
         "description": "Starts a search run over a workspace's enabled sources. POST `{workspace_id, query}` (optionally `tier` and a per-run `model` override). The response always carries `run_id`, `session_id`, `status` and the full `run` snapshot. An orchestrated run returns `running` promptly \u2014 then poll `GET /runs/{run_id}` or attach to `GET /runs/{run_id}/events` (SSE) to follow it; the echo path settles synchronously as `completed`.\nRuns the search agent over the workspace's enabled sources. The\nresponse always carries `run_id`, `session_id`, `status` and the full\n`run` snapshot. An orchestrated run returns `running` promptly and\nsettles through the event stream or by polling `GET /runs/{run_id}`;\nthe echo path settles synchronously as `completed`. Set `tier` to\ntrade depth for latency; the tier also picks the model that drives\nthe run.",
         "operationId": "create_run",
@@ -4273,6 +5878,927 @@
         ]
       }
     },
+    "/api/apps": {
+      "get": {
+        "operationId": "get_apps_collection",
+        "responses": {
+          "200": {
+            "description": "The app gallery (lean summaries).",
+            "schema": {
+              "$ref": "#/definitions/AppList"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List every app in the gallery (archived apps hidden)",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "post": {
+        "operationId": "post_apps_collection",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppCreateRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Draft app created.",
+            "schema": {
+              "$ref": "#/definitions/AppCreated"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Create a draft app from an intent (mints a builder session to stream)",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}": {
+      "get": {
+        "operationId": "get_app_item",
+        "responses": {
+          "200": {
+            "description": "The app manifest + version history.",
+            "schema": {
+              "$ref": "#/definitions/AppDetail"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Return the app's manifest and version history",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "patch": {
+        "operationId": "patch_app_item",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppPatchRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated app detail.",
+            "schema": {
+              "$ref": "#/definitions/AppDetail"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Edit an app's title / summary / icon",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/archive": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_archive",
+        "responses": {
+          "200": {
+            "description": "The archived app.",
+            "schema": {
+              "$ref": "#/definitions/AppSpec"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Archive an app (removes it from the gallery; absorbing)",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/data/{collection}": {
+      "get": {
+        "description": "Read-only \u2014 no write verb exists on this route.",
+        "operationId": "get_app_data",
+        "parameters": [
+          {
+            "description": "JSON object of equality matches on top-level doc fields.",
+            "in": "query",
+            "name": "filter",
+            "type": "string"
+          },
+          {
+            "description": "Doc field to sort by; prefix with '-' for descending.",
+            "in": "query",
+            "name": "sort",
+            "type": "string"
+          },
+          {
+            "description": "Max documents (<=500).",
+            "in": "query",
+            "name": "limit",
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection's AppDataDoc envelopes.",
+            "schema": {
+              "$ref": "#/definitions/AppDataResult"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Query a collection",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "collection",
+          "required": true,
+          "type": "string"
+        }
+      ]
+    },
+    "/api/apps/{app_id}/pause": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_pause",
+        "responses": {
+          "200": {
+            "description": "The paused app.",
+            "schema": {
+              "$ref": "#/definitions/AppSpec"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Pause the app and every armed trigger it owns",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/pipelines": {
+      "get": {
+        "operationId": "get_app_pipelines",
+        "responses": {
+          "200": {
+            "description": "The declared pipeline surface.",
+            "schema": {
+              "$ref": "#/definitions/AppPipelines"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List every pipeline's declared mode/schedule/params surface",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ]
+    },
+    "/api/apps/{app_id}/pipelines/{name}": {
+      "get": {
+        "operationId": "get_app_pipeline_invoke",
+        "responses": {
+          "200": {
+            "description": "The pipeline's materialized output.",
+            "schema": {
+              "$ref": "#/definitions/AppPipelineInvokeResult"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "502": {
+            "description": "The runner raised while executing the pipeline.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError502"
+            }
+          },
+          "503": {
+            "description": "No pipeline runner is configured on this deployment.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Invoke a pipeline read-only: query params become `params`",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "Requires a WRITE-scoped token.",
+        "operationId": "post_app_pipeline_invoke",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppPipelineInvokeRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pipeline's materialized output.",
+            "schema": {
+              "$ref": "#/definitions/AppPipelineInvokeResult"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "502": {
+            "description": "The runner raised while executing the pipeline.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError502"
+            }
+          },
+          "503": {
+            "description": "No pipeline runner is configured on this deployment.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Invoke a pipeline: params in the JSON body",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/pipelines/{name}/fire": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "name",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_pipeline_fire",
+        "responses": {
+          "200": {
+            "description": "A code pipeline ran and ledgered.",
+            "schema": {
+              "$ref": "#/definitions/AppPipelineFireResult"
+            }
+          },
+          "202": {
+            "description": "An agentic pipeline's maintainer was woken.",
+            "schema": {
+              "$ref": "#/definitions/AppPipelineFireResult"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "App not live, no maintainer, a run already open for this pipeline, or the maintainer refused the wake.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Fired within the cooldown window (carries retry_after_seconds).",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
+            }
+          },
+          "502": {
+            "description": "A code pipeline's runner raised (ledgered, no auto-repair).",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError502"
+            }
+          },
+          "503": {
+            "description": "No fire seam is configured on this deployment.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Fire a pipeline now: a code pipeline runs synchronously; an agentic one wakes",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/rearm": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_rearm",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppRearmRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The re-arm summary.",
+            "schema": {
+              "$ref": "#/definitions/AppRearmResult"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "The app is not live \u2014 re-arm applies only to a live app.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Re-arm the app's declared schedules (master/issued key only)",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/resume": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_resume",
+        "responses": {
+          "200": {
+            "description": "The resumed app.",
+            "schema": {
+              "$ref": "#/definitions/AppSpec"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Resume the app and re-arm every paused trigger it owns",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/rollback": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "operationId": "post_app_rollback",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppRollbackRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The refreshed app detail at its new version.",
+            "schema": {
+              "$ref": "#/definitions/AppDetail"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Roll the app back to an earlier version (recorded as a new version)",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/system": {
+      "get": {
+        "operationId": "get_app_system",
+        "responses": {
+          "200": {
+            "description": "The app's system-health payload.",
+            "schema": {
+              "$ref": "#/definitions/AppSystemHealth"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Freshness, triggers, recent runs, and maintainer status in one payload",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ]
+    },
+    "/api/apps/{app_id}/token": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "`scope=\"write\"` (body) additionally requires the literal master\ntoken \u2014 an issued key may mint read only.\n\nThe route gates on `apps.use`, not `apps.admin`: minting a READ\ntoken is what a client does to RENDER an app, so requiring the admin\nverb here would stop an ordinary member from opening any app at all.\nThe escalation this route could otherwise carry is the write scope, and\nthat is already held shut by the master-token check inside\n:meth:`AppsRoutesController.mint_token`.",
+        "operationId": "post_app_token",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppTokenMintRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "A minted token (token_id is the credential).",
+            "schema": {
+              "$ref": "#/definitions/AppReadToken"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Mint a render-scoped token carrying only this app_id + a scope",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
+    "/api/apps/{app_id}/triggers": {
+      "get": {
+        "operationId": "get_app_triggers",
+        "responses": {
+          "200": {
+            "description": "The app's triggers.",
+            "schema": {
+              "$ref": "#/definitions/AppTriggers"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List the app's triggers for the management surface",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ]
+    },
     "/api/automation/vcs-pickup": {
       "post": {
         "description": "Start or continue an agent session for an issue or pull-request event from CI (GitHub / Gitea Actions). Sessions are keyed by the deterministic tag `vcs:<owner/repo>:<kind>:<number>`, so repeated triggers for the same item reuse one conversation.\n\n**Outcomes:**\n\n- `200` \u2014 a fresh run was started (`accepted: true`, with `run_id`), or the trigger was a no-op (`skipped: true`, e.g. the bot's own comment).\n- `202` \u2014 a run was already active, so the prompt was enqueued as a steering message (`enqueued: true`).\n\nPull-request pickups with a `head_ref` run in a worktree checked out on that branch; issue pickups get an isolated `mewbo/issue-<n>` worktree. When a forge token is configured server-side (`channels.vcs.tokens`), the agent's final answer is posted back to the issue/PR as a comment.\nStarts or continues an agent session for an issue or pull request event\nfrom CI. Sessions are keyed by the deterministic tag\n`vcs:<owner/repo>:<kind>:<number>`, so repeated triggers for the same item\nreuse one conversation. If a run is already active on that session, the\nnew prompt is enqueued as a steering message and the request returns 202.\nPull request pickups with a `head_ref` run in a worktree checked out on\nthat branch. When a forge token is configured server-side, the final\nanswer is posted back to the issue or pull request as a comment.",
@@ -4658,6 +7184,50 @@
         ]
       }
     },
+    "/api/keys/{key_id}/rotate": {
+      "post": {
+        "description": "Mint a replacement carrying the same owner, roles, scopes, team and expiry as `key_id`, and revoke the original in the same call. The new plaintext key is returned exactly once \u2014 store it immediately. Requires the **master** token, or `keys.mint_own` on a key the caller owns.\nMints a replacement carrying the same authority as the original and\nrevokes the original. The new plaintext key is returned exactly once.",
+        "operationId": "post_api_key_rotate",
+        "parameters": [
+          {
+            "description": "Key id returned by POST /api/keys.",
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key rotated. The new plaintext key is in the body.",
+            "schema": {
+              "$ref": "#/definitions/KeyMintResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No key with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Rotate an API key",
+        "tags": [
+          "API Keys"
+        ]
+      }
+    },
     "/api/models": {
       "get": {
         "description": "List the model names served by the configured LLM proxy, the default model, and a per-model capability map. Read `capabilities[name].supports_vision` to decide whether image attachments can be sent to a given model before uploading them.\nReturns the model names served by the configured LLM proxy, the\ndefault model, and a per-model capability map. Use\n`capabilities[name].supports_vision` to decide whether image\nattachments can be sent to a given model.",
@@ -5014,6 +7584,12 @@
             "schema": {
               "$ref": "#/definitions/ApiMessageError401"
             }
+          },
+          "410": {
+            "description": "A targeted session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
           }
         },
         "security": [
@@ -5029,7 +7605,7 @@
     },
     "/api/sessions": {
       "get": {
-        "description": "List one summary per session \u2014 status, title, timestamps, and an `origin` (`user`, `wiki`, `search`, or `channel`) describing what created it. Archived sessions are hidden unless `include_archived=true`.\nReturns one summary per session with status, title, timestamps, and an\n`origin` field (`user`, `wiki`, `search`, or `channel`) describing\nwhat created it. Archived sessions are hidden unless\n`include_archived=true`.",
+        "description": "List one summary per session \u2014 status, title, timestamps, and an `origin` describing what created it (the `SessionSummary` model carries the full set of values). Archived sessions are hidden unless `include_archived=true`.\nReturns one summary per session with status, title, timestamps, and an\n`origin` field describing what created it (the `SessionSummary` model\ncarries the full set of values). Archived sessions are hidden unless\n`include_archived=true`.",
         "operationId": "get_sessions",
         "parameters": [
           {
@@ -5635,6 +8211,12 @@
             "schema": {
               "$ref": "#/definitions/ApiMessageError409"
             }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
           }
         },
         "security": [
@@ -5739,6 +8321,12 @@
             "schema": {
               "$ref": "#/definitions/ApiMessageError401"
             }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
           }
         },
         "security": [
@@ -5802,6 +8390,12 @@
             "description": "The session could not be re-engaged.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError409"
+            }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
             }
           }
         },
@@ -5915,6 +8509,12 @@
               "$ref": "#/definitions/ApiMessageError404"
             }
           },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
+          },
           "500": {
             "description": "The plan was approved but the follow-up run could not start.",
             "schema": {
@@ -5990,6 +8590,12 @@
             "schema": {
               "$ref": "#/definitions/ApiMessageError409"
             }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
           }
         },
         "security": [
@@ -5998,6 +8604,89 @@
           }
         ],
         "summary": "Run a session query",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/questions/{call_id}/answer": {
+      "post": {
+        "description": "Answer a pending `user_question` event (emitted while the agent blocks on its `ask_user_question` tool call \u2014 see the `ask_user` entry in `X-Mewbo-Capabilities`). The caller presents the single-use `call_token` carried on that event, proving session-stream read access and preventing replay (same threat model as device tools \u2014 not proof of WHICH surface answered; the `X-Mewbo-Surface` header is recorded as `answered_via` on the resulting `user_question_answered` event). One item per question, `selected_indexes` XOR `text`; free text is always accepted. First answer wins: a later POST returns 409 while the run is still reading it, then 404.\nDelivers the human's answers for a pending `user_question` event;\nthe blocked `ask_user_question` tool call resolves with them. One\nanswer item per question (`selected_indexes` XOR `text`).",
+        "operationId": "post_session_question_answer",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The `call_id` from the `user_question` event being answered.",
+            "in": "path",
+            "name": "call_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/QuestionAnswerRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Answer delivered; the blocked tool call resolves.",
+            "schema": {
+              "$ref": "#/definitions/QuestionAnswered"
+            }
+          },
+          "400": {
+            "description": "The request body is malformed.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "403": {
+            "description": "`call_token` does not match the pending question.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError403"
+            }
+          },
+          "404": {
+            "description": "No pending question with that `call_id` (unknown, superseded, or already read).",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError404"
+            }
+          },
+          "409": {
+            "description": "An answer was already delivered for this question.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError409"
+            }
+          },
+          "422": {
+            "description": "Answers do not fit the questions (count, bounds, or arity).",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError422"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Answer a pending user question",
         "tags": [
           "Sessions"
         ]
@@ -6047,6 +8736,12 @@
             "description": "A run is already active for this session.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError409"
+            }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
             }
           }
         },
@@ -6105,6 +8800,50 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/spec": {
+      "get": {
+        "description": "Return the session's binding \u2014 the purpose it was created for, and the model, fallback ladder, tool ceiling, capabilities and working directory it runs under \u2014 together with a server-declared `editable` map naming which of those a request may override. Hydrate a composer from this rather than from client-global defaults: re-deriving the context per turn is what lets a follow-up arrive on a different model with an unrelated tool set. `editable` is authoritative and fail-closed; a field it reports false for is refused server-side, so a client should render it read-only rather than offer an edit that will be ignored.\nReturns what this session is bound to run as, and which of those fields a\nrequest may legitimately override. A session created before bindings were\nrecorded reports one reconstructed from its persisted context, flagged by\n`source` so a client can tell a durable binding from a reconstruction.",
+        "operationId": "get_session_spec_view",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session's binding and its editable map.",
+            "schema": {
+              "$ref": "#/definitions/SessionSpecResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get the session binding",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/stream": {
       "get": {
         "description": "Open a Server-Sent Events stream. The stored backlog is replayed first, then new events are pushed as they happen (`data: <json>` frames). Heartbeat comments keep the connection alive and a terminal `stream_end` frame is sent when the run finishes. EventSource cannot set headers, so the key may be passed as the `api_key` query param.\nOpens a Server-Sent Events stream. The stored backlog is replayed\nfirst, then new events are pushed as they happen. Heartbeat comments\nkeep the connection alive, and a terminal `stream_end` frame is sent\nwhen the run finishes. Because EventSource cannot set headers, the API\nkey may be passed as the `api_key` query parameter instead.",
@@ -6141,6 +8880,94 @@
           }
         ],
         "summary": "Stream session events",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/terminate": {
+      "post": {
+        "description": "Permanently terminate the session. Cancels any active run, fires cascade-cancel callbacks, and appends a `session_terminated` event. This is a one-way door: there is no un-terminate, and every subsequent mutating call (query, message, interrupt, recover, fork) returns 410. Reads (events, stream, history) keep working \u2014 terminated is not deleted. The call is idempotent: repeating it returns 200 with the original `terminated_at` and `cancelled_triggers: 0`.\nPermanently terminates the session: cancels any active run, runs\ncascade-cancel callbacks, and records a `session_terminated` event.\nIrreversible \u2014 every subsequent mutating call returns 410 while reads\nkeep working. Idempotent: a repeat call returns the original\n`terminated_at` and does not re-fire the side effects.",
+        "operationId": "post_session_terminate",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session terminated (idempotent).",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminateResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Terminate a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/timeline": {
+      "get": {
+        "description": "Return the session's transcript assembled into conversation rows \u2014 turn boundaries, plans, checklists, questions, triggers, recoveries and run failures, in transcript order. Prefer this over deriving turns from the raw event log: the assembly rules live in one place, so every client renders the same conversation. Turn bodies are NOT inlined; fetch the raw events endpoint when you need them.\nReturns the session's transcript already reconstructed into turns and\nmarkers. A terminated session is still fully readable \u2014 termination\nends a session's run, it does not withdraw its transcript.",
+        "operationId": "get_session_timeline",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assembled conversation.",
+            "schema": {
+              "$ref": "#/definitions/SessionTimelineResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Get the assembled timeline",
         "tags": [
           "Sessions"
         ]
@@ -6247,6 +9074,67 @@
           }
         ],
         "summary": "Generate a session title",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/triggers": {
+      "get": {
+        "operationId": "get_session_triggers",
+        "responses": {
+          "200": {
+            "description": "The session's triggers.",
+            "schema": {
+              "$ref": "#/definitions/TriggerList"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List every trigger owned by one session",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "session_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "The body is `{kind, wake_prompt, action?, max_fires?, expires_at?}`\nplus the kind's own config fields (spread flat, or nested under\n`args`). Server-owned fields (id/status/fires/secret/\u2026) in the body\nare ignored. Returns the created trigger (201) with the webhook secret\nincluded in `args` when applicable.",
+        "operationId": "post_session_triggers",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/CreateTriggerRequest"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Trigger armed.",
+            "schema": {
+              "$ref": "#/definitions/Trigger"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Arm a new trigger for a session",
         "tags": [
           "Sessions"
         ]
@@ -6361,6 +9249,150 @@
         ]
       }
     },
+    "/api/system-instructions": {
+      "get": {
+        "operationId": "get_system_instructions_item",
+        "responses": {
+          "200": {
+            "description": "The system-instructions document.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsDoc"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Read the singleton document (never 404s \u2014 defaults if unset)",
+        "tags": [
+          "System-Instructions"
+        ]
+      },
+      "put": {
+        "description": "400 when the body is malformed or the Jinja template does not\ncompile (rejected before anything is persisted).",
+        "operationId": "put_system_instructions_item",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsPutRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document upserted.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsDoc"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsErrorEnvelope400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Upsert the document",
+        "tags": [
+          "System-Instructions"
+        ]
+      }
+    },
+    "/api/system-instructions/preview": {
+      "post": {
+        "description": "Always 200 on a render failure (`error` set).",
+        "operationId": "post_system_instructions_preview",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsPreviewRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rendered preview (a broken template returns error, never 500).",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsPreviewResponse"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsErrorEnvelope400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Render for preview",
+        "tags": [
+          "System-Instructions"
+        ]
+      }
+    },
+    "/api/system-instructions/variables": {
+      "get": {
+        "operationId": "get_system_instructions_variables",
+        "responses": {
+          "200": {
+            "description": "The InstructionContext variable table.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsVariablesResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SystemInstructionsMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List every variable a template can reference, with type + description",
+        "tags": [
+          "System-Instructions"
+        ]
+      }
+    },
     "/api/tools": {
       "get": {
         "description": "List every known tool integration with its enablement state, the MCP server it comes from, and a `scope` of `builtin`, `project`, `system`, or `plugin`. Pass `project` to include tools configured inside that project. Use the `tool_id` values in a session's `mcp_tools` allowlist to scope what a run may call.\nReturns every known tool integration with its enablement state, the\nMCP server it comes from, and a `scope` of `builtin`, `project`,\n`system`, or `plugin`. Pass `project` to include tools configured\ninside that project. Use the `tool_id` values in a session's\n`mcp_tools` allowlist to scope what a run may call.",
@@ -6395,6 +9427,139 @@
         "summary": "List tools",
         "tags": [
           "Tools & Skills"
+        ]
+      }
+    },
+    "/api/triggers": {
+      "get": {
+        "operationId": "get_triggers_collection",
+        "parameters": [
+          {
+            "description": "Only triggers owned by this session.",
+            "in": "query",
+            "name": "session_id",
+            "type": "string"
+          },
+          {
+            "description": "Only triggers of this kind.",
+            "in": "query",
+            "name": "kind",
+            "type": "string"
+          },
+          {
+            "description": "Only triggers in this status.",
+            "in": "query",
+            "name": "status",
+            "type": "string"
+          },
+          {
+            "description": "Cap the number returned.",
+            "in": "query",
+            "name": "limit",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching triggers.",
+            "schema": {
+              "$ref": "#/definitions/TriggerList"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "List triggers with optional session/kind/status/limit filters",
+        "tags": [
+          "Triggers"
+        ]
+      }
+    },
+    "/api/triggers/hook/{trigger_id}/{secret}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "trigger_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "secret",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "Fire a webhook trigger. No API key \u2014 the capability URL (id + secret) is the sole credential. Unknown id, wrong kind, not-armed, or bad secret all return a uniform 404.",
+        "operationId": "post_trigger_hook",
+        "responses": {
+          "202": {
+            "description": "Accepted; trigger fired.",
+            "schema": {
+              "$ref": "#/definitions/TriggerHookResponse"
+            }
+          }
+        },
+        "security": [],
+        "summary": "Verify the capability secret (+ optional HMAC) and fire the trigger",
+        "tags": [
+          "Triggers"
+        ]
+      }
+    },
+    "/api/triggers/{trigger_id}": {
+      "delete": {
+        "description": "A repeat call, or an already-terminal trigger, returns 200 with the\ntrigger's current status.",
+        "operationId": "delete_trigger_item",
+        "responses": {
+          "200": {
+            "description": "Trigger cancelled (idempotent).",
+            "schema": {
+              "$ref": "#/definitions/TriggerCancelResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Cancel a trigger (idempotent)",
+        "tags": [
+          "Triggers"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "trigger_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "patch": {
+        "description": "409 when the trigger is already terminal (a completed/failed/cancelled/\nexpired trigger can't be re-armed or paused). Returns the trigger with\nits webhook secret so an operator can re-fetch the capability URL.",
+        "operationId": "patch_trigger_item",
+        "responses": {
+          "200": {
+            "description": "Updated trigger.",
+            "schema": {
+              "$ref": "#/definitions/Trigger"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Pause (`status:\"paused\"`) or resume (`status:\"armed\"`) a trigger",
+        "tags": [
+          "Triggers"
         ]
       }
     },
@@ -6961,6 +10126,9 @@
     "application/json"
   ],
   "responses": {
+    "ApiError": {
+      "description": "Render a refusal raised inside a flask-restx ``Resource``"
+    },
     "MaskError": {
       "description": "When any error occurs on mask"
     },
@@ -7038,12 +10206,24 @@
       "name": "Automation"
     },
     {
+      "description": "Reverse invocation. A trigger is a durable contract that wakes a session later, when a CI run finishes, a pull request moves, a schedule fires, or a webhook arrives, so an agent never has to sit in a polling loop. Arm, list, pause, resume, and cancel them here; agents arm their own from inside a session.",
+      "name": "Triggers"
+    },
+    {
       "description": "",
       "name": "Agentic Search"
     },
     {
       "description": "",
+      "name": "Apps"
+    },
+    {
+      "description": "",
       "name": "Files"
+    },
+    {
+      "description": "",
+      "name": "System-Instructions"
     }
   ],
   "x-tagGroups": [
@@ -7087,14 +10267,17 @@
     {
       "name": "Automation",
       "tags": [
-        "Automation"
+        "Automation",
+        "Triggers"
       ]
     },
     {
       "name": "Other",
       "tags": [
         "Agentic Search",
-        "Files"
+        "Apps",
+        "Files",
+        "System-Instructions"
       ]
     }
   ]

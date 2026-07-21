@@ -12,8 +12,10 @@ import { useLocation } from "wouter";
 import { GitFork, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cardSurface } from "@/components/ui/card-surface";
+import { cn } from "@/lib/utils";
 
-import { BrandMark } from "./BrandMark";
+import { BrandMark } from "../BrandMark";
 import { RepoLink } from "./RepoLink";
 import { WikiTopBar } from "./WikiTopBar";
 import { PlatformIcon } from "./configure-wizard/PlatformIcon";
@@ -46,16 +48,16 @@ export function WelcomeScreen({ slug, platform }: WelcomeScreenProps) {
 
   return (
     <div className="flex flex-col flex-1 overflow-y-auto">
-      <WikiTopBar repo={slug} showBackToAll />
+      <WikiTopBar repo={slug} showBackToAll showSettings />
       <div className="flex-1 px-4 sm:px-6 py-10 sm:py-14">
         <div className="max-w-[680px] mx-auto">
           {/* Repo card */}
-          <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 flex items-start gap-4">
+          <div className={cn(cardSurface({ radius: "panel" }), "p-6 flex items-start gap-4")}>
             <div className="shrink-0 inline-flex items-center justify-center w-12 h-12 rounded-xl bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]">
               <BrandMark size={28} />
             </div>
             <div className="flex-1 min-w-0">
-              <h2 className="text-base font-semibold truncate">{repo}</h2>
+              <h2 className="text-base font-medium truncate">{repo}</h2>
               <span className="inline-block mt-0.5 text-xs font-mono text-[hsl(var(--muted-foreground))]">
                 <RepoLink slug={slug} />
               </span>
@@ -65,17 +67,19 @@ export function WelcomeScreen({ slug, platform }: WelcomeScreenProps) {
               </p>
               <div className="mt-3 flex items-center gap-1.5 flex-wrap">
                 {platform && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-2xs text-[hsl(var(--muted-foreground))]">
                     <PlatformIcon platformId={platform} className="h-2.5 w-2.5" />
                     {platform}
                   </span>
                 )}
                 {host && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-2xs font-mono text-[hsl(var(--muted-foreground))]">
                     {host}
                   </span>
                 )}
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-[11px] text-[hsl(var(--muted-foreground))]">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[hsl(var(--muted))]/60 text-2xs text-[hsl(var(--muted-foreground))]">
+                  {/* Identity hue, not state — see wiki CLAUDE.md QW1 note; do not
+                      migrate onto a semantic status token. */}
                   <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-amber-400" />
                   Auto-detect language
                 </span>
@@ -84,14 +88,14 @@ export function WelcomeScreen({ slug, platform }: WelcomeScreenProps) {
           </div>
 
           {/* Hero */}
-          <h1 className="mt-10 text-[clamp(28px,4vw,42px)] font-semibold tracking-[-0.02em] [text-wrap:balance]">
+          <h1 className="mt-10 text-2xl font-semibold tracking-[-0.02em] [text-wrap:balance]">
             Repository not indexed
           </h1>
           <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] [text-wrap:pretty] leading-relaxed">
             Indexing lets you explore code structure, find documentation,
             and ask questions about this repository.
           </p>
-          <p className="mt-1.5 text-xs text-[hsl(var(--muted-foreground))]/80">
+          <p className="mt-1.5 text-xs text-[hsl(var(--muted-foreground))]">
             Indexing typically takes 2–10 minutes once it starts.
           </p>
 

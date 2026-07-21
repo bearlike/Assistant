@@ -30,12 +30,31 @@ sealed interface ChatItem {
         val text: String,
         val ts: String,
         val pending: Boolean = false,
-        /** Metadata-only files riding this send (Gitea attachments wire-up, 2026-07-03) - rendered
+        /** Metadata-only files riding this send (attachments wire-up, 2026-07-03) - rendered
          * as a right-aligned tile row above the bubble by [com.mewbo.aura.ui.chat.UserBubbleRow].
          * Populated both from the optimistic local echo ([com.mewbo.aura.ui.chat.ChatViewModel.send]'s
          * staged attachments) and from the backend's persisted `user`/`user_steer` event payload on
          * replay - never a separate fetch. */
         val attachments: List<AttachmentSummary> = emptyList(),
+        /**
+         * This message was STEERED into an already-running run, so the backend persisted it as a
+         * `user_steer` event rather than a `user` one ([SessionEvent.UserSteer]; data/CLAUDE.md
+         * "`user_steer` (not `user`) is the type recorded for a message enqueued into an active
+         * run").
+         *
+         * Both types render as the same bubble, so this exists for exactly ONE reason: a `user_steer`
+         * event can never anchor a RETRY. `SessionRuntime.resolve_recovery_query`
+         * (`packages/mewbo_core/.../session_runtime.py:996`) resolves `/recover`'s `from_ts` with
+         * `e.get("type") == "user" and e.get("ts") == from_ts` — a steer message is invisible to that
+         * scan, so a retry anchored on one raises `ValueError` → 400, always. `MessageAction`'s gate
+         * reads this to withhold "Retry from here" on a steered bubble instead of offering a button
+         * that cannot succeed.
+         *
+         * A FORK is unaffected and stays offered: `SessionStore.fork_session_at` truncates purely on
+         * `ts <= cutoff`, never inspecting the event's type, so a steer message's ts is a perfectly
+         * valid cut point.
+         */
+        val steer: Boolean = false,
         override val key: String,
     ) : ChatItem
 
@@ -47,7 +66,7 @@ sealed interface ChatItem {
     ) : ChatItem
 
     /**
-     * A reference-style fold group of one turn's `tool_result` events (Gitea #177 W1-B, replaces the
+     * A reference-style fold group of one turn's `tool_result` events (replaces the
      * old one-pill-per-event `ActivityChip`). [key] is the first call's key, stable across later
      * appends ([TranscriptReducer] upserts the SAME key as more `tool_result`s land in the group).
      */
@@ -56,8 +75,53 @@ sealed interface ChatItem {
         override val key: String,
     ) : ChatItem
 
+    /**
+     * A tool call promoted OUT of the collapsed [ToolCallGroup] fold into its own transcript card.
+     * Membership is a presentation-emphasis choice ([PromotedTools]), not a wire concept.
+     */
+    data class ToolCard(
+        val call: ToolCall,
+        override val key: String,
+    ) : ChatItem
+
     data class ErrorCard(
         val message: String,
+        val ts: String,
+        override val key: String,
+    ) : ChatItem
+
+    /**
+     * A Streamlit widget the model built, rendered as its own transcript card - the
+     * full app renders it in a self-contained stlite WebView ([com.mewbo.aura.ui.chat.widget.WidgetCard]),
+     * while the assist overlay renders only [summary] as a compact card (booting Pyodide inside a
+     * tiny floating overlay is wrong). One item per [widgetId], upserted in place if the same widget
+     * is re-emitted. The render-relevant projection of [WidgetReadyPayload] - [appPy]/[dataJson]/
+     * [requirements] reconstruct the `postMessage` payload; [summary] is the overlay/fallback label.
+     */
+    data class Widget(
+        val widgetId: String,
+        val sessionId: String,
+        val appPy: String,
+        val dataJson: String,
+        val requirements: List<String>,
+        val summary: String?,
+        val ts: String,
+        override val key: String,
+    ) : ChatItem
+
+    /**
+     * A pending (or settled) ask-user question group (core `ask_user_question`). One item per
+     * [callId], upserted in place: created PENDING by a `user_question` event and settled by the
+     * matching `user_question_answered` ([TranscriptReducer.foldUserQuestionAnswered]) — even when a
+     * DIFFERENT surface answered. [callToken] is presented by the answer POST
+     * ([com.mewbo.aura.data.api.AuraApi.answerQuestion]). [resolution] is `null` while awaiting an
+     * answer (card interactive) and non-null once settled (card read-only, no error residue).
+     */
+    data class Question(
+        val callId: String,
+        val callToken: String,
+        val questions: List<UiQuestion>,
+        val resolution: QuestionResolution?,
         val ts: String,
         override val key: String,
     ) : ChatItem
@@ -94,6 +158,39 @@ sealed interface ChatItem {
 
 @Immutable
 data class ChatTodoItem(val label: String, val status: String)
+
+/**
+ * One question in a [ChatItem.Question] card. The answer SHAPE is DERIVED from structure (never
+ * stored, so it can't drift): empty [options] ⇒ free-text; else [multiSelect] toggles single- vs
+ * multi-select. A free-text ("Other") answer is always available regardless.
+ */
+@Immutable
+data class UiQuestion(
+    val header: String,
+    val question: String,
+    val options: List<UiQuestionOption>,
+    val multiSelect: Boolean,
+)
+
+@Immutable
+data class UiQuestionOption(val label: String, val description: String?)
+
+/**
+ * How a [ChatItem.Question] settled. [Answered] renders the chosen answers read-only (and, when
+ * [answeredVia] names another surface, "answered on <surface>"); [Dismissed]
+ * (declined/interrupted/cancelled, or any unknown future outcome) dims the card to "no longer
+ * awaiting an answer" with NO error residue (DESIGN.md §6).
+ */
+@Immutable
+sealed interface QuestionResolution {
+    data class Answered(val answers: List<UiAnswer>, val answeredVia: String?) : QuestionResolution
+    data class Dismissed(val outcome: String) : QuestionResolution
+}
+
+/** One question's chosen answer in a settled [QuestionResolution.Answered] — [selectedIndexes] XOR
+ * [text], mirroring the wire. */
+@Immutable
+data class UiAnswer(val selectedIndexes: List<Int>?, val text: String?)
 
 /**
  * Metadata-only attachment descriptor for a [ChatItem.UserBubble] - filename + type, NEVER a real

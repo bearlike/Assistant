@@ -124,8 +124,11 @@ describe("RightRail — run-stats block", () => {
     })
     expect(screen.getByText(/3 probes/)).toBeInTheDocument()
     expect(screen.getByText(/7 tool calls/)).toBeInTheDocument()
-    expect(screen.getByText(/setup 32\.0s/)).toBeInTheDocument()
-    expect(screen.getByText(/search 41\.0s/)).toBeInTheDocument()
+    // formatDuration (utils/time.ts) floors to whole seconds — the console's
+    // one duration-rounding convention, adopted from the agentic_search
+    // `humanizeMs` copy this migrated off of (which read "32.0s"/"41.0s").
+    expect(screen.getByText(/setup 32s/)).toBeInTheDocument()
+    expect(screen.getByText(/search 41s/)).toBeInTheDocument()
     expect(screen.getByText(/12\.4k→900 tok/)).toBeInTheDocument()
   })
 

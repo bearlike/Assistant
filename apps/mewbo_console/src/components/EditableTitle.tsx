@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, Sparkles } from 'lucide-react';
 import { Button } from './ui/button';
+import { cn } from '../lib/utils';
 
 /**
  * Inline-editable title with optional AI regeneration.
@@ -14,7 +15,7 @@ import { Button } from './ui/button';
  *   regeneration and populates the input with the result.
  *
  * Parent is responsible for wrapping in a `group` element if hover-reveal
- * is desired (NavBar wraps the title block in `group`).
+ * is desired (SessionHeader wraps the title block in `group`).
  */
 export function EditableTitle({
   value,
@@ -115,7 +116,10 @@ export function EditableTitle({
           }}
           onClick={(e) => e.stopPropagation()}
           aria-label="Edit session title"
-          className={`${className} bg-transparent border-b border-[hsl(var(--border))] focus:border-[hsl(var(--ring))] outline-none flex-1 min-w-0 px-0.5 disabled:opacity-60`}
+          className={cn(
+            className,
+            'text-field md:text-sm bg-transparent border-b border-[hsl(var(--border))] focus:border-[hsl(var(--ring))] outline-none flex-1 min-w-0 px-0.5 disabled:opacity-60',
+          )}
         />
         {onRegenerate && (
           <Button

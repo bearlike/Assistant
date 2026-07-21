@@ -21,6 +21,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { SearchBar } from "./SearchBar"
+import type { SearchScope } from "./SearchScopeControl"
 import type { Workspace } from "../../types/agenticSearch"
 
 vi.mock("../../hooks/useAgenticSearch", async (importOriginal) => {
@@ -67,7 +68,12 @@ function workspace(): Workspace {
   }
 }
 
-function renderBar(over: Partial<Parameters<typeof SearchBar>[0]> = {}) {
+function renderBar(
+  over: Partial<Omit<Parameters<typeof SearchBar>[0], "scope">> & {
+    scope?: Partial<SearchScope>
+  } = {},
+) {
+  const { scope: scopeOver, ...rest } = over
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
@@ -77,13 +83,18 @@ function renderBar(over: Partial<Parameters<typeof SearchBar>[0]> = {}) {
         onSubmit={vi.fn()}
         workspace={workspace()}
         workspaces={[workspace()]}
-        onPickWorkspace={vi.fn()}
+        onSelectWorkspace={vi.fn()}
         onNewWorkspace={vi.fn()}
-        tier="auto"
-        onTierChange={vi.fn()}
-        model=""
-        onModelChange={vi.fn()}
-        {...over}
+        scope={{
+          tier: "auto",
+          onTierChange: vi.fn(),
+          model: "",
+          onModelChange: vi.fn(),
+          fallbackModels: [],
+          onFallbackModelsChange: vi.fn(),
+          ...scopeOver,
+        }}
+        {...rest}
       />
     </QueryClientProvider>,
   )
@@ -97,14 +108,14 @@ describe("SearchBar scope control (tier · model · sources)", () => {
   })
 
   it("resting label follows the tier prop (Deep names the deep preset)", () => {
-    renderBar({ tier: "deep" })
+    renderBar({ scope: { tier: "deep" } })
     expect(screen.getByRole("button", { name: SCOPE_PILL_LABEL })).toHaveTextContent(
       "Deep · gpt-5.5",
     )
   })
 
   it("an explicit override replaces the preset in the label", () => {
-    renderBar({ model: "openai/gpt-5.5" })
+    renderBar({ scope: { model: "openai/gpt-5.5" } })
     const pill = screen.getByRole("button", { name: SCOPE_PILL_LABEL })
     expect(pill).toHaveTextContent("Auto · gpt-5.5")
   })
@@ -128,14 +139,14 @@ describe("SearchBar scope control (tier · model · sources)", () => {
 
   it("picking a tier row emits onTierChange with the tier id", () => {
     const onTierChange = vi.fn()
-    renderBar({ onTierChange })
+    renderBar({ scope: { onTierChange } })
     fireEvent.keyDown(screen.getByRole("button", { name: SCOPE_PILL_LABEL }), { key: "Enter" })
     fireEvent.click(screen.getByText("max depth · wide fan-out"))
     expect(onTierChange).toHaveBeenCalledWith("deep")
   })
 })
 
-describe("SearchBar — past-query suggestions dedupe + unique identity (#98)", () => {
+describe("SearchBar — past-query suggestions dedupe + unique identity", () => {
   // cmdk identifies CommandItems by `value`; identical query text under a
   // shared value made every rerun of a query hover/select as one. The fix:
   // dedupe the rendered Recent list by normalized text (keep most recent) AND
@@ -193,7 +204,7 @@ describe("SearchBar — past-query suggestions dedupe + unique identity (#98)", 
   })
 })
 
-describe("SearchBar — the input is the single query home (#96)", () => {
+describe("SearchBar — the input is the single query home", () => {
   // The results band echoed the query as italic subtext; the fix moves the
   // query to exactly ONE place — the bar's input. The compact bar reflects the
   // controlled `value` and surfaces no second copy of the query string.

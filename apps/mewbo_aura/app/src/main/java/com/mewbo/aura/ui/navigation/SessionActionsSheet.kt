@@ -4,12 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,12 +40,14 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mewbo.aura.data.model.SessionSummary
+import com.mewbo.aura.ui.common.SheetActionRow
+import com.mewbo.aura.ui.common.SheetErrorCaption
+import com.mewbo.aura.ui.common.SheetHeader
+import com.mewbo.aura.ui.common.SheetShape
 import com.mewbo.aura.ui.theme.AuraColors
-import com.mewbo.aura.ui.theme.AuraShape
 import com.mewbo.aura.ui.theme.AuraSpacing
 import com.mewbo.aura.ui.theme.AuraType
 import com.mewbo.aura.ui.theme.VectorGlyphFill
@@ -132,54 +131,14 @@ private fun RootActionsPane(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(bottom = AuraSpacing.Composer.internalPadding)) {
-        SessionHeader(session = session)
+        // "Untitled session" fallback identical to `RecentSessionRow`.
+        SheetHeader(text = session.title?.takeIf { it.isNotBlank() } ?: "Untitled session")
         HorizontalDivider(color = AuraColors.outlineHairline)
         SheetActionRow(label = "Rename", icon = Icons.Outlined.Edit, enabled = !busy, onClick = onRenameTap)
         SheetActionRow(label = "Archive", icon = ArchiveGlyph, enabled = !busy, onClick = onArchiveTap)
         if (error != null) {
-            InlineErrorCaption(error)
+            SheetErrorCaption(error)
         }
-    }
-}
-
-/** Non-interactive title header (caption/secondary treatment, same tier `ComposerOptionsSheet`'s
- * "Session" section label uses) — "Untitled session" fallback identical to `RecentSessionRow`. */
-@Composable
-private fun SessionHeader(session: SessionSummary, modifier: Modifier = Modifier) {
-    Text(
-        text = session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
-        style = AuraType.sectionHeader,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = AuraSpacing.screenGutter, vertical = AuraSpacing.DrawerRow.sectionHeaderTopPad / 2),
-    )
-}
-
-@Composable
-private fun SheetActionRow(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .height(AuraSpacing.DrawerRow.height)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = AuraSpacing.screenGutter),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (enabled) AuraColors.iconPrimary else AuraColors.textTertiary,
-            modifier = Modifier.size(AuraSpacing.DrawerRow.iconSize),
-        )
-        Spacer(Modifier.width(AuraSpacing.DrawerRow.iconToLabelGap))
-        Text(
-            text = label,
-            style = AuraType.listItem,
-            color = if (enabled) AuraColors.textPrimary else AuraColors.textTertiary,
-            modifier = Modifier.weight(1f),
-        )
     }
 }
 
@@ -243,7 +202,7 @@ private fun RenamePane(
                 .focusRequester(focusRequester),
         )
         if (error != null) {
-            InlineErrorCaption(error)
+            SheetErrorCaption(error)
         }
     }
 }
@@ -293,19 +252,6 @@ private fun RenamePaneHeader(onBack: () -> Unit, onConfirm: () -> Unit, confirmE
     }
 }
 
-@Composable
-private fun InlineErrorCaption(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = AuraType.caption,
-        color = AuraColors.accentError,
-        modifier = modifier.padding(horizontal = AuraSpacing.screenGutter, vertical = AuraSpacing.Composer.gapTight),
-    )
-}
-
-/** Top corners only, same as `ComposerOptionsSheet`/`ModelPickerSheet`. */
-private val SheetShape = RoundedCornerShape(topStart = AuraShape.radiusBubble, topEnd = AuraShape.radiusBubble)
-
 /** Server-side title cap (task brief) — input beyond this length is simply not accepted. */
 private const val RenameMaxLength = 120
 
@@ -315,11 +261,12 @@ private val ConfirmSpinnerSize: Dp = 16.dp
 private val ConfirmSpinnerStroke: Dp = 2.dp
 
 /**
- * Hand-ported "archive box" glyph — `material-icons-core` (the app's only icon dependency, no
- * `material-icons-extended`) has no archive glyph at all. Simplified stroked house style, same
- * convention as `ui/chat/ChatIcons`' `PhotoGlyph`/`FileGlyph`/`StopTile`: a lid rectangle, a box
- * body below it, and a small filled pull-tab slot — recognizable as "archive," not a literal
- * Material Symbols path trace.
+ * Hand-ported "archive box" glyph, predating `material-icons-extended` (added to the catalog
+ * 2026-07-14; apps/mewbo_aura/CLAUDE.md § Iconography). A legacy hand-roll kept as-is — an existing
+ * reuse is not a "new hand-roll" — though it is now replaceable by an extended glyph. Simplified
+ * stroked house style, same convention as `ui/chat/ChatIcons`' `PhotoGlyph`/`FileGlyph`/`StopTile`:
+ * a lid rectangle, a box body below it, and a small filled pull-tab slot — recognizable as
+ * "archive," not a literal Material Symbols path trace.
  */
 private val ArchiveGlyph: ImageVector by lazy {
     ImageVector.Builder(name = "Archive", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)

@@ -121,7 +121,7 @@ class _FakeRuntime:
 
     def append_event(self, session_id, event):
         # Mirrors SessionRuntime.append_event: records the raw transcript event
-        # verbatim so the terminal-failure completion is observable in tests (#40).
+        # verbatim so the terminal-failure completion is observable in tests.
         self.events.append(event)
 
     def run_sync(self, **kwargs):
@@ -169,13 +169,13 @@ def test_responder_returns_validated_object_and_scopes_session():
 
 
 def test_responder_stamps_structured_provenance_tag_and_surface():
-    """``_prepare`` stamps a per-session ``structured:run:<id>`` tag + surface (#78/#87).
+    """``_prepare`` stamps a per-session ``structured:run:<id>`` tag + surface.
 
     Without this the session is untagged → ``SessionOrigin`` falls back to
     ``user`` and the trace loses ``surface:<platform>``. The tag is UNIQUE per
     session (``structured:run:<id>``), never the bare ``structured:run`` prefix —
     a constant tag would collide on the tag-keyed store and let one run steal
-    every other run's tag (#87). This also covers the MCP ``structured_query``
+    every other run's tag. This also covers the MCP ``structured_query``
     tool, which posts to the same route.
     """
     from mewbo_core.structured_response import STRUCTURED_RUN_TAG
@@ -204,7 +204,7 @@ def test_responder_persists_structured_output_event_for_async_get():
     in-memory ``emit.payload`` the sync ``run()`` relies on. So ``_prepare`` MUST
     wire the emit tool's ``event_logger`` to ``runtime.append_event``. Without it
     a *successful* emit produced no event and the async GET 422'd "model did not
-    emit" despite the run succeeding (#40). This fails if the logger is unwired.
+    emit" despite the run succeeding. This fails if the logger is unwired.
     """
     runtime = _FakeRuntime(tool_inputs=[{"name": "Ada", "age": 36}])
     responder = StructuredResponder(runtime=runtime, schema=_PERSON_SCHEMA)
@@ -509,7 +509,7 @@ def test_start_async_redrives_when_first_pass_misses_emit():
 def test_start_async_records_terminal_failure_when_emit_never_fires():
     """When neither drive triggers emit_result, start_async must persist a
     terminal FAILURE completion (not silently `completed`) so summarize_session
-    reports `failed` and GET surfaces the reason — never a late phantom 422 (#40).
+    reports `failed` and GET surfaces the reason — never a late phantom 422.
     """
     done = threading.Event()
 
@@ -540,7 +540,7 @@ def test_start_async_records_terminal_failure_when_emit_never_fires():
 def test_start_async_records_terminal_failure_when_validation_cap_hit():
     """When the model emits but fails schema validation up to the cap,
     start_async persists a terminal failure whose reason names the validation
-    failure — the emit.failed branch of _failure_reason (#40)."""
+    failure — the emit.failed branch of _failure_reason."""
     done = threading.Event()
 
     class _InvalidRuntime(_FakeRuntime):

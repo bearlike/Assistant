@@ -19,26 +19,56 @@ USER root
 WORKDIR /app
 
 # 1. Copy only dependency metadata first (layer caching — survives source changes)
+# Workspace discovery needs every member/source manifest, even for a --package
+# install that never builds the others.
 COPY pyproject.toml uv.lock ./
 COPY packages/mewbo_core/pyproject.toml packages/mewbo_core/pyproject.toml
+COPY packages/mewbo_tools/pyproject.toml packages/mewbo_tools/pyproject.toml
+COPY packages/mewbo_graph/pyproject.toml packages/mewbo_graph/pyproject.toml
+COPY apps/mewbo_api/pyproject.toml apps/mewbo_api/pyproject.toml
+COPY apps/mewbo_cli/pyproject.toml apps/mewbo_cli/pyproject.toml
 COPY apps/mewbo_mcp/pyproject.toml apps/mewbo_mcp/pyproject.toml
+COPY apps/mewbo_ha_conversation/pyproject.toml apps/mewbo_ha_conversation/pyproject.toml
 
 # 2. Copy source
 COPY packages/ packages/
 COPY apps/mewbo_mcp/ apps/mewbo_mcp/
 COPY configs/ configs/
 
-# 3. Install with BuildKit cache mount (pip wheels survive rebuilds)
+# 3. Install the locked closure for the mcp app — standard uv container flow
+# (never re-resolve from pyproject ranges at build time; see Dockerfile.api).
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-        -e packages/mewbo_core \
-        -e apps/mewbo_mcp
+    uv sync --frozen --no-dev --package mewbo-mcp
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 4. Entrypoint + tracked init.d scripts — the SAME pair Dockerfile.api uses.
+# This image previously had no entrypoint at all, so it started with none of
+# the runtime setup the api gets: no internal-CA trust, no git credentials, no
+# forge CLIs. Listed file-by-file rather than `COPY docker/init.d/` for the
+# leak reason spelled out in Dockerfile.api.
+COPY docker/entrypoint.sh /app/docker/entrypoint.sh
+COPY docker/init.d/00-toolbox.sh \
+     docker/init.d/10-git-setup.sh \
+     docker/init.d/12-agent-clis.sh \
+     docker/init.d/15-tea-setup.sh \
+     /app/docker/init.d/
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/init.d/*.sh
+
+# Runtime toolbox for gh/tea (see Dockerfile.api for the build-vs-runtime rule).
+RUN mkdir -p /opt/mewbo-tools/bin && chown -R 1000:1000 /opt/mewbo-tools
+ENV PATH="/opt/mewbo-tools/bin:$PATH"
 
 ENV MASTER_API_TOKEN='msk-strong-password' \
     MEWBO_MCP_HOST='127.0.0.1' \
     MEWBO_MCP_PORT='5127' \
     MEWBO_API_URL='http://localhost:5125'
 
+# Shorter than the api's list — this image mounts none of the wiki/plan/IDE
+# scratch volumes, so naming them here would only warn about absent paths.
+ENV INIT_CHOWN_DIRS="/app/data /opt/mewbo-tools"
+
 USER mewbo
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["mewbo-mcp"]

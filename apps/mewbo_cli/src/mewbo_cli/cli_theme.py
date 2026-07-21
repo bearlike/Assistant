@@ -3,8 +3,8 @@
 Provides the canonical Palette dataclass (15 roles), build_theme() factory,
 and ThemeManager (atomic class) for registering and switching Textual themes.
 
-This is the keystone palette contract imported by DiffView (#153) and the rest
-of the full-Textual rewrite (epic #149). Injected, never global.
+This is the keystone palette contract imported by DiffView and the rest
+of the full-Textual rewrite. Injected, never global.
 """
 
 from __future__ import annotations

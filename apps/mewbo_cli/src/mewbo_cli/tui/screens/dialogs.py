@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""In-app modal pickers for the Mewbo TUI (#157).
+"""In-app modal pickers for the Mewbo TUI.
 
 ``ModalScreen`` equivalents of the four ``DialogFactory`` primitives
 (``select_one`` / ``select_many`` / ``prompt_text`` / ``confirm``). They run
-inside the ONE ``MewboApp`` loop (#150) — pushed with ``app.push_screen(modal,
+inside the ONE ``MewboApp`` loop — pushed with ``app.push_screen(modal,
 callback)`` — instead of spinning up a second blocking Textual ``App`` the way
 ``DialogFactory`` must for the plain fallback. ``DialogFactory`` stays intact for
 the no-TTY path; these are the in-app path, sharing its key contract

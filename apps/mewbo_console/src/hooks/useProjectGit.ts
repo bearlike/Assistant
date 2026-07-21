@@ -79,16 +79,31 @@ export function useProjectGit(activeProject: string | null | undefined): Project
     void qc.invalidateQueries({ queryKey: ["project-git", projectKey] });
   }, [qc, projectKey]);
 
+  /**
+   * A worktree IS a managed project row: ``GET /api/projects`` returns it as
+   * a child entry with ``is_worktree`` set, and ``useProjects()`` /
+   * ``useVirtualProjects()`` both key off the ``['projects']`` root. Without
+   * this, creating or deleting a worktree here leaves that list stale for up
+   * to its 60s default ``staleTime`` — the new worktree's own project card
+   * (and every other ``['projects']`` consumer: the composer's ConfigMenu
+   * picker, `ProjectLabel`) doesn't see the change. This is the ONE seam for
+   * worktree writes, so invalidate here rather than in each caller.
+   */
+  const invalidateAfterWorktreeWrite = useCallback(() => {
+    invalidate();
+    void qc.invalidateQueries({ queryKey: ["projects"] });
+  }, [invalidate, qc]);
+
   const createMutation = useMutation({
     mutationFn: (input: CreateWorktreeInput) =>
       createWorktree(projectKey as string, input),
-    onSuccess: () => invalidate(),
+    onSuccess: () => invalidateAfterWorktreeWrite(),
   });
 
   const deleteMutation = useMutation({
     mutationFn: ({ worktreeId, force }: { worktreeId: string; force?: boolean }) =>
       deleteWorktree(projectKey as string, worktreeId, force ?? false),
-    onSuccess: () => invalidate(),
+    onSuccess: () => invalidateAfterWorktreeWrite(),
   });
 
   const createWorktreeFor = useCallback(
@@ -130,7 +145,11 @@ export function useProjectGit(activeProject: string | null | undefined): Project
     currentBranch: branchesQuery.data?.current_branch ?? null,
     branchesInUse: branchesQuery.data?.branches_in_use ?? [],
     worktrees: worktreesQuery.data ?? [],
-    loading: branchesQuery.isPending || worktreesQuery.isPending,
+    // `isLoading` (= pending AND fetching), never `isPending`: a DISABLED query
+    // stays `pending` forever, so `isPending` pins `loading` true for a project
+    // that isn't a git repo (the worktrees query is skipped on purpose) and no
+    // consumer can ever render the "not a git repository" state.
+    loading: branchesQuery.isLoading || worktreesQuery.isLoading,
     error,
     reason: branchesQuery.data?.reason,
     refresh: invalidate,

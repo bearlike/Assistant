@@ -68,4 +68,31 @@ class SessionSummaryDtoTest {
 
         assertFalse(response.sessions.single().toDomain().running)
     }
+
+    /** hard-termination: the summary carries `terminated`/`terminated_at` (and
+     * `status:"terminated"`, `recoverable:false`) - the drawer/domain must map them through. */
+    @Test
+    fun `maps the terminated fields the summary carries for a permanently terminated session`() {
+        val raw = """
+            {"sessions":[
+                {"session_id":"dead","status":"terminated","running":false,"recoverable":false,
+                 "terminated":true,"terminated_at":"2026-07-13T20:00:00+00:00"}
+            ]}
+        """.trimIndent()
+        val summary = json.decodeFromString(SessionsListResponseDto.serializer(), raw).sessions.single().toDomain()
+
+        assertTrue(summary.terminated)
+        assertEquals("2026-07-13T20:00:00+00:00", summary.terminatedAt)
+        assertEquals("terminated", summary.status)
+        assertFalse(summary.recoverable)
+    }
+
+    @Test
+    fun `terminated defaults false and terminatedAt null when absent from the wire`() {
+        val raw = """{"sessions":[{"session_id":"abc"}]}"""
+        val summary = json.decodeFromString(SessionsListResponseDto.serializer(), raw).sessions.single().toDomain()
+
+        assertFalse(summary.terminated)
+        assertNull(summary.terminatedAt)
+    }
 }

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#30302e" />
+    <title>Widget · Mewbo</title>
+    <style>
+      /* Standalone host: the stlite widget fills the whole viewport. #root is
+         the positioned ancestor Streamlit's `position:absolute; inset:0` .stApp
+         anchors to (see StliteWidgetPanel notes).
+
+         #root is sized with `position:fixed; inset:0`, NOT `height:100vh` (nor a
+         `height:100%` chain through html/body): inside an embedded Android
+         WebView every viewport unit (vh/svh/lvh/dvh) and the root element's
+         percentage height can resolve to 0 — the WebView never feeds Blink a
+         viewport-unit basis — while fixed-positioning geometry is always
+         correct. Verified live on an Android device + redroid: 100vh
+         measured 0px, fixed inset:0 measured the full viewport. */
+      html, body { margin: 0; background: #30302e; }
+      #root { position: fixed; inset: 0; overflow: hidden; }
+
+      /* Streamlit's runtime (emotion) styles size the app frame with 100dvh —
+         both stMain and its anonymous wrapper div — so they collapse to 0 in
+         the same WebViews for the same reason. Re-anchor them to the real app
+         frame. data-testid is the stable handle; emotion class hashes churn
+         per build and must never be referenced here. */
+      [data-testid="stAppViewContainer"] > div,
+      [data-testid="stMain"] { height: 100% !important; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Relative src (no leading slash) so the relative-base build keeps this
+         page relocatable to any origin/mount path (e.g. the Android WebView's
+         appassets.androidplatform.net). -->
+    <script type="module" src="./src/widget/host.ts"></script>
+  </body>
+</html>

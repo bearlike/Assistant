@@ -6,7 +6,7 @@
  *     "Recent sessions ⌄"), not a static aria-hidden label.
  *  2. The past-query example chips REPLAY a stored run (run_id → onOpenRun) and
  *     fall back to a fresh search (no run_id → onSubmit) — the replay-not-rerun
- *     contract, with the stable `title` strings the inert test (#80) keys off.
+ *     contract, with the stable `title` strings the inert test keys off.
  *
  * vitest runs WITHOUT globals, so cleanup is wired explicitly (console
  * convention) and we stub scrollIntoView (jsdom omits it).
@@ -52,11 +52,15 @@ function renderLanding(
         workspace={ws}
         workspaces={[ws]}
         sources={[]}
-        tier="auto"
-        onTierChange={vi.fn()}
-        model=""
-        onModelChange={vi.fn()}
-        onPickWorkspace={vi.fn()}
+        scope={{
+          tier: "auto",
+          onTierChange: vi.fn(),
+          model: "",
+          onModelChange: vi.fn(),
+          fallbackModels: [],
+          onFallbackModelsChange: vi.fn(),
+        }}
+        onSelectWorkspace={vi.fn()}
         onSubmit={overrides.onSubmit ?? vi.fn()}
         onOpenCreate={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -138,7 +142,7 @@ describe("LandingPanel — past-query chips (replay vs rerun)", () => {
     expect(chip.querySelector(".truncate")).not.toBeNull()
   })
 
-  it("dedupes identical past queries into ONE example chip (#98)", () => {
+  it("dedupes identical past queries into ONE example chip", () => {
     // Three runs of the same query collapse to a single chip — they previously
     // shared a `key={e.q}` and hovered/replayed as twins.
     renderLanding(
@@ -154,7 +158,7 @@ describe("LandingPanel — past-query chips (replay vs rerun)", () => {
     expect(screen.getAllByTitle("Replay this search")).toHaveLength(1)
   })
 
-  it("keeps the most recent duplicate's run for the surviving chip (#98)", () => {
+  it("keeps the most recent duplicate's run for the surviving chip", () => {
     const onOpenRun = vi.fn()
     renderLanding(
       workspace({
@@ -170,7 +174,7 @@ describe("LandingPanel — past-query chips (replay vs rerun)", () => {
   })
 })
 
-describe("LandingPanel — workspace card meta row is single-line (#98)", () => {
+describe("LandingPanel — workspace card meta row is single-line", () => {
   // The meta/action shelf must NEVER wrap to a second line: `flex-nowrap` on
   // the row + `flex-none` on the action cluster + `whitespace-nowrap` on the
   // "N past" pill, pinned to the card bottom via `mt-auto`.

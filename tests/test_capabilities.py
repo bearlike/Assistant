@@ -92,7 +92,7 @@ def test_filter_by_capabilities_session_ordering_irrelevant():
 
 
 # ------------------------------------------------------------------
-# augment_session_capabilities + the provider push registry (#83-B)
+# augment_session_capabilities + the provider push registry
 # ------------------------------------------------------------------
 
 

@@ -150,7 +150,7 @@ export function KnowledgeGraph3DScreen({ slug, platform }: KnowledgeGraph3DScree
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <WikiTopBar repo={slug} showBackToAll />
+      <WikiTopBar repo={slug} showBackToAll showSettings />
       <Graph3DView
         graph={graph}
         stats={stats}

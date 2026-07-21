@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full-transcript modal view (``ctrl+o``) for the active session (#157).
+"""Full-transcript modal view (``ctrl+o``) for the active session.
 
 The inline transcript shows the conversational surface; this modal exposes the
 *full* record for the active session — tool inputs + outputs, assistant /

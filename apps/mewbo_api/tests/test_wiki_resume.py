@@ -1,4 +1,4 @@
-"""WikiResume driver + /v1/wiki resume/recoverable routes (Gitea #54, Part B)."""
+"""WikiResume driver + /v1/wiki resume/recoverable routes (Part B)."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -6,9 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 from mewbo_api.wiki.resume import WikiResume
 from mewbo_graph.entities.types import Entity
-from mewbo_graph.wiki.credentials import CredentialStore
+from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.tokens import CloneTokenCache
 from mewbo_graph.wiki.types import (
     Frontmatter,
     IndexingJob,
@@ -32,6 +31,11 @@ def runtime(store):
     rt.wiki_store = store
     rt.resolve_session.return_value = "sess-resume"
     rt.start_async.return_value = True
+    # In-flight guard: WikiResume.resume checks runtime.is_running(session_id)
+    # before mutating anything. A bare MagicMock() would be truthy here, tripping
+    # every test in this file — pin the default to "not running" like the sibling
+    # runtime_stub fixture in tests/wiki/test_routes.py already does.
+    rt.is_running.return_value = False
     return rt
 
 
@@ -65,8 +69,12 @@ def _seed_interrupted_at_pages(store, *, job_id="j-resume", slug="org/repo"):
         "model": "anthropic/claude-sonnet-4-6", "filterMode": "exclude",
         "dirs": [], "files": [],
     })
-    store.upsert_nodes(slug, [_node(slug, f"n{i}") for i in range(4)])
-    store.upsert_entities(slug, [Entity(name="Widget", type="concept")])
+    store.upsert_nodes(
+        slug, [_node(slug, f"n{i}") for i in range(4)], commit_sha="abc123"
+    )
+    store.upsert_entities(
+        slug, [Entity(name="Widget", type="concept")], commit_sha="abc123"
+    )
     ids = [f"p{i}" for i in range(7)]
     store.save_job_plan(job_id, [{"id": pid, "title": pid} for pid in ids])
     for pid in ids:
@@ -108,14 +116,25 @@ def test_resume_readvertises_wiki_capability(store, runtime):
     assert cap_calls, "resume must advertise the wiki capability"
 
 
-def test_resume_restores_credential(store, runtime):
-    """The durable per-slug credential is warmed into CloneTokenCache so the
-    re-clone authenticates after the warming process is gone."""
+def test_resume_does_not_disturb_durable_credential(store, runtime):
+    """Resume no longer warms an ephemeral cache — CloneTokenCache is gone.
+
+    The re-clone authenticates via the clone tool's own ``resolve_chain``,
+    which reads the durable per-slug ``CredentialStore`` directly at clone
+    time. This test documents that resume leaves that store untouched."""
     job_id, slug = _seed_interrupted_at_pages(store)
-    CredentialStore.save(store, slug, RepoCredential(kind="token", value="ghp_dur", username=None))
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(slug),
+        RepoCredential(kind="token", value="ghp_dur", username=None),
+    )
 
     WikiResume.resume(store, runtime, job_id)
-    assert CloneTokenCache.peek(job_id) == "ghp_dur"
+
+    cred = CredentialStore.load(store, CredentialScope.from_slug(slug))
+    assert cred is not None
+    assert cred.kind == "token"
+    assert cred.value == "ghp_dur"
 
 
 def test_resume_injects_plan_summary_into_indexer(store, runtime):
@@ -132,8 +151,11 @@ def test_resume_injects_plan_summary_into_indexer(store, runtime):
     assert "RESUME" in kw["user_query"]
     assert "SKIP wiki_build_graph" in kw["user_query"]
     assert "p3" in kw["user_query"]
-    # Commit-pinned re-clone (recorded SHA, not latest HEAD).
-    assert "abc123" in kw["user_query"]
+    # The commit pin is now SERVER-SIDE (wiki_clone_repo resolves job.commit_sha
+    # itself and ignores any ref the model supplies) — the rendered prompt no
+    # longer carries a ``ref:`` line or the recorded sha at all; see
+    # test_render_resume_query_never_renders_a_ref_line for the dedicated check.
+    assert "abc123" not in kw["user_query"]
 
 
 def test_resume_user_initiated_resets_recovery_cap(store, runtime):

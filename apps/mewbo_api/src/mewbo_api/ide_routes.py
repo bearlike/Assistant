@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -11,6 +10,7 @@ from flask_restx import Namespace, Resource, fields
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from mewbo_api.auth.guard_registry import guard
 from mewbo_api.ide import (
     SESSION_ID_RE,
     DockerUnavailable,
@@ -84,29 +84,25 @@ _ide_max_lifetime_model = ide_ns.model(
 )
 
 AuthResult = tuple[dict, int] | None
-AuthGuard = Callable[[], AuthResult]
-
-
-def _no_auth() -> AuthResult:
-    return None
 
 
 # Populated by ``init_ide`` at app startup.
 _manager: IdeManager | None = None
 _runtime: SessionRuntime | None = None
-_require_api_key: AuthGuard = _no_auth
 
 
-def init_ide(
-    manager: IdeManager,
-    runtime: SessionRuntime,
-    require_api_key: AuthGuard,
-) -> None:
-    """Wire the namespace to its collaborators (called once at app startup)."""
-    global _manager, _runtime, _require_api_key
+def init_ide(manager: IdeManager, runtime: SessionRuntime) -> None:
+    """Wire the namespace to its collaborators (called once at app startup).
+
+    Authentication and authorization are NOT wired here: every view in this
+    module declares its own requirement with ``@guard.requires``, which resolves
+    the live ``AuthKit`` through ``guard_registry`` at request time. Injecting a
+    guard here as well would be a second, silently-unused path to the same
+    decision.
+    """
+    global _manager, _runtime
     _manager = manager
     _runtime = runtime
-    _require_api_key = require_api_key
 
 
 class ExtendBody(BaseModel):
@@ -125,15 +121,17 @@ class ExtendBody(BaseModel):
 
 
 def _precheck(session_id: str) -> AuthResult:
-    """Run auth + session_id regex + manager availability in one call.
+    """Check the session_id shape + manager availability in one call.
 
     Returns ``None`` on success (the caller may then use ``_manager``
     unconditionally) or an ``(error_body, status)`` tuple that the route
     should return verbatim.
+
+    Authentication/authorization is NOT here: each verb declares it with
+    ``@guard.requires("ide.access")``, which runs before the handler body and
+    therefore still answers ahead of both checks below — the original
+    auth -> session-id -> manager ordering is unchanged.
     """
-    auth_error = _require_api_key()
-    if auth_error:
-        return auth_error
     if not SESSION_ID_RE.match(session_id):
         return {"message": "session not found"}, 404
     if _manager is None:  # pragma: no cover - only hit if init_ide wasn't called
@@ -203,6 +201,7 @@ class IdeResource(Resource):
     @ide_ns.response(200, "Reconnected to the existing IDE container", _ide_instance_model)
     @kit.errors(404, 409, 503, shape="message")
     @kit.auth_error()
+    @guard.requires("ide.access")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Create or reconnect to the session's code-server container."""
         error = _precheck(session_id)
@@ -235,6 +234,7 @@ class IdeResource(Resource):
     @ide_ns.response(200, "Current IDE instance state", _ide_instance_model)
     @kit.errors(404, 503, shape="message")
     @kit.auth_error()
+    @guard.requires("ide.access")
     def get(self, session_id: str) -> tuple[dict, int]:
         """Return current instance state or 404 if none exists."""
         error = _precheck(session_id)
@@ -259,6 +259,7 @@ class IdeResource(Resource):
     @ide_ns.response(204, "IDE container stopped and removed (no body)")
     @kit.errors(404, 503, shape="message")
     @kit.auth_error()
+    @guard.requires("ide.access")
     def delete(self, session_id: str) -> tuple[dict, int]:
         """Stop and remove the container, deleting Mongo + deadline file."""
         error = _precheck(session_id)
@@ -314,6 +315,7 @@ class IdeExtendResource(Resource):
     @kit.errors(404, 503, shape="message")
     @kit.errors(400, shape="message")
     @kit.auth_error()
+    @guard.requires("ide.access")
     def post(self, session_id: str) -> tuple[dict, int]:
         """Push ``expires_at`` forward, rejecting requests past ``max_deadline``."""
         error = _precheck(session_id)

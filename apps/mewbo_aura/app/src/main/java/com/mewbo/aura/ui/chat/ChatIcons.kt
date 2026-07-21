@@ -1,5 +1,9 @@
 package com.mewbo.aura.ui.chat
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
@@ -7,17 +11,40 @@ import androidx.compose.ui.unit.dp
 import com.mewbo.aura.ui.theme.VectorGlyphFill
 
 /**
- * Hand-rolled vectors for glyphs that aren't in the app's curated `material-icons-core` set
- * (composer: mic, stop, waveform, stop-tile, up-arrow; chat chrome: two-line menu, content-copy,
- * volume-up) - `material-icons-extended` isn't in the dependency catalog and this task may not
- * edit build files (apps/mewbo_aura/CLAUDE.md). Path data mirrors the standard Material glyphs at
- * 24dp where one exists (StopTile/TwoLineMenu/ContentCopy have no Material analog - see their own
- * docs); fill/stroke is [VectorGlyphFill] (ui/theme/Color.kt) so `Icon`'s default `tint =
- * LocalContentColor.current` paints these paths - no raw `Color` reference here (ui/CLAUDE.md
- * token discipline). ChatIcons.Stop is also reused, unmodified, as the C4 trailing-circle glyph
- * in ui/composer (out of this task's ownership - do not rename/remove without checking that lane).
+ * FROZEN LEGACY hand-rolled glyph set. These vectors predate `material-icons-extended`, which was
+ * added to the dependency catalog on 2026-07-14 (apps/mewbo_aura/CLAUDE.md § Iconography). They cover
+ * glyphs the app's original `material-icons-core`-only floor lacked (composer: mic, stop, waveform,
+ * stop-tile, up-arrow; chat chrome: two-line menu, content-copy, volume-up; tool cards: clock) plus a
+ * few with no Material analog at all (StopTile/TwoLineMenu/ContentCopy - see their own docs). The set
+ * is FROZEN: existing reuses stay (a reused hand-rolled glyph is not a "new hand-roll"), but NEW
+ * glyphs pull from `material-icons-extended` first - do not add a hand-rolled path here. Path data
+ * mirrors the standard Material glyphs at 24dp where one exists; fill/stroke is [VectorGlyphFill]
+ * (ui/theme/Color.kt) so `Icon`'s default `tint = LocalContentColor.current` paints these paths - no
+ * raw `Color` reference here (ui/CLAUDE.md token discipline). ChatIcons.Stop is also reused,
+ * unmodified, as the C4 trailing-circle glyph in ui/composer (do not rename/remove without checking
+ * that lane).
  */
 object ChatIcons {
+
+    // --- Scope glyphs: off-the-shelf material-icons-extended aliases (NOT hand-rolled) ---
+    // Composer scope row + project/tool pickers (user directive 2026-07-14). One-line library
+    // references, centralized so every scope glyph choice lives in one place. These are NOT part of
+    // this file's legacy hand-rolled path set (frozen — new glyphs pull from material-icons-extended,
+    // added to the dependency catalog 2026-07-14). Filled weight, matching every other icon surface.
+
+    /** The "project / workspace" scope prefix (composer scope row + real project rows) — a folder.
+     * Tinted [com.mewbo.aura.ui.theme.AuraColors.scopeProject]. */
+    val ProjectScope: ImageVector get() = Icons.Filled.Folder
+
+    /** The ephemeral "Temporary" project's DISTINCT prefix (project pickers) — a clock (schedule),
+     * marking the throwaway temp-dir cwd apart from real, saved projects (paired with a divider below
+     * it, §F). Reads "time-bound / transient" without the destructive-action ambiguity a trash glyph
+     * would carry next to a selectable row. */
+    val TemporaryProjectScope: ImageVector get() = Icons.Filled.Schedule
+
+    /** The "tools" scope prefix (composer scope row) — a wrench (`build`). Tinted
+     * [com.mewbo.aura.ui.theme.AuraColors.scopeTool]. */
+    val ToolScope: ImageVector get() = Icons.Filled.Build
 
     val Mic: ImageVector by lazy {
         ImageVector.Builder(name = "Mic", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
@@ -190,7 +217,7 @@ object ChatIcons {
             .build()
     }
 
-    /** Composer options sheet's "Photos" pill leading glyph (Gitea #177 W2) - no Material analog
+    /** Composer options sheet's "Photos" pill leading glyph - no Material analog
      * available at this task's dependency floor, so a simplified mountain-in-frame silhouette, same
      * stroked house style as [StopTile]/[ContentCopy]. */
     val PhotoGlyph: ImageVector by lazy {
@@ -221,7 +248,7 @@ object ChatIcons {
             .build()
     }
 
-    /** Composer options sheet's "Files" pill leading glyph (Gitea #177 W2) - simplified
+    /** Composer options sheet's "Files" pill leading glyph - simplified
      * document-with-folded-corner outline, same stroked house style as [PhotoGlyph]. */
     val FileGlyph: ImageVector by lazy {
         ImageVector.Builder(name = "FileGlyph", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
@@ -237,6 +264,43 @@ object ChatIcons {
                 moveTo(14f, 3f)
                 verticalLineTo(8f)
                 horizontalLineTo(19f)
+            }
+            .build()
+    }
+
+    /**
+     * The alarm action card's header glyph (`ui/chat/toolcards/AlarmToolCard`), mirroring Material
+     * "schedule" (clock face + hands) - `material-icons-core` carries no clock or alarm glyph at
+     * all, so there was nothing to reuse.
+     *
+     * The face is ONE path with two subpaths wound in OPPOSITE directions (outer circle
+     * counter-clockwise, inner clockwise) - that's what punches the hole out under the default
+     * nonzero fill rule, exactly as Material's own path data does it. Splitting them into two
+     * `.path {}` blocks (the house style everywhere else in this file) would fill the inner circle
+     * back in and render a solid disc.
+     */
+    val Clock: ImageVector by lazy {
+        ImageVector.Builder(name = "Clock", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+            .path(fill = SolidColor(VectorGlyphFill)) {
+                moveTo(11.99f, 2f)
+                curveTo(6.47f, 2f, 2f, 6.48f, 2f, 12f)
+                reflectiveCurveToRelative(4.47f, 10f, 9.99f, 10f)
+                curveTo(17.52f, 22f, 22f, 17.52f, 22f, 12f)
+                reflectiveCurveTo(17.52f, 2f, 11.99f, 2f)
+                close()
+                moveTo(12f, 20f)
+                curveToRelative(-4.42f, 0f, -8f, -3.58f, -8f, -8f)
+                reflectiveCurveToRelative(3.58f, -8f, 8f, -8f)
+                reflectiveCurveToRelative(8f, 3.58f, 8f, 8f)
+                reflectiveCurveToRelative(-3.58f, 8f, -8f, 8f)
+                close()
+                moveTo(12.5f, 7f)
+                horizontalLineTo(11f)
+                verticalLineToRelative(6f)
+                lineToRelative(5.25f, 3.15f)
+                lineToRelative(0.75f, -1.23f)
+                lineToRelative(-4.5f, -2.67f)
+                close()
             }
             .build()
     }
@@ -261,6 +325,55 @@ object ChatIcons {
                 curveToRelative(0f, -1.77f, -1.02f, -3.29f, -2.5f, -4.03f)
                 verticalLineToRelative(8.05f)
                 curveToRelative(1.48f, -0.73f, 2.5f, -2.25f, 2.5f, -4.02f)
+                close()
+            }
+            .build()
+    }
+
+    /** The widget card's "enter full screen" affordance glyph, mirroring Material
+     * "fullscreen" - four corner brackets. Predates `material-icons-extended` (added 2026-07-14); a
+     * legacy hand-roll kept as-is under the frozen-set rule above, not evidence extended is
+     * unavailable. Four disjoint corners, one `.path {}` each (house style). */
+    val Fullscreen: ImageVector by lazy {
+        ImageVector.Builder(name = "Fullscreen", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+            .path(fill = SolidColor(VectorGlyphFill)) {
+                moveTo(7f, 14f)
+                horizontalLineTo(5f)
+                verticalLineToRelative(5f)
+                horizontalLineToRelative(5f)
+                verticalLineToRelative(-2f)
+                horizontalLineTo(7f)
+                verticalLineToRelative(-3f)
+                close()
+            }
+            .path(fill = SolidColor(VectorGlyphFill)) {
+                moveTo(5f, 10f)
+                horizontalLineToRelative(2f)
+                verticalLineTo(7f)
+                horizontalLineToRelative(3f)
+                verticalLineTo(5f)
+                horizontalLineTo(5f)
+                verticalLineToRelative(5f)
+                close()
+            }
+            .path(fill = SolidColor(VectorGlyphFill)) {
+                moveTo(17f, 17f)
+                horizontalLineToRelative(-3f)
+                verticalLineToRelative(2f)
+                horizontalLineToRelative(5f)
+                verticalLineToRelative(-5f)
+                horizontalLineToRelative(-2f)
+                verticalLineToRelative(3f)
+                close()
+            }
+            .path(fill = SolidColor(VectorGlyphFill)) {
+                moveTo(14f, 5f)
+                verticalLineToRelative(2f)
+                horizontalLineToRelative(3f)
+                verticalLineToRelative(3f)
+                horizontalLineToRelative(2f)
+                verticalLineTo(5f)
+                horizontalLineToRelative(-5f)
                 close()
             }
             .build()

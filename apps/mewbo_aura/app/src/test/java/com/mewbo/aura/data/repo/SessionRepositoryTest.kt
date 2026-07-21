@@ -2,6 +2,8 @@ package com.mewbo.aura.data.repo
 
 import com.mewbo.aura.data.api.ArchiveSessionResponseDto
 import com.mewbo.aura.data.api.AuraApi
+import com.mewbo.aura.data.api.ForkSessionRequest
+import com.mewbo.aura.data.api.ForkSessionResponseDto
 import com.mewbo.aura.data.api.RenameSessionRequest
 import com.mewbo.aura.data.api.RenameSessionResponseDto
 import com.mewbo.aura.data.api.SessionSummaryDto
@@ -9,12 +11,16 @@ import com.mewbo.aura.data.api.SessionsListResponseDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
+import retrofit2.Response
 
 /**
  * Drawer long-press sheet (Rename/Archive): [SessionRepository.renameSession] and
@@ -108,6 +114,86 @@ class SessionRepositoryTest {
 
         try {
             repo.archiveSession("s1")
+            throw AssertionError("expected CancellationException to propagate")
+        } catch (e: CancellationException) {
+            // expected - see ModelRepository.catalog's own fix-wave discipline this mirrors.
+        }
+    }
+
+    @Test
+    fun `forkSession returns the new id on 201 and leaves the source session untouched in the cache`() = runTest {
+        val api = mock(AuraApi::class.java)
+        val repo = repoWithSessions(api, "s1")
+        `when`(api.forkSession("s1", ForkSessionRequest())).thenReturn(
+            Response.success(201, ForkSessionResponseDto(sessionId = "s1-fork", forkedFrom = "s1")),
+        )
+        // forkSession's own best-effort refreshSessions() re-fetches the list - simulate the
+        // backend now reporting both the source and the new forked row.
+        `when`(api.listSessions(false)).thenReturn(
+            SessionsListResponseDto(
+                sessions = listOf(
+                    SessionSummaryDto(sessionId = "s1", title = "Original s1"),
+                    SessionSummaryDto(sessionId = "s1-fork", title = "Original s1"),
+                ),
+            ),
+        )
+
+        val newId = repo.forkSession("s1")
+
+        assertEquals("s1-fork", newId)
+        val titles = repo.sessions.value.associate { it.sessionId to it.title }
+        assertEquals("Original s1", titles["s1"])
+        assertEquals("Original s1", titles["s1-fork"])
+    }
+
+    @Test
+    fun `forkSession returns the new id even when the best-effort refreshSessions afterwards throws`() = runTest {
+        val api = mock(AuraApi::class.java)
+        val repo = repoWithSessions(api, "s1")
+        `when`(api.forkSession("s1", ForkSessionRequest())).thenReturn(
+            Response.success(201, ForkSessionResponseDto(sessionId = "s1-fork", forkedFrom = "s1")),
+        )
+        `when`(api.listSessions(false)).thenThrow(RuntimeException("network down"))
+
+        val newId = repo.forkSession("s1")
+
+        assertEquals("s1-fork", newId)
+    }
+
+    @Test
+    fun `forkSession returns null on an error response and leaves the cache untouched`() = runTest {
+        val api = mock(AuraApi::class.java)
+        val repo = repoWithSessions(api, "s1")
+        `when`(api.forkSession("s1", ForkSessionRequest())).thenReturn(
+            Response.error(409, "conflict".toResponseBody("application/json".toMediaType())),
+        )
+
+        val newId = repo.forkSession("s1")
+
+        assertNull(newId)
+        assertEquals(listOf("s1"), repo.sessions.value.map { it.sessionId })
+    }
+
+    @Test
+    fun `forkSession returns null on transport failure without touching the cache`() = runTest {
+        val api = mock(AuraApi::class.java)
+        val repo = repoWithSessions(api, "s1")
+        `when`(api.forkSession("s1", ForkSessionRequest())).thenThrow(RuntimeException("network down"))
+
+        val newId = repo.forkSession("s1")
+
+        assertNull(newId)
+        assertEquals(listOf("s1"), repo.sessions.value.map { it.sessionId })
+    }
+
+    @Test
+    fun `forkSession propagates cancellation rather than degrading to null`() = runTest {
+        val api = mock(AuraApi::class.java)
+        val repo = repoWithSessions(api, "s1")
+        `when`(api.forkSession("s1", ForkSessionRequest())).thenThrow(CancellationException("cancelled"))
+
+        try {
+            repo.forkSession("s1")
             throw AssertionError("expected CancellationException to propagate")
         } catch (e: CancellationException) {
             // expected - see ModelRepository.catalog's own fix-wave discipline this mirrors.

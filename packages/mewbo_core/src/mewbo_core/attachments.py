@@ -155,7 +155,7 @@ def parse_to_markdown(source: str) -> str | None:
     try:
         from markitdown import MarkItDown
     except Exception as exc:  # noqa: BLE001
-        logging.warning("markitdown not available: %s", exc)
+        logging.warning("markitdown not available: {}", exc)
         return None
     try:
         md = MarkItDown(enable_plugins=False)
@@ -170,7 +170,7 @@ def parse_to_markdown(source: str) -> str | None:
         if isinstance(text, str) and text.strip():
             return text
     except Exception as exc:  # noqa: BLE001
-        logging.warning("markitdown failed for %s: %s", source, exc)
+        logging.warning("markitdown failed for {}: {}", source, exc)
     return None
 
 

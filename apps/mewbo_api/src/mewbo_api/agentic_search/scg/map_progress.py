@@ -1,4 +1,4 @@
-"""Phase-progress writer for map-source (SCG indexing) jobs — spec #19 §16.2.
+"""Phase-progress writer for map-source (SCG indexing) jobs — spec §16.2.
 
 A map job's progress lives in the *agentic_search* store (alongside search
 runs), so it rides the same run-event-log + ``RunSseGenerator`` plumbing. This
@@ -54,7 +54,7 @@ class MapJobProgress:
         try:
             store.update_map_job(job_id, phase=phase, phase_started_at=started_at)
         except Exception:
-            logging.warning("Map job %s snapshot phase update failed for %s", job_id, phase)
+            logging.warning("Map job {} snapshot phase update failed for {}", job_id, phase)
         return idx
 
 

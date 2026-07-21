@@ -1,15 +1,12 @@
 import { useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
-  AlertTriangle,
   ArrowUp,
   CircleSlash,
   Clock,
   Code,
-  ExternalLink,
   FileText,
   Globe,
-  Layers,
   Loader2,
   MessageSquare,
   Shapes,
@@ -19,8 +16,8 @@ import {
 } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { cardSurface } from "@/components/ui/card-surface"
 import { cn } from "@/lib/utils"
-import { CopyButton } from "../CopyButton"
 import type {
   ResultKind,
   SearchResult,
@@ -31,8 +28,9 @@ import type {
 } from "../../types/agenticSearch"
 import { AnswerCard } from "./AnswerCard"
 import { ResultCard } from "./ResultCard"
+import { ResultsTopBand } from "./ResultsTopBand"
 import { RightRail } from "./RightRail"
-import { SearchBar } from "./SearchBar"
+import { type SearchScope } from "./SearchScopeControl"
 import { SrcAvatar } from "./SrcAvatar"
 import { TraceDrawer } from "./TraceDrawer"
 import { agentSnapshot, laneSource, runProgress } from "./utils"
@@ -43,6 +41,15 @@ const NEXT_TIER: Record<SearchTier, SearchTier | null> = {
   auto: "deep",
   deep: null,
 }
+
+/** Streaming-affordance skeleton cards, capped so a wide fan-out doesn't flood
+ *  the results column with placeholders. */
+const MAX_SKELETON_CARDS = 2
+/** Delay before scrolling a cited result into view — long enough for the
+ *  expand-tier DOM to settle before measuring its position. */
+const CITE_SCROLL_DELAY_MS = 50
+/** How long a cited result's highlight ring stays lit. */
+const CITE_HIGHLIGHT_DURATION_MS = 1400
 
 const KINDS: { id: "all" | ResultKind; name: string; Icon: typeof Sparkles }[] = [
   { id: "all", name: "All", Icon: Sparkles },
@@ -67,11 +74,8 @@ interface ResultsPanelProps {
   /** Final cited synthesis has landed (`answer_ready`). */
   answerReady: boolean
   isLoading: boolean
-  tier: SearchTier
-  onTierChange: (tier: SearchTier) => void
-  /** Per-run model override ("" = tier default) — session-instance-only. */
-  model: string
-  onModelChange: (model: string) => void
+  /** Budget tier + model override, bundled with their setters. */
+  scope: SearchScope
   /** A new run submission is in flight (mutation pending). */
   submitting?: boolean
   onRun: (query: string) => void
@@ -82,9 +86,9 @@ interface ResultsPanelProps {
   /** Replay a stored run by id (GET snapshot) — past-query suggestions use
    *  this instead of re-running. */
   onOpenRun?: (runId: string) => void
-  /** Open the workspace's capability graph (#79). */
+  /** Open the workspace's capability graph. */
   onOpenGraph?: () => void
-  onPickWorkspace: (workspace: Workspace) => void
+  onSelectWorkspace: (workspace: Workspace) => void
   onOpenCreate: () => void
   onOpenConfig: (workspace: Workspace) => void
 }
@@ -99,17 +103,14 @@ export function ResultsPanel({
   done,
   answerReady,
   isLoading,
-  tier,
-  onTierChange,
-  model,
-  onModelChange,
+  scope,
   submitting = false,
   onRun,
   onDeeper,
   onCancel,
   onOpenRun,
   onOpenGraph,
-  onPickWorkspace,
+  onSelectWorkspace,
   onOpenCreate,
   onOpenConfig,
 }: ResultsPanelProps) {
@@ -149,7 +150,7 @@ export function ResultsPanel({
     setPending(`Regarding ${ctx}: `)
     focusBar()
   }
-  // Explicit re-run of THIS exact query (#80): distinct from replaying the
+  // Explicit re-run of THIS exact query: distinct from replaying the
   // stored run — it fires a fresh POST /runs for the same text. Disabled while
   // a submission is already in flight or the workspace has no sources.
   const handleRunAgain = () => {
@@ -158,7 +159,7 @@ export function ResultsPanel({
   }
   // "Go deeper": re-run the same query one tier up (fast→auto→deep). The run's
   // own tier (echoed on the payload) seeds the ladder; hidden at deep.
-  const runTier: SearchTier = run.tier ?? tier
+  const runTier: SearchTier = run.tier ?? scope.tier
   const deeperTier = NEXT_TIER[runTier]
   const handleDeeper = () => {
     if (!deeperTier || submitting || workspace.sources.length === 0) return
@@ -169,7 +170,7 @@ export function ResultsPanel({
   // the full set, no fake `elapsed`-based reveal. While agents are still
   // running we show a couple of skeleton cards as a streaming affordance.
   //
-  // Belt-and-suspenders dedup by unique result id (#82): the stream reducer
+  // Belt-and-suspenders dedup by unique result id: the stream reducer
   // already drops duplicate `result` ids, but a snapshot↔SSE merge (or a
   // backend echo replay) could still hand a list with repeats. Two cards
   // sharing an id render the same React key AND the same `result-<id>` DOM id —
@@ -184,7 +185,17 @@ export function ResultsPanel({
     })
   }, [run.results])
   const runningAgents = run.trace.filter((a) => agentSnapshot(a).running).length
-  const skeletons = done ? 0 : Math.min(2, Math.max(runningAgents, run.trace.length === 0 ? 1 : 0))
+  const skeletons = done
+    ? 0
+    : Math.min(MAX_SKELETON_CARDS, Math.max(runningAgents, run.trace.length === 0 ? 1 : 0))
+
+  // O(1) rank lookup for result cards — `findIndex` inside the `filtered.map`
+  // render below would be O(n²) over the result count.
+  const rankById = useMemo(() => {
+    const m = new Map<string, number>()
+    visibleResults.forEach((r, i) => m.set(r.id, i + 1))
+    return m
+  }, [visibleResults])
 
   const kindCounts = useMemo(() => {
     const c: Record<string, number> = { all: visibleResults.length }
@@ -202,8 +213,8 @@ export function ResultsPanel({
     window.setTimeout(() => {
       const el = document.getElementById(`result-${rid}`)
       el?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }, 50)
-    window.setTimeout(() => setHighlightId(null), 1400)
+    }, CITE_SCROLL_DELAY_MS)
+    window.setTimeout(() => setHighlightId(null), CITE_HIGHLIGHT_DURATION_MS)
   }
 
   const submit = (q: string) => {
@@ -212,109 +223,37 @@ export function ResultsPanel({
   }
 
   return (
-    <main className="flex-1 overflow-y-auto">
-      {/* Top band — one calm sticky search surface in the landing composer's
-          visual language: the bar is the focal point (capped + centered like
-          the hero), then a single muted meta row. The query appears ONCE, in
-          the input — editing/refining is the input's job, not a redundant echo.
-          Status lives in exactly one place (the meta row's left), the right
-          gathers the calm Copy-link + sources affordances with real spacing. */}
-      <div className="sticky top-0 z-10 bg-[hsl(var(--background)/0.92)] backdrop-blur-md border-b border-[hsl(var(--border))]">
-        <div className="mx-auto max-w-[1320px] px-6 py-3">
-          <div ref={barRef} className="mx-auto max-w-[570px]">
-            <SearchBar
-              value={pending}
-              onChange={setPending}
-              onSubmit={submit}
-              onReplay={onOpenRun}
-              workspace={workspace}
-              workspaces={workspaces}
-              onPickWorkspace={onPickWorkspace}
-              onNewWorkspace={onOpenCreate}
-              sources={sources}
-              onOpenConfig={onOpenConfig}
-              tier={tier}
-              onTierChange={onTierChange}
-              model={model}
-              onModelChange={onModelChange}
-              submitting={submitting}
-              variant="compact"
-            />
-            {workspace.sources.length === 0 && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-[hsl(var(--destructive))]">
-                <AlertTriangle className="h-3.5 w-3.5 flex-none" />
-                <span>
-                  This workspace has no sources — new searches can't run.{" "}
-                  <button
-                    type="button"
-                    onClick={() => onOpenConfig(workspace)}
-                    className="underline underline-offset-2 hover:opacity-80"
-                  >
-                    Add sources
-                  </button>
-                </span>
-              </div>
-            )}
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-[hsl(var(--muted-foreground))]">
-              <RunStats
-                count={visibleResults.length}
-                elapsedMs={elapsedMs}
-                done={done}
-                failed={failed}
-                cancelled={cancelled}
-              />
-              {/* Agent-trace trigger lives in the meta row too, so it's reachable
-                  at EVERY width (the right rail — which holds the only at-rest
-                  trigger — is hidden below 1100px). */}
-              <button
-                type="button"
-                onClick={() => setTraceOpen(true)}
-                className="inline-flex items-center gap-1 hover:text-[hsl(var(--primary))] transition-colors"
-              >
-                <Layers className="h-3 w-3" />
-                Agent trace
-                {!done && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--primary))] animate-pulse" />
-                )}
-              </button>
-              {/* The backing agent session (deep-dive into the orchestrator's
-                  conversation) — only when the BE stamped a session id. */}
-              {run.session_id && (
-                <a
-                  href={`/s/${encodeURIComponent(run.session_id)}`}
-                  className="inline-flex items-center gap-1 hover:text-[hsl(var(--primary))] transition-colors"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Open agent session
-                </a>
-              )}
-              {/* Steering: cancel an in-flight run. Mirrors the composer Stop —
-                  fire-and-forget; the stream's `cancelled` frame flips the view. */}
-              {!done && onCancel && (
-                <button
-                  type="button"
-                  onClick={onCancel}
-                  className="inline-flex items-center gap-1 text-[hsl(var(--destructive))] hover:opacity-80 transition-opacity"
-                >
-                  <CircleSlash className="h-3 w-3" />
-                  Cancel
-                </button>
-              )}
-              {/* Sources config now lives in the composer's scope control —
-                  the band keeps only the share affordance (DRY: status reads
-                  in RunStats, config reads in one place). */}
-              {run.run_id && (
-                <CopyButton
-                  text={`${window.location.origin}/search?run=${encodeURIComponent(run.run_id)}`}
-                  className="ml-auto h-7 px-2 text-[11px]"
-                >
-                  Copy link
-                </CopyButton>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className="flex-1 overflow-y-auto">
+      {/* Screen-reader-only: the pre-search landing gets its h1 for free from
+          ProductHero, but this is a mutually-exclusive alternate view (see
+          AgenticSearchView's `run ? <ResultsPanel/> : <LandingPanel/>`) — with
+          no heading here, heading-navigation skips the results screen
+          entirely. Visually silent by design; the query itself is the loud,
+          on-screen version (SearchBar). */}
+      <h1 className="sr-only">Results for "{query}"</h1>
+      <ResultsTopBand
+        workspace={workspace}
+        workspaces={workspaces}
+        sources={sources}
+        scope={scope}
+        submitting={submitting}
+        pending={pending}
+        onPendingChange={setPending}
+        onSubmit={submit}
+        onOpenRun={onOpenRun}
+        onSelectWorkspace={onSelectWorkspace}
+        onOpenCreate={onOpenCreate}
+        onOpenConfig={onOpenConfig}
+        barRef={barRef}
+        run={run}
+        resultCount={visibleResults.length}
+        elapsedMs={elapsedMs}
+        done={done}
+        failed={failed}
+        cancelled={cancelled}
+        onCancel={onCancel}
+        onOpenTrace={() => setTraceOpen(true)}
+      />
 
       {/* Results body — a CONTENT-SIZED two-column grid centered in the
           viewport. The old grid was `minmax(0,1fr) | 270` capped at 1320 with a
@@ -382,7 +321,7 @@ export function ResultsPanel({
             <FilterRail
               counts={kindCounts}
               active={activeKind}
-              onPick={setActiveKind}
+              onSelect={setActiveKind}
             />
           </div>
 
@@ -390,7 +329,7 @@ export function ResultsPanel({
             {/* Deliberate zero-results state for a finished run. Failed and
                 cancelled runs surface their own terminal blocks above. */}
             {done && !failed && !cancelled && visibleResults.length === 0 && (
-              <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
+              <div className={cn(cardSurface({ radius: "right" }), "px-4 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]")}>
                 <div className="font-medium text-[hsl(var(--foreground))]">No results</div>
                 <p className="mt-1 text-xs [text-wrap:balance]">
                   None of this workspace's sources returned a match for this query.
@@ -398,7 +337,7 @@ export function ResultsPanel({
                 <button
                   type="button"
                   onClick={handleRefine}
-                  className="mt-3 text-[hsl(var(--primary))] hover:underline text-xs"
+                  className="mt-3 text-[hsl(var(--primary-text))] hover:underline text-xs"
                 >
                   Refine query
                 </button>
@@ -410,14 +349,14 @@ export function ResultsPanel({
                 <button
                   type="button"
                   onClick={() => setActiveKind("all")}
-                  className="text-[hsl(var(--primary))] hover:underline"
+                  className="text-[hsl(var(--primary-text))] hover:underline"
                 >
                   Show all
                 </button>
               </div>
             )}
             {filtered.map((r) => {
-              const num = visibleResults.findIndex((x) => x.id === r.id) + 1
+              const num = rankById.get(r.id) ?? 0
               return (
                 <ResultCard
                   key={r.id}
@@ -441,11 +380,11 @@ export function ResultsPanel({
               <span className="flex-1 h-px bg-[hsl(var(--border))]" />
               <span>End of results</span>
               <span aria-hidden>·</span>
-              <button type="button" onClick={handleFollowUp} className="hover:text-[hsl(var(--primary))]">
+              <button type="button" onClick={handleFollowUp} className="hover:text-[hsl(var(--primary-text))]">
                 Ask a follow-up
               </button>
               <span aria-hidden>·</span>
-              <button type="button" onClick={handleRefine} className="hover:text-[hsl(var(--primary))]">
+              <button type="button" onClick={handleRefine} className="hover:text-[hsl(var(--primary-text))]">
                 Refine query
               </button>
               <span aria-hidden>·</span>
@@ -453,7 +392,7 @@ export function ResultsPanel({
                 type="button"
                 onClick={handleRunAgain}
                 disabled={submitting || workspace.sources.length === 0}
-                className="hover:text-[hsl(var(--primary))] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="hover:text-[hsl(var(--primary-text))] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Run again
               </button>
@@ -465,7 +404,7 @@ export function ResultsPanel({
                     type="button"
                     onClick={handleDeeper}
                     disabled={submitting || workspace.sources.length === 0}
-                    className="inline-flex items-center gap-1 hover:text-[hsl(var(--primary))] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex items-center gap-1 hover:text-[hsl(var(--primary-text))] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ArrowUp className="h-3 w-3" />
                     Go deeper ({deeperTier})
@@ -499,7 +438,7 @@ export function ResultsPanel({
         elapsedMs={elapsedMs}
         done={done}
       />
-    </main>
+    </div>
   )
 }
 
@@ -520,7 +459,7 @@ interface RunStatsProps {
  *    must NEVER render "0.0s" — an absent total_ms / 0 elapsed means "duration
  *    unknown", which we show as silence, not a fabricated zero.
  */
-function RunStats({ count, elapsedMs, done, failed, cancelled }: RunStatsProps) {
+export function RunStats({ count, elapsedMs, done, failed, cancelled }: RunStatsProps) {
   // Real seconds only when we have a positive elapsed basis (live tick while
   // streaming, or a real total_ms / derived snapshot duration when done).
   const seconds = elapsedMs > 0 ? elapsedMs / 1000 : null
@@ -570,7 +509,7 @@ function ProgressStrip({ agents, sources, visibleResults }: ProgressStripProps) 
   // only mounts mid-run (`!done`), so the bar is always in its streaming state.
   const progress = runProgress(agents, false)
   return (
-    <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 shadow-[var(--elev-1)]">
+    <div className={cn(cardSurface({ radius: "right", elevation: "elev-1" }), "p-3")}>
       <div className="h-0.5 w-full bg-[hsl(var(--muted))] relative rounded-full overflow-hidden mb-2.5">
         <span
           className="absolute inset-y-0 left-0 bg-[hsl(var(--primary))] transition-[width]"
@@ -586,11 +525,11 @@ function ProgressStrip({ agents, sources, visibleResults }: ProgressStripProps) 
             <div
               key={a.id}
               className={cn(
-                "inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[11px] font-medium",
+                "inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-2xs font-medium",
                 state === "queued" &&
                   "border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] opacity-60",
                 state === "searching" &&
-                  "border-[hsl(var(--primary)/0.4)] bg-[hsl(var(--primary)/0.06)] text-[hsl(var(--primary))]",
+                  "border-[hsl(var(--primary)/0.4)] bg-[hsl(var(--primary)/0.06)] text-[hsl(var(--primary-text))]",
                 state === "done" &&
                   "border-[hsl(var(--success)/0.4)] bg-[hsl(var(--success)/0.06)] text-[hsl(var(--success))]",
                 state === "empty" &&
@@ -611,8 +550,8 @@ function ProgressStrip({ agents, sources, visibleResults }: ProgressStripProps) 
               {/* Per-source result count is meaningless for the coordinator
                   (results carry connector source ids, never "") — hide it
                   rather than render a misleading 0. */}
-              {state === "done" && !isCoordinator && <span className="font-mono">{count}</span>}
-              {state === "empty" && !isCoordinator && <span className="font-mono">0</span>}
+              {state === "done" && !isCoordinator && <span>{count}</span>}
+              {state === "empty" && !isCoordinator && <span>0</span>}
             </div>
           )
         })}
@@ -624,10 +563,10 @@ function ProgressStrip({ agents, sources, visibleResults }: ProgressStripProps) 
 interface FilterRailProps {
   counts: Record<string, number>
   active: "all" | ResultKind
-  onPick: (id: "all" | ResultKind) => void
+  onSelect: (id: "all" | ResultKind) => void
 }
 
-function FilterRail({ counts, active, onPick }: FilterRailProps) {
+function FilterRail({ counts, active, onSelect }: FilterRailProps) {
   // Only render kinds that actually have results (plus "All"). A zero-count chip
   // rendered greyed-out looked identical to a populated one and implied results
   // that aren't there — hiding it removes the dead affordance entirely. The
@@ -649,7 +588,7 @@ function FilterRail({ counts, active, onPick }: FilterRailProps) {
           <button
             key={k.id}
             type="button"
-            onClick={() => onPick(k.id)}
+            onClick={() => onSelect(k.id)}
             className={cn(
               "inline-flex items-center gap-1.5 px-3 h-7 rounded-full border text-xs transition-colors",
               isActive
@@ -660,7 +599,7 @@ function FilterRail({ counts, active, onPick }: FilterRailProps) {
             <k.Icon className="h-3 w-3" />
             <span>{k.name}</span>
             {n > 0 && (
-              <span className="font-mono text-[10px] opacity-70">{n}</span>
+              <span className="text-2xs opacity-70">{n}</span>
             )}
           </button>
         )
@@ -671,7 +610,7 @@ function FilterRail({ counts, active, onPick }: FilterRailProps) {
 
 function ResultSkeleton() {
   return (
-    <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 shadow-[var(--elev-1)] space-y-2">
+    <div className={cn(cardSurface({ radius: "right", elevation: "elev-1" }), "p-4 space-y-2")}>
       <div className="h-3 w-1/3 rounded bg-[hsl(var(--muted))] animate-pulse" />
       <div className="h-4 w-4/5 rounded bg-[hsl(var(--muted))] animate-pulse" />
       <div className="h-3 w-3/5 rounded bg-[hsl(var(--muted))] animate-pulse" />

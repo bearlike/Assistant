@@ -1,4 +1,4 @@
-"""Golden byte-equality tests for the migrated tool-use-loop prompts (Gitea #89).
+"""Golden byte-equality tests for the migrated tool-use-loop prompts.
 
 Phase 1 is a VERBATIM extraction: the registry must reproduce the exact bytes
 that ``tool_use_loop.py`` previously hardcoded (system-prompt section wrappers,
@@ -328,6 +328,13 @@ def test_budget_warning_is_verbatim():
     )
 
 
+def test_task_objective_reminder_is_verbatim():
+    reg = get_prompt_registry()
+    assert reg.render("loop.task_objective_reminder", goal="ship the feature") == (
+        "Reminder — your task: ship the feature"
+    )
+
+
 def test_agent_results_header_is_verbatim():
     reg = get_prompt_registry()
     result_lines = "[abcd1234] completed: did the thing"
@@ -357,11 +364,36 @@ def test_final_answer_synthesis_is_verbatim():
     )
 
 
+def test_budget_exhausted_wrapup_is_verbatim():
+    reg = get_prompt_registry()
+    assert reg.render("loop.budget_exhausted_wrapup") == (
+        "BUDGET EXHAUSTED: No further tool calls are available. Produce "
+        "your final summary now — what you accomplished, what remains, "
+        "and any hand-off notes for whoever continues this work."
+    )
+
+
 def test_stall_warning_is_verbatim():
     reg = get_prompt_registry()
     assert (
         reg.render("loop.stall_warning")
         == "STALL WARNING: No progress for 2+ minutes. Wrap up or report status."
+    )
+
+
+def test_agent_budget_warning_is_verbatim():
+    reg = get_prompt_registry()
+    assert reg.render("loop.agent_budget_warning") == (
+        "AGENT BUDGET WARNING: Your own step budget is nearly exhausted. "
+        "Wrap up and return your result soon."
+    )
+
+
+def test_wall_deadline_warning_is_verbatim():
+    reg = get_prompt_registry()
+    assert reg.render("loop.wall_deadline_warning") == (
+        "WALL DEADLINE WARNING: You are approaching your wall-clock time "
+        "limit. Wrap up and report status soon."
     )
 
 

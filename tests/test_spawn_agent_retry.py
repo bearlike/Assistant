@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for bounded auto-retry / re-delegation of sub-agents (Gitea #118).
+"""Tests for bounded auto-retry / re-delegation of sub-agents.
 
 Coverage
 --------
@@ -13,7 +13,7 @@ Coverage
     * the non-blocking root path retries via the lifecycle manager and the
       retry is visible through ``check_agents`` + ``render_agent_tree``.
 
-A fresh ``ToolUseLoop`` is built per attempt, so each retry re-runs the #54
+A fresh ``ToolUseLoop`` is built per attempt, so each retry re-runs the
 fallback ladder rather than this layer reinventing model escalation.
 """
 

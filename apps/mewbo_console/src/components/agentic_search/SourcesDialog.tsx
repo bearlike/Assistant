@@ -1,4 +1,4 @@
-import { Check, Loader2, Settings2 } from "lucide-react"
+import { Check, Loader2, Settings } from "lucide-react"
 import { useLocation } from "wouter"
 
 import {
@@ -14,10 +14,10 @@ import { cn } from "@/lib/utils"
 import {
   isMapJobActive,
   useMapJobs,
-  useMapJobStream,
   useScgStatus,
   useStartMapJob,
 } from "../../hooks/useAgenticSearch"
+import { useMapJobStream } from "../../hooks/mapJobStream"
 import type { MapJobPhase, SourceCatalogEntry } from "../../types/agenticSearch"
 import { SrcAvatar } from "./SrcAvatar"
 
@@ -34,7 +34,7 @@ const MAP_PHASE_LABEL: Record<MapJobPhase, string> = {
 interface SourcesDialogProps {
   open: boolean
   sources: SourceCatalogEntry[]
-  onClose: () => void
+  onOpenChange: (open: boolean) => void
 }
 
 /**
@@ -43,7 +43,7 @@ interface SourcesDialogProps {
  * Graph (`GET /scg`), and offers a "Map" action per source with live phase
  * progress over the map-events SSE stream (reload-safe via the jobs snapshot).
  */
-export function SourcesDialog({ open, sources, onClose }: SourcesDialogProps) {
+export function SourcesDialog({ open, sources, onOpenChange }: SourcesDialogProps) {
   const [, navigate] = useLocation()
   const scgQuery = useScgStatus(open)
   const scg = scgQuery.data
@@ -51,8 +51,8 @@ export function SourcesDialog({ open, sources, onClose }: SourcesDialogProps) {
   const mappedIds = new Set((scg?.sources ?? []).map((s) => s.source_id))
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto shadow-[var(--elev-3)]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto [box-shadow:var(--elev-3)]">
         <DialogHeader>
           <DialogTitle>Sources</DialogTitle>
           <DialogDescription>
@@ -67,19 +67,19 @@ export function SourcesDialog({ open, sources, onClose }: SourcesDialogProps) {
             Checking graph status…
           </div>
         ) : scgQuery.isError ? (
-          <div className="text-[13px] text-[hsl(var(--destructive))]">
+          <div className="text-sm text-[hsl(var(--destructive-text))]">
             Couldn't read graph status: {scgQuery.error?.message ?? "unknown error"}
           </div>
         ) : enabled ? (
           scg?.counts && (
-            <div className="text-xs font-mono text-[hsl(var(--muted-foreground))]">
+            <div className="text-xs text-[hsl(var(--muted-foreground))]">
               {scg.counts.sources} mapped · {scg.counts.nodes} nodes ·{" "}
               {scg.counts.edges} edges · {scg.counts.recipes} recipes
             </div>
           )
         ) : (
-          <div className="flex items-start gap-2.5 p-3 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] text-[13px]">
-            <Settings2 className="h-4 w-4 flex-none mt-0.5 text-[hsl(var(--muted-foreground))]" />
+          <div className="flex items-start gap-2.5 p-3 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] text-sm">
+            <Settings className="h-4 w-4 flex-none mt-0.5 text-[hsl(var(--muted-foreground))]" />
             <div className="flex-1">
               Source mapping is off. Turn on <code className="font-mono text-xs">scg.enabled</code>{" "}
               in Settings to build the Source Capability Graph and route searches through it.
@@ -143,14 +143,14 @@ function SourceRow({ source, scgEnabled, mapped }: SourceRowProps) {
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <span className="truncate">{source.name}</span>
           {!available && (
-            <span className="text-[10px] uppercase tracking-wider font-mono text-[hsl(var(--muted-foreground))]">
+            <span className="text-2xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
               unavailable
             </span>
           )}
         </div>
         <div className="text-xs text-[hsl(var(--muted-foreground))] truncate">
           {active && phase ? (
-            <span className="inline-flex items-center gap-1.5 text-[hsl(var(--primary))]">
+            <span className="inline-flex items-center gap-1.5 text-[hsl(var(--primary-text))]">
               <Loader2 className="h-3 w-3 animate-spin" />
               {MAP_PHASE_LABEL[phase]}…
             </span>
@@ -160,14 +160,14 @@ function SourceRow({ source, scgEnabled, mapped }: SourceRowProps) {
               Starting…
             </span>
           ) : failed && failure ? (
-            <span className="text-[hsl(var(--destructive))]">Map failed: {failure}</span>
+            <span className="text-[hsl(var(--destructive-text))]">Map failed: {failure}</span>
           ) : (
             source.desc
           )}
         </div>
       </div>
       {mapped && (
-        <span className="inline-flex items-center gap-1 text-[11px] font-mono text-[hsl(var(--success))]">
+        <span className="inline-flex items-center gap-1 text-2xs text-[hsl(var(--success))]">
           <Check className="h-3 w-3" />
           Mapped
         </span>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StatusLineRunner — user statusLine script over a JSON-on-stdin contract (#156).
+"""StatusLineRunner — user statusLine script over a JSON-on-stdin contract.
 
 Mirrors the prompt-registry / MCP-config *file-contract* philosophy: the user
 points a config knob at an executable, we hand it a **stable JSON document on

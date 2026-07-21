@@ -12,7 +12,7 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 
 /**
- * Gitea #182 P3: [SessionScopeRepository.tools] widens from MCP-only to also admit
+ * [SessionScopeRepository.tools] widens from MCP-only to also admit
  * capability-gated product tools (`scope == "plugin"`), while continuing to exclude plain core
  * builtins (`kind == "builtin"`, `scope == "builtin"` or unset) that would otherwise flood the
  * picker with entries nobody can usefully toggle.
@@ -112,7 +112,7 @@ class SessionScopeRepositoryTest {
             repo.tools()
             throw AssertionError("expected CancellationException to propagate")
         } catch (e: CancellationException) {
-            // expected - see the #181 fix-wave discipline this file's own KDoc documents.
+            // expected - see the discipline this file's own KDoc documents.
         }
     }
 

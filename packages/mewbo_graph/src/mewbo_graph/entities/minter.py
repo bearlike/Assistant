@@ -31,12 +31,23 @@ class EntityMinter:
         embedder: EmbedderProtocol,
         resolver: EntityResolver,
         clock: Callable[[], str] | None = None,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> None:
-        """Wire collaborators (all injected); ``clock`` is overridable for tests."""
+        """Wire collaborators (all injected); ``clock`` is overridable for tests.
+
+        ``commit_sha``/``job_id`` attribute every entity this minter writes to the
+        index that ran it — the enrich phase passes the owning job's, so a
+        completed re-index supersedes the prior commit's entities. Both default
+        ``None``: a Q&A session also mints entities, and those carry no job, so
+        they stay commit-less and supersede preserves them as accretive memory.
+        """
         self._store = store
         self._embedder = embedder
         self._resolver = resolver
         self._clock = clock or utc_now_iso
+        self._commit_sha = commit_sha
+        self._job_id = job_id
 
     def upsert(
         self,
@@ -73,7 +84,9 @@ class EntityMinter:
             )
         else:
             entity = extracted.model_copy(update={"mentions": [mention], "status": status})
-        self._store.upsert_entities(slug, [entity])
+        self._store.upsert_entities(
+            slug, [entity], commit_sha=self._commit_sha, job_id=self._job_id
+        )
         self._embed(slug, entity)
         return entity
 
@@ -97,7 +110,9 @@ class EntityMinter:
                 "description": target.description or extracted.description,
             }
         )
-        self._store.upsert_entities(slug, [survivor])
+        self._store.upsert_entities(
+            slug, [survivor], commit_sha=self._commit_sha, job_id=self._job_id
+        )
         self._embed(slug, survivor)
         return survivor
 
@@ -117,6 +132,8 @@ class EntityMinter:
                         source_id=entity.id, target_id=decision.target_id, type="SAME_AS"
                     )
                 ],
+                commit_sha=self._commit_sha,
+                job_id=self._job_id,
             )
         return entity
 
@@ -138,6 +155,8 @@ class EntityMinter:
                         dim=len(vector),
                     )
                 ],
+                commit_sha=self._commit_sha,
+                job_id=self._job_id,
             )
 
 

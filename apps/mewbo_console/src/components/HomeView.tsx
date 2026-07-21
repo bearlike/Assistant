@@ -1,13 +1,23 @@
 import { useState, useMemo, useCallback, useRef, useEffect, type CSSProperties } from 'react';
-import { AlertCircle, Search, X, Archive, RotateCcw, Loader2, ChevronDown, ListFilter } from 'lucide-react';
-import { cn } from '../utils/cn';
+import { AlertCircle, Search, Archive, RotateCcw, Loader2, ListFilter } from 'lucide-react';
 import { SessionItem } from './SessionItem';
 import { SessionOriginBadge } from './SessionOriginBadge';
 import { InputBar } from './InputBar';
+import { ProductHero } from './ProductHero';
 import { TypewriterGreeting } from './TypewriterGreeting';
 import { QueryMode, SessionContext, SessionOrigin, SessionSummary } from '../types';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Button } from './ui/button';
+import { FOCUS_RING } from './ui/focus-ring';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from './ui/command';
+import { DialogTitle } from './ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -28,7 +38,7 @@ interface HomeViewProps {
   error?: string | null;
   archivedError?: string | null;
   actionError?: string | null;
-  onSessionSelect: (sessionId: string) => void;
+  onSelectSession: (sessionId: string) => void;
   onCreateAndRun: (
     query: string,
     context?: SessionContext,
@@ -49,7 +59,7 @@ export function HomeView({
   error,
   archivedError,
   actionError,
-  onSessionSelect,
+  onSelectSession,
   onCreateAndRun,
   onLoadArchived,
   onArchive,
@@ -58,12 +68,10 @@ export function HomeView({
   onRetry
 }: HomeViewProps) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'sessions' | 'archive'>('sessions');
   const [visibleOrigins, setVisibleOrigins] = useState<Set<SessionOrigin>>(
     () => new Set(DEFAULT_VISIBLE_ORIGINS)
   );
-  const [chevronHidden, setChevronHidden] = useState(false);
   const { projects } = useProjects();
   const projectLabel = useMemo(() => new ProjectLabel(projects), [projects]);
   const toggleOrigin = useCallback((origin: SessionOrigin) => {
@@ -77,45 +85,7 @@ export function HomeView({
   const isDefaultOriginFilter =
     visibleOrigins.size === DEFAULT_VISIBLE_ORIGINS.length &&
     DEFAULT_VISIBLE_ORIGINS.every((origin) => visibleOrigins.has(origin));
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   const sessionsRef = useRef<HTMLDivElement | null>(null);
-
-  // Chevron is a scroll affordance — show near the top of the hero, hide
-  // once the user has nudged past it, re-show when they scroll back up.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      setChevronHidden(el.scrollTop > 80);
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
-
-  // Single page-level IntersectionObserver for .fade-in-row reveal. Observes
-  // anything not yet visible on every render so freshly-rendered session rows
-  // get picked up. CSS owns the transition + stagger via --row-index.
-  useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('is-visible');
-            observer.unobserve(entry.target);
-          }
-        }
-      },
-      { threshold: 0.05 }
-    );
-    const rows = document.querySelectorAll('.fade-in-row:not(.is-visible)');
-    rows.forEach((row) => observer.observe(row));
-    return () => observer.disconnect();
-  });
-
-  const handleChevronClick = useCallback(() => {
-    sessionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
 
   // Tab switch resets the scroll to the top of the sessions area so the two
   // lists always open with the same orientation — otherwise the user can land
@@ -135,6 +105,31 @@ export function HomeView({
   const displayedSessions = scopedSessions.filter((session) =>
     visibleOrigins.has(session.origin ?? 'user')
   );
+
+  // Single page-level IntersectionObserver for .fade-in-row reveal. Observes
+  // anything not yet visible whenever the row list itself could have changed
+  // (tab switch, origin filter, or the underlying session data), rather than
+  // on every render — a bare no-deps effect recreated the observer on every
+  // keystroke elsewhere on the page (e.g. the search dialog) with no rows to
+  // pick up. CSS owns the transition + stagger via --row-index.
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.05 }
+    );
+    const rows = document.querySelectorAll('.fade-in-row:not(.is-visible)');
+    rows.forEach((row) => observer.observe(row));
+    return () => observer.disconnect();
+  }, [activeTab, displayedSessions]);
+
   const now = useMemo(() => new Date(), []);
   const recentSessions = displayedSessions.filter((session) => {
     if (!session.created_at) return true;
@@ -144,30 +139,16 @@ export function HomeView({
   const olderSessions = displayedSessions.filter(
     (session) => !recentSessions.includes(session)
   );
-  const filteredSessions = displayedSessions.filter((session) => {
-    const title = session.title?.toLowerCase() || '';
-    const project = (projectLabel.resolve(session.context).label || '').toLowerCase();
-    return (
-      title.includes(searchQuery.toLowerCase()) ||
-      project.includes(searchQuery.toLowerCase()));
-
-  });
   return (
-    <div ref={scrollRef} className="h-full w-full relative overflow-y-auto">
-      {/* Hero — occupies the full viewport so sessions sit naturally below the fold. */}
-      <section className="min-h-[85dvh] flex flex-col items-center justify-center px-4 pt-16 pb-16 relative">
-        <img
-          src="/logo-transparent.svg"
-          alt="Mewbo"
-          className="w-16 h-16 mb-6 drop-shadow-[0_0_40px_hsl(var(--primary)/.25)]" />
-        <h1 className="text-4xl sm:text-5xl font-semibold text-[hsl(var(--foreground))] tracking-tight mb-3">
-          Mewbo
-        </h1>
-        <TypewriterGreeting />
-
-        <div className="w-full max-w-4xl">
+    <div className="h-full w-full relative overflow-y-auto">
+      {/* The composer is the focal element; the hero above it is the shared
+          `ProductHero` so Tasks, Wiki and Search open on the same mark, the
+          same type and the same offset. The rotating greeting is the subtitle
+          TEXT — its typography belongs to the hero. */}
+      <ProductHero title="Agentic Tasks" subtitle={<TypewriterGreeting />}>
+        <div className="w-full max-w-[var(--thread-max-width)]">
           {(actionError || (listError && !apiUnavailable)) &&
-          <div className="mb-4">
+          <div className="mb-4 text-left">
               <Alert variant="destructive">
                 <AlertTitle>Session error</AlertTitle>
                 <AlertDescription>{actionError || listError}</AlertDescription>
@@ -185,39 +166,18 @@ export function HomeView({
             </div>
           }
         </div>
+      </ProductHero>
 
-        {/* Scroll affordance — fades out once scrolled past the hero, returns
-            when the user comes back up. Outer div centers via flex so the
-            bounce keyframe's `transform` can't fight a translate-x centering. */}
-        <div
-          aria-hidden={chevronHidden}
-          className={cn(
-            "absolute bottom-8 inset-x-0 flex justify-center transition-opacity duration-300",
-            chevronHidden && "opacity-0 pointer-events-none"
-          )}>
-          <button
-            type="button"
-            onClick={handleChevronClick}
-            aria-label="Scroll to recent sessions"
-            className="flex flex-col items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] animate-scroll-bounce">
-            <span>Recent sessions</span>
-            <ChevronDown className="w-4 h-4" />
-          </button>
-        </div>
-      </section>
-
-      {/* Sessions — naturally below the fold, scrolled as part of the same page.
-          sessions-peek-fade is on the list container (below the tabs), not this
-          wrapper, so the tab labels render at full opacity. */}
+      {/* Sessions — sit just below the hero, scrolled as part of the same page. */}
       <div ref={sessionsRef} className="w-full">
         <div className="max-w-4xl mx-auto px-4 pb-20">
           {apiUnavailable ?
           <div className="flex flex-col items-center justify-center py-24 text-center">
-              <AlertCircle className="w-10 h-10 text-red-500 mb-4" />
+              <AlertCircle className="w-10 h-10 text-[hsl(var(--destructive))] mb-4" />
               <h2 className="text-lg font-semibold text-[hsl(var(--foreground))] mb-2">
                 Unable to connect to API
               </h2>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-6 max-w-md">
+              <p className="text-sm font-normal text-[hsl(var(--muted-foreground))] mb-6 max-w-md">
                 {listError}
               </p>
               {onRetry &&
@@ -227,79 +187,111 @@ export function HomeView({
               }
             </div> :
           <>
-          <div className="sticky top-0 z-10 pt-2 mb-4 flex items-center justify-between border-b border-[hsl(var(--border-strong))] bg-[hsl(var(--background))]/85 backdrop-blur-sm shadow-[0_4px_12px_hsl(var(--background))]">
-            <div className="flex gap-8">
+          <div className="sticky top-0 z-10 pt-2 mb-4 flex items-center justify-between border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/85 backdrop-blur-sm">
+            <div className="flex gap-6">
+              {/* Active vs inactive reads off WEIGHT + colour + the underline,
+                  never off a size step — both tabs stay `text-sm`. */}
               <button
                 onClick={() => switchTab('sessions')}
-                className={`pb-3 text-sm font-medium transition-colors ${activeTab === 'sessions' ? 'text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
+                className={`pb-3 text-sm transition-colors ${activeTab === 'sessions' ? 'font-medium text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'font-normal text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
 
                 Sessions
               </button>
               <button
                 onClick={() => switchTab('archive')}
-                className={`pb-3 text-sm font-medium transition-colors ${activeTab === 'archive' ? 'text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
+                className={`pb-3 text-sm transition-colors ${activeTab === 'archive' ? 'font-medium text-[hsl(var(--foreground))] border-b-2 border-[hsl(var(--foreground))]' : 'font-normal text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'}`}>
 
                 Archive
               </button>
             </div>
+            {/* Both controls are icon-only, so each carries `aria-label` AND
+                `title`, and each pads its 16px glyph out to a 28x28 box — a bare
+                icon is a 16x16 hit target, under the 24x24 AA floor. */}
             <div className="flex items-center gap-1 pb-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
                     aria-label="Filter sessions by origin"
                     title="Filter sessions by origin"
-                    className="relative text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
+                    className={`relative p-1.5 rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${FOCUS_RING}`}>
                     <ListFilter className="w-4 h-4" />
                     {!isDefaultOriginFilter && (
-                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))]" />
+                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))]" />
                     )}
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuLabel>Show</DropdownMenuLabel>
-                  {ORIGIN_FILTERS.map(({ origin, label }) => (
-                    <DropdownMenuCheckboxItem
-                      key={origin}
-                      checked={visibleOrigins.has(origin)}
-                      onSelect={(e) => e.preventDefault()}
-                      onCheckedChange={() => toggleOrigin(origin)}>
-                      {label}
-                    </DropdownMenuCheckboxItem>
-                  ))}
+                  {/* A group label should be quieter than the rows it labels,
+                      so it drops a step and goes muted; the primitive's
+                      `font-medium` still separates it from the items. */}
+                  <DropdownMenuLabel className="text-xs text-[hsl(var(--muted-foreground))]">
+                    Show
+                  </DropdownMenuLabel>
+                  {ORIGIN_FILTERS.map(({ origin, label, icon: OriginIcon }) => {
+                    const isOn = visibleOrigins.has(origin);
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={origin}
+                        checked={isOn}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={() => toggleOrigin(origin)}
+                        // Checked vs unchecked reads off weight + colour on top
+                        // of the check glyph — every row stays `text-sm`, the
+                        // same rule the tab strip above follows.
+                        className={
+                          isOn
+                            ? 'font-medium text-[hsl(var(--foreground))]'
+                            : 'font-normal text-[hsl(var(--muted-foreground))]'
+                        }>
+                        {/* Same glyph the row's chip carries, so the filter
+                            teaches the mark the session list then uses. Sized
+                            explicitly: unlike `DropdownMenuItem`, the checkbox
+                            variant carries no `[&>svg]` rule, so an unsized
+                            lucide icon would render at its 24px default. 3.5
+                            matches the check indicator's own box. */}
+                        <span className="inline-flex items-center gap-2">
+                          <OriginIcon
+                            className="size-3.5 shrink-0 text-[hsl(var(--muted-foreground))]"
+                            aria-hidden
+                          />
+                          {label}
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
                 </DropdownMenuContent>
               </DropdownMenu>
               <button
                 onClick={() => setIsSearchOpen(true)}
                 aria-label="Search sessions"
                 title="Search sessions"
-                className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors">
+                className={`p-1.5 rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors ${FOCUS_RING}`}>
 
                 <Search className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          <div className="sessions-peek-fade">
           {activeTab === 'archive' ?
-          <div className="space-y-8 mt-6">
+          <div className="space-y-6 mt-6">
               <SessionSection
               title="Archived"
               loading={listLoading}
               sessions={displayedSessions}
               projectLabel={projectLabel}
-              onSessionSelect={onSessionSelect}
+              onSelectSession={onSelectSession}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
 
             </div> :
 
-          <div className="space-y-8 mt-6">
+          <div className="space-y-6 mt-6">
               <SessionSection
               title="Last 7 Days"
               loading={listLoading}
               sessions={recentSessions}
               projectLabel={projectLabel}
-              onSessionSelect={onSessionSelect}
+              onSelectSession={onSelectSession}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
 
@@ -308,116 +300,92 @@ export function HomeView({
               loading={listLoading && recentSessions.length === 0}
               sessions={olderSessions}
               projectLabel={projectLabel}
-              onSessionSelect={onSessionSelect}
+              onSelectSession={onSelectSession}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
 
             </div>
           }
-          </div>
           </>
           }
         </div>
       </div>
 
-      {/* Search Dialog Overlay */}
-      {isSearchOpen &&
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-start justify-center pt-32">
-          <div className="w-full max-w-2xl bg-[hsl(var(--popover))] border border-[hsl(var(--border))] rounded-xl shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[hsl(var(--border))]">
-              <h2 className="text-sm font-medium text-[hsl(var(--foreground))]">
-                {activeTab === 'archive' ?
-              'Search archived sessions' :
-              'Search sessions'}
-              </h2>
-              <Button
-              variant="ghost"
-              size="sm"
-              iconOnly
-              onClick={() => setIsSearchOpen(false)}
-              aria-label="Close search">
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-
-            <div className="p-2">
-              <div className="relative mb-2">
-                <Search className="absolute left-3 top-2.5 w-4 h-4 text-[hsl(var(--muted-foreground))]" />
-                <input
-                type="text"
-                autoFocus
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[hsl(var(--muted))] border border-[hsl(var(--border))] rounded-lg py-2 pl-9 pr-8 text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))] focus:outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]/30"
-                placeholder="Search..." />
-
-                {searchQuery &&
-              <Button
-                variant="ghost"
-                size="sm"
-                iconOnly
-                onClick={() => setSearchQuery('')}
-                aria-label="Clear search"
-                className="absolute right-1 top-1/2 -translate-y-1/2">
-                    <X className="w-3 h-3" />
-                  </Button>
-              }
-              </div>
-
-              <div className="max-h-[400px] overflow-y-auto">
-                {filteredSessions.map((session) =>
-              <div
-                key={session.session_id}
-                onClick={() => {
-                  onSessionSelect(session.session_id);
-                  setIsSearchOpen(false);
-                }}
-                className="flex items-start gap-4 p-3 hover:bg-[hsl(var(--accent))] rounded-lg cursor-pointer group">
-
-                    <div className="flex flex-col gap-1 min-w-0 flex-1">
-                      <h3 className="text-sm font-medium text-[hsl(var(--foreground))] line-clamp-2">
-                        {session.title}
-                      </h3>
-                      <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
-                        <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
-                        <SessionOriginBadge session={session} />
-                        {projectLabel.resolve(session.context).label && (
-                          <>
-                            <span>·</span>
-                            <span className="truncate">{projectLabel.resolve(session.context).label}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      {(onArchive != null || onUnarchive != null) &&
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (session.archived) {
-                            onUnarchive?.(session.session_id);
-                          } else {
-                            onArchive?.(session.session_id);
-                          }
-                        }}
-                        aria-label={session.archived ? 'Unarchive session' : 'Archive session'}
-                        className="p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-0 group-hover:opacity-100 transition-all">
-
-                        {session.archived ?
-                        <RotateCcw className="w-4 h-4" /> :
-
-                        <Archive className="w-4 h-4" />
-                        }
-                      </button>
-                      }
+      {/* Search dialog. Filtering is cmdk's own — each CommandItem's `value`
+          carries the title + resolved project label, matching how
+          ConfigMenu's project rows already drive cmdk's filter. */}
+      <CommandDialog open={isSearchOpen} onOpenChange={setIsSearchOpen}>
+        <DialogTitle className="sr-only">
+          {activeTab === 'archive' ? 'Search archived sessions' : 'Search sessions'}
+        </DialogTitle>
+        <CommandInput placeholder="Search sessions..." />
+        <CommandList>
+          {/* `CommandEmpty` spreads props AFTER its own `className`, so passing
+              one REPLACES the primitive's layout rather than merging — the
+              padding and centring have to be restated here. */}
+          <CommandEmpty className="py-6 text-center text-sm font-normal text-[hsl(var(--muted-foreground))]">
+            No sessions found.
+          </CommandEmpty>
+          <CommandGroup>
+            {displayedSessions.map((session) => {
+              const project = projectLabel.resolve(session.context).label;
+              return (
+                <CommandItem
+                  key={session.session_id}
+                  value={`${session.title ?? ''} ${project ?? ''}`}
+                  onSelect={() => {
+                    onSelectSession(session.session_id);
+                    setIsSearchOpen(false);
+                  }}
+                  className="group flex items-start justify-between gap-3 py-2.5"
+                >
+                  <div className="flex flex-col gap-1 min-w-0 flex-1">
+                    {/* The title is the row's own emphasis; everything under it
+                        is metadata and stays at the base weight. */}
+                    <h3 className="text-sm font-medium text-[hsl(var(--foreground))] line-clamp-2">
+                      {session.title}
+                    </h3>
+                    <div className="flex items-center gap-1.5 text-xs font-normal text-[hsl(var(--muted-foreground))]">
+                      <span className="whitespace-nowrap">{formatSessionTime(session.created_at)}</span>
+                      <SessionOriginBadge session={session} />
+                      {project && (
+                        <>
+                          <span>·</span>
+                          <span className="truncate">{project}</span>
+                        </>
+                      )}
                     </div>
                   </div>
-              )}
-              </div>
-            </div>
-          </div>
-        </div>
-      }
+                  {(onArchive != null || onUnarchive != null) && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (session.archived) {
+                          onUnarchive?.(session.session_id);
+                        } else {
+                          onArchive?.(session.session_id);
+                        }
+                      }}
+                      aria-label={session.archived ? 'Unarchive session' : 'Archive session'}
+                      title={session.archived ? 'Unarchive session' : 'Archive session'}
+                      // Hover-revealed, so it must also reveal on keyboard
+                      // focus — otherwise the control is unreachable by tab.
+                      className={`shrink-0 p-1 rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--accent))] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 ${FOCUS_RING} transition-all`}
+                    >
+                      {session.archived ? (
+                        <RotateCcw className="w-4 h-4" />
+                      ) : (
+                        <Archive className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+                </CommandItem>
+              );
+            })}
+          </CommandGroup>
+        </CommandList>
+      </CommandDialog>
     </div>);
 
 }
@@ -426,7 +394,7 @@ function SessionSection({
   loading,
   sessions,
   projectLabel,
-  onSessionSelect,
+  onSelectSession,
   onArchive,
   onUnarchive
 
@@ -436,20 +404,20 @@ function SessionSection({
 
 
 
-}: {title: string;loading: boolean;sessions: SessionSummary[];projectLabel: ProjectLabel;onSessionSelect: (sessionId: string) => void;onArchive?: (sessionId: string) => void;onUnarchive?: (sessionId: string) => void;}) {
+}: {title: string;loading: boolean;sessions: SessionSummary[];projectLabel: ProjectLabel;onSelectSession: (sessionId: string) => void;onArchive?: (sessionId: string) => void;onUnarchive?: (sessionId: string) => void;}) {
   return (
     <div>
-      <h3 className="text-xs font-medium text-[hsl(var(--muted-foreground))] mb-3 uppercase tracking-wider pl-2">
+      <h3 className="text-2xs font-medium text-[hsl(var(--muted-foreground))] mb-3 uppercase tracking-wider pl-2">
         {title}
       </h3>
       <div className="divide-y divide-[hsl(var(--border))]">
         {loading &&
-        <div className="text-sm text-[hsl(var(--muted-foreground))] pl-2">
+        <div className="text-sm font-normal text-[hsl(var(--muted-foreground))] pl-2">
             Loading sessions...
           </div>
         }
         {!loading && sessions.length === 0 &&
-        <div className="text-sm text-[hsl(var(--muted-foreground))] pl-2">
+        <div className="text-sm font-normal text-[hsl(var(--muted-foreground))] pl-2">
             No sessions yet.
           </div>
         }
@@ -461,7 +429,7 @@ function SessionSection({
             <SessionItem
               session={session}
               projectLabel={projectLabel}
-              onClick={onSessionSelect}
+              onClick={onSelectSession}
               onArchive={onArchive}
               onUnarchive={onUnarchive} />
           </div>

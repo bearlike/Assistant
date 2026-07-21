@@ -509,7 +509,7 @@ class TestConnectAllTimeout:
         assert "slow-srv" in results
         assert len(results["slow-srv"]) == 1
         assert results["slow-srv"][0].startswith("ERROR: ")
-        # Gitea #130: a timed-out connect is now recorded as a backoff placeholder
+        # A timed-out connect is now recorded as a backoff placeholder
         # (transient failure) so it is NOT re-dialed on every refresh — it fast-
         # fails until the window elapses. The server stays disconnected.
         state = self.pool._servers["slow-srv"]
@@ -548,7 +548,7 @@ class _DuckGroup(Exception):
 
 
 class TestConnectFailureNamesRealCause:
-    """The opaque TaskGroup wrapper must never reach the log/ERROR string (#132)."""
+    """The opaque TaskGroup wrapper must never reach the log/ERROR string."""
 
     def setup_method(self):
         reset_mcp_pool()
@@ -563,13 +563,13 @@ class TestConnectFailureNamesRealCause:
         group = _DuckGroup("unhandled errors in a TaskGroup (1 sub-exception)", [real])
 
         async def _run():
-            cfg = {"servers": {"sidestage-postgres": {"url": "http://x"}}}
+            cfg = {"servers": {"beacon-postgres": {"url": "http://x"}}}
             with patch.object(self.pool, "_connect_single", side_effect=group):
                 return await self.pool.connect_all(cfg)
 
         results = asyncio.run(_run())
-        entry = results["sidestage-postgres"][0]
-        # Consolidated onto #130's `_record_failure`: ERROR carries the coarse
+        entry = results["beacon-postgres"][0]
+        # Consolidated onto `_record_failure`: ERROR carries the coarse
         # reason AND the unwrapped cause — never the opaque TaskGroup wrapper.
         assert entry == "ERROR: dns: [Errno -2] failed to resolve host 'postgres'"
         assert "sub-exception" not in entry
@@ -586,7 +586,7 @@ class TestConnectFailureNamesRealCause:
         )
 
         async def _run():
-            cfg = {"servers": {"sidestage-postgres": {"url": "http://x"}}}
+            cfg = {"servers": {"beacon-postgres": {"url": "http://x"}}}
             with patch.object(self.pool, "_connect_single", side_effect=group):
                 await self.pool.connect_all(cfg)
 

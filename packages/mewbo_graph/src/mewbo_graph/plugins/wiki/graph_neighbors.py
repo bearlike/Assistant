@@ -115,11 +115,14 @@ class WikiGraphNeighbors:
     # ── Construction ────────────────────────────────────────────────
 
     @classmethod
-    def for_session(cls, session_id: str) -> WikiGraphNeighbors | MockSpeaker:
+    def for_session(cls, session_id: str) -> WikiGraphNeighbors | MockSpeaker | None:
         """Resolve indexer or QA ctx + build a neighbours view.
 
-        Returns a fresh instance on success, or the :func:`_err_result`
-        ``MockSpeaker`` the caller can hand back to the LLM.
+        Three outcomes, deliberately distinct: a fresh instance on success, an
+        :func:`_err_result` ``MockSpeaker`` when something genuinely FAILED (no
+        runtime), and ``None`` when the session simply is not grounded in any
+        wiki — an expected state the caller renders through
+        ``WikiSessionTool._ungrounded_result``.
         """
         runtime = cls._resolve_runtime()
         if runtime is None:
@@ -128,7 +131,7 @@ class WikiGraphNeighbors:
             ctx = resolver(session_id, runtime)
             if ctx is not None:
                 return cls(slug=ctx.slug, store=ctx.store)
-        return _err_result("internal", "wiki ctx not found for this session")
+        return None
 
     # ── Behaviour ───────────────────────────────────────────────────
 
@@ -241,6 +244,8 @@ class WikiGraphNeighborsTool(WikiSessionTool):
     async def handle(self, action_step: ActionStep) -> MockSpeaker:
         """Resolve the per-session graph and delegate to ``traverse``."""
         view = WikiGraphNeighbors.for_session(self._session_id)
+        if view is None:  # not grounded in any wiki
+            return self._ungrounded_result()
         if isinstance(view, MockSpeaker):  # err payload from _err_result
             return view
         args = self._parse_args(WikiGraphNeighborsArgs, action_step)

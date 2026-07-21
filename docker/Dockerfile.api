@@ -16,30 +16,28 @@ LABEL org.opencontainers.image.title="Mewbo API" \
 USER root
 WORKDIR /app
 
-# 0. Install git (if missing from base), GitHub CLI, and Docker CLI
-#    gh  ref: https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+# 0. Install the Docker CLI.
 #    docker ref: https://docs.docker.com/engine/install/debian/
-RUN apt-get update && apt-get install -y --no-install-recommends git wget \
-    && mkdir -p -m 755 /etc/apt/keyrings \
-    && wget -nv -O /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-        https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
+#
+# BUILD-TIME vs RUNTIME — the line this file draws:
+#   An image ships CAPABILITIES; a container acquires IDENTITY when it starts.
+#   docker-ce-cli is a capability (the Web IDE's sibling-container tooling), so
+#   it is baked here. `gh` and `tea` are identity tools — inert without the
+#   credentials that only arrive at runtime — so they are provisioned by
+#   docker/init.d/12-agent-clis.sh into a persistent toolbox volume instead.
+#   Nothing was dropped in that move; it only relocated. What it bought: this
+#   build no longer contacts cli.github.com or gitea.com, a transient 503 from
+#   either of which used to take the whole api image build down with it.
+#
+# git/wget are NOT reinstalled here — Dockerfile.base already provides both.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg \
         -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
         > /etc/apt/sources.list.d/docker.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh docker-ce-cli \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
-
-# 0b. tea (Gitea CLI) — single static binary from the official gitea.com
-#     release; runtime login setup lives in docker/init.d/15-tea-setup.sh.
-ARG TEA_VERSION=0.14.0
-RUN curl -fsSL "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-$(dpkg --print-architecture)" \
-        -o /usr/local/bin/tea \
-    && chmod +x /usr/local/bin/tea
 
 # 1. Copy only dependency metadata first (layer caching — survives source changes)
 COPY pyproject.toml uv.lock ./
@@ -47,37 +45,51 @@ COPY packages/mewbo_core/pyproject.toml packages/mewbo_core/pyproject.toml
 COPY packages/mewbo_tools/pyproject.toml packages/mewbo_tools/pyproject.toml
 COPY packages/mewbo_graph/pyproject.toml packages/mewbo_graph/pyproject.toml
 COPY apps/mewbo_api/pyproject.toml apps/mewbo_api/pyproject.toml
+# Workspace discovery needs every member/source manifest present, even for a
+# --package install that never builds them.
+COPY apps/mewbo_cli/pyproject.toml apps/mewbo_cli/pyproject.toml
+COPY apps/mewbo_mcp/pyproject.toml apps/mewbo_mcp/pyproject.toml
+COPY apps/mewbo_ha_conversation/pyproject.toml apps/mewbo_ha_conversation/pyproject.toml
 
 # 2. Copy source
 COPY packages/ packages/
 COPY apps/mewbo_api/ apps/mewbo_api/
 COPY configs/ configs/
 
-# 3. Entrypoint (runs runtime init.d scripts, then execs gunicorn)
-COPY docker/entrypoint-api.sh /app/docker/entrypoint-api.sh
-RUN chmod +x /app/docker/entrypoint-api.sh
+# 3. Entrypoint + the tracked init.d scripts (shared with Dockerfile.mcp).
+#
+# The init scripts are listed ONE BY ONE on purpose. `COPY docker/init.d/`
+# would sweep in whatever the developer has sitting in that directory —
+# it is gitignored except for the tracked few, so a local script naming an
+# internal host would be baked into a published ghcr.io image. An explicit
+# allowlist cannot leak that way.
+#
+# Baking them also keeps the runtime relocation lossless: a deployment with no
+# docker-compose.override.yml still gets git setup and the forge CLIs. Mounting
+# the directory (see docker-compose.override.example.yml) shadows these copies.
+COPY docker/entrypoint.sh /app/docker/entrypoint.sh
+COPY docker/init.d/00-toolbox.sh \
+     docker/init.d/10-git-setup.sh \
+     docker/init.d/12-agent-clis.sh \
+     docker/init.d/15-tea-setup.sh \
+     /app/docker/init.d/
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/init.d/*.sh
 
-# 4. Install with BuildKit cache mount (pip wheels survive rebuilds)
+# 4. Install the locked dependency closure — the STANDARD uv container flow.
+# `uv sync --frozen --package mewbo-api` installs exactly what uv.lock pins
+# for the api app (never re-resolving from pyproject ranges — litellm 1.92.0
+# walked into the image that way once and broke every tool-bearing
+# LLM call). gunicorn comes via mewbo-api's own dependencies; the wiki extra
+# (mewbo-graph[treesitter,retrieval]) rides the same lock when WIKI_EXTRAS=1.
+# UV_LINK_MODE=copy: the wheel cache is a build-time mount, so the venv must
+# not hardlink into it.
 ARG WIKI_EXTRAS=0
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
+ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-        -e packages/mewbo_core \
-        -e packages/mewbo_tools \
-        -e apps/mewbo_api \
-        gunicorn
-# Wiki extras: tree-sitter, rank-bm25, numpy — only baked in when WIKI_EXTRAS=1.
-# The `mewbo-api[wiki]` extra forwards to the local `mewbo-graph` capability
-# library (packages/mewbo_graph), which is NOT published to any index. uv has
-# no source for a bare `mewbo-graph>=0.0.13` requirement, so we hand it the
-# local editable explicitly — mirroring the core/tools/api installs above —
-# and let that satisfy the [wiki] extra's transitive dependency.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "$WIKI_EXTRAS" = "1" ]; then \
-        uv pip install --system \
-            -e "packages/mewbo_graph[treesitter,retrieval]" \
-            -e "apps/mewbo_api[wiki]"; \
-    fi
+    uv sync --frozen --no-dev --package mewbo-api \
+        $( [ "$WIKI_EXTRAS" = "1" ] && printf -- '--extra wiki' )
+ENV PATH="/app/.venv/bin:$PATH"
 
 # SCIP symbol indexers (Python precise symbol resolution) — only baked in when
 # SCIP_EXTRAS=1, mirroring the WIKI_EXTRAS toggle above. The wiki code-graph
@@ -141,13 +153,42 @@ RUN if [ "$WIKI_EXTRAS" = "1" ]; then \
 # Named volumes copy permissions from the image on first mount, so
 # ``plans-data:/tmp/mewbo/plans`` inherits mewbo ownership
 # instead of root:root. The entrypoint also fixes ownership at
-# runtime for volumes that already exist (see entrypoint-api.sh).
+# runtime for volumes that already exist (see entrypoint.sh).
 RUN mkdir -p /tmp/mewbo/plans /tmp/mewbo/wiki/clones && chown -R 1000:1000 /tmp/mewbo
+
+# Runtime toolbox — where init.d/12-agent-clis.sh lands gh and tea. Backed by
+# the `mewbo-tools` named volume, so the download happens once ever rather than
+# once per container start. Pre-created with uid 1000 for the same reason
+# /tmp/mewbo is above: a named volume copies permissions from the image on
+# first mount, so this is what keeps the volume writable without a chown.
+RUN mkdir -p /opt/mewbo-tools/bin && chown -R 1000:1000 /opt/mewbo-tools
+ENV PATH="/opt/mewbo-tools/bin:$PATH"
 
 ENV MASTER_API_TOKEN='msk-strong-password' \
     API_PORT=5125 \
     CLAUDE_PLUGIN_ROOT=''
 
+# Writable paths the shared entrypoint repairs before init.d runs (api-only
+# volumes; the mcp image sets its own shorter list).
+ENV INIT_CHOWN_DIRS="/tmp/mewbo /tmp/mewbo/plans /tmp/mewbo/wiki /tmp/mewbo/wiki/clones /app/data /tmp/mewbo-ide /opt/mewbo-tools"
+
+# entrypoint.sh runs docker/init.d/*.sh, then execs this CMD.
 # Single worker (RunRegistry is in-memory), 8 HTTP threads, 5-min timeout.
-# entrypoint-api.sh runs docker/init.d/*.sh scripts before exec'ing gunicorn.
-ENTRYPOINT ["/app/docker/entrypoint-api.sh"]
+# --threads is INERT on the default sync worker (one request per worker
+# process); the gthread worker is what actually serves the 8 threads, so a cold
+# synchronous freshness/clone check on one request no longer blocks the whole
+# single-worker API.
+#
+# sh -c (not exec-form) so ${API_PORT} still expands — exec-form CMD would ship
+# the literal string. The inner `exec` keeps gunicorn as PID 1 so it still
+# receives SIGTERM for a graceful shutdown.
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+CMD ["sh", "-c", "exec gunicorn \
+    --bind 0.0.0.0:${API_PORT:-5125} \
+    --workers 1 \
+    --worker-class gthread \
+    --threads 8 \
+    --timeout 300 \
+    --graceful-timeout 30 \
+    --access-logfile - \
+    mewbo_api.backend:app"]

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Post-mount installer wiring the session UX onto ``MewboApp`` (#157).
+"""Post-mount installer wiring the session UX onto ``MewboApp``.
 
 The global keys + their actions naturally belong on the App, but ``app.py`` is
-closed (#150). The installer (an :data:`AppInstaller`) configures the *mounted*
+closed. The installer (an :data:`AppInstaller`) configures the *mounted*
 App instead: it builds the feature collaborators (the :class:`RewindCheckpointer`,
 :class:`AutoTitler`, :class:`KeybindingConfig`), parks them + a
 :class:`SessionController` on the app as well-known attributes the command
@@ -214,7 +214,7 @@ def make_session_installer(
     keybinding_path: Any = None,
     **_ignored: Any,
 ) -> Callable[[MewboApp], None]:
-    """Build the post-mount installer for the session UX (#157).
+    """Build the post-mount installer for the session UX.
 
     ``store``/``runtime``/``state`` come from ``cli_master._run_app`` scope and
     are exactly the deps the controller + command handlers need. Extra deps

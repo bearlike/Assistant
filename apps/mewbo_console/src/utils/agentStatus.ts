@@ -1,7 +1,8 @@
 /**
  * Shared agent status palette — used by any card that renders an agent
- * lifecycle state as a chip, dot, or tree row. Tailwind palette classes
- * (no custom CSS vars) so light/dark theming comes for free.
+ * lifecycle state as a chip, dot, or tree row. Bound to the semantic status
+ * tokens in `index.css` (`--success`/`--warning`/`--info`/`--destructive`/
+ * `--muted`) so light/dark theming comes for free.
  *
  * Keep the five keys aligned with `AgentStatus` in hypervisor.py.
  * Non-matching strings fold to `submitted`.
@@ -31,32 +32,32 @@ export const STATUS_STYLES: Record<StatusKey, StatusStyle> = {
     ring: 'ring-[hsl(var(--muted-foreground))]/20',
   },
   running: {
-    text: 'text-cyan-600',
-    bg: 'bg-cyan-500/10',
-    border: 'border-cyan-500/30',
-    dot: 'bg-cyan-500',
-    ring: 'ring-cyan-500/30',
+    text: 'text-[hsl(var(--info))]',
+    bg: 'bg-[hsl(var(--info)/0.1)]',
+    border: 'border-[hsl(var(--info)/0.3)]',
+    dot: 'bg-[hsl(var(--info))]',
+    ring: 'ring-[hsl(var(--info)/0.3)]',
   },
   completed: {
-    text: 'text-emerald-600',
-    bg: 'bg-emerald-500/10',
-    border: 'border-emerald-500/30',
-    dot: 'bg-emerald-500',
-    ring: 'ring-emerald-500/30',
+    text: 'text-[hsl(var(--success))]',
+    bg: 'bg-[hsl(var(--success)/0.1)]',
+    border: 'border-[hsl(var(--success)/0.3)]',
+    dot: 'bg-[hsl(var(--success))]',
+    ring: 'ring-[hsl(var(--success)/0.3)]',
   },
   failed: {
-    text: 'text-red-600',
-    bg: 'bg-red-500/10',
-    border: 'border-red-500/30',
-    dot: 'bg-red-500',
-    ring: 'ring-red-500/30',
+    text: 'text-[hsl(var(--destructive-text))]',
+    bg: 'bg-[hsl(var(--destructive)/0.1)]',
+    border: 'border-[hsl(var(--destructive)/0.3)]',
+    dot: 'bg-[hsl(var(--destructive))]',
+    ring: 'ring-[hsl(var(--destructive)/0.3)]',
   },
   cancelled: {
-    text: 'text-amber-600',
-    bg: 'bg-amber-500/10',
-    border: 'border-amber-500/30',
-    dot: 'bg-amber-500',
-    ring: 'ring-amber-500/30',
+    text: 'text-[hsl(var(--warning))]',
+    bg: 'bg-[hsl(var(--warning)/0.1)]',
+    border: 'border-[hsl(var(--warning)/0.3)]',
+    dot: 'bg-[hsl(var(--warning))]',
+    ring: 'ring-[hsl(var(--warning)/0.3)]',
   },
 };
 

@@ -428,7 +428,7 @@ class TestLangfuseTraceSpan:
 
 class TestRecordSpanException:
     """``record_span_exception`` records an OTel ``exception`` event so Langfuse
-    error tooling (which queries those events) is not blind (#65)."""
+    error tooling (which queries those events) is not blind."""
 
     def test_records_exception_with_attributes(self):
         otel = MagicMock()

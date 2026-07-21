@@ -3,18 +3,26 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Turn-completion notifications: POST_NOTIFICATIONS is the API-33+ runtime grant (the SOLE
+         consent gate — requested at first query send from MainActivity, no in-app pre-consent dialog).
+         FOREGROUND_SERVICE + FOREGROUND_SERVICE_DATA_SYNC back RunNotificationService, which keeps the
+         process alive while a backgrounded run finishes so its completion can be observed and posted;
+         both are normal, install-time grants. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Haptic map (spec §6.13) — without this, Vibrator.vibrate silently no-ops. -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- device_set_alarm/device_set_timer (Gitea #179): lets ACTION_SET_ALARM/ACTION_SET_TIMER
+    <!-- device_set_alarm/device_set_timer: lets ACTION_SET_ALARM/ACTION_SET_TIMER
          reach the clock app without an OEM confirmation prompt. Normal protection level, granted
          at install. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
-    <!-- device_wake (Gitea #179): AlarmManager.setAlarmClock (WakeDeviceHandler) is lint-flagged
+    <!-- device_wake: AlarmManager.setAlarmClock (WakeDeviceHandler) is lint-flagged
          (MissingPermission) without this declared, even though setAlarmClock's user-facing-alarm
          semantics exempt it from the runtime "Alarms & reminders" special-access restriction other
          exact-alarm APIs need. Auto-granted at install, no runtime prompt. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <!-- device_read_latest_sms / device_send_sms (Gitea #179 Phase 4): dangerous-protection-level,
+    <!-- device_read_latest_sms / device_send_sms: dangerous-protection-level,
          requested at runtime via Settings' "SMS access" row (ui/settings) - no other gate. -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
@@ -40,7 +48,7 @@
              taps the composer; `adjustResize` is what lets the composer avoid the IME once it IS
              open (Scaffold's default contentWindowInsets = safeDrawing, which includes `ime`, only
              actually resizes the window if the mode says so). -->
-        <!-- launchMode="singleTask" (Gitea #178 W2): the assist overlay's handoff
+        <!-- launchMode="singleTask": the assist overlay's handoff
              (AuraSession.handleHandoff) starts this Activity from a VoiceInteractionSession
              context on every invocation - without singleTask, a warm handoff while the app is
              already running would stack a duplicate instance instead of redelivering via
@@ -76,11 +84,20 @@
             android:permission="android.permission.BIND_VOICE_INTERACTION"
             android:exported="true" />
 
-        <!-- device_wake (Gitea #179): fired only by our own AlarmManager.setAlarmClock PendingIntent
+        <!-- device_wake: fired only by our own AlarmManager.setAlarmClock PendingIntent
              (WakeDeviceHandler) - never exported, no external caller can trigger it. -->
         <receiver
             android:name=".data.device.WakeAlarmReceiver"
             android:exported="false" />
+
+        <!-- Turn-completion notifications: follows a backgrounded run to completion. foregroundServiceType
+             MUST match the ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC passed to startForeground.
+             dataSync (not shortService) because a long agentic turn can exceed shortService's ~3min cap
+             — the case this exists for. Not exported: only RunNotificationLauncher starts it in-process. -->
+        <service
+            android:name=".notify.RunNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

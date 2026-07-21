@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI local-first remote seam (Gitea #171).
+"""CLI local-first remote seam.
 
 The terminal CLI is a strictly-local engine: it runs ``SessionRuntime`` →
 ``ToolUseLoop`` in-process and stores sessions as local JSONL. This module makes
@@ -205,7 +205,7 @@ class RemoteTranscriptSync:
             try:
                 self._poster(url, {"records": records})
             except Exception:  # noqa: BLE001 — best-effort mirror; JSONL is authoritative
-                logging.warning("Remote transcript sync POST failed: %s", url, exc_info=True)
+                logging.warning("Remote transcript sync POST failed: {}", url, exc_info=True)
 
     def _http_post(self, url: str, payload: dict[str, Any]) -> None:
         """Default poster: POST JSON with the remote API key header."""

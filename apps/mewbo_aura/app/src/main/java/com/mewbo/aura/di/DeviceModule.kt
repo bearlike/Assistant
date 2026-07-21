@@ -7,6 +7,7 @@ import android.os.Process
 import com.mewbo.aura.data.api.AuraApi
 import com.mewbo.aura.data.device.AlarmManagerNextAlarmReader
 import com.mewbo.aura.data.device.AppForegroundChecker
+import com.mewbo.aura.data.device.AssistOverlayPresence
 import com.mewbo.aura.data.device.BatteryStatusHandler
 import com.mewbo.aura.data.device.ContentResolverSmsInboxReader
 import com.mewbo.aura.data.device.DeviceClock
@@ -14,6 +15,9 @@ import com.mewbo.aura.data.device.DevicePermissionChecker
 import com.mewbo.aura.data.device.DeviceTimeHandler
 import com.mewbo.aura.data.device.DeviceToolCallHistory
 import com.mewbo.aura.data.device.DeviceToolCallLedger
+import com.mewbo.aura.data.device.DeviceToolDispatch
+import com.mewbo.aura.data.device.DeviceToolExecutor
+import com.mewbo.aura.data.device.DeviceToolGate
 import com.mewbo.aura.data.device.DeviceToolHandler
 import com.mewbo.aura.data.device.DeviceToolResultReporter
 import com.mewbo.aura.data.device.DismissAlarmHandler
@@ -25,14 +29,17 @@ import com.mewbo.aura.data.device.SetAlarmHandler
 import com.mewbo.aura.data.device.SetTimerHandler
 import com.mewbo.aura.data.device.SmsInboxReader
 import com.mewbo.aura.data.device.WakeDeviceHandler
+import com.mewbo.aura.data.device.canStartActivityNow
+import com.mewbo.aura.data.settings.SettingsStore
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.first
 
-/** Hilt bindings for `data/device/` (Gitea #179 Phase 2-4). [Context.checkSelfPermission] is the
+/** Hilt bindings for `data/device/`. [Context.checkSelfPermission] is the
  * platform API directly (API 23+, well under `minSdk 33`) - no `androidx.core` dependency needed
  * just for this one call. */
 @Module
@@ -48,6 +55,13 @@ abstract class DeviceModule {
     @Binds
     abstract fun bindNextAlarmReader(impl: AlarmManagerNextAlarmReader): NextAlarmReader
 
+    /** The ONE place [DeviceToolExecutor] is wired to anything: `RunRepository` depends on the
+     * narrow [DeviceToolDispatch] and attaches it inside `live()`, so every path that follows a run
+     * services device tool calls by construction (that interface's KDoc has the regression this
+     * came out of). Nothing else may inject the executor. */
+    @Binds
+    abstract fun bindDeviceToolDispatch(impl: DeviceToolExecutor): DeviceToolDispatch
+
     companion object {
         @Provides
         fun provideDevicePermissionChecker(@ApplicationContext context: Context): DevicePermissionChecker =
@@ -58,17 +72,31 @@ abstract class DeviceModule {
         @Provides
         fun provideDeviceClock(): DeviceClock = DeviceClock { System.currentTimeMillis() / 1000.0 }
 
-        /** `ActivityManager.runningAppProcesses` importance (not `ProcessLifecycleOwner`, not an
-         * extra dependency) - the app's OWN process's importance at or above
-         * `IMPORTANCE_FOREGROUND` is the same signal Android's own background-activity-launch
-         * restriction (API 29+) checks (review finding F4). */
+        /** the per-tool Settings toggle read behind the narrow [DeviceToolGate]
+         * seam (the reason it exists: keeps `DeviceToolCatalog`/`DeviceToolExecutor` plain-JVM
+         * unit-testable, same as [DevicePermissionChecker]). `first()` is the current set - DataStore
+         * caches it in memory after the first read, so this is a cheap suspend on every `/query`
+         * advertisement and every dispatch. */
         @Provides
-        fun provideAppForegroundChecker(@ApplicationContext context: Context): AppForegroundChecker =
+        fun provideDeviceToolGate(settingsStore: SettingsStore): DeviceToolGate =
+            DeviceToolGate { settingsStore.disabledDeviceToolIds.first() }
+
+        /** `ActivityManager.runningAppProcesses` importance (not `ProcessLifecycleOwner`, not an
+         * extra dependency) is the same signal Android's own background-activity-launch restriction
+         * (API 29+) checks (review finding F4) - but it is only HALF the question. The decision
+         * itself, and why the assist overlay counts as launch-permitted even though its process
+         * importance says otherwise, lives in [canStartActivityNow]; this provider only reads the
+         * two platform-side inputs it needs. */
+        @Provides
+        fun provideAppForegroundChecker(
+            @ApplicationContext context: Context,
+            overlayPresence: AssistOverlayPresence,
+        ): AppForegroundChecker =
             AppForegroundChecker {
                 val activityManager = context.getSystemService(ActivityManager::class.java)
                 val myPid = Process.myPid()
                 val importance = activityManager?.runningAppProcesses?.firstOrNull { it.pid == myPid }?.importance
-                importance != null && importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                canStartActivityNow(processImportance = importance, assistOverlayVisible = overlayPresence.visible)
             }
 
         /** Assembles the concrete `device_*` handlers into the plain list

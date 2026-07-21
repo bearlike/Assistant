@@ -24,9 +24,10 @@ import { SecretField } from "./SecretField";
 import { ArrayFieldTemplate } from "./fields/ArrayField";
 import { RecordListField } from "./fields/RecordListField";
 import { KeyedCollectionField } from "./fields/KeyedCollectionField";
+import { ScalarInput } from "./fields/ScalarInput";
 import { FieldLabel } from "./fields/FieldLabel";
 import { FieldHelp } from "./fields/FieldHelp";
-import { inputBase, subsectionTitleCls } from "./styles";
+import { inputBase, labelCls, subsectionTitleCls } from "./styles";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -167,13 +168,16 @@ function BaseInputTemplate(props: BaseInputTemplateProps) {
   const { id, type, value, onChange, onBlur, onFocus, readonly, disabled, autofocus } = props;
   const isPassword = type === "password";
   return (
-    <input
+    <ScalarInput
       id={id}
-      type={type || "text"}
-      className={inputBase}
-      value={value ?? ""}
-      onChange={(e) => {
-        const v = e.target.value;
+      htmlType={type || "text"}
+      value={value}
+      readOnly={readonly}
+      disabled={disabled}
+      autoFocus={autofocus}
+      autoComplete={isPassword ? "new-password" : undefined}
+      onChange={(raw) => {
+        const v = raw as string;
         if (v === "") {
           onChange(props.schema.default ?? undefined);
           return;
@@ -189,12 +193,8 @@ function BaseInputTemplate(props: BaseInputTemplateProps) {
           onChange(v);
         }
       }}
-      onBlur={onBlur && ((e) => onBlur(id, e.target.value))}
-      onFocus={onFocus && ((e) => onFocus(id, e.target.value))}
-      readOnly={readonly}
-      disabled={disabled}
-      autoFocus={autofocus}
-      autoComplete={isPassword ? "new-password" : undefined}
+      onBlur={onBlur && ((v) => onBlur(id, v))}
+      onFocus={onFocus && ((v) => onFocus(id, v))}
     />
   );
 }
@@ -220,7 +220,7 @@ function CheckboxWidget(props: WidgetProps) {
       {(label || description) && (
         <label htmlFor={id} className="cursor-pointer select-none">
           {label && (
-            <span className="block text-xs font-medium text-[hsl(var(--foreground))]">
+            <span className={labelCls}>
               {label}
             </span>
           )}

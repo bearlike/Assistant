@@ -183,9 +183,13 @@ def test_base_raises_not_implemented(method: str, args: tuple) -> None:
         def increment_job_submitted_count(self, jid): ...  # type: ignore[override]
         def save_job_submission(self, jid, sub): ...  # type: ignore[override]
         def get_job_submission(self, jid): ...  # type: ignore[override]
+        def save_project_settings(self, slug, settings): ...  # type: ignore[override]
+        def get_project_settings(self, slug): ...  # type: ignore[override]
+        def delete_project_settings(self, slug): ...  # type: ignore[override]
         def save_credentials(self, slug, blob): ...  # type: ignore[override]
         def get_credentials(self, slug): ...  # type: ignore[override]
         def delete_credentials(self, slug): ...  # type: ignore[override]
+        def list_credentials(self): ...  # type: ignore[override]
         def get_recovery_attempts(self, slug): ...  # type: ignore[override]
         def bump_recovery_attempts(self, slug): ...  # type: ignore[override]
         def save_qa(self, qa): ...  # type: ignore[override]
@@ -838,7 +842,7 @@ def test_mongo_list_jobs_filtered_by_slug() -> None:
     assert len(all_jobs) == 2
 
 
-# ── Resume sidecar + recovery-cap reset (Gitea #54, both backends) ─────────────
+# ── Resume sidecar + recovery-cap reset (both backends) ─────────────
 
 
 def test_resume_plan_roundtrips(store) -> None:

@@ -1,4 +1,4 @@
-"""Route-level contract tests for client-declared device tools (Gitea #179).
+"""Route-level contract tests for client-declared device tools.
 
 Drives the real Flask backend test client against a temp-store runtime (only
 auth, storage root, and the run-dispatch seam are swapped — same shape as
@@ -8,7 +8,7 @@ auth, storage root, and the run-dispatch seam are swapped — same shape as
    ``ClientDeclaredTool`` into ``extra_session_tools``; an invalid spec 400s.
 2. The SAME derivation applies at every dispatch site that was duplicating
    ``_extract_allowed_tools`` (``/query``, ``/message`` re-engage, ``/recover``,
-   sync ``POST /api/query``) — the DRY refactor #179 requires.
+   sync ``POST /api/query``) — the DRY refactor requires.
 3. A full dispatch round trip through the concrete ``ApiDeviceToolDispatcher``
    and the ``POST .../device_tools/<call_id>/result`` route, without any LLM.
 """
@@ -213,7 +213,7 @@ def test_query_without_device_tools_passes_empty_extra_session_tools(client, mon
 
 
 # ---------------------------------------------------------------------------
-# /message re-engage — must rebuild from LAST-PERSISTED context (#179 DRY site)
+# /message re-engage — must rebuild from LAST-PERSISTED context (DRY site)
 # ---------------------------------------------------------------------------
 
 
@@ -514,3 +514,39 @@ def test_dispatch_timeout_surfaces_device_timeout_error(client, monkeypatch):
             ),
         },
     }
+
+
+class TestExtractAllowedToolsThreeState:
+    """``mcp_tools`` is three-state and the empty case is a real ceiling.
+
+    ``_extract_allowed_tools`` reads the PERSISTED context at every re-engage
+    site, so a collapse here silently re-widens a session's tool scope on
+    ``/message`` and ``/recover`` even when the original ``start_async`` was
+    correctly scoped. A client that persisted ``mcp_tools: []`` advertised no
+    MCP tools; returning ``None`` re-bound every MCP tool in the registry to a
+    session that declared none.
+    """
+
+    def test_absent_mcp_tools_is_unrestricted(self):
+        from mewbo_api.backend import _extract_allowed_tools
+
+        assert _extract_allowed_tools({}) is None
+        assert _extract_allowed_tools({"cwd": "/tmp"}) is None
+
+    def test_an_empty_mcp_tools_list_is_preserved_as_empty(self):
+        from mewbo_api.backend import _extract_allowed_tools
+
+        assert _extract_allowed_tools({"mcp_tools": []}) == []
+
+    def test_a_non_empty_mcp_tools_list_passes_through(self):
+        from mewbo_api.backend import _extract_allowed_tools
+
+        assert _extract_allowed_tools({"mcp_tools": ["mcp_a", "mcp_b"]}) == [
+            "mcp_a",
+            "mcp_b",
+        ]
+
+    def test_a_non_list_mcp_tools_value_is_unrestricted(self):
+        from mewbo_api.backend import _extract_allowed_tools
+
+        assert _extract_allowed_tools({"mcp_tools": "not-a-list"}) is None

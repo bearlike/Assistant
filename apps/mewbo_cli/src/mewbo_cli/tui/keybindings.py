@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Declarative keybindings + user-override loader for the Mewbo TUI (#157).
+"""Declarative keybindings + user-override loader for the Mewbo TUI.
 
 The session feature owns three global keys — ``ctrl+o`` (transcript),
 ``ctrl+s`` (sessions) and ``ctrl+l`` (clear + redraw) — declared once here as
@@ -11,8 +11,8 @@ post-mount installer (the shipped path) or declaratively on ``MewboApp``
 User overrides live in ``~/.mewbo/keybindings.json`` (a JSON object mapping an
 ``action`` name to a key, the file-contract that mirrors themes). A bad file is
 skipped wholesale — a broken keymap must never crash the App. We deliberately do
-NOT bind keys other children own: ``shift+tab`` (permission mode, #154),
-``ctrl+p``/``ctrl+r`` (palette/history, #155), ``ctrl+c`` (quit, app.py).
+NOT bind keys other children own: ``shift+tab`` (permission mode),
+``ctrl+p``/``ctrl+r`` (palette/history), ``ctrl+c`` (quit, app.py).
 """
 
 from __future__ import annotations

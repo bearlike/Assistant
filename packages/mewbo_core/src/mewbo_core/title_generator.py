@@ -20,7 +20,7 @@ logger = get_logger(name="core.title_generator")
 # constant stays exported (the BASE, model-agnostic prompt, for downstream
 # callers/tests) and is sourced verbatim from the registry — one source of truth.
 # ``generate_session_title`` re-renders per-call WITH the title model so a
-# per-model override of ``title.system`` reaches the title prompt too (#113).
+# per-model override of ``title.system`` reaches the title prompt too.
 TITLE_SYSTEM_PROMPT = get_prompt_registry().render("title.system")
 
 
@@ -94,7 +94,7 @@ async def generate_session_title(events: list[EventRecord]) -> str | None:
         user_payload = f"<conversation>\n{excerpt}\n</conversation>\n\nTitle:"
 
         # Render the title prompt for the title model so a per-model override
-        # of ``title.system`` applies (#113); falls back to the base otherwise.
+        # of ``title.system`` applies; falls back to the base otherwise.
         title_prompt = get_prompt_registry().render("title.system", model=model_name)
         llm = build_chat_model(model_name=model_name)
         response = await llm.ainvoke(

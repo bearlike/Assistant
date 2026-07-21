@@ -21,6 +21,8 @@ Running Mewbo in production means hardening the default Docker Compose setup wit
 
 5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `MEWBO_MONGODB_URI` to match.
 
+6. **Consider per-user accounts**. A shared master token cannot tell one caller from another. If you need per-user identity, roles, or an audit trail, see [Authentication & Access](authentication.md). It is opt-in, and leaving it off keeps the shared-token behavior above.
+
 ## TLS with nginx
 
 The repository includes a ready-to-use nginx reverse proxy config. Install it on the host machine (outside Docker):
@@ -161,9 +163,9 @@ Facets appear as `key:value` trace tags. The available keys:
 
 | Facet | Example values |
 |-------|----------------|
-| `origin` | `user`, `wiki`, `search`, `channel`, `structured`, `draft` |
-| `product` | `agent`, `wiki`, `search`, `channel`, `structured`, `draft`, `vcs` |
-| `session_type` | `chat`, `wiki_index`, `wiki_qa`, `search_run`, `scg_map`, `channel_msg`, `structured_run`, `structured_fast`, `draft_stream`, `vcs_pickup` |
+| `origin` | `user`, `wiki`, `search`, `channel`, `structured`, `draft`, `mobile`, `apps` |
+| `product` | `agent`, `wiki`, `search`, `channel`, `structured`, `draft`, `mobile`, `apps`, `vcs` |
+| `session_type` | `chat`, `wiki_index`, `wiki_qa`, `search_run`, `scg_map`, `channel_msg`, `structured_run`, `structured_fast`, `draft_stream`, `mobile_<platform>`, `app_agent`, `vcs_pickup` |
 | `surface` | `api`, plus whatever clients stamp (CLI, console, channel platforms) |
 | `project` | The named project the session ran against. |
 | `repo` | Repository, e.g. `owner/repo`. |

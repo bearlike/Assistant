@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""InputArea — rich sigil-dispatched prompt input (issue #155, epic #149).
+"""InputArea — rich sigil-dispatched prompt input.
 
 ONE input field, sigil-dispatched at the caret:
 
@@ -18,14 +18,14 @@ highlighted candidate WITHOUT dismissing the overlay (fast browsing);
 
 The widget subclasses :class:`~textual.widgets.Input` so the host App's
 ``Input.Submitted`` contract is untouched (the constructor signature
-``InputArea(gateway, *, id=..., placeholder=...)`` is preserved — see #150).
+``InputArea(gateway, *, id=..., placeholder=...)`` is preserved).
 It also owns three orthogonal behaviours the controller wires in via the
 installer (see :mod:`mewbo_cli.tui.input.palette`):
 
 - **Queue while busy.** :meth:`set_busy` flips the busy flag; while busy,
   ``Enter`` queues the line instead of submitting (the controller drains it via
   :meth:`drain_next` when the turn finishes). ``escape`` pulls the most-recent
-  queued line back into the box. :meth:`queued_count` is read by the #156 pill.
+  queued line back into the box. :meth:`queued_count` is read by the sidebar pill.
 - **History.** ``up``/``down`` on an empty/edited line walk
   :class:`~mewbo_cli.tui.input.history.PromptHistory`; ``ctrl+r`` opens a
   reverse-search overlay (binding lives here, so it is active when focused).
@@ -55,7 +55,7 @@ _MAX_OVERLAY_ROWS = 10
 
 
 class _GatewaySuggester(Suggester):
-    """Inline ghost-suggestion adapter over :class:`InputGateway` (#150 fallback).
+    """Inline ghost-suggestion adapter over :class:`InputGateway` (fallback).
 
     Used only until the richer :class:`CompletionEngine` is injected — it offers
     a single inline completion (the first gateway result that extends the value).
@@ -83,7 +83,7 @@ class InputArea(Input):
 
     # Use built-in semantic roles ($surface/$panel/$accent) so the widget mounts
     # cleanly even in a bare host App with no theme registered; the injected
-    # Palette (#151) overrides these roles, so the overlay stays theme-aware.
+    # Palette overrides these roles, so the overlay stays theme-aware.
     DEFAULT_CSS = """
     InputArea { height: auto; }
     .input--completion {
@@ -140,7 +140,7 @@ class InputArea(Input):
     # -- injection (post-mount, by the installer) -----------------------
 
     def set_completion_engine(self, engine: CompletionEngine) -> None:
-        """Inject the rich completion engine (#155 installer)."""
+        """Inject the rich completion engine (installer)."""
         self._engine = engine
 
     def set_history(self, history: PromptHistory) -> None:
@@ -159,7 +159,7 @@ class InputArea(Input):
         return self._busy
 
     def queued_count(self) -> int:
-        """Number of queued follow-up messages (read by the #156 queue pill)."""
+        """Number of queued follow-up messages (read by the queue pill)."""
         return len(self._queue)
 
     def enqueue(self, text: str) -> None:
@@ -182,7 +182,7 @@ class InputArea(Input):
         queue pull/clear) goes through here. Because ``Input.Changed`` fires
         asynchronously, :meth:`_on_changed` compares against ``_programmatic_value``
         rather than a transient flag — so it keeps history navigation alive across
-        our own writes while still resetting it the moment the user types (I2).
+        our own writes while still resetting it the moment the user types.
         ``cursor`` defaults to end-of-line.
         """
         self._programmatic_value = value
@@ -214,7 +214,7 @@ class InputArea(Input):
 
     @on(Input.Changed)
     def _on_changed(self, event: Input.Changed) -> None:
-        """Recompute completions; user typing also exits history navigation (I2)."""
+        """Recompute completions; user typing also exits history navigation."""
         if event.value != self._programmatic_value:
             # The change wasn't one of our own writes → the user typed. Invalidate
             # the history-browse cursor so the next up/down starts fresh from this
@@ -223,7 +223,7 @@ class InputArea(Input):
         self._refresh_completions()
 
     def watch_selection(self, old: object, new: object) -> None:
-        """Re-evaluate the overlay when the caret moves (I1).
+        """Re-evaluate the overlay when the caret moves.
 
         ``cursor_position`` is derived from the ``selection`` reactive; cursor
         moves via bindings (left/right/home/end) fire no ``Input.Changed``, so
@@ -503,7 +503,7 @@ class InputArea(Input):
 def default_files(cwd_provider: Callable[[], str] = os.getcwd) -> Callable[[], list[str]]:
     """A cached project-file provider for the completion engine (public helper).
 
-    Kept here (not in the engine) so the engine stays I/O-free; the #155
+    Kept here (not in the engine) so the engine stays I/O-free; the input
     installer imports this to build the engine's ``files_provider``. Public so
     that cross-module use (``palette.py``) is an explicit, supported contract.
     """

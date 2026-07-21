@@ -87,7 +87,7 @@ Never type keys through the Settings UI in automation — `adb input text` mangl
 
 Launch directly with `adb -s <serial> shell am start -n com.mewbo.aura/<activity>`:
 
-- `.ui.aurora.LivenessShowcaseActivity` — 6-page visual gallery (aurora wash/glow/edge, spark, orb states).
+- `.ui.aurora.LivenessShowcaseActivity` — 5-page visual gallery (aurora wash/glow/edge, spark, orb states).
 - `ChatPreviewActivity` — chat vocabulary on fake state, no network.
 - `AssistOverlayPreviewActivity` — fast-loop overlay verification without the assistant role/gesture.
 
@@ -106,6 +106,6 @@ The `TranscriptReducer` and `SentenceChunker` suites are the wire-contract tests
 
 ## Further reading
 
-Deeper, agent-oriented guidance lives in the `CLAUDE.md` tree: [`CLAUDE.md`](CLAUDE.md) (build facts, device matrix, workflow rules) with children for [`data/`](app/src/main/java/com/mewbo/aura/data/CLAUDE.md) (wire contract), [`ui/`](app/src/main/java/com/mewbo/aura/ui/CLAUDE.md) (theme/orb/chat rendering), and [`voice/`](app/src/main/java/com/mewbo/aura/voice/CLAUDE.md) (overlay contract). Product specs and deviations are tracked in the Gitea issues referenced there.
+Deeper, agent-oriented guidance lives in the `CLAUDE.md` tree: [`CLAUDE.md`](CLAUDE.md) (build facts, device matrix, workflow rules) with children for [`data/`](app/src/main/java/com/mewbo/aura/data/CLAUDE.md) (wire contract), [`ui/`](app/src/main/java/com/mewbo/aura/ui/CLAUDE.md) (theme/orb/chat rendering), and [`voice/`](app/src/main/java/com/mewbo/aura/voice/CLAUDE.md) (overlay contract). Product specs and deviations are recorded there.
 
 [Link to GitHub Repository](https://github.com/bearlike/Assistant)

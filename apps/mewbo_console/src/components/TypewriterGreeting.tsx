@@ -155,9 +155,19 @@ export function TypewriterGreeting() {
     return cleanup;
   }, [nextPhrase]);
 
+  // Text only — no element, no typography, no spacing. This renders INSIDE
+  // `ProductHero`'s subtitle <p>, which owns all three so the Tasks subtitle is
+  // styled identically to the static ones on Wiki and Search.
+  //
+  // The caret blinks between full opacity and none. It used to idle at 0.7,
+  // which compounded onto the subtitle's already-muted colour and left the
+  // glyph under the AA contrast floor for its whole "on" phase — a caret is
+  // either there or it isn't.
   return (
-    <p className="text-base sm:text-lg font-normal text-[hsl(var(--muted-foreground))] mb-10 whitespace-nowrap">
-      {"Let's "}<span>{text}</span><span style={{ opacity: cursorOn ? 0.7 : 0 }}>|</span>
-    </p>
+    <>
+      {"Let's "}
+      <span>{text}</span>
+      <span style={{ opacity: cursorOn ? 1 : 0 }}>|</span>
+    </>
   );
 }

@@ -1,8 +1,8 @@
-"""Kotlin + Java AST graph coverage (Gitea #189).
+"""Kotlin + Java AST graph coverage.
 
 Adds `.kt`/`.java` to the tree-sitter language registry alongside the new
 Object/Property node kinds and the open `subkind` refinement (schema v2,
-#188). Drives `GraphIndex.parse_repo` over the fixture repos from the CALLER
+). Drives `GraphIndex.parse_repo` over the fixture repos from the CALLER
 site and asserts exact node/edge/subkind shape, plus one `build_graph_core`
 round-trip per language proving the extracted graph passes `CodeGraph`'s
 validator — especially that Kotlin's overlapping `class_declaration` query

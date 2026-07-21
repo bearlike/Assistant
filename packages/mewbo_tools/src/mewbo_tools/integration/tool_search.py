@@ -11,6 +11,17 @@ tools become invocable.
 Result format is designed so the model recognises it from training data —
 one ``<function>{...}</function>`` line per match inside a ``<functions>``
 block.
+
+**Supplement.** ``ToolRegistry.list_specs()`` is only ONE of the
+four populations ``ToolUseLoop._bind_model`` actually binds — the spawn family,
+``activate_skill`` and the per-agent SESSION TOOLS are injected directly by the
+loop and never appear in the registry, so they were permanently unsearchable
+("No deferred tools are registered."). The loop now hands :meth:`run` a
+``supplement`` of the exact OpenAI-function schemas it bound directly, built
+from the SAME per-instance state as ``_bind_model`` (so a strictly-scoped agent
+can never widen its surface via search). These are ALREADY bound, so selecting
+one is a harmless no-op that simply hands the model its schema — the same
+contract the ``select:`` fallback already gives an already-loaded registry tool.
 """
 
 from __future__ import annotations
@@ -40,6 +51,47 @@ class _Match:
     score: float
 
 
+@dataclass(frozen=True)
+class _Searchable:
+    """A tool the runner can match + render, independent of its source.
+
+    Both a deferred ``ToolRegistry`` spec and a directly-bound loop tool
+    (spawn family / ``activate_skill`` / a session tool, supplied via the
+    ``supplement``) normalize to this shape so :meth:`ToolSearchRunner._match`
+    and :func:`_render_schema_block` never have to discriminate.
+    """
+
+    tool_id: str
+    description: str
+    parameters: dict[str, object]
+
+    @classmethod
+    def from_spec(cls, spec: ToolSpec) -> _Searchable:
+        """Normalize a registry spec (schema lives under ``metadata['schema']``)."""
+        schema = spec.metadata.get("schema") if isinstance(spec.metadata, dict) else None
+        if not isinstance(schema, dict):
+            schema = {"type": "object", "properties": {}}
+        return cls(tool_id=spec.tool_id, description=spec.description, parameters=schema)
+
+    @classmethod
+    def from_openai_tool(cls, tool: object) -> _Searchable | None:
+        """Normalize an OpenAI-function schema dict (the loop's bound shape).
+
+        Returns ``None`` for a malformed entry (no ``function.name``) so a
+        stray supplement item degrades to a skip rather than a crash.
+        """
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if not isinstance(fn, dict):
+            return None
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            return None
+        params = fn.get("parameters")
+        if not isinstance(params, dict):
+            params = {"type": "object", "properties": {}}
+        return cls(tool_id=name, description=str(fn.get("description") or ""), parameters=params)
+
+
 def _parse_tool_name(name: str) -> tuple[list[str], bool]:
     """Split a tool name into searchable parts.
 
@@ -55,19 +107,19 @@ def _parse_tool_name(name: str) -> tuple[list[str], bool]:
 
 
 def _score_spec(
-    spec: ToolSpec,
+    item: _Searchable,
     parts: list[str],
     is_mcp: bool,
     required: list[str],
     optional: list[str],
 ) -> float:
-    """Score a single spec against query terms.
+    """Score a single tool against query terms.
 
     Weights are tuned so exact part match dominates, description match is a
     tiebreaker. Required terms (``+term``) act as a gate — return 0 if any
     required term is missing.
     """
-    desc = spec.description.lower()
+    desc = item.description.lower()
     all_terms = [*required, *optional]
     score = 0.0
     for term in required:
@@ -85,24 +137,21 @@ def _score_spec(
     return score
 
 
-def _render_schema_block(specs: list[ToolSpec]) -> str:
-    """Render matched specs as a ``<functions>`` block.
+def _render_schema_block(items: list[_Searchable]) -> str:
+    """Render matched tools as a ``<functions>`` block.
 
-    One ``<function>{...}</function>`` line per spec, JSON-encoded with
+    One ``<function>{...}</function>`` line per tool, JSON-encoded with
     name / description / parameters — same encoding the model sees for
     tools listed at the top of the prompt.
     """
-    if not specs:
+    if not items:
         return "No matching deferred tools found."
     lines = ["<functions>"]
-    for spec in specs:
-        schema = spec.metadata.get("schema") if isinstance(spec.metadata, dict) else None
-        if not isinstance(schema, dict):
-            schema = {"type": "object", "properties": {}}
+    for item in items:
         payload = {
-            "name": spec.tool_id,
-            "description": spec.description,
-            "parameters": schema,
+            "name": item.tool_id,
+            "description": item.description,
+            "parameters": item.parameters,
         }
         lines.append(f"<function>{json.dumps(payload, ensure_ascii=False)}</function>")
     lines.append("</functions>")
@@ -133,8 +182,21 @@ class ToolSearchRunner:
         """Bind to ``registry`` so each call sees the current spec set."""
         self._registry = registry
 
-    def run(self, action_step: ActionStep) -> MockSpeaker:
-        """Return matched tool schemas as a ``<functions>`` block."""
+    def run(
+        self,
+        action_step: ActionStep,
+        *,
+        supplement: list[dict[str, object]] | None = None,
+    ) -> MockSpeaker:
+        """Return matched tool schemas as a ``<functions>`` block.
+
+        *supplement* is the loop's directly-bound OpenAI-function schemas
+        (spawn family / ``activate_skill`` / session tools) — searchable
+        alongside the deferred registry specs so the model can discover a
+        tool it holds but the registry never listed. ``None``
+        (the default, e.g. a direct registry invocation) preserves the
+        registry-only behaviour byte-for-byte.
+        """
         speaker = get_mock_speaker()
         argument = action_step.tool_input
         if isinstance(argument, str):
@@ -151,35 +213,44 @@ class ToolSearchRunner:
 
         from mewbo_core.tool_registry import is_deferred
 
-        deferred = [s for s in self._registry.list_specs() if is_deferred(s)]
-        if not deferred:
+        population = [
+            _Searchable.from_spec(s) for s in self._registry.list_specs() if is_deferred(s)
+        ]
+        for tool in supplement or []:
+            item = _Searchable.from_openai_tool(tool)
+            if item is not None:
+                population.append(item)
+        if not population:
             return speaker(content="No deferred tools are registered.")
 
-        matched = self._match(query, deferred, max_results)
+        matched = self._match(query, population, max_results)
         return speaker(content=_render_schema_block(matched))
 
-    def _match(self, query: str, deferred: list[ToolSpec], max_results: int) -> list[ToolSpec]:
-        """Resolve ``query`` to a list of matched specs, capped at ``max_results``."""
+    def _match(
+        self, query: str, population: list[_Searchable], max_results: int
+    ) -> list[_Searchable]:
+        """Resolve ``query`` to a list of matched tools, capped at ``max_results``."""
         # Direct selection: ``select:name1,name2``.
         if query.lower().startswith("select:"):
             wanted = [s.strip() for s in query[7:].split(",") if s.strip()]
-            by_id = {s.tool_id: s for s in deferred}
+            by_id = {s.tool_id: s for s in population}
             # Fall back to the full registry — selecting an already-loaded
-            # tool is a harmless no-op that lets the model proceed.
-            full = {s.tool_id: s for s in self._registry.list_specs()}
-            picked: list[ToolSpec] = []
+            # tool (or a supplemented, already-bound one) is a harmless no-op
+            # that lets the model proceed with the schema in hand.
+            full = {s.tool_id: _Searchable.from_spec(s) for s in self._registry.list_specs()}
+            picked: list[_Searchable] = []
             seen: set[str] = set()
             for name in wanted:
-                spec = by_id.get(name) or full.get(name)
-                if spec is not None and spec.tool_id not in seen:
-                    picked.append(spec)
-                    seen.add(spec.tool_id)
+                item = by_id.get(name) or full.get(name)
+                if item is not None and item.tool_id not in seen:
+                    picked.append(item)
+                    seen.add(item.tool_id)
             return picked
 
         # Exact-name fast path: model dropped the ``select:`` prefix.
-        for spec in deferred:
-            if spec.tool_id.lower() == query.lower():
-                return [spec]
+        for item in population:
+            if item.tool_id.lower() == query.lower():
+                return [item]
 
         # Keyword search.
         terms = [t for t in query.lower().split() if t]
@@ -189,14 +260,14 @@ class ToolSearchRunner:
             return []
 
         scored: list[_Match] = []
-        for spec in deferred:
-            parts, is_mcp = _parse_tool_name(spec.tool_id)
-            score = _score_spec(spec, parts, is_mcp, required, optional)
+        for item in population:
+            parts, is_mcp = _parse_tool_name(item.tool_id)
+            score = _score_spec(item, parts, is_mcp, required, optional)
             if score > 0:
-                scored.append(_Match(name=spec.tool_id, score=score))
+                scored.append(_Match(name=item.tool_id, score=score))
         scored.sort(key=lambda m: m.score, reverse=True)
         winners = {m.name for m in scored[:max_results]}
-        return [s for s in deferred if s.tool_id in winners][:max_results]
+        return [s for s in population if s.tool_id in winners][:max_results]
 
 
 __all__ = ["ToolSearchRunner"]

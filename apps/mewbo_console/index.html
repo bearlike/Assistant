@@ -11,6 +11,17 @@
     <title>Home | Mewbo</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/file-icon-vectors@1.0.0/dist/file-icon-vivid.min.css" />
     <script src="/runtime-config.js"></script>
+    <!-- Apply the persisted theme before the bundle loads: React syncs the
+         class only after first paint, so without this a persisted-light user
+         gets a dark first frame (FOUC). Key must stay in lockstep with
+         App.tsx's mewbo:theme. -->
+    <script>
+      try {
+        if (localStorage.getItem('mewbo:theme') === 'light') {
+          document.documentElement.classList.add('light');
+        }
+      } catch (e) { /* private browsing etc. — dark default is fine */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

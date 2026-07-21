@@ -268,6 +268,11 @@ def test_nc_system_context_mentions_trigger() -> None:
     assert "Nextcloud Talk" in ctx
 
 
+def test_nc_adapter_supports_webhook() -> None:
+    """NC Talk is pushed via webhook — its HMAC check is real proof."""
+    assert _nc_adapter().supports_webhook is True
+
+
 # ---------------------------------------------------------------------------
 # Helpers: _extract_message_text with non-JSON content
 # ---------------------------------------------------------------------------
@@ -465,6 +470,11 @@ def test_email_adapter_system_context_content() -> None:
     assert "markdown" in ctx.lower()
 
 
+def test_email_adapter_does_not_support_webhook() -> None:
+    """Email is polled via IMAP, never pushed — no signature to verify."""
+    assert _make_email_adapter().supports_webhook is False
+
+
 # ---------------------------------------------------------------------------
 # routes._process_inbound pipeline
 # ---------------------------------------------------------------------------
@@ -475,6 +485,7 @@ def _make_runtime() -> MagicMock:
     rt.session_store.resolve_tag.return_value = None
     rt.session_store.create_session.return_value = "sess-aabbccdd" * 4
     rt.is_running.return_value = False
+    rt.is_terminated.return_value = False
     return rt
 
 
@@ -605,6 +616,28 @@ class TestProcessInbound:
 
         rt.enqueue_message.assert_called_once()
         rt.start_async.assert_not_called()
+
+    def test_terminated_session_replies_and_starts_nothing(
+        self, route_env: tuple, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A terminated tagged session gets a one-off reply and NO run."""
+        import mewbo_api.channels.routes as routes
+
+        rt, adapter, _ = route_env
+        rt.session_store.resolve_tag.return_value = "dead-sess"
+        rt.is_terminated.return_value = True
+        send_response = MagicMock()
+        monkeypatch.setattr(adapter, "send_response", send_response)
+        msg = _make_inbound(msg_id="m-terminated")
+
+        result = routes._process_inbound(adapter, msg)
+
+        assert result == ({}, 200)
+        send_response.assert_called_once()
+        assert "terminated" in send_response.call_args.kwargs["text"].lower()
+        rt.start_async.assert_not_called()
+        rt.enqueue_message.assert_not_called()
+        rt.session_store.create_session.assert_not_called()
 
     def test_slash_command_help_dispatched(
         self, route_env: tuple, monkeypatch: pytest.MonkeyPatch
@@ -985,6 +1018,40 @@ class TestWebhookEndpoint:
         c, _, _ = webhook_client
         resp = c.post("/api/webhooks/slack", data=b"{}", content_type="application/json")
         assert resp.status_code == 404
+
+    def test_email_platform_returns_404_despite_registration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Email has no push surface, so the route 404s it even though the
+        adapter stays registered (mention gating + the completion hook both
+        need `_registry.get("email")` to resolve). Pins the resolved shape of
+        the defect where a hardcoded `verify_request` True combined with a
+        hardcoded `parse_inbound` None to leave an unauthenticated public
+        endpoint inert only by coincidence — wiring up `parse_inbound` must
+        not silently reopen it.
+        """
+        import mewbo_api.channels.routes as routes
+        from flask import Flask
+        from mewbo_api.channels.base import ChannelRegistry, DeduplicationGuard
+
+        rt = _make_runtime()
+        email_adapter = _make_email_adapter()
+        registry = ChannelRegistry()
+        registry.register(email_adapter)
+
+        monkeypatch.setattr(routes, "_runtime", rt)
+        monkeypatch.setattr(routes, "_registry", registry)
+        monkeypatch.setattr(routes, "_dedup", DeduplicationGuard())
+
+        app = Flask("email-webhook-test")
+        app.register_blueprint(routes.channel_bp)
+        app.config["TESTING"] = True
+
+        resp = app.test_client().post(
+            "/api/webhooks/email", data=b"{}", content_type="application/json"
+        )
+        assert resp.status_code == 404
+        assert routes._registry.get("email") is email_adapter
 
     def test_invalid_hmac_returns_401(self, webhook_client: tuple) -> None:
         c, _, _ = webhook_client

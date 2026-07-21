@@ -5,6 +5,13 @@
  * fallbacks or hard-coded host tables.
  */
 
+/**
+ * Fallback slug for screens that render before a real one is known (a
+ * legacy deep link with no ``slug`` param, a dev/demo route). This repo's
+ * own slug, since the console is its own worked example.
+ */
+export const DEFAULT_WIKI_SLUG = "bearlike/Assistant";
+
 export interface ParsedSlug {
   /** DNS host (``github.com``, ``git.example.com``) — absent on legacy
    *  two-segment slugs from before the canonical refactor. */

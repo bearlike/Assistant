@@ -109,7 +109,7 @@ def test_record_persisted_completed_with_payload(store):
 
 
 def test_no_duplicate_result_events_in_log(store):
-    """Each result id appears exactly once in the run event log (issue #82)."""
+    """Each result id appears exactly once in the run event log."""
     run, ws = _seed_run(store, sources=["notion", "github", "drive", "linear", "filesystem"])
     EchoSearchRunner().start(run, ws, store=store)
 
@@ -125,7 +125,7 @@ def test_no_duplicate_result_events_in_log(store):
 
 
 def test_result_append_is_idempotent_by_id(store):
-    """A re-appended result (same id) is a no-op — the dedup guard (issue #82).
+    """A re-appended result (same id) is a no-op — the dedup guard.
 
     Simulates the real-world double-projection paths the issue names — an SSE
     replay+tail boundary, a re-drive, or a settle-time reconciliation re-emitting

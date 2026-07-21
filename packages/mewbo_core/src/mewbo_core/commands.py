@@ -136,7 +136,22 @@ async def _handle_tokens(ctx: CommandContext, args: list[str]) -> CommandResult:
 
 
 async def _handle_fork(ctx: CommandContext, args: list[str]) -> CommandResult:
-    """Fork the current session, optionally tagging the new session."""
+    """Fork the current session, optionally tagging the new session.
+
+    Refuses on a permanently terminated session. This handler copies the
+    transcript through the STORE, bypassing ``SessionRuntime.resolve_session``
+    (where ``SessionTerminatedError`` normally guards a fork) — so without this
+    check any surface that dispatches core commands could launder a killed
+    session into a fresh, live one. The guard belongs here, at the seam that
+    does the copying, not only in the callers.
+    """
+    if ctx.session_store.is_terminated(ctx.session_id):
+        return CommandResult(
+            render=CommandRender.NOTIFICATION,
+            title="Session terminated",
+            body="This session is permanently terminated and cannot be forked.",
+            metadata={"session_terminated": True},
+        )
     new_id = ctx.session_store.fork_session(ctx.session_id)
     tag = args[0] if args else None
     if tag:

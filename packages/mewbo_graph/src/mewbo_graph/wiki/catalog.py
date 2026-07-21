@@ -203,7 +203,7 @@ class CatalogIngestor:
         embedder = self._resolve_embedder()
         if embedder is None:
             logging.warning(
-                "catalog ingest: no embedder available; grounding catalog %s "
+                "catalog ingest: no embedder available; grounding catalog {} "
                 "with BM25 only",
                 slug,
             )
@@ -212,7 +212,7 @@ class CatalogIngestor:
             embeddings = embedder.embed_nodes(items, slug=slug)
         except Exception as exc:  # noqa: BLE001 — degrade gracefully like build_graph
             logging.warning(
-                "catalog ingest: embeddings unavailable for %s (%s); falling "
+                "catalog ingest: embeddings unavailable for {} ({}); falling "
                 "back to BM25",
                 slug,
                 exc,

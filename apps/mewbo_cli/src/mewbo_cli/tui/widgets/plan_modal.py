@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan-approval modal for the Mewbo TUI (issue #159, epic #149).
+"""Plan-approval modal for the Mewbo TUI.
 
 :class:`PlanApprovalModal` is a :class:`~textual.screen.ModalScreen` that
 presents a proposed plan for a single interactive decision — mirroring the

@@ -19,6 +19,12 @@ interface AuraHaptics {
      * `beginTurn`). */
     fun transcriptAccepted()
 
+    /** Listening ended WITHOUT an accepted transcript [R4 2026-07-10]: cancel tap, silence
+     * timeout, or a recognizer error — the a11y-mandated non-visual "mic is off" cue (the glow/
+     * waveform alone are invisible to blind users). The accepted-Final path keeps
+     * [transcriptAccepted] — the two moments must stay distinct. */
+    fun listeningEnded()
+
     /** A turn hands off successfully - either `beginTurn`'s dispatched-query path or
      * `AssistTurnMachine.continueLastSession`'s dispatch-free one (v4: there's no more in-overlay
      * "stream to completion" to fold on; handing off IS the completion). */
@@ -33,6 +39,7 @@ interface AuraHaptics {
 object NoOpAuraHaptics : AuraHaptics {
     override fun invocation() = Unit
     override fun transcriptAccepted() = Unit
+    override fun listeningEnded() = Unit
     override fun settle() = Unit
     override fun error() = Unit
 }
@@ -47,6 +54,7 @@ object NoOpAuraHaptics : AuraHaptics {
 class VibratorAuraHaptics(private val vibrator: Vibrator?) : AuraHaptics {
     override fun invocation() = playPrimitive(Composition.PRIMITIVE_CLICK, INVOCATION_SCALE, VibrationEffect.EFFECT_CLICK)
     override fun transcriptAccepted() = playPrimitive(Composition.PRIMITIVE_TICK, FULL_SCALE, VibrationEffect.EFFECT_TICK)
+    override fun listeningEnded() = playPrimitive(Composition.PRIMITIVE_TICK, LISTENING_ENDED_SCALE, VibrationEffect.EFFECT_TICK)
     override fun settle() = playPrimitive(Composition.PRIMITIVE_TICK, SETTLE_SCALE, VibrationEffect.EFFECT_TICK)
     override fun error() = playDoubleClick()
 
@@ -79,6 +87,7 @@ class VibratorAuraHaptics(private val vibrator: Vibrator?) : AuraHaptics {
 
     private companion object {
         const val INVOCATION_SCALE = 0.8f
+        const val LISTENING_ENDED_SCALE = 0.5f
         const val SETTLE_SCALE = 0.4f
         const val FULL_SCALE = 1f
         const val ERROR_CLICK_GAP_MS = 80

@@ -11,10 +11,10 @@ import { cn } from "@/lib/utils";
 interface StepperProps {
   steps: Array<{ id: string; label: string; sub: string }>;
   current: number;
-  onJump: (index: number) => void;
+  onNavigate: (index: number) => void;
 }
 
-export function Stepper({ steps, current, onJump }: StepperProps) {
+export function Stepper({ steps, current, onNavigate }: StepperProps) {
   return (
     <div className="flex items-center gap-2 mt-4" role="tablist">
       {steps.map((s, i) => {
@@ -27,7 +27,7 @@ export function Stepper({ steps, current, onJump }: StepperProps) {
               role="tab"
               aria-selected={i === current}
               disabled={state === "future"}
-              onClick={() => i < current && onJump(i)}
+              onClick={() => i < current && onNavigate(i)}
               className={cn(
                 "inline-flex items-center gap-2.5 px-2 py-1 rounded-md transition-colors text-left",
                 state === "future" && "opacity-50 cursor-not-allowed",
@@ -36,8 +36,8 @@ export function Stepper({ steps, current, onJump }: StepperProps) {
             >
               <span
                 className={cn(
-                  "inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-semibold shrink-0",
-                  state === "done" && "bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary))]",
+                  "inline-flex items-center justify-center w-6 h-6 rounded-full text-2xs font-medium shrink-0",
+                  state === "done" && "bg-[hsl(var(--primary))]/15 text-[hsl(var(--primary-text))]",
                   state === "active" &&
                     "bg-[hsl(var(--primary))] text-white shadow-[0_0_0_4px_hsl(var(--primary)/0.15)]",
                   state === "future" &&
@@ -50,12 +50,12 @@ export function Stepper({ steps, current, onJump }: StepperProps) {
                 <span
                   className={cn(
                     "block text-xs font-medium",
-                    state === "active" && "text-[hsl(var(--primary))]"
+                    state === "active" && "text-[hsl(var(--primary-text))]"
                   )}
                 >
                   {s.label}
                 </span>
-                <span className="block text-[10px] text-[hsl(var(--muted-foreground))]">
+                <span className="block text-2xs text-[hsl(var(--muted-foreground))]">
                   {s.sub}
                 </span>
               </span>

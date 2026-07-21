@@ -257,17 +257,17 @@ def test_token_resolved_from_credential_store(
     """No arg token, cold CloneTokenCache → clone reads the durable credential."""
     import mewbo_graph.plugins.wiki.clone as clone_mod
     from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
-    from mewbo_graph.wiki.credentials import CredentialStore
-    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
     from mewbo_graph.wiki.types import RepoCredential
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
     store = _store(tmp_path)
     store.create_job(_job("job-cs", "git.home/org/repo"))
     store.attach_job_session("job-cs", "sess-cs")
-    CloneTokenCache.forget("job-cs")
     CredentialStore.save(
-        store, "git.home/org/repo", RepoCredential(kind="token", value="ghp_store", username=None)
+        store,
+        CredentialScope.from_slug("git.home/org/repo"),
+        RepoCredential(kind="token", value="ghp_store", username=None),
     )
 
     runtime = _fake_runtime(store)
@@ -298,18 +298,18 @@ def test_durable_token_scrubbed_from_clone_error(
     result when git fails and echoes the auth'd URL into stderr."""
     import mewbo_graph.plugins.wiki.clone as clone_mod
     from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
-    from mewbo_graph.wiki.credentials import CredentialStore
-    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
     from mewbo_graph.wiki.types import RepoCredential
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
     store = _store(tmp_path)
     store.create_job(_job("job-leak", "git.home/org/repo"))
     store.attach_job_session("job-leak", "sess-leak")
-    CloneTokenCache.forget("job-leak")
     SECRET = "ghp_durableLEAK999"
     CredentialStore.save(
-        store, "git.home/org/repo", RepoCredential(kind="token", value=SECRET, username=None)
+        store,
+        CredentialScope.from_slug("git.home/org/repo"),
+        RepoCredential(kind="token", value=SECRET, username=None),
     )
 
     runtime = _fake_runtime(store)
@@ -353,17 +353,15 @@ def test_ssh_key_credential_sets_git_ssh_command(
     and the temp key file is removed afterward."""
     import mewbo_graph.plugins.wiki.clone as clone_mod
     from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
-    from mewbo_graph.wiki.credentials import CredentialStore
-    from mewbo_graph.wiki.tokens import CloneTokenCache
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
     from mewbo_graph.wiki.types import RepoCredential
 
     monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
     store = _store(tmp_path)
     store.create_job(_job("job-ssh", "git.home/org/repo"))
     store.attach_job_session("job-ssh", "sess-ssh")
-    CloneTokenCache.forget("job-ssh")
     CredentialStore.save(
-        store, "git.home/org/repo",
+        store, CredentialScope.from_slug("git.home/org/repo"),
         RepoCredential(kind="ssh_key", value="PRIVATEKEYDATA", username="git"),
     )
 
@@ -431,3 +429,159 @@ def test_ssh_command_quotes_key_path_with_spaces(tmp_path: Path) -> None:
     finally:
         if key_path is not None:
             key_path.unlink(missing_ok=True)
+
+
+# ── Test 9: THE regression — rejected stored token, ambient credential rescues ─
+
+
+def test_stored_token_rejected_falls_back_to_ambient(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A revoked stored token no longer wedges the clone: the chain advances to the
+    ambient git credential, a warning names the rejected scope, and the argv/env
+    carry the helper-disable + prompt-off hardening. This is the root-cause fix."""
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
+    from mewbo_graph.wiki import credentials as cred_mod
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
+    store = _store(tmp_path)
+    store.create_job(_job("job-rescue", "git.home/org/repo"))
+    store.attach_job_session("job-rescue", "sess-rescue")
+
+    REJECTED = "ghp_rejected000"
+    AMBIENT = "ghp_ambientOK111"
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug("git.home/org/repo"),
+        RepoCredential(kind="token", value=REJECTED),
+    )
+    # Override the conftest autouse (ambient→None): a valid ambient credential.
+    monkeypatch.setattr(
+        cred_mod, "ambient_credential",
+        lambda host: RepoCredential(kind="token", value=AMBIENT),
+    )
+
+    clone_dir = tmp_path / "clones" / "job-rescue"
+    clone_calls: list = []
+    clone_envs: list = []
+
+    def _run(cmd, **kwargs):
+        if "clone" in cmd:
+            clone_calls.append(list(cmd))
+            clone_envs.append(dict(kwargs.get("env") or {}))
+            url_arg = cmd[-2]
+            if REJECTED in url_arg:
+                return subprocess.CompletedProcess(
+                    cmd, 128, b"",
+                    (
+                        f"fatal: unable to access "
+                        f"'https://x-access-token:{REJECTED}@git.home/org/repo/': "
+                        "The requested URL returned error: 403"
+                    ).encode(),
+                )
+            # The ambient-authed URL succeeds.
+            clone_dir.mkdir(parents=True, exist_ok=True)
+            (clone_dir / "README.md").write_text("hi")
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        if "rev-parse" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, b"abc1234\n", b"")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    runtime = _fake_runtime(store)
+    tool = WikiCloneRepoTool(session_id="sess-rescue")
+    with patch.object(clone_mod, "_resolve_runtime", return_value=runtime), \
+         patch("subprocess.run", side_effect=_run):
+        result = asyncio.run(
+            tool.handle(_make_action_step({"url": "https://git.home/org/repo"}))
+        )
+
+    # Rescued: not an error, and the queued wire event fired.
+    assert "repo_access" not in result.content
+    events = store.load_job_events("job-rescue")
+    assert any(e["type"] == "queued" for e in events)
+
+    # Exactly two clone attempts: rejected store token, then the ambient rescue.
+    assert len(clone_calls) == 2
+    assert REJECTED in clone_calls[0][-2]
+    assert AMBIENT in clone_calls[1][-2]
+
+    # Every attempt disables the git credential helper (argv) and forces
+    # GIT_TERMINAL_PROMPT=0 (env) so git never touches the mounted cred file.
+    for call in clone_calls:
+        assert "credential.helper=" in call
+    for env in clone_envs:
+        assert env.get("GIT_TERMINAL_PROMPT") == "0"
+
+    # A WARNING log names the rejected STORE scope (the Settings-UI story).
+    warnings = [
+        e for e in events if e["type"] == "log" and e.get("level") == "warning"
+    ]
+    assert any(
+        "git.home/org/repo" in w["text"] and "rejected" in w["text"].lower()
+        for w in warnings
+    )
+
+    # Neither candidate secret leaks into any event or persisted file.
+    assert REJECTED not in str(events) and AMBIENT not in str(events)
+    for f in tmp_path.rglob("*"):
+        if f.is_file() and "credentials" not in f.parts:
+            text = f.read_text(errors="replace")
+            assert REJECTED not in text and AMBIENT not in text
+
+
+# ── Test 10: a non-auth (network) failure aborts without burning candidates ────
+
+
+def test_non_auth_failure_does_not_iterate_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network error (not an auth rejection) aborts the chain immediately — a
+    valid ambient candidate is NEVER tried, and the error surfaces as repo_access."""
+    import mewbo_graph.plugins.wiki.clone as clone_mod
+    from mewbo_graph.plugins.wiki.clone import WikiCloneRepoTool
+    from mewbo_graph.wiki import credentials as cred_mod
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    monkeypatch.setenv("MEWBO_WIKI_CLONE_ROOT", str(tmp_path / "clones"))
+    store = _store(tmp_path)
+    store.create_job(_job("job-net", "git.home/org/repo"))
+    store.attach_job_session("job-net", "sess-net")
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug("git.home/org/repo"),
+        RepoCredential(kind="token", value="ghp_first"),
+    )
+    monkeypatch.setattr(
+        cred_mod, "ambient_credential",
+        lambda host: RepoCredential(kind="token", value="ghp_ambient"),
+    )
+
+    clone_calls: list = []
+
+    def _run(cmd, **kwargs):
+        if "clone" in cmd:
+            clone_calls.append(list(cmd))
+            return subprocess.CompletedProcess(
+                cmd, 128, b"",
+                b"fatal: unable to access '...': Could not resolve host: git.home",
+            )
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    runtime = _fake_runtime(store)
+    tool = WikiCloneRepoTool(session_id="sess-net")
+    with patch.object(clone_mod, "_resolve_runtime", return_value=runtime), \
+         patch("subprocess.run", side_effect=_run):
+        result = asyncio.run(
+            tool.handle(_make_action_step({"url": "https://git.home/org/repo"}))
+        )
+
+    assert "repo_access" in result.content
+    # Aborted after the FIRST attempt — the ambient candidate was never reached.
+    assert len(clone_calls) == 1
+    errors = [e for e in store.load_job_events("job-net") if e["type"] == "error"]
+    assert len(errors) == 1
+    assert "resolve host" in errors[0]["error"]["message"]

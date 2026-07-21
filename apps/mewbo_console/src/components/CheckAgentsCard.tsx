@@ -102,16 +102,16 @@ function TreeRow({ row }: { row: FlatRow }) {
       <div className="flex items-baseline gap-2 min-w-0" style={{ marginLeft: indent }}>
         <StatusDot status={agent.status} pulse={agent.status === 'running'} className="self-center" />
         <AgentIdChip agentId={agent.id} />
-        <span className={cn('shrink-0 self-center text-[10.5px] font-medium font-sans uppercase tracking-wider', s.text)}>
+        <span className={cn('shrink-0 self-center text-2xs font-medium font-sans uppercase tracking-wider', s.text)}>
           {agent.status}
         </span>
-        <span className="flex-1 min-w-0 text-[13px] font-sans text-[hsl(var(--foreground))] truncate">
+        <span className="flex-1 min-w-0 text-sm font-sans text-[hsl(var(--foreground))] truncate">
           &quot;{agent.task}&quot;
         </span>
       </div>
 
       <div
-        className="flex flex-wrap gap-x-2.5 gap-y-0.5 mt-0.5 text-[11.5px] font-mono text-[hsl(var(--muted-foreground))]"
+        className="flex flex-wrap gap-x-2.5 gap-y-0.5 mt-0.5 text-2xs text-[hsl(var(--muted-foreground))]"
         style={{ marginLeft: indent + 20 }}
       >
         <span className="shrink-0 whitespace-nowrap">
@@ -119,11 +119,11 @@ function TreeRow({ row }: { row: FlatRow }) {
         </span>
         {agent.last_tool_id && (
           <span className="shrink-0 whitespace-nowrap">
-            · last: <code className="text-[hsl(var(--foreground))] font-[inherit]">{agent.last_tool_id}</code>
+            · last: <code className="font-mono text-[hsl(var(--foreground))]">{agent.last_tool_id}</code>
           </span>
         )}
         {agent.compaction_count > 0 && (
-          <span className="shrink-0 whitespace-nowrap text-amber-500">
+          <span className="shrink-0 whitespace-nowrap text-[hsl(var(--warning))]">
             · compacted ×{agent.compaction_count}
           </span>
         )}
@@ -132,12 +132,12 @@ function TreeRow({ row }: { row: FlatRow }) {
       {(showResult || showProgress) && (
         <div
           className={cn(
-            'mt-1 pl-2 border-l-2 text-[12.5px] font-sans text-[hsl(var(--foreground))]',
-            showResult ? s.border.replace('border-', 'border-l-').replace('/30', '/60') : 'border-l-cyan-500/60',
+            'mt-1 pl-2 border-l-2 text-sm font-sans text-[hsl(var(--foreground))]',
+            showResult ? s.border.replace('border-', 'border-l-').replace('/30', '/60') : 'border-l-[hsl(var(--info)/0.6)]',
           )}
           style={{ marginLeft: indent + 20 }}
         >
-          <span className={cn('mr-1.5 font-mono text-[9.5px] font-semibold tracking-wider', showResult ? s.text : 'text-cyan-600')}>
+          <span className={cn('mr-1.5 text-2xs font-medium tracking-wider', showResult ? s.text : 'text-[hsl(var(--info))]')}>
             {showResult ? `RESULT(${agent.result?.status || agent.status})` : 'PROGRESS'}
           </span>
           <span className="opacity-90 italic">
@@ -171,9 +171,9 @@ export function CheckAgentsCard({
 
   const header = (
     <span className="flex items-center gap-2 min-w-0">
-      <span className="font-mono text-xs font-medium">check_agents</span>
+      <span className="text-xs font-medium">check_agents</span>
       {wait && (
-        <span className="font-mono text-[10px] text-cyan-600 px-1.5 py-px rounded bg-cyan-500/10 border border-cyan-500/30">
+        <span className="font-mono text-2xs text-[hsl(var(--info))] px-1.5 py-px rounded bg-[hsl(var(--info)/0.1)] border border-[hsl(var(--info)/0.3)]">
           wait=true
         </span>
       )}
@@ -186,7 +186,7 @@ export function CheckAgentsCard({
         <StatusPill key={k} status={k} count={counts[k] || 0} />
       ))}
       {(durationMs != null || waitedMs != null) && (
-        <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] whitespace-nowrap pl-1">
+        <span className="text-2xs text-[hsl(var(--muted-foreground))] whitespace-nowrap pl-1">
           {waitedMs != null ? `${(waitedMs / 1000).toFixed(1)}s wait` : `${durationMs}ms`}
         </span>
       )}
@@ -208,27 +208,27 @@ export function CheckAgentsCard({
       >
         <div className="flex items-center justify-between mb-2">
           <TabsList className="h-7 p-0.5 bg-[hsl(var(--surface))]">
-            <TabsTrigger value="rendered" className="h-6 px-2 text-[11px] gap-1">
+            <TabsTrigger value="rendered" className="h-6 px-2 text-2xs gap-1">
               <Eye className="w-3 h-3" /> Rendered
             </TabsTrigger>
-            <TabsTrigger value="raw" className="h-6 px-2 text-[11px] gap-1">
+            <TabsTrigger value="raw" className="h-6 px-2 text-2xs gap-1">
               <Code2 className="w-3 h-3" /> Raw
             </TabsTrigger>
           </TabsList>
-          <span className="font-mono text-[9.5px] tracking-wider text-[hsl(var(--muted-foreground))]">
-            returned to <code className="text-[hsl(var(--primary))] bg-transparent px-0">{parentId.slice(0, 8)}</code>
+          <span className="text-2xs tracking-wider text-[hsl(var(--muted-foreground))]">
+            returned to <code className="font-mono text-[hsl(var(--primary-text))] bg-transparent px-0">{parentId.slice(0, 8)}</code>
           </span>
         </div>
 
         <TabsContent value="rendered" className="mt-0">
           {agents.length === 0 ? (
-            <div className="p-2 font-mono text-xs text-[hsl(var(--muted-foreground))]">
+            <div className="p-2 text-xs text-[hsl(var(--muted-foreground))]">
               No agents spawned.
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mb-2 pb-2 border-b border-dashed border-[hsl(var(--border))] font-mono text-[11px] text-[hsl(var(--muted-foreground))]">
-                <span className="text-[9.5px] tracking-wider uppercase">Agents</span>
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mb-2 pb-2 border-b border-dashed border-[hsl(var(--border))] text-2xs text-[hsl(var(--muted-foreground))]">
+                <span className="text-2xs tracking-wider uppercase">Agents</span>
                 {STATUS_ORDER.filter(k => counts[k]).map(k => (
                   <span key={k}>
                     {counts[k]} <span className={STATUS_STYLES[k].text}>{k}</span>
@@ -243,7 +243,7 @@ export function CheckAgentsCard({
         </TabsContent>
 
         <TabsContent value="raw" className="mt-0">
-          <pre className="p-3 -mx-3 -mb-3 bg-[hsl(var(--code-body))] text-[hsl(var(--code-fg))] text-[11.5px] leading-[1.55] font-mono whitespace-pre-wrap break-words">
+          <pre className="p-3 -mx-3 -mb-3 bg-[hsl(var(--code-body))] text-[hsl(var(--code-fg))] text-2xs leading-[1.55] font-mono whitespace-pre-wrap break-words">
             {rawText}
           </pre>
         </TabsContent>

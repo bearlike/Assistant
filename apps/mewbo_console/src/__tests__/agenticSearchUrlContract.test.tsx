@@ -1,5 +1,5 @@
 /**
- * URL-as-source-of-truth tests for the Agentic Search surface (#80 sharability).
+ * URL-as-source-of-truth tests for the Agentic Search surface.
  *
  * The canonical URL is `/search?ws=<workspace_id>&run=<run_id>`. Every state
  * that shows a run reflects there, so a copied URL renders the same run +
@@ -17,7 +17,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 afterEach(cleanup)
 
-import AgenticSearchView from "../components/agentic_search/AgenticSearchView"
+import { AgenticSearchView } from "../components/agentic_search/AgenticSearchView"
 import * as api from "../api/agenticSearch"
 import type { RunRecord, Workspace } from "../types/agenticSearch"
 
@@ -166,7 +166,7 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-describe("AgenticSearch URL contract (#80 sharability)", () => {
+describe("AgenticSearch URL contract", () => {
   it("PUSHes ws+run params into the URL on submit success", async () => {
     renderView()
     // Land on the inert landing page (default workspace = w1, first in list).

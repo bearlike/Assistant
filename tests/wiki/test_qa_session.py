@@ -30,6 +30,7 @@ def runtime(store: JsonWikiStore) -> MagicMock:
     rt.resolve_session.return_value = "sess-qa-abc"
     rt.start_async.return_value = True
     rt.cancel.return_value = True
+    rt.is_running.return_value = False
     return rt
 
 
@@ -129,7 +130,7 @@ def test_qa_start_creates_record_and_emits_meta_event(store, runtime):
 
 
 def test_qa_start_is_self_approving(store, runtime):
-    """The read-only QA run is self-approving — auto_approve + strict visible scope (#172).
+    """The read-only QA run is self-approving — auto_approve + strict visible scope.
 
     The capability gate surfaces the wiki/scg SessionTools onto the root + probes
     regardless of strict scope, so a restrictive approval callback could only turn a
@@ -179,6 +180,145 @@ def test_qa_meta_appears_before_first_tool_call(store, runtime):
     events = store.load_qa_events(answer.answer_id)
     # The meta event must be at index 0 regardless of what start_async does
     assert events[0]["type"] == "meta"
+
+
+def test_qa_start_persists_scope_as_first_class_session_state(store, runtime):
+    """QA tool-scope/playbook/strict-scope are persisted context, not bare kwargs.
+
+    The continuation path re-reads/re-applies this instead of a generic re-engage
+    re-deriving unscoped grants — see ``WikiQaSession.follow_up``.
+    """
+    from mewbo_api.wiki.jobs import QA_SESSION_STEP_BUDGET, QA_TOOLS
+
+    answer = WikiQaSession.start(
+        slug="org/repo",
+        question="What is the auth flow?",
+        from_page_id="",
+        model="anthropic/claude-sonnet-4-6",
+        runtime=runtime,
+    )
+    assert answer.question == "What is the auth flow?"
+    runtime.append_context_event.assert_called_once()
+    _, ctx = runtime.append_context_event.call_args.args
+    assert ctx["client_capabilities"] == ["wiki"]
+    assert ctx["mcp_tools"] == QA_TOOLS
+    assert ctx["strict_tool_scope"] is True
+    assert ctx["session_step_budget"] == QA_SESSION_STEP_BUDGET
+    assert "wiki-qa-probe" in ctx["skill_instructions"]
+    # meta event exposes the backing session id (addressable continuation)
+    meta = store.load_qa_events(answer.answer_id)[0]
+    assert meta["sessionId"] == "sess-qa-abc"
+
+
+# ---------------------------------------------------------------------------
+# Unit: WikiQaSession.follow_up
+# ---------------------------------------------------------------------------
+
+
+def test_qa_follow_up_reuses_session_and_appends_prior_turn(store, runtime):
+    """follow_up() reuses the SAME session_id/answer_id and snapshots the prior turn."""
+    from mewbo_api.wiki.jobs import QA_TOOLS
+
+    first = WikiQaSession.start(
+        slug="org/repo",
+        question="What is the auth flow?",
+        from_page_id="auth-overview",
+        model="anthropic/claude-sonnet-4-6",
+        runtime=runtime,
+    )
+    # Simulate the first turn having finished + been reconciled by QaFinalizer.close
+    # (as it would be by the time a human can ask a follow-up). Re-validate through
+    # the model so the raw block dict is coerced to a real ``BlockUnion`` (model_copy
+    # skips validation — a raw dict would otherwise warn on the persist serialize).
+    store.update_qa_fields(QaAnswer.model_validate({
+        **first.model_dump(by_alias=True),
+        "blocks": [{"kind": "p", "text": "OAuth2 with refresh tokens."}],
+        "summarySources": ["wiki:auth-overview"],
+        "status": "complete",
+    }))
+
+    second = WikiQaSession.follow_up(
+        first.answer_id, "What about refresh token rotation?", runtime=runtime,
+    )
+
+    # Same identity — no new answer_id, no new session.
+    assert second.answer_id == first.answer_id
+    runtime.resolve_session.assert_called_once()  # only start() ever minted a session
+    assert runtime.start_async.call_count == 2
+    follow_up_kw = runtime.start_async.call_args.kwargs
+    assert follow_up_kw["session_id"] == "sess-qa-abc"
+    assert follow_up_kw["user_query"] == "What about refresh token rotation?"
+    assert follow_up_kw["allowed_tools"] == QA_TOOLS  # QA scope re-applied on follow-up
+    assert follow_up_kw["strict_tool_scope"] is True
+
+    # The new turn's top-level fields reset; the prior turn is preserved in history.
+    assert second.question == "What about refresh token rotation?"
+    assert second.blocks == []
+    assert second.status == "running"
+    assert len(second.turns) == 1
+    assert second.turns[0].question == "What is the auth flow?"
+    assert second.turns[0].blocks[0].root.text.root == "OAuth2 with refresh tokens."
+    assert second.turns[0].status == "complete"
+
+    # A second meta event (new turn boundary) with the SAME session id.
+    metas = [e for e in store.load_qa_events(first.answer_id) if e["type"] == "meta"]
+    assert len(metas) == 2
+    assert metas[1]["sessionId"] == "sess-qa-abc"
+
+
+def test_qa_follow_up_unknown_answer_raises(runtime):
+    """follow_up() on an answer with no backing session raises LookupError."""
+    with pytest.raises(LookupError):
+        WikiQaSession.follow_up("no-such-answer", "Q2", runtime=runtime)
+
+
+def test_qa_follow_up_raises_when_session_already_running(store, runtime):
+    """TOCTOU backstop: start_async itself refusing surfaces as RuntimeError too."""
+    first = WikiQaSession.start(
+        slug="org/repo", question="Q1", from_page_id="", model="m", runtime=runtime,
+    )
+    runtime.start_async.return_value = ""  # SessionRuntime's "already running" signal
+    with pytest.raises(RuntimeError):
+        WikiQaSession.follow_up(first.answer_id, "Q2", runtime=runtime)
+
+
+def test_qa_follow_up_guards_before_mutating_when_session_already_running(
+    store, runtime, monkeypatch,
+):
+    """A concurrent follow-up (double-submit / retry racing the live turn) must bail
+    BEFORE touching the store — not after (review).
+
+    Pre-fix, ``update_qa_fields``/``append_qa_event`` ran unconditionally before
+    ``start_async`` was even called, so a race would inject a second ``meta``
+    into the actively-streaming prior turn's event log (shifting
+    ``QaFinalizer.current_turn_events``'s boundary mid-stream) and leave a
+    premature ``QaTurn`` appended to ``turns`` — even though the run itself
+    never started. The guard must run first, using the same
+    ``runtime.is_running`` check ``SessionRecovery.post`` uses in backend.py.
+    """
+    first = WikiQaSession.start(
+        slug="org/repo", question="Q1", from_page_id="", model="m", runtime=runtime,
+    )
+    store.update_qa_fields(first.model_copy(update={"status": "complete"}))
+    before = store.get_qa(first.answer_id)
+
+    runtime.is_running.return_value = True
+    runtime.start_async.reset_mock()  # drop start()'s own prior call from the count
+    update_spy = MagicMock(wraps=store.update_qa_fields)
+    append_spy = MagicMock(wraps=store.append_qa_event)
+    monkeypatch.setattr(store, "update_qa_fields", update_spy)
+    monkeypatch.setattr(store, "append_qa_event", append_spy)
+
+    with pytest.raises(RuntimeError):
+        WikiQaSession.follow_up(first.answer_id, "Q2", runtime=runtime)
+
+    update_spy.assert_not_called()
+    append_spy.assert_not_called()
+    runtime.start_async.assert_not_called()
+    after = store.get_qa(first.answer_id)
+    assert after == before
+    assert after.turns == []
+    assert after.question == "Q1"
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +558,95 @@ def test_post_qa_requires_auth(client):
 
 
 # ---------------------------------------------------------------------------
+# Route: POST /v1/wiki/qa with answerId (continuation)
+# ---------------------------------------------------------------------------
+
+
+def _answer_id_from_sse(resp) -> str:
+    import re
+
+    m = re.search(r'"answerId":\s*"([^"]+)"', resp.data.decode())
+    assert m is not None
+    return m.group(1)
+
+
+def test_post_qa_with_answer_id_continues_same_session(client, runtime):
+    """A follow-up (question + answerId) reuses the session — no new session_tag resolved."""
+    c, store = client
+    first = c.post("/v1/wiki/qa", json=_valid_qa_body(), headers={"X-Api-Key": API_KEY})
+    assert first.status_code == 200
+    answer_id = _answer_id_from_sse(first)
+    # Mark the first turn complete, as QaFinalizer.close would by the time a
+    # human can ask a follow-up.
+    snap = store.get_qa(answer_id)
+    store.update_qa_fields(snap.model_copy(update={"status": "complete"}))
+
+    second = c.post(
+        "/v1/wiki/qa",
+        json={"question": "And what about MFA?", "answerId": answer_id},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert second.status_code == 200
+    assert "text/event-stream" in second.content_type
+    runtime.resolve_session.assert_called_once()  # only the FIRST post minted a session
+    snap = store.get_qa(answer_id)
+    assert snap.question == "And what about MFA?"
+    assert len(snap.turns) == 1
+
+
+def test_post_qa_with_unknown_answer_id_404(client):
+    """POST with a non-existent answerId → 404, not a silent new session."""
+    c, _ = client
+    resp = c.post(
+        "/v1/wiki/qa",
+        json={"question": "Q", "answerId": "no-such-answer"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 404
+    assert resp.get_json()["code"] == "not_found"
+
+
+def test_post_qa_with_answer_id_already_running_returns_409(client, runtime):
+    """A follow-up racing the still-streaming prior turn → 409, not 500 (review)."""
+    c, store = client
+    first = c.post("/v1/wiki/qa", json=_valid_qa_body(), headers={"X-Api-Key": API_KEY})
+    answer_id = _answer_id_from_sse(first)
+
+    runtime.is_running.return_value = True
+    resp = c.post(
+        "/v1/wiki/qa",
+        json={"question": "Too soon", "answerId": answer_id},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp.status_code == 409
+    # Racing the guard must not have mutated the answer at all.
+    assert store.get_qa(answer_id).turns == []
+
+
+def test_post_qa_with_answer_id_requires_no_project(client):
+    """A follow-up doesn't need project/slug/fromPageId — those ride the existing answer."""
+    c, store = client
+    first = c.post("/v1/wiki/qa", json=_valid_qa_body(), headers={"X-Api-Key": API_KEY})
+    answer_id = _answer_id_from_sse(first)
+    store.update_qa_fields(store.get_qa(answer_id).model_copy(update={"status": "complete"}))
+
+    resp = c.post(
+        "/v1/wiki/qa",
+        json={"question": "Follow-up with no project field"},
+        headers={"X-Api-Key": API_KEY},
+    )
+    # No answerId AND no project → the ordinary new-session validation still applies.
+    assert resp.status_code == 400
+
+    resp2 = c.post(
+        "/v1/wiki/qa",
+        json={"question": "Follow-up", "answerId": answer_id},
+        headers={"X-Api-Key": API_KEY},
+    )
+    assert resp2.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Route: DELETE /v1/wiki/qa/<id>
 # ---------------------------------------------------------------------------
 
@@ -516,7 +745,7 @@ def test_get_qa_snapshot_returns_answer(client):
 
 
 def test_get_qa_snapshot_resolves_summary_graph_refs(client):
-    """GET humanises ``graph:<id>`` refs in BOTH panels — cited (summary) + accessed (#172).
+    """GET humanises ``graph:<id>`` refs in BOTH panels — cited (summary) + accessed.
 
     ``summary_sources`` now folds in the file/graph evidence off the accessed trail, so
     its graph refs need the same read-time resolution the accessed trail already gets

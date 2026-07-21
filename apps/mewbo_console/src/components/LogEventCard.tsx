@@ -3,10 +3,10 @@ import { ChevronRight } from 'lucide-react';
 import { formatSessionTime } from '../utils/time';
 
 const accentColors: Record<string, string> = {
-  emerald: 'border-l-emerald-500',
-  red: 'border-l-red-500',
-  amber: 'border-l-amber-500',
-  blue: 'border-l-blue-500',
+  emerald: 'border-l-[hsl(var(--success))]',
+  red: 'border-l-[hsl(var(--destructive))]',
+  amber: 'border-l-[hsl(var(--warning))]',
+  blue: 'border-l-[hsl(var(--info))]',
   muted: 'border-l-[hsl(var(--muted-foreground))]',
   'agent-0': 'border-l-agent-0',
   'agent-1': 'border-l-agent-1',
@@ -58,14 +58,14 @@ export function LogEventCard({
       className={`rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] border-l-[2.5px] ${accentColors[accent] || accentColors.muted} ${hasBody ? 'cursor-pointer' : ''} transition-colors hover:bg-[hsl(var(--accent))]/30`}
       onClick={hasBody ? () => setExpanded((p) => !p) : undefined}
     >
-      <div className="flex items-center gap-2 pl-[14px] pr-3 py-[9px]">
+      <div className="flex items-center gap-2 pl-3 pr-3 py-2">
         <span className="shrink-0 opacity-70">{icon}</span>
         <span className="text-sm font-medium text-[hsl(var(--foreground))] truncate flex-1">
           {title}
         </span>
         {badge}
         {timestamp && (
-          <span className="text-[10px] text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0">
+          <span className="text-2xs text-[hsl(var(--muted-foreground))] whitespace-nowrap shrink-0">
             {formatSessionTime(timestamp)}
           </span>
         )}

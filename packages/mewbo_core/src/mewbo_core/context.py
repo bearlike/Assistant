@@ -211,13 +211,18 @@ class ContextBuilder:
         # ``context_compacted`` event are already represented in ``summary``.
         # Replaying their raw payloads under "Recent conversation:" would
         # double-count them and leak pre-compaction noise that the user
-        # explicitly asked to summarize away. Slice forward past the marker.
-        last_compact_ts = max(
-            (e.get("ts", "") for e in events if e.get("type") == "context_compacted"),
-            default="",
-        )
-        if last_compact_ts:
-            events = [e for e in events if e.get("ts", "") > last_compact_ts]
+        # explicitly asked to summarize away. Slice forward past the marker
+        # by POSITION: the transcript is an append-only log, so index order is
+        # what "after the boundary" means. Comparing ISO strings instead holds
+        # only while every producer spells the UTC offset identically — ``Z``
+        # sorts above ``+00:00``, so one same-second mix silently drops a
+        # post-boundary event out of context.
+        last_compact_idx = -1
+        for idx, event in enumerate(events):
+            if event.get("type") == "context_compacted":
+                last_compact_idx = idx
+        if last_compact_idx >= 0:
+            events = events[last_compact_idx + 1 :]
         context_events = [
             event
             for event in events
@@ -227,6 +232,10 @@ class ContextBuilder:
                 "assistant",
                 "tool_result",
                 "step_reflection",
+                # The promise-as-completion nudge rides this event. Without it in
+                # the filter the marker reaches the console, CLI and forensics but
+                # never the model — the one place the whole overhaul aims it.
+                "run_note",
             }
         ]
         recent_limit = int(get_config_value("context", "recent_event_limit", default=8))

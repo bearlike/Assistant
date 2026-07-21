@@ -96,26 +96,3 @@ export function runProgress(agents: TraceAgent[], done: boolean): number {
   if (agents.length === 0) return 0
   return agents.filter((a) => agentSnapshot(a).done).length / agents.length
 }
-
-/**
- * Humanize a millisecond duration for the trace instrument rows: sub-second →
- * "420ms", under a minute → "4.1s", longer → "1m 12s". Returns "" for
- * null/undefined/non-finite so the field stays silent (honesty rule — the
- * trace panel renders only present values, never a fabricated 0).
- */
-export function humanizeMs(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return ""
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  const rem = Math.round(s - m * 60)
-  return `${m}m ${rem}s`
-}
-
-/** Compact a token count: 850 → "850", 12_400 → "12.4k". "" for absent. */
-export function compactTokens(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n) || n < 0) return ""
-  if (n < 1000) return String(n)
-  return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`
-}

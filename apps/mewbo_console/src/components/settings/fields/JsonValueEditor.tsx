@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 
-import { inputBase } from "../styles";
+import { inputTextCls } from "../styles";
 
 interface JsonValueEditorProps {
   value: unknown;
@@ -55,7 +55,7 @@ export function JsonValueEditor({
     <div className="space-y-1">
       <textarea
         id={id}
-        className={`${inputBase} font-mono`}
+        className={`${inputTextCls} font-mono`}
         rows={4}
         value={draft}
         disabled={disabled}
@@ -67,7 +67,7 @@ export function JsonValueEditor({
         <p
           id={errorId}
           role="alert"
-          className="text-[hsl(var(--destructive))] text-xs"
+          className="text-[hsl(var(--destructive-text))] text-xs"
         >
           {error}
         </p>

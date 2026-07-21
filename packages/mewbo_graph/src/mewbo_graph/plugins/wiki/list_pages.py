@@ -53,7 +53,7 @@ class WikiListPagesTool(WikiSessionTool):
         """Execute a ``wiki_list_pages`` tool call."""
         ctx = self._qa_ctx()
         if ctx is None:
-            return _err_result("internal", "wiki QA ctx not found for this session")
+            return self._ungrounded_result()
 
         args = self._parse_args(WikiListPagesArgs, action_step)
         if isinstance(args, MockSpeaker):

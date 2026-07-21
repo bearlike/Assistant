@@ -3,7 +3,7 @@ package com.mewbo.aura.ui.chat
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.mewbo.aura.data.device.DeviceToolExecutor
+import com.mewbo.aura.data.api.QuestionAnswerItemDto
 import com.mewbo.aura.data.model.AttachmentPayload
 import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.data.model.SessionEvent
@@ -11,9 +11,11 @@ import com.mewbo.aura.data.model.TextPayload
 import com.mewbo.aura.data.model.TranscriptReducer
 import com.mewbo.aura.data.repo.AttachmentRepository
 import com.mewbo.aura.data.repo.ModelRepository
+import com.mewbo.aura.data.repo.QuestionAnswerResult
 import com.mewbo.aura.data.repo.RunRepository
 import com.mewbo.aura.data.repo.SendResult
 import com.mewbo.aura.data.repo.SessionRepository
+import com.mewbo.aura.data.repo.SessionTerminatedException
 import com.mewbo.aura.data.repo.SessionScopeRepository
 import com.mewbo.aura.data.settings.SettingsStore
 import com.mewbo.aura.ui.composer.StagedAttachmentsReducer
@@ -41,8 +43,8 @@ import kotlinx.coroutines.launch
 /**
  * One session's chat state. Owns no transport - everything routes through [SessionRepository] /
  * [RunRepository], which own the REST + SSE mechanics (data/CLAUDE.md). [Synthesizer] (read-aloud,
- * plus voice-turn speak-along via [SpeechController], Gitea #180 P3/P4) and composer dictation
- * ([Transcriber], Gitea #180 P2) are the two legal `voice/` dependencies this view model carries
+ * plus voice-turn speak-along via [SpeechController]) and composer dictation
+ * ([Transcriber]) are the two legal `voice/` dependencies this view model carries
  * (viewmodels -> voice is legal layering, apps/mewbo_aura/CLAUDE.md) - it owns no other audio/
  * speech behavior.
  *
@@ -64,7 +66,6 @@ class ChatViewModel @Inject constructor(
     private val settingsStore: SettingsStore,
     private val sessionScopeRepository: SessionScopeRepository,
     private val attachmentRepository: AttachmentRepository,
-    private val deviceToolExecutor: DeviceToolExecutor,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatUiState())
@@ -74,6 +75,21 @@ class ChatViewModel @Inject constructor(
     private val speech = SpeechController(synthesizer, viewModelScope)
     private var streamJob: Job? = null
     private var dictationJob: Job? = null
+
+    /**
+     * The in-flight session LOAD - [bind]'s history fetch, or [retryFromMessage]'s rewind (a POST
+     * plus that same fetch). Tracked exactly like [streamJob] and [dictationJob], and cancelled by
+     * [bind] for exactly the same reason: it belongs to the session being LEFT, and everything it is
+     * about to write (the reducer, `items`, `title`, `sessionEnded`, the model/scope hydration, the
+     * live subscription) is state SHARED with whatever session binds next.
+     *
+     * Untracked, a load that outlived a session switch folded session A's transcript into session
+     * B's binding and pointed [streamJob] at A's run. [retryFromMessage] made that window much wider
+     * (a network POST *then* a fetch, not just a fetch), but it was already open in [bind] itself -
+     * so the fix lives here, on the one field both paths route through, rather than on the retry
+     * path alone.
+     */
+    private var historyJob: Job? = null
     private var lastSentText: String? = null
 
     private var reducerState = TranscriptReducer.State()
@@ -86,7 +102,7 @@ class ChatViewModel @Inject constructor(
      * overrides [ChatUiState.selectedModel] away from this value. */
     private var globalModelPreference: String? = null
 
-    /** The default-project setting (`SettingsStore.selectedProject`, Gitea #178 W1-A), tracked the
+    /** The default-project setting (`SettingsStore.selectedProject`), tracked the
      * same way [globalModelPreference] is: [bind] reseeds [ChatUiState.composerScope]'s
      * `selectedProjectKey` from this on every fresh/new chat (via [reseedProjectForBind]), but
      * (unlike the model) [selectProject]'s per-chat override never writes back through to
@@ -96,8 +112,13 @@ class ChatViewModel @Inject constructor(
 
     /** True once [selectProject] overrode the current fresh chat's project - blocks the
      * settings-collector reseed below from clobbering an un-sent per-chat pick (the chat's
-     * ViewModel survives a Settings round-trip; #178 review find). Reset by [bind]. */
+     * ViewModel survives a Settings round-trip). Reset by [bind]. */
     private var projectOverriddenForCurrentChat = false
+
+    /** `SettingsStore.streamlitWidgetsEnabled` mirror, the replay-gate input for
+     * [applyEvent]. Defaults to the store's own default (ON) until the collector below emits, so a
+     * first-frame history replay never renders a widget the flag would forbid. */
+    private var widgetsEnabled: Boolean = true
 
     init {
         viewModelScope.launch {
@@ -111,6 +132,9 @@ class ChatViewModel @Inject constructor(
                 globalModelPreference = model.ifBlank { null }
                 _state.update { it.copy(selectedModel = globalModelPreference) }
             }
+        }
+        viewModelScope.launch {
+            settingsStore.streamlitWidgetsEnabled.collect { widgetsEnabled = it }
         }
         viewModelScope.launch {
             // Only seeds the CURRENT scope while still on a fresh/unsaved chat (binding.currentId ==
@@ -249,7 +273,7 @@ class ChatViewModel @Inject constructor(
      * EXISTING session's model is hydrated from its own transcript below - so switching between
      * chats never leaks one session's picked model into another's header/next-send scope.
      *
-     * [handoffModality] (Gitea #180 P1) is the assist-overlay handoff's raw `EXTRA_HANDOFF_MODALITY`
+     * [handoffModality] is the assist-overlay handoff's raw `EXTRA_HANDOFF_MODALITY`
      * string (`ChatScreen`'s own nav-resolved arg, itself baked into the route by `AuraNavHost` from
      * `MainActivity`'s intent extra) - `null` for every ordinary bind (drawer/search navigation, a
      * fresh "New chat"), non-null only when this session is being picked up mid-handoff, in which
@@ -263,19 +287,19 @@ class ChatViewModel @Inject constructor(
         projectOverriddenForCurrentChat = false
         streamJob?.cancel()
         streamJob = null
+        // An in-flight history/retry load belongs to the session being LEFT too - left running, it
+        // resumes after this reset and folds the OLD session's transcript into the new binding (see
+        // historyJob's own doc). Cancellation is cooperative, so loadHistoryAndFollow ALSO re-checks
+        // binding.isCurrent after each suspension point - the two together are what close this.
+        historyJob?.cancel()
+        historyJob = null
         // A dictation in progress belongs to the session being LEFT - a switch (including to/from
         // a fresh/null chat) must not leave it listening into whatever session binds next.
         dictationJob?.cancel()
         dictationJob = null
-        // Same for any speech in flight (Gitea #180 P3 barge-in trigger: "bind() session switch") -
+        // Same for any speech in flight (barge-in trigger: "bind() session switch") -
         // a voice turn's speak-along belongs to the session being left, never the one binding next.
         speech.bargeIn()
-        // Every real session switch (including to/from a fresh/null chat) cuts device-tool
-        // servicing for whatever session was previously bound - subscribeLive() below re-attaches
-        // it once a run is actually confirmed live on the NEW session, so a tool call belonging to
-        // a chat the user has navigated away from is never dispatched (task brief: device tool
-        // servicing must track which session is actually open, not just which one last ran).
-        deviceToolExecutor.detach()
         reducerState = TranscriptReducer.State()
         clientTail = emptyList()
         lastSentText = null
@@ -287,6 +311,9 @@ class ChatViewModel @Inject constructor(
                 speakingKey = null,
                 isLoadingHistory = id != null,
                 sessionId = id,
+                // Reset the terminal state on every rebind - a switch away from a terminated session
+                // must re-enable the composer; the history load below re-derives it.
+                sessionEnded = false,
                 selectedModel = globalModelPreference,
                 composerScope = reseedProjectForBind(id, it.composerScope, globalProjectPreference),
                 activeTurnModality = InputModality.fromExtra(handoffModality),
@@ -303,62 +330,89 @@ class ChatViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
-            try {
-                val history = sessionRepository.fetchHistory(id)
-                // speakAlong=false: catching up this fresh binding's reducer state from persisted
-                // history is not a live turn - AssistUiState.Streaming's own SpeechController (the
-                // assist-overlay handoff case, voice/CLAUDE.md's cross-instance handoff law) may
-                // already have spoken some or all of this. primeAlreadySpoken below (after the
-                // replay + hydration settle) is what marks it consumed instead, so the SAME
-                // information reaches speech state without re-speaking it.
-                history.events.forEach { applyEvent(it, speakAlong = false) }
-                // Hydrate from the session's OWN last-persisted context (backend.py
-                // `_load_last_context` semantics) so the frozen scope reflects what the NEXT turn
-                // would actually run on, not the global new-chat default it was seeded with at bind.
-                // model falls back to the global default when the session has no context/model;
-                // project + tool-narrowing round-trip through the SAME persisted `context` event
-                // (backend `_build_context_payload` copies the context object verbatim) and take NO
-                // such fallback - absent project => Temporary (null), absent mcp_tools => all tools
-                // (null), each an honest match of what the backend re-resolves. Without this a
-                // revisited project-scoped session silently reverted to Temporary and, because the
-                // backend re-resolves scope from EVERY /query's own context (nothing is sticky
-                // server-side - SessionContext.kt), the next send MIGRATED the session onto the
-                // wrong project/cwd.
-                val hydratedModel = SessionEvent.lastContextModel(history.events) ?: globalModelPreference
-                _state.update {
-                    it.copy(
-                        title = history.title,
-                        isLoadingHistory = false,
-                        selectedModel = hydratedModel,
-                        composerScope = it.composerScope.copy(
-                            selectedProjectKey = SessionEvent.lastContextProject(history.events),
-                            activeToolIds = SessionEvent.lastContextMcpTools(history.events),
-                        ),
-                    )
-                }
-                // Gitea #181 fix wave, finding 1: primes THIS (fresh) SpeechController with
-                // whatever text the replay above just folded in, so a voice-tagged binding (only
-                // real case this isn't a no-op - see primeAlreadySpoken's own gating) never re-
-                // speaks a first turn the overlay's OWN SpeechController instance already spoke
-                // before handing off - a still-streaming last message (a mid-turn Expand tap) stays
-                // primed-but-open, so subscribeLive's later live deltas for that same message still
-                // speak only the genuinely new remainder.
-                speech.primeAlreadySpoken(
-                    item = _state.value.items.lastOrNull { it is ChatItem.AssistantMessage } as? ChatItem.AssistantMessage,
-                    modality = _state.value.activeTurnModality,
+        historyJob = viewModelScope.launch { loadHistoryAndFollow(id) }
+    }
+
+    /**
+     * Fetches [id]'s authoritative transcript, folds it into the (already-reset) reducer, hydrates
+     * the session's own persisted scope, and attaches to its live stream if a run is in flight.
+     *
+     * Shared verbatim by the two callers that need a transcript rebuilt from the SERVER: [bind]
+     * (a session switch) and [retryFromMessage] (a destructive rewind, where the client is holding
+     * events the server has just deleted). Both must reach the identical end state, so this is ONE
+     * body rather than two that drift.
+     *
+     * **Every write below is gated on [id] still being the bound session** ([SessionBinding.isCurrent]).
+     * The caller's [historyJob] cancellation already covers most of the window, but cancellation only
+     * lands at a suspension point, and the fetch is the last one before a long non-suspending run of
+     * state mutation - so the explicit re-check is what makes "this load may write" a decision rather
+     * than an assumption. Nothing in here is worth writing into a session the user has already left.
+     */
+    private suspend fun loadHistoryAndFollow(id: String) {
+        try {
+            val history = sessionRepository.fetchHistory(id)
+            // The user opened a different session while this was in flight - drop it entirely rather
+            // than fold session `id`'s transcript/title/scope into whatever is bound now.
+            if (!binding.isCurrent(id)) return
+            // speakAlong=false: catching up this fresh binding's reducer state from persisted
+            // history is not a live turn - AssistUiState.Streaming's own SpeechController (the
+            // assist-overlay handoff case, voice/CLAUDE.md's cross-instance handoff law) may
+            // already have spoken some or all of this. primeAlreadySpoken below (after the
+            // replay + hydration settle) is what marks it consumed instead, so the SAME
+            // information reaches speech state without re-speaking it.
+            history.events.forEach { applyEvent(it, speakAlong = false) }
+            // Hydrate from the session's OWN last-persisted context (backend.py
+            // `_load_last_context` semantics) so the frozen scope reflects what the NEXT turn
+            // would actually run on, not the global new-chat default it was seeded with at bind.
+            // model falls back to the global default when the session has no context/model;
+            // project + tool-narrowing round-trip through the SAME persisted `context` event
+            // (backend `_build_context_payload` copies the context object verbatim) and take NO
+            // such fallback - absent project => Temporary (null), absent mcp_tools => all tools
+            // (null), each an honest match of what the backend re-resolves. Without this a
+            // revisited project-scoped session silently reverted to Temporary and, because the
+            // backend re-resolves scope from EVERY /query's own context (nothing is sticky
+            // server-side - SessionContext.kt), the next send MIGRATED the session onto the
+            // wrong project/cwd.
+            val hydratedModel = SessionEvent.lastContextModel(history.events) ?: globalModelPreference
+            _state.update {
+                it.copy(
+                    title = history.title,
+                    isLoadingHistory = false,
+                    // Opening a permanently terminated session lands directly in its terminal
+                    // state - composer disabled, no Retry - so the first send never has to 410
+                    // to discover it (the events endpoint carries the authoritative flag).
+                    sessionEnded = history.terminated,
+                    selectedModel = hydratedModel,
+                    composerScope = it.composerScope.copy(
+                        selectedProjectKey = SessionEvent.lastContextProject(history.events),
+                        activeToolIds = SessionEvent.lastContextMcpTools(history.events),
+                    ),
                 )
-                if (history.running) subscribeLive(id)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _state.update { it.copy(isLoadingHistory = false) }
-                appendClientError(e.message ?: "Couldn't load this conversation")
             }
+            // primes THIS (fresh) SpeechController with
+            // whatever text the replay above just folded in, so a voice-tagged binding (only
+            // real case this isn't a no-op - see primeAlreadySpoken's own gating) never re-
+            // speaks a first turn the overlay's OWN SpeechController instance already spoke
+            // before handing off - a still-streaming last message (a mid-turn Expand tap) stays
+            // primed-but-open, so subscribeLive's later live deltas for that same message still
+            // speak only the genuinely new remainder.
+            speech.primeAlreadySpoken(
+                item = _state.value.items.lastOrNull { it is ChatItem.AssistantMessage } as? ChatItem.AssistantMessage,
+                modality = _state.value.activeTurnModality,
+            )
+            if (history.running) subscribeLive(id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Same gate on the failure path: session `id`'s load failing says nothing about the
+            // session now bound, and an ErrorCard/spinner-clear written into IT would be a lie.
+            if (!binding.isCurrent(id)) return
+            _state.update { it.copy(isLoadingHistory = false) }
+            appendClientError(e.message ?: "Couldn't load this conversation")
         }
     }
 
-    /** [modality] (Gitea #180 P1, default [InputModality.Text]) tags the turn THIS send opens -
+    /** [modality] (default [InputModality.Text]) tags the turn THIS send opens -
      * client-only, never reaches the backend (see [InputModality]'s KDoc). Callers besides
      * `AssistTurnMachine`'s handoff-modality threading (via [bind]) all rely on the default. */
     fun send(text: String, modality: InputModality = InputModality.Text) {
@@ -366,9 +420,9 @@ class ChatViewModel @Inject constructor(
         if (trimmed.isBlank()) return
         lastSentText = trimmed
 
-        // Barge-in (Gitea #180 P3: "new send()") - whatever was speaking (a P3 speak-along or a P4
+        // Barge-in ("new send()") - whatever was speaking (a P3 speak-along or a P4
         // manual read-aloud) never survives into the next turn. A voice-initiated send additionally
-        // resets the per-conversation mute - fresh turn, fresh consent to speak (#175 §7.1).
+        // resets the per-conversation mute - fresh turn, fresh consent to speak (§7.1).
         speech.bargeIn()
         if (modality == InputModality.Voice) _state.update { it.copy(speechMuted = false) }
 
@@ -440,25 +494,197 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: SessionTerminatedException) {
+                markSessionTerminated()
+                if (isSteering) clearOptimisticSteerEcho(trimmed)
             } catch (e: Exception) {
                 _state.update { it.copy(isUploadingAttachments = false) }
-                if (isSteering) {
-                    // The optimistic bubble's pending=true echo (above) is only ever cleared by a
-                    // REAL server user/user_steer event dedupe-matching it
-                    // (TranscriptReducer.foldUserText) - a send that never reached the backend at
-                    // all will never produce one, so the bubble was stuck at 70% opacity forever
-                    // (fix-round-3 minor #12). Re-folding the same text (default pending=false)
-                    // makes foldUserText treat this as that echo and clear it - the exact
-                    // mechanism a real success would have used, no new reducer path needed.
-                    applyEvent(SessionEvent.User(ts = Instant.now().toString(), payload = TextPayload(trimmed)))
-                }
+                if (isSteering) clearOptimisticSteerEcho(trimmed)
                 appendClientError(e.message ?: "Couldn't send that message")
             }
         }
     }
 
+    /**
+     * The session is permanently terminated (a 410 on any mutation). Flips the pre-wired
+     * terminal state: the composer disables and any ErrorCard drops its Retry
+     * ([ChatUiState.sessionEnded]), instead of surfacing a retryable error that would 410 forever
+     * (bug #3, the infinite-retry loop). runPhase must leave Sending/Streaming so the liveness spark
+     * stops. Deliberately NO client ErrorCard - the calm terminated composer block carries the
+     * message (DESIGN.md §6: no error residue).
+     *
+     * Shared by every mutation that can meet a 410: [send] and [retryFromMessage]. (A fork can too,
+     * but [SessionRepository.forkSession] degrades to `null` rather than raising - and the gate
+     * ([MessageAction.availableFor]) has already withdrawn all three actions by then anyway.)
+     */
+    private fun markSessionTerminated() {
+        _state.update { it.copy(isUploadingAttachments = false, sessionEnded = true, runPhase = RunPhase.Done) }
+    }
+
+    /**
+     * "Retry from here" ([MessageAction.RetryFromHere]) - re-runs [message] in the SAME session.
+     * DESTRUCTIVE by design: `POST /recover {action:"retry", from_ts}` deletes that turn and
+     * everything after it server-side, then the orchestrator re-appends the user event and runs a
+     * fresh attempt (`SessionRuntime.resolve_recovery_query` - "retry = time-travel"). Earlier turns
+     * survive.
+     *
+     * **Which is exactly why the client cannot just keep streaming.** [TranscriptReducer] is
+     * additive - `fold` upserts, it has no delete - so the reducer state still holds every event the
+     * server just destroyed, and no amount of replay removes them. Attaching to the new run would
+     * render the retried turn UNDERNEATH the orphaned corpse of the old one.
+     *
+     * So the reducer is torn down to zero and rebuilt from the SERVER's transcript
+     * ([resetTranscriptForReload] + [loadHistoryAndFollow], the same path [bind] uses). Rebuilding
+     * from `GET /events` rather than leaning on the SSE backlog is deliberate: `/stream` does replay
+     * the full persisted transcript on a FRESH connection, but `RunRepository.live()` hands out a
+     * per-session multicast `SharedFlow` with `replay = 0`, so a subscriber that joins an
+     * already-open one receives no backlog at all. The REST fetch is authoritative regardless of
+     * which of those two happens, and the stream's own replay then folds in idempotently on top
+     * (content-key dedupe) - so there is no gap between the fetch and the subscribe either.
+     */
+    fun retryFromMessage(message: ChatItem.UserBubble, onResult: (Boolean) -> Unit) {
+        val id = binding.currentId
+        if (id == null) {
+            onResult(false)
+            return
+        }
+        // Tracked as the session load it is (see [historyJob]) - it rebuilds this session's whole
+        // transcript, so a session switch must be able to cancel it exactly like bind()'s own load.
+        historyJob?.cancel()
+        historyJob = viewModelScope.launch {
+            try {
+                // 202 or bust - a non-2xx raises (RunRepository.errorFor). The SendResult itself
+                // carries nothing to branch on here: /recover has exactly one success shape.
+                runRepository.retryFrom(id, message.ts, _state.value.selectedModel)
+                // The rewind HAPPENED - report that truthfully and let the sheet close, before the
+                // reload below (which shows its own spinner) and regardless of where the user has
+                // navigated to since.
+                onResult(true)
+                // ...but only session `id` gets its transcript rebuilt. If the user opened a
+                // different one while the POST was in flight, the rewind still stands server-side
+                // and re-opening this session will show it; what must NOT happen is folding it into
+                // whatever is bound now.
+                if (!binding.isCurrent(id)) return@launch
+                resetTranscriptForReload()
+                loadHistoryAndFollow(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SessionTerminatedException) {
+                if (binding.isCurrent(id)) markSessionTerminated()
+                onResult(false)
+            } catch (e: Exception) {
+                onResult(false)
+            }
+        }
+    }
+
+    /**
+     * "Branch in new chat" ([MessageAction.BranchInNewChat], [fromTs] = the bubble's ts) and "Fork
+     * session" ([MessageAction.ForkSession], [fromTs] = `null`) - the SAME `POST /fork`, differing
+     * only in whether a cut point is sent. Non-destructive: THIS session is untouched, so there is
+     * nothing to reset here; the new session id goes to [onResult] and the HOST navigates to it
+     * (which rebinds this view model through [bind] like any other session switch).
+     *
+     * NOT tracked as a [historyJob] (unlike [retryFromMessage]) precisely BECAUSE it mutates nothing
+     * here: cancelling it on a session switch would only abandon a fork the user asked for and the
+     * server may already have made. Instead the RESULT is gated - if they have moved on, the fork
+     * still exists (and appears in the drawer via the repository's own `refreshSessions`), we simply
+     * don't yank them into it.
+     *
+     * The currently-selected model rides along so a fork made after re-picking the model in the top
+     * bar actually runs on it - absent that the fork silently inherits the source's persisted one.
+     * **Caveat:** on a session with NO persisted `context.model`, [bind] hydrates `selectedModel`
+     * from [globalModelPreference], so the fork gets that model explicitly PINNED even though the
+     * source session never had one pinned. Harmless (it is the model the user is looking at in the
+     * top bar, and the one the next turn here would have used) but it is not a pure copy.
+     *
+     * **Asymmetry with [retryFromMessage], deliberately left in place:** `SessionRepository.forkSession`
+     * degrades 409 / 410 / transport failure to a single `null` (that file's house idiom, matching
+     * `renameSession`/`archiveSession`), so a session terminated by ANOTHER client cannot flip
+     * [ChatUiState.sessionEnded] from here the way a retry's typed [SessionTerminatedException] does -
+     * the fork just reports failure and the gate keeps offering actions until something else reveals
+     * the termination. Surfacing it would mean either a typed exception in a repository built on
+     * degrade-to-null, or a second result type; neither is worth it for a race this narrow.
+     */
+    fun forkSession(fromTs: String?, onResult: (String?) -> Unit) {
+        val id = binding.currentId
+        if (id == null) {
+            onResult(null)
+            return
+        }
+        viewModelScope.launch {
+            val newSessionId = sessionRepository.forkSession(id, fromTs, _state.value.selectedModel)
+            // Navigating is the caller's response to this. Don't drag the user out of a session they
+            // deliberately opened while the fork was in flight - the fork itself is safe on the server.
+            if (!binding.isCurrent(id)) return@launch
+            onResult(newSessionId)
+        }
+    }
+
+    /**
+     * Tears the transcript down to nothing so the next [loadHistoryAndFollow] rebuilds it purely
+     * from the server - the reducer included, since it is append-only and cannot un-see an event
+     * (see [retryFromMessage]). Session-IDENTITY state ([bind]'s `sessionEnded`/`selectedModel`/
+     * `composerScope`/modality resets) is deliberately NOT touched: this is the same session, only
+     * its transcript changed.
+     */
+    private fun resetTranscriptForReload() {
+        streamJob?.cancel()
+        streamJob = null
+        // Whatever was being spoken belongs to a turn that no longer exists (same barge-in trigger
+        // family as bind()/stop()/send()).
+        speech.bargeIn()
+        reducerState = TranscriptReducer.State()
+        clientTail = emptyList()
+        _state.update {
+            it.copy(items = emptyList(), runPhase = RunPhase.Idle, speakingKey = null, isLoadingHistory = true)
+        }
+    }
+
+    /**
+     * The optimistic bubble's `pending = true` echo ([send]) is only ever cleared by a REAL server
+     * `user`/`user_steer` event dedupe-matching it ([TranscriptReducer.foldUserText]) - a send that
+     * never reached the backend will never produce one, so the bubble would be stuck at 70% opacity
+     * forever. Re-folding the same text (default `pending = false`) makes
+     * `foldUserText` treat this as that echo and clear it - the exact mechanism a real success would
+     * have used, no new reducer path needed. Shared by both send-failure catches ([send]).
+     */
+    private fun clearOptimisticSteerEcho(text: String) {
+        applyEvent(SessionEvent.User(ts = Instant.now().toString(), payload = TextPayload(text)))
+    }
+
+    /**
+     * Submits the human's [answers] to a pending ask-user question ([ChatItem.Question]) — the blocked
+     * `ask_user_question` tool call resolves and the run continues. A HUMAN-tap answer wired the same
+     * way retry/fork flow (ViewModel → repository), deliberately NOT the auto-serviced
+     * `device_tool_call` pipeline.
+     *
+     * The AUTHORITATIVE card settle is the `user_question_answered` SSE event ([TranscriptReducer]),
+     * which the live subscription is already following (the run is blocked, so `running` is true) — so
+     * [onResult] only steers the card's local submitting state: `true` on accept/already-answered
+     * (leave the spinner; the event flips the card read-only), `false` on genuine failure (the card
+     * re-enables and shows a transient notice). No session id ⇒ `false` (nothing to answer against).
+     */
+    fun answerQuestion(callId: String, callToken: String, answers: List<QuestionAnswerItemDto>, onResult: (Boolean) -> Unit) {
+        val id = binding.currentId
+        if (id == null) {
+            onResult(false)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val result = runRepository.answerQuestion(id, callId, callToken, answers)
+                onResult(result != QuestionAnswerResult.Failed)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onResult(false)
+            }
+        }
+    }
+
     /** Client-side detach only - the backend run keeps going (v1 semantics, task brief). Also a
-     * barge-in trigger (Gitea #180 P3: "the run-stop control") - stopping the run stops its speech. */
+     * barge-in trigger ("the run-stop control") - stopping the run stops its speech. */
     fun stop() {
         streamJob?.cancel()
         streamJob = null
@@ -473,7 +699,7 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Spec §6.5: tap the action row's read-aloud glyph on a specific completed turn. Routed
-     * through [SpeechController.speakFinalized] (Gitea #180 P4) so read-aloud shares the exact same
+     * through [SpeechController.speakFinalized] so read-aloud shares the exact same
      * markdown-stripping/sentence-chunking as speak-along, instead of speaking the raw string -
      * [SentenceChunker.stripMarkdown]'s own contract test asserts the exact fidelity this buys
      * (code fences -> "Code block omitted.", links -> link text, emphasis stripped). */
@@ -484,10 +710,10 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * The sticky stop control's tap handler (Gitea #180 P4 two-widget pattern) - stops WHATEVER is
+     * The sticky stop control's tap handler (two-widget pattern) - stops WHATEVER is
      * currently speaking (a P3 speak-along or a P4 manual read-aloud), identically to
      * [toggleReadAloud]'s own stop branch, but additionally latches the per-conversation mute
-     * (#175 §7.1) when it interrupts THIS turn's own live voice-modality speech
+     * (§7.1) when it interrupts THIS turn's own live voice-modality speech
      * ([SendDecision.shouldMuteOnStopSpeaking] has the "why not always" reasoning). [send]'s next
      * voice-initiated call is what resets [ChatUiState.speechMuted] back.
      */
@@ -498,14 +724,14 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * Composer mic tap (Gitea #180 P2) - the permission request itself lives at the UI layer
+     * Composer mic tap - the permission request itself lives at the UI layer
      * (`ChatScreen`); this is only ever called once RECORD_AUDIO is actually granted. A no-op while
      * already listening (defensive - [ComposerState][com.mewbo.aura.ui.composer.ComposerState]'s
      * own C1/C3 split means the mic glyph and the stop tile are never both reachable at once).
      */
     fun startDictation() {
         if (_state.value.dictation is DictationState.Listening) return
-        // Barge-in (Gitea #180 P3: "startDictation()") - about to speak into the mic, so whatever
+        // Barge-in ("startDictation()") - about to speak into the mic, so whatever
         // was speaking stops.
         speech.bargeIn()
         dictationJob?.cancel()
@@ -565,13 +791,12 @@ class ChatViewModel @Inject constructor(
     private fun subscribeLive(id: String) {
         streamJob?.cancel()
         _state.update { it.copy(runPhase = RunPhase.Streaming) }
-        // Both the chat transcript collector below and the device-tool executor subscribe to this
-        // SAME Flow instance - RunRepository.live() multicasts (shareIn) per session id, so the
-        // two collectors share one underlying SSE connection instead of each opening their own
-        // (data/CLAUDE.md "don't fork chat rendering" - chat rendering itself, applyEvent/
-        // TranscriptReducer below, is untouched by the executor).
+        // Device-tool servicing is NOT wired here: RunRepository.live() attaches the executor to the
+        // flow it returns (DeviceToolDispatch's KDoc has why that seam and not this one), and
+        // multicasts (shareIn) per session id, so the transcript collector below and the executor
+        // share ONE underlying SSE connection rather than each opening their own. Chat rendering
+        // (applyEvent/TranscriptReducer) is untouched by any of that.
         val events = runRepository.live(id)
-        deviceToolExecutor.attach(id, events)
         streamJob = viewModelScope.launch {
             try {
                 // A SharedFlow's own collect() never completes on its own (unlike the raw cold
@@ -627,12 +852,22 @@ class ChatViewModel @Inject constructor(
      * in lockstep with the finalized items, making that inconsistent intermediate state unobservable
      * by construction.
      */
-    // Gitea #181 fix wave, finding 1: speakAlong defaults true (byte-equivalent for every existing
+    // speakAlong defaults true (byte-equivalent for every existing
     // call site) - bind()'s own history-replay loop is the ONE caller that passes false, so
     // catching up a fresh binding's reducer state never routes already-finalized-elsewhere history
     // through the live speak-along pipeline. See bind()'s own primeAlreadySpoken call, right after
     // that replay loop, for the other half of this fix.
     private fun applyEvent(event: SessionEvent, pending: Boolean = false, completionPhase: RunPhase? = null, speakAlong: Boolean = true) {
+        // replay gate: `widget_ready` events are server-persisted, so a history re-fold
+        // (bind) or SSE backlog replay (subscribeLive) - both routed through here - would otherwise
+        // re-render (and re-boot Pyodide for) a widget created earlier even AFTER the user turned the
+        // Streamlit-widgets capability OFF. Drop it at this ONE ingestion seam so the flag gates
+        // RENDER as well as advertise, while `TranscriptReducer` stays pure (no settings DI). A NEW
+        // widget can't arrive while the flag is off anyway (the `stlite` header isn't sent), so this
+        // only suppresses replay of previously-created ones. The assist overlay needs no equivalent:
+        // it only ever folds `beginTurn`'s fresh brand-new session (no history replay), and any live
+        // widget there still requires the flag-gated header - safe by construction (voice/CLAUDE.md).
+        if (widgetGateDropsReplay(event, widgetsEnabled)) return
         reducerState = TranscriptReducer.fold(reducerState, event, pending)
         clientTail = emptyList()
         publish(completionPhase, speakAlong)
@@ -646,7 +881,7 @@ class ChatViewModel @Inject constructor(
 
     private fun publish(completionPhase: RunPhase? = null, speakAlong: Boolean = true) {
         val items = reducerState.chatItems + clientTail
-        // Gitea #180 P3: feeds the transcript's current LAST assistant message through the speak-
+        // feeds the transcript's current LAST assistant message through the speak-
         // along pipeline on every fold - SpeechController's own modality/mute/closedKey gating makes
         // this a no-op whenever there's nothing new to speak (e.g. an unrelated client-error tail).
         // speakAlong=false (bind()'s history replay only) skips this entirely instead of relying on
@@ -661,3 +896,14 @@ class ChatViewModel @Inject constructor(
         _state.update { it.copy(items = items, runPhase = completionPhase ?: it.runPhase) }
     }
 }
+
+/**
+ * The widget replay gate as a pure predicate (extracted top-level, like [SessionBinding], so
+ * it's directly unit-testable without constructing the whole ViewModel + its Context-backed
+ * `SettingsStore`): `true` iff [event] is a `widget_ready` that must be DROPPED because the user has
+ * the Streamlit-widgets capability turned off. Every other event, and every event while
+ * [widgetsEnabled] is on, passes (`false`). Composed with the real [TranscriptReducer] in
+ * [ChatWidgetGateTest] to prove a suppressed widget never becomes a [ChatItem.Widget].
+ */
+internal fun widgetGateDropsReplay(event: SessionEvent, widgetsEnabled: Boolean): Boolean =
+    event is SessionEvent.WidgetReady && !widgetsEnabled

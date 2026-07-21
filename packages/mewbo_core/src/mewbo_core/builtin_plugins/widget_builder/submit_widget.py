@@ -102,6 +102,42 @@ SUBMIT_WIDGET_SCHEMA: dict[str, object] = pydantic_to_openai_tool(
 
 
 # ------------------------------------------------------------------
+# widget_ready event payload — typed at its atomic home
+# ------------------------------------------------------------------
+
+
+class WidgetReadyPayload(BaseModel):
+    """Typed payload for the ``widget_ready`` event.
+
+    Owned here rather than in ``mewbo_core.types.EventPayload`` — the core
+    union is generic infrastructure shared by every event kind, and a
+    plugin-specific arm there would re-couple core to the widget shape
+    (see ``packages/mewbo_core/CLAUDE.md`` → "Built-in plugins"). The wire
+    shape is FROZEN: snake_case keys exactly as below, mirrored by the
+    console TS type (``WidgetReadyPayload`` in
+    ``apps/mewbo_console/src/types.ts``) and an Android Kotlin mirror —
+    changing a key or dropping ``extra="forbid"`` breaks both clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    widget_id: str
+    session_id: str
+    files: dict[str, str]
+    requirements: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+    @field_validator("files")
+    @classmethod
+    def _exact_file_keys(cls, v: dict[str, str]) -> dict[str, str]:
+        if set(v) != {"app.py", "data.json"}:
+            raise ValueError(
+                f"files must contain exactly 'app.py' and 'data.json', got {sorted(v)}"
+            )
+        return v
+
+
+# ------------------------------------------------------------------
 # SessionTool implementation
 # ------------------------------------------------------------------
 
@@ -111,8 +147,11 @@ class SubmitWidgetTool:
 
     Validates args via Pydantic, reads the generated widget files from
     ``${MEWBO_WIDGET_ROOT}/{session_id}/{widget_id}/`` (default
-    ``/tmp/mewbo/widgets``), emits a ``widget_ready`` event, and sets a
-    termination flag so the sub-agent loop exits cleanly.
+    ``/tmp/mewbo/widgets``) and emits a ``widget_ready`` event.
+
+    Terminal-free (like ``update_todos``): the widget renders off the
+    emitted event, so submitting never exits the loop — the agent closes
+    out naturally on its next turn.
     """
 
     # Class-level attributes satisfy the ``SessionTool`` Protocol natively —
@@ -136,13 +175,9 @@ class SubmitWidgetTool:
         """
         self._session_id = session_id
         self._event_logger = event_logger
-        self._terminate_run_pending = False
 
     def should_terminate_run(self) -> bool:
-        """Return True once if the run should terminate; resets the flag."""
-        if self._terminate_run_pending:
-            self._terminate_run_pending = False
-            return True
+        """Never terminate — submitting a widget is a normal step, not a loop exit."""
         return False
 
     def _emit(self, event: Event) -> None:
@@ -203,19 +238,18 @@ class SubmitWidgetTool:
                 )
             )
 
-        # The core ``Event`` union dropped the widget-specific payload type when
-        # the feature moved out of core. The generic ``dict`` branch of the
-        # payload union absorbs the emit — no narrower type would buy us
-        # anything without re-coupling core to the widget shape.
-        payload: dict[str, object] = {
-            "widget_id": args.widget_id,
-            "session_id": self._session_id,
-            "files": {"app.py": py_code, "data.json": json_data},
-            "requirements": list(args.requirements),
-            "summary": args.summary,
-        }
-        self._emit({"type": "widget_ready", "payload": payload})
-        self._terminate_run_pending = True
+        # Validated through WidgetReadyPayload (this module's typed contract)
+        # then dumped back to a plain dict — the core Event union still rides
+        # its generic ``dict`` branch for this event, but the shape emitted is
+        # no longer hand-assembled and unchecked.
+        payload = WidgetReadyPayload(
+            widget_id=args.widget_id,
+            session_id=self._session_id,
+            files={"app.py": py_code, "data.json": json_data},
+            requirements=list(args.requirements),
+            summary=args.summary,
+        )
+        self._emit({"type": "widget_ready", "payload": payload.model_dump()})
         return MockSpeaker(content=f"Widget '{args.widget_id}' submitted successfully.")
 
 
@@ -223,4 +257,5 @@ __all__ = [
     "SUBMIT_WIDGET_SCHEMA",
     "SubmitWidgetArgs",
     "SubmitWidgetTool",
+    "WidgetReadyPayload",
 ]

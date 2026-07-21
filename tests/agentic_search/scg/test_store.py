@@ -113,7 +113,7 @@ def test_query_nodes_combined_filters(store: JsonScgStore) -> None:
     assert [n.name for n in hits] == ["search"]
 
 
-# ── query_nodes caching + invalidation (#139) ───────────────────────────────
+# ── query_nodes caching + invalidation ───────────────────────────────
 
 
 def test_query_nodes_is_cached_until_a_node_write(store: JsonScgStore) -> None:

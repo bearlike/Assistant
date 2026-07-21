@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for FleetBridge — run-event → faceted-sidebar refresh glue (#161).
+"""Tests for FleetBridge — run-event → faceted-sidebar refresh glue.
 
-The old tool-call ``TodoTracker`` heuristic was retired in #173 (the plan dock
+The old tool-call ``TodoTracker`` heuristic was retired (the plan dock
 now renders the hub's authoritative ``todos`` event), so the bridge's tool hooks
 are pure sidebar refreshes.
 """

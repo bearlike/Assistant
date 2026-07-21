@@ -61,15 +61,13 @@ class WikiBuildGraphTool(WikiSessionTool):
 
         emit_phase(ctx, "graph")
 
-        # Checkpoint-aware resume (Gitea #54): the persisted graph is reused
+        # Checkpoint-aware resume: the persisted graph is reused
         # as-is when an interrupted index already built it (graph + enrich are
         # the ~6-min expensive idempotent phases). Done-detection lives ONLY in
-        # ResumePlan (DRY); this is the single-line short-circuit. Still advance
-        # the phase to ``enrich`` so progress reflects the (also-skipped) window.
+        # ResumePlan (DRY); this is the single-line short-circuit.
         rp = ctx.resume_plan
         if rp is not None and rp.should_skip("graph"):
             emit_log(ctx, f"Graph already built ({rp.node_count} nodes) — skipped on resume")
-            emit_phase(ctx, "enrich")
             return MockSpeaker(content=str({
                 "nodeCount": rp.node_count,
                 "skipped": "graph already built — reused on resume",
@@ -85,14 +83,15 @@ class WikiBuildGraphTool(WikiSessionTool):
         # fallback live in exactly ONE place).
         result = build_graph_core(ctx)
 
-        # Graph is built; advance the phase to ``enrich`` so progress reflects
-        # the entity-enrichment fan-out that immediately follows. build_graph is
-        # the last tool the indexer calls before spawning the wiki-enricher
-        # sub-agents — without this the snapshot sits at ``graph`` for the whole
-        # enrich window and then jumps straight to ``plan`` (the ~2-minute
-        # "graph plateau" users see). enrich emits no tool of its own, so this
-        # is the single deterministic place to mark the transition.
-        emit_phase(ctx, "enrich")
+        # The ``enrich`` phase is deliberately NOT stamped here. It used to be —
+        # build_graph is the last tool before the wiki-enricher fan-out, and
+        # stamping its successor closed the "graph plateau" the snapshot showed
+        # during the enrich window. But stamping a phase when its PREDECESSOR ends
+        # claims work that has not begun: a run cancelled moments after this
+        # returned left a job reading ``enrich`` forever for a fan-out that never
+        # spawned. The enrichers stamp it themselves on their first mint
+        # (``mint_entity`` → ``emit_phase_once``), so the phase now marks work that
+        # actually started.
         return MockSpeaker(content=str(result))
 
 
@@ -122,7 +121,7 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
     parsed = _apply_resolver(ctx.slug, repo_root, parsed)
     emit_log(ctx, f"Built graph: {len(parsed.nodes)} nodes, {len(parsed.edges)} edges")
 
-    # 1b. Validate the whole graph ONCE at ingest (schema v2 — Gitea #188): node-id
+    # 1b. Validate the whole graph ONCE at ingest (schema v2): node-id
     # uniqueness + referential integrity + CPG endpoint rules. A malformed graph
     # fails loudly HERE rather than corrupting the persisted store silently.
     from pydantic import ValidationError  # noqa: PLC0415
@@ -136,9 +135,23 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
             f"graph schema validation failed for {ctx.slug}: {exc}"
         ) from exc
 
-    # 2. Persist the validated graph (store API unchanged — flat node/edge lists).
-    ctx.store.upsert_nodes(ctx.slug, code_graph.nodes)
-    ctx.store.upsert_edges(ctx.slug, code_graph.edges)
+    # 2. Persist the validated graph, attributed to the commit this job indexed.
+    # The commit is read from the job record (written by clone) rather than a ctx
+    # field: the agent build_graph tool resolves ctx fresh per call, but the
+    # graph-only indexer builds its ctx once BEFORE clone, so the job record is
+    # the one authoritative source both paths agree on. Stamping here is what lets
+    # ``wiki_finalize`` supersede the previous commit's nodes instead of unioning
+    # into them, and what makes the resume "graph for THIS commit built" count true.
+    job = ctx.store.get_job(ctx.job_id)
+    commit_sha = (job.commit_sha if job is not None else None) or getattr(
+        ctx, "commit_sha", None
+    )
+    ctx.store.upsert_nodes(
+        ctx.slug, code_graph.nodes, commit_sha=commit_sha, job_id=ctx.job_id
+    )
+    ctx.store.upsert_edges(
+        ctx.slug, code_graph.edges, commit_sha=commit_sha, job_id=ctx.job_id
+    )
 
     # 3. Embed nodes if enabled. Embedding failures are non-fatal — retrieval
     # falls back to BM25 + 1-hop graph traversal, which is still useful. This
@@ -166,7 +179,9 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
                 level="warn",
             )
         if embeddings:
-            ctx.store.upsert_embeddings(ctx.slug, embeddings)
+            ctx.store.upsert_embeddings(
+                ctx.slug, embeddings, commit_sha=commit_sha, job_id=ctx.job_id
+            )
             embedded_count = len(embeddings)
             emit_log(
                 ctx,

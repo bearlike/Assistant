@@ -8,6 +8,7 @@ Stubs: subprocess (git) only. No real network calls.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -517,6 +518,102 @@ def test_install_plugin_skips_already_cloned_git_dir(tmp_path: Path, monkeypatch
     manifest = install_plugin("p", "test-mp", marketplace_dirs=[mp_dir], install_base=install_base)
     assert manifest.name == "p"
     assert calls == []  # No git clone invoked
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    """Run a git command in *cwd* with a fixed identity; return stdout."""
+    out = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out.stdout.strip()
+
+
+def test_install_plugin_dict_source_subdir_and_sha(tmp_path: Path) -> None:
+    """A ``{source: url, path, sha}`` entry vendors a plugin from a repo
+    SUBDIRECTORY pinned to a commit — the "community-managed" shape.
+
+    Regression: the resolver used to drop ``path`` (reading plugin.json from the
+    clone root, where it does not exist → "missing a valid plugin.json") and
+    ``sha`` (installing the moving branch tip). Uses a real local git repo so the
+    clone/checkout/subtree-copy runs for real; no network.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+
+    # A repo whose plugin lives at plugins/mine/, with the manifest CHANGED in a
+    # later commit so pinning to the first commit is observable.
+    origin = tmp_path / "origin"
+    plugin_dir = origin / "plugins" / "mine" / ".claude-plugin"
+    plugin_dir.mkdir(parents=True)
+    manifest_file = plugin_dir / "plugin.json"
+    manifest_file.write_text(json.dumps({"name": "mine", "version": "1.0.0"}))
+    _git(["init", "-q"], origin)
+    _git(["add", "-A"], origin)
+    _git(["commit", "-q", "-m", "pinned"], origin)
+    pinned_sha = _git(["rev-parse", "HEAD"], origin)
+    # HEAD moves past the pin; the pinned install must NOT pick this up.
+    manifest_file.write_text(json.dumps({"name": "mine", "version": "2.0.0"}))
+    _git(["commit", "-qam", "moved on"], origin)
+
+    mp_dir, install_base = _setup_marketplace(
+        tmp_path,
+        [
+            {
+                "name": "mine",
+                "version": "1.0",
+                "source": {
+                    "source": "url",
+                    "url": str(origin),
+                    "path": "plugins/mine",
+                    "sha": pinned_sha,
+                },
+            }
+        ],
+    )
+
+    manifest = install_plugin(
+        "mine", "test-mp", marketplace_dirs=[mp_dir], install_base=install_base
+    )
+
+    # path honored: manifest resolved from the subdir, not the (manifest-less) root.
+    assert manifest.name == "mine"
+    # sha honored: the pinned commit's content, not HEAD's 2.0.0.
+    assert manifest.version == "1.0.0"
+    # cache_dir IS the plugin root (subdir materialized), like the local ./ branch.
+    installed = Path(manifest.install_path)
+    assert (installed / ".claude-plugin" / "plugin.json").is_file()
+    assert not (installed / "plugins").exists()
+
+
+def test_install_plugin_dict_source_bad_sha_raises(tmp_path: Path) -> None:
+    """A pinned ``sha`` that does not exist in the repo fails with a named error
+    rather than a raw CalledProcessError."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+
+    origin = tmp_path / "origin"
+    (origin / ".claude-plugin").mkdir(parents=True)
+    (origin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "mine"}))
+    _git(["init", "-q"], origin)
+    _git(["add", "-A"], origin)
+    _git(["commit", "-q", "-m", "root"], origin)
+
+    mp_dir, install_base = _setup_marketplace(
+        tmp_path,
+        [
+            {
+                "name": "mine",
+                "version": "1.0",
+                "source": {"source": "url", "url": str(origin), "sha": "0" * 40},
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="cannot check out pinned commit"):
+        install_plugin("mine", "test-mp", marketplace_dirs=[mp_dir], install_base=install_base)
 
 
 def test_install_plugin_updates_registry(tmp_path: Path, monkeypatch) -> None:

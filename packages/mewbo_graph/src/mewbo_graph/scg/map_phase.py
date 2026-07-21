@@ -57,7 +57,7 @@ class MapPhaseSink:
         try:
             return cls._writer(job_id, phase)
         except Exception:  # noqa: BLE001 — cosmetic progress, never fatal
-            logging.warning("map-phase sink failed for job %s phase %s", job_id, phase)
+            logging.warning("map-phase sink failed for job {} phase {}", job_id, phase)
             return None
 
 

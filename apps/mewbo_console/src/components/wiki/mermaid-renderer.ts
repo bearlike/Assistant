@@ -8,6 +8,8 @@
  * that happens when many blocks each call init in their own effects.
  */
 
+import { cssVarColor } from "./graphTheme";
+
 type MermaidLib = typeof import("mermaid")["default"];
 
 let mermaidLibPromise: Promise<MermaidLib> | null = null;
@@ -29,30 +31,50 @@ export function currentTheme(): Theme {
     : "dark";
 }
 
+/**
+ * Mermaid needs an actual resolved font stack, not a live `var(--font-sans)`
+ * reference: it feeds this string into Canvas 2D text measurement
+ * (`ctx.font = …`) to lay out diagram boxes, and a CSS custom property
+ * doesn't resolve there the way it does in a stylesheet — only in the SVG's
+ * own inline styles, which is half the story. Reading the computed value
+ * mirrors `cssVarColor` below and keeps this from ever hardcoding (and
+ * outliving) a specific font name again.
+ */
+function resolveFontFamily(): string {
+  if (typeof window === "undefined") return "system-ui, sans-serif";
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--font-sans")
+    .trim();
+  return raw || "system-ui, sans-serif";
+}
+
+// Colours are live token reads (via `graphTheme.ts:cssVarColor`), not a
+// hardcoded per-theme palette — `getComputedStyle` picks up whichever of
+// `:root` / `.light` is active on `<html>` at call time, so the two themes
+// share one mapping and never drift out of sync with `index.css`. Only
+// mermaid's own built-in theme name still branches on `theme` below.
 function buildThemeConfig(theme: Theme) {
+  const fontFamily = resolveFontFamily();
   return {
     startOnLoad: false as const,
     securityLevel: "loose" as const,
-    fontFamily: "Inter, system-ui, sans-serif",
+    fontFamily,
     theme: (theme === "light" ? "default" : "dark") as "default" | "dark",
-    themeVariables:
-      theme === "light"
-        ? {
-            background: "#f0eee6",
-            primaryColor: "#ffffff",
-            primaryTextColor: "#0a0a0a",
-            primaryBorderColor: "#d6d3c5",
-            lineColor: "#a8a59a",
-            fontFamily: "Inter, system-ui, sans-serif",
-          }
-        : {
-            background: "#1f1e1c",
-            primaryColor: "#2c2b29",
-            primaryTextColor: "#f5f4ef",
-            primaryBorderColor: "#3d3b37",
-            lineColor: "#6b6963",
-            fontFamily: "Inter, system-ui, sans-serif",
-          },
+    themeVariables: {
+      background: cssVarColor("--surface"),
+      primaryColor: cssVarColor("--card"),
+      primaryTextColor: cssVarColor("--foreground"),
+      primaryBorderColor: cssVarColor("--border-strong"),
+      lineColor: cssVarColor("--border-strong"),
+      // Edge labels (a flowchart branch's "yes"/"no") are drawn as a filled
+      // chip, and mermaid derives that fill from its OWN palette rather than
+      // from `background` — so overriding the surface alone left the chip at
+      // mermaid's light default, grey-on-grey against our dark diagram. Both
+      // halves have to be stated: the chip fill and the text sitting on it.
+      edgeLabelBackground: cssVarColor("--surface"),
+      textColor: cssVarColor("--foreground"),
+      fontFamily,
+    },
   };
 }
 

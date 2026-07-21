@@ -16,7 +16,7 @@ from mewbo_core.session_store import SessionStore
         (["agentic_search:run:abc"], {}, SessionOrigin.SEARCH),
         (["nextcloud-talk:room:tok"], {}, SessionOrigin.CHANNEL),
         (["email:thread:chan:root"], {}, SessionOrigin.CHANNEL),
-        # Realtime structured/draft surfaces (#78).
+        # Realtime structured/draft surfaces.
         (["structured:run"], {}, SessionOrigin.STRUCTURED),
         (["structured:fast"], {}, SessionOrigin.STRUCTURED),
         (["draft:stream"], {}, SessionOrigin.DRAFT),
@@ -24,9 +24,12 @@ from mewbo_core.session_store import SessionStore
         (["mobile:android"], {}, SessionOrigin.MOBILE),
         ([], {"client": "aura-android"}, SessionOrigin.MOBILE),
         ([], {"source_platform": "android"}, SessionOrigin.MOBILE),
+        # Mewbo Apps builder/maintainer sessions (tag wins, context is fallback).
+        (["app:abc123"], {}, SessionOrigin.APPS),
         # Context fallback when no tag is present.
         ([], {"client_capabilities": ["wiki"]}, SessionOrigin.WIKI),
         ([], {"client_capabilities": ["scg"]}, SessionOrigin.SEARCH),
+        ([], {"client_capabilities": ["apps"]}, SessionOrigin.APPS),
         ([], {"source_platform": "nextcloud-talk"}, SessionOrigin.CHANNEL),
         # Manual console sessions and the empty default.
         ([], {"client_capabilities": ["stlite"]}, SessionOrigin.USER),
@@ -122,7 +125,7 @@ def test_summarize_session_surfaces_capabilities_and_workspace(tmp_path):
         # Wiki indexing vs Q&A — product/type/id from the tag.
         (["wiki:job:abc"], {}, "api", "wiki", "wiki_index", {"wiki_id": "abc"}),
         (["wiki:qa:xyz"], {}, "console", "wiki", "wiki_qa", {"wiki_id": "xyz"}),
-        # Agentic search run vs SCG map (#77): the three search-product session
+        # Agentic search run vs SCG map: the three search-product session
         # types stay distinct — a RUN (agentic_search:run), the legacy scg tag,
         # and the MAP-source job (scg:map). A run must NOT read as a map.
         (["agentic_search:run:r1"], {}, "api", "search", "search_run", {"search_id": "r1"}),
@@ -133,7 +136,7 @@ def test_summarize_session_surfaces_capabilities_and_workspace(tmp_path):
         # surface separates an MCP-invoked call from a console one.
         ([], {"structured_workspace": "ws"}, "mcp", "agent", "structured", {"workspace": "ws"}),
         ([], {}, "cli", "agent", "chat", {}),
-        # Realtime structured/draft tags drive product + session_type (#78); the
+        # Realtime structured/draft tags drive product + session_type ; the
         # tag's session_type wins over the context-derived "structured".
         (["structured:run"], {}, "api", "structured", "structured_run", {}),
         (["structured:fast"], {"structured_workspace": "ws"}, "api", "structured",
@@ -141,6 +144,8 @@ def test_summarize_session_surfaces_capabilities_and_workspace(tmp_path):
         (["draft:stream"], {}, "console", "draft", "draft_stream", {}),
         # Mobile-tagged session (#, aura): tag drives product + sub-kind session_type.
         (["mobile:android"], {}, "android", "mobile", "mobile_android", {}),
+        # App builder/maintainer session: tag drives product + type + app_id.
+        (["app:abc123"], {}, "api", "apps", "app_agent", {"app_id": "abc123"}),
         # Untagged mobile context (existing Aura sessions) still resolves to the
         # mobile product via the ``_ORIGIN_PRODUCT`` fallback (no session-type refinement).
         ([], {"client": "aura-android"}, "aura-android", "mobile", "chat", {}),
@@ -167,6 +172,15 @@ def test_derive_mobile_origin_and_product():
     assert prov.origin == SessionOrigin.MOBILE
     assert prov.product == "mobile"
     assert "origin:mobile" in prov.tags
+
+
+def test_derive_apps_origin_and_product():
+    """An app: tag resolves APPS origin end-to-end (classify + product + facet)."""
+    prov = TraceProvenance.derive(tags=["app:abc123"], context={}, surface="api")
+    assert prov.origin == SessionOrigin.APPS
+    assert prov.product == "apps"
+    assert prov.metadata["app_id"] == "abc123"
+    assert "origin:apps" in prov.tags
 
 
 def test_derive_channel_unpacks_platform_and_ids():
@@ -209,7 +223,7 @@ def test_derive_vcs_pickup_and_managed_worktree():
 
 
 def test_derive_transcript_sink_facet():
-    """A ``transcript_sink`` context key becomes a low-cardinality filter chip (#171)."""
+    """A ``transcript_sink`` context key becomes a low-cardinality filter chip."""
     prov = TraceProvenance.derive(
         tags=[],
         context={"transcript_sink": "synced"},

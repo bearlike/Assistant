@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""FleetBridge — refresh the faceted sidebar from live run events (#161).
+"""FleetBridge — refresh the faceted sidebar from live run events.
 
 Integration glue (controller-owned, not a Wave-2 child): a per-run
 :class:`~mewbo_core.hooks.HookManager` whose agent-lifecycle + tool hooks poke
 the UI to re-pull the live fleet from the
 :class:`~mewbo_cli.tui.agent_transcript_hub.AgentTranscriptHub`. The hub (a bus
 observer) is the single source of fleet rollups AND the authoritative live todos
-(the ``todos`` event, #173); the bridge's only job here is to marshal a *refresh*
+(the ``todos`` event); the bridge's only job here is to marshal a *refresh*
 onto the UI thread (``app.call_from_thread``) whenever a run event lands, so the
 :class:`~mewbo_cli.tui.widgets.fleet_panel.FleetPanel`, the plan dock and any open
 drill view re-render promptly. (The panel also self-ticks while agents run, so
@@ -14,7 +14,7 @@ token/elapsed liveness never depends solely on a hook.)
 
 The plan/todo dock is fed by the hub's authoritative ``todos`` event (an agent
 calls ``update_todos``); the old tool-call heuristic (a ``TodoTracker`` that
-re-projected every raw step) was retired in #173, so these tool hooks now only
+re-projected every raw step) was retired, so these tool hooks now only
 marshal a refresh — they never fabricate progress.
 """
 
@@ -44,7 +44,7 @@ class FleetBridge:
 
         ``app`` may be ``None`` (plain REPL / no sidebar) — every hook is then a
         safe no-op. The plan dock's todos come from the hub's authoritative
-        ``todos`` event, not from these hooks (#173).
+        ``todos`` event, not from these hooks.
         """
         self._app = app
 

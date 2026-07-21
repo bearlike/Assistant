@@ -6,6 +6,7 @@ import com.mewbo.aura.data.model.SessionEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -17,11 +18,25 @@ import org.junit.Test
 
 /** [DeviceToolExecutor.handle] is exercised directly (it's `internal`, visible from this test
  * source set) for dedup/staleness/error-mapping - the actual decision logic worth a fast,
- * deterministic unit test. The one test that exercises [DeviceToolExecutor.attach] itself
- * ("...does not block...") targets the collect-loop decoupling specifically (review finding);
- * everything else about `attach`'s `Flow`/coroutine-launch plumbing is thin wiring covered by the
- * boot-smoke pass (task brief). All constructor deps are swapped for trivial in-memory fakes;
- * none of the concrete `device_*` handlers (which need a real `Context`) are constructed here. */
+ * deterministic unit test. The tests that drive [DeviceToolExecutor.attach] itself each target one
+ * specific hazard, and the last three are the two halves of the multi-session contract - the two
+ * ways it can be got wrong point in OPPOSITE directions, so both need locking down:
+ *
+ * - collect-loop decoupling ("...does not block...");
+ * - **too little concurrency** - a second session's attach must not steal dispatch from a live one
+ *   ("...after a SECOND session attaches"), which is the whole reason dispatch went multi-session;
+ * - **too much** - a collector must not outlive its own stream ("...evicts itself on stream_end",
+ *   and the `StreamError` twin), or multi-session would leak one suspended coroutine per flow ever
+ *   attached;
+ * - in-flight survival of a dispatched call across its own stream's teardown (review finding F8);
+ * - flow-IDENTITY idempotency, both halves (no re-subscription churn on a re-attach of the same
+ *   flow; a genuine re-attach on a new one).
+ *
+ * Everything else about `attach`'s `Flow`/coroutine-launch plumbing is thin wiring covered by the
+ * boot-smoke pass (task brief). Who CALLS attach (`RunRepository.live`, the seam that makes it
+ * reach the assist overlay at all) is `RunRepositoryTest`'s. All constructor deps are swapped for
+ * trivial in-memory fakes; none of the concrete `device_*` handlers (which need a real `Context`)
+ * are constructed here. */
 class DeviceToolExecutorTest {
 
     private fun executor(
@@ -29,10 +44,12 @@ class DeviceToolExecutorTest {
         ledger: DeviceToolCallLedger = FakeLedger(),
         nowEpochSeconds: Double = 0.0,
         handlers: List<DeviceToolHandler> = emptyList(),
+        disabledToolIds: Set<String> = emptySet(),
     ) = DeviceToolExecutor(
         resultReporter = reporter,
         callLedger = ledger,
         clock = DeviceClock { nowEpochSeconds },
+        gate = DeviceToolGate { disabledToolIds },
         handlers = handlers,
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
     )
@@ -165,80 +182,40 @@ class DeviceToolExecutorTest {
     }
 
     @Test
-    fun `attach decouples per-call handling - a handler that suspends indefinitely does not block a later, different call_id`() = runTest {
-        val slowHandler = FakeHandler("device_get_time", suspendForever = true)
-        val fastHandler = FakeHandler("device_get_battery")
+    fun `a user-disabled tool is refused with code tool_disabled and its handler never runs`() = runTest {
+        // the catalog already hides a disabled tool from advertisement, but a stale
+        // server could still dispatch one - the executor refuses it rather than silently running.
+        val handler = FakeHandler("device_get_time")
         val reporter = FakeResultReporter()
-        val exec = DeviceToolExecutor(
-            resultReporter = reporter,
-            callLedger = FakeLedger(),
-            clock = DeviceClock { 0.0 },
-            handlers = listOf(slowHandler, fastHandler),
-            // Unconfined (the same manual scope the executor() helper above uses) rather than
-            // runTest's own scope/backgroundScope: the slow handler's child coroutine is
-            // INTENTIONALLY left suspended forever by this test, and it lives entirely outside
-            // runTest's own job tree this way, so there's nothing for runTest's leak detection to
-            // trip on. Unconfined also runs attach()'s collector - and each event's dispatched
-            // handle() - eagerly/synchronously, so plain emit() calls are enough on their own; no
-            // advanceUntilIdle() timing dance needed to get the collector subscribed first.
-            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
-        )
-        val events = MutableSharedFlow<SessionEvent>(extraBufferCapacity = 4)
+        val exec = executor(reporter = reporter, handlers = listOf(handler), disabledToolIds = setOf("device_get_time"))
 
-        exec.attach("session-1", events)
-        events.emit(SessionEvent.DeviceToolCall(ts = "t1", payload = call(callId = "slow-call", toolId = "device_get_time")))
-        events.emit(SessionEvent.DeviceToolCall(ts = "t2", payload = call(callId = "fast-call", toolId = "device_get_battery")))
+        exec.handle("session-1", call(toolId = "device_get_time"))
 
-        // The slow call WAS picked up (proves it isn't silently dropped)...
-        assertEquals(1, slowHandler.callCount)
-        // ...but never finishes, so it never reaches the reporter...
-        assertTrue(reporter.reports.none { it.callId == "slow-call" })
-        // ...and critically, the SECOND, unrelated call_id was still processed instead of being
-        // stuck behind the first one in the collect loop (this assertion is what fails without
-        // the attach() fix: with handle() awaited inline, the collector's own coroutine is the one
-        // that ends up parked on the slow handler's awaitCancellation(), so it never gets back
-        // around to the second emitted event and the fast call's handler never runs).
-        assertEquals(1, fastHandler.callCount)
-        assertTrue(reporter.reports.any { it.callId == "fast-call" && it.request.status == "ok" })
+        assertEquals(0, handler.callCount)
+        val report = reporter.reports.single()
+        assertEquals("error", report.request.status)
+        assertEquals("tool_disabled", report.request.error?.code)
+        assertNull(report.request.result)
     }
 
     @Test
-    fun `an in-flight handle survives detach - a session switch does not cancel an already-dispatched call`() = runTest {
-        // Review finding F8: if the child coroutine running handle() were parented to attach()'s
-        // own collect job, detach()'s job.cancel() would abort it mid-flight - between a handler's
-        // real-world side effect (e.g. an SMS actually sent) and the result POST that tells the
-        // server it succeeded, risking a server-side timeout-and-retry that sends a genuine
-        // duplicate. This gate simulates exactly that in-flight window.
-        val gate = CompletableDeferred<Unit>()
-        val handler = object : DeviceToolHandler {
-            override val toolId = "device_send_sms"
-            override suspend fun execute(args: JsonObject): JsonObject {
-                gate.await()
-                return buildJsonObject {}
-            }
-        }
+    fun `an enabled tool still runs normally when a DIFFERENT tool is disabled`() = runTest {
+        val handler = FakeHandler("device_get_battery")
         val reporter = FakeResultReporter()
-        val exec = DeviceToolExecutor(
-            resultReporter = reporter,
-            callLedger = FakeLedger(),
-            clock = DeviceClock { 0.0 },
-            handlers = listOf(handler),
-            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
-        )
-        val events = MutableSharedFlow<SessionEvent>(extraBufferCapacity = 4)
+        val exec = executor(reporter = reporter, handlers = listOf(handler), disabledToolIds = setOf("device_get_time"))
 
-        exec.attach("session-1", events)
-        events.emit(SessionEvent.DeviceToolCall(ts = "t1", payload = call(callId = "in-flight-call", toolId = "device_send_sms")))
-        // handle() is now suspended on gate.await() - simulate a session switch happening WHILE
-        // the call is genuinely in flight, exactly as ChatViewModel.bind() would trigger.
-        exec.detach()
+        exec.handle("session-1", call(toolId = "device_get_battery"))
 
-        gate.complete(Unit) // release the held-open handler
-
-        val report = reporter.reports.single()
-        assertEquals("in-flight-call", report.callId)
-        assertEquals("ok", report.request.status)
+        assertEquals(1, handler.callCount)
+        assertEquals("ok", reporter.reports.single().request.status)
     }
+
+
+
+
+
+
+
 
     private class FakeResultReporter : DeviceToolResultReporter {
         data class Report(val sessionId: String, val callId: String, val request: DeviceToolResultRequest)

@@ -36,16 +36,16 @@ export function PlanCard({ plan, onApprove }: PlanCardProps) {
         : XCircle;
   const iconClass =
     status === 'pending'
-      ? 'text-cyan-600'
+      ? 'text-[hsl(var(--info-text))]'
       : status === 'approved'
-        ? 'text-emerald-600'
-        : 'text-amber-600';
+        ? 'text-[hsl(var(--success))]'
+        : 'text-[hsl(var(--warning-text))]';
   const badgeClass =
     status === 'pending'
-      ? 'bg-cyan-500/10 text-cyan-700 border-cyan-500/30'
+      ? 'bg-[hsl(var(--info)/0.1)] text-[hsl(var(--info-text))] border-[hsl(var(--info)/0.3)]'
       : status === 'approved'
-        ? 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30'
-        : 'bg-amber-500/10 text-amber-700 border-amber-500/30';
+        ? 'bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))] border-[hsl(var(--success)/0.3)]'
+        : 'bg-[hsl(var(--warning)/0.1)] text-[hsl(var(--warning-text))] border-[hsl(var(--warning)/0.3)]';
   const statusLabel =
     status === 'pending'
       ? 'Awaiting approval'
@@ -63,11 +63,11 @@ export function PlanCard({ plan, onApprove }: PlanCardProps) {
         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[hsl(var(--accent))]/40 transition-colors"
       >
         <StatusIcon className={`w-4 h-4 shrink-0 ${iconClass}`} />
-        <span className="text-sm font-semibold text-[hsl(var(--foreground))]">
+        <span className="text-sm font-medium text-[hsl(var(--foreground))]">
           {title}
         </span>
         <span
-          className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${badgeClass}`}
+          className={`text-2xs font-medium px-2 py-0.5 rounded-full border ${badgeClass}`}
         >
           {statusLabel}
         </span>
@@ -77,7 +77,7 @@ export function PlanCard({ plan, onApprove }: PlanCardProps) {
       </button>
       {expanded && (
         <div className="border-t border-[hsl(var(--border))] px-4 py-3">
-          <div className="text-xs text-[hsl(var(--foreground))] leading-relaxed [&_pre]:text-[11px] [&_p]:mb-1 [&_p:last-child]:mb-0 min-w-0 overflow-hidden">
+          <div className="text-xs text-[hsl(var(--foreground))] leading-relaxed [&_pre]:text-2xs [&_p]:mb-1 [&_p:last-child]:mb-0 min-w-0 overflow-hidden">
             <MarkdownContent content={planContent} />
           </div>
           {status === 'pending' && onApprove && (
@@ -85,7 +85,7 @@ export function PlanCard({ plan, onApprove }: PlanCardProps) {
               <button
                 type="button"
                 onClick={() => onApprove(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-[hsl(var(--success)/0.4)] bg-[hsl(var(--success)/0.1)] text-[hsl(var(--success))] hover:bg-[hsl(var(--success)/0.2)] transition-colors"
               >
                 <ThumbsUp className="w-3.5 h-3.5" />
                 Approve
@@ -93,12 +93,12 @@ export function PlanCard({ plan, onApprove }: PlanCardProps) {
               <button
                 type="button"
                 onClick={() => onApprove(false)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-[hsl(var(--warning)/0.4)] bg-[hsl(var(--warning)/0.1)] text-[hsl(var(--warning-text))] hover:bg-[hsl(var(--warning)/0.2)] transition-colors"
               >
                 <ThumbsDown className="w-3.5 h-3.5" />
                 Reject
               </button>
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))] ml-1">
+              <span className="text-2xs text-[hsl(var(--muted-foreground))] ml-1">
                 Reject and type refinement guidance in the chat input.
               </span>
             </div>

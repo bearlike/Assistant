@@ -29,8 +29,20 @@ from mewbo_core.config import (
 
 
 @pytest.fixture(autouse=True)
-def app_config_file(tmp_path: Path):
-    """Write a fresh app config file and point the loader at it."""
+def app_config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Write a fresh app config file and point the loader at it.
+
+    Also pins ``MEWBO_HOME`` to a throwaway dir *before* constructing
+    ``AppConfig()``. ``RuntimeConfig``'s ``config_dir``/``cache_dir``/
+    ``session_dir`` fields default to ``""`` and a ``field_validator`` resolves
+    that to ``resolve_mewbo_home()`` at construction time — the resolved
+    absolute path is what gets baked into the JSON this fixture writes, not a
+    placeholder that re-resolves later. A test that sets ``MEWBO_HOME`` itself
+    inside its own body does so too late for anything reading `config_dir`
+    (every ``_JsonCollectionStore`` subclass in ``mewbo_iam.stores``) — without
+    this, those stores fall back to the developer's real ``~/.mewbo``.
+    """
+    monkeypatch.setenv("MEWBO_HOME", str(tmp_path / "home"))
     reset_config()
     config_path = tmp_path / "app.json"
     AppConfig().write(config_path)
@@ -51,3 +63,24 @@ def _reset_mcp_pool():
     reset_mcp_pool()
     yield
     reset_mcp_pool()
+
+
+@pytest.fixture(autouse=True)
+def _reset_schedule_trigger_provider():
+    """Reset the process-wide schedule_trigger provider between tests.
+
+    ``configs/app.json`` enables triggers, so importing ``backend.py`` (any apps
+    test, in any random order) runs ``init_triggers`` and sets
+    ``mewbo_core.triggers.session_tool._TRIGGER_TOOL_PROVIDER`` for the whole
+    PROCESS. After that every ``Orchestrator`` registers ``schedule_trigger`` as
+    an ``unconditional`` session tool, so it surfaces on any un-scoped OR
+    permissive session — polluting core tests that assert an EXACT session-tool
+    set. A test that genuinely WANTS the provider registers it in its own body;
+    everyone else gets a clean slate (mirrors the config / MCP-pool resets above).
+    """
+    from mewbo_core.triggers import session_tool as _st
+
+    saved = _st._TRIGGER_TOOL_PROVIDER
+    _st._TRIGGER_TOOL_PROVIDER = None
+    yield
+    _st._TRIGGER_TOOL_PROVIDER = saved

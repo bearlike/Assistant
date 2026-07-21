@@ -1,4 +1,4 @@
-# Shared runtime helper prompts (Gitea #89, phase 1 — VERBATIM extraction).
+# Shared runtime helper prompts (VERBATIM extraction).
 #
 # Migrated from common.py: the sub-package instruction-file headings
 # (discover_project_instructions) and the git-context block (get_git_context).

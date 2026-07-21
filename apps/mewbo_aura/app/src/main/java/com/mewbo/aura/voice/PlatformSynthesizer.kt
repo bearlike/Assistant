@@ -118,7 +118,7 @@ class PlatformSynthesizer @Inject constructor(
             if (tts?.isSpeaking != true) abandonAudioFocus()
         }
 
-        // Gitea #181 fix wave, finding 8: onDone abandons focus when nothing else is speaking, but
+        // onDone abandons focus when nothing else is speaking, but
         // an error on the LAST queued utterance of a turn used to leave focus held (ducking other
         // apps) until some unrelated later speak()/stop() call - voice/CLAUDE.md's own "abandon on
         // stop/done" rule didn't cover the error path. Same guard as onDone, since an error means

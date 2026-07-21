@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the CLI auto-titler (#157).
+"""Tests for the CLI auto-titler.
 
 Stubs only the LLM seam (``generate_session_title``); the store is an in-memory
 fake so the idempotency + persistence + callback wiring run real code paths.

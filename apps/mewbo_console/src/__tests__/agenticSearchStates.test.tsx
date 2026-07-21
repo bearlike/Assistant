@@ -65,12 +65,16 @@ function renderPanel(run: RunPayload) {
         done
         answerReady={false}
         isLoading={false}
-        tier="auto"
-        onTierChange={() => undefined}
-        model=""
-        onModelChange={() => undefined}
+        scope={{
+          tier: "auto",
+          onTierChange: () => undefined,
+          model: "",
+          onModelChange: () => undefined,
+          fallbackModels: [],
+          onFallbackModelsChange: () => undefined,
+        }}
         onRun={() => undefined}
-        onPickWorkspace={() => undefined}
+        onSelectWorkspace={() => undefined}
         onOpenCreate={() => undefined}
         onOpenConfig={() => undefined}
       />

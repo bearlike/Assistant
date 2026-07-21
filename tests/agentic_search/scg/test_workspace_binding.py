@@ -1,4 +1,4 @@
-"""Tests for :class:`WorkspaceGraphBinding` — the #77 workspace-binding seam.
+"""Tests for :class:`WorkspaceGraphBinding` — the workspace-binding seam.
 
 The ONE place a workspace confers the ``scg`` capability + graph traversal tools
 + the source scope. These drive the real binding (no LLM, no runtime): the three
@@ -74,7 +74,7 @@ def test_scope_binds_workspace_sources_and_resets() -> None:
     assert ScgScope.allowed() is None  # unscoped before
     with binding.scope():
         assert ScgScope.allowed() == frozenset({"github", "linear"})
-        # #76 attribution: the workspace id is bound for deposit attribution.
+        # attribution: the workspace id is bound for deposit attribution.
         assert ScgScope.workspace() == "ws-1"
     assert ScgScope.allowed() is None  # reset after
     assert ScgScope.workspace() is None

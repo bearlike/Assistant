@@ -1,7 +1,7 @@
 package com.mewbo.aura.voice
 
 /**
- * Client-only tag for which input channel started a chat turn - typed vs. voice (Gitea #180 P1's
+ * Client-only tag for which input channel started a chat turn - typed vs. voice ('s
  * modality seam). Purely a UI hint for later phases (e.g. speaking a voice-initiated reply aloud);
  * NEVER put on the wire - the backend contract has no concept of it and is untouched by this.
  * Not persisted: a process death mid-turn resets to [Text] on the next cold start/rebind, an

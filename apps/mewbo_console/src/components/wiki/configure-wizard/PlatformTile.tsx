@@ -36,18 +36,18 @@ export function PlatformTile({ platform, selected, onSelect }: PlatformTileProps
         className="inline-flex items-center justify-center w-9 h-9 rounded-md shrink-0"
         style={{ background: platform.color }}
       >
-        <PlatformIcon platformId={platform.id} className="h-[18px] w-[18px] text-white" />
+        <PlatformIcon platformId={platform.id} className="size-5 text-white" />
       </span>
       <span className="flex-1 min-w-0">
         <span className="block text-sm font-medium text-[hsl(var(--foreground))]">
           {platform.name}
         </span>
-        <span className="block text-[11px] text-[hsl(var(--muted-foreground))] [text-wrap:pretty]">
+        <span className="block text-2xs text-[hsl(var(--muted-foreground))] [text-wrap:pretty]">
           {platform.short}
         </span>
       </span>
       {selected && (
-        <span className="text-[hsl(var(--primary))] shrink-0">
+        <span className="text-[hsl(var(--primary-text))] shrink-0">
           <Check className="h-4 w-4" />
         </span>
       )}

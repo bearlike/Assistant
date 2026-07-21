@@ -27,7 +27,7 @@ from ..types import (
 )
 
 # Query operators a queryable (``in: query``) parameter is assumed to support.
-# Coarse + connector-agnostic; the learned memory layer (#13) sharpens these.
+# Coarse + connector-agnostic; the learned memory layer sharpens these.
 _QUERY_OPERATORS = ["eq"]
 
 

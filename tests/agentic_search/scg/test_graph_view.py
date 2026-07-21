@@ -1,4 +1,4 @@
-"""Tests for ScgGraphView — the SCG multiplex assembler (#76).
+"""Tests for ScgGraphView — the SCG multiplex assembler.
 
 The search-side mirror of the wiki ``KnowledgeGraphView``: it unifies the three
 SCG-tenant layers (schema + memory + entity) for a source-id scope and reconciles

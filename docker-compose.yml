@@ -65,6 +65,8 @@ services:
       # each IDE container live under /tmp/mewbo-ide.
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/mewbo-ide:/tmp/mewbo-ide
+      # Runtime CLI toolbox (gh, tea) — see the volume definition at the bottom.
+      - mewbo-tools:/opt/mewbo-tools
       # Project directories and init scripts — add in docker-compose.override.yml
       # (see docker-compose.override.example.yml for the template)
     environment:
@@ -117,6 +119,9 @@ services:
       # api_keys collection. Without this, the MCP server cannot validate any
       # key except the master token.
       - api-data:/app/data
+      # Shared with the api: whichever container starts first fetches gh/tea,
+      # the other finds them already present and skips the download.
+      - mewbo-tools:/opt/mewbo-tools
     environment:
       - MEWBO_HOME=/app/data
       # Point at the api service. Both services run with network_mode: host
@@ -190,3 +195,8 @@ volumes:
   mongo-data:
   plans-data:
   wiki-clones:
+  # Runtime CLI toolbox (gh, tea) provisioned by docker/init.d/12-agent-clis.sh.
+  # Persisting it is the point: the binaries are fetched once, not on every
+  # container start, so a cold start needs no network once warm. Safe to drop —
+  # `docker compose down -v` just means the next start re-downloads them.
+  mewbo-tools:

@@ -119,6 +119,20 @@ def test_json_run_create_get_update_list(tmp_path):
     assert [r.run_id for r in ws1_runs] == ["run-1"]
 
 
+def test_json_list_recent_runs_newest_first_across_workspaces_and_capped(tmp_path):
+    """list_recent_runs spans every workspace, sorts newest-first, and caps."""
+    store = JsonAgenticSearchStore(root_dir=tmp_path)
+    store.create_run(_record("run-1", "ws-1", created_at="2026-06-01T00:00:00+00:00"))
+    store.create_run(_record("run-2", "ws-2", created_at="2026-06-02T00:00:00+00:00"))
+    store.create_run(_record("run-3", "ws-1", created_at="2026-06-03T00:00:00+00:00"))
+
+    recent = store.list_recent_runs(10)
+    assert [r.run_id for r in recent] == ["run-3", "run-2", "run-1"]
+
+    capped = store.list_recent_runs(2)
+    assert [r.run_id for r in capped] == ["run-3", "run-2"]
+
+
 def test_json_missing_run_get_returns_none_update_raises(tmp_path):
     """get_run on an unknown id returns None; update raises KeyError."""
     store = JsonAgenticSearchStore(root_dir=tmp_path)
@@ -246,6 +260,21 @@ def test_mongo_search_workspaces_shared_filter():
     assert {w.id for w in store.search_workspaces("  ")} == {eng.id, prod.id}
 
 
+def test_mongo_list_recent_runs_sorts_and_limits_at_the_query():
+    """list_recent_runs spans every workspace, newest-first, capped by Mongo's
+    own ``.sort().limit()`` — not a Python-side slice."""
+    mongomock = pytest.importorskip("mongomock")
+    store = MongoAgenticSearchStore(
+        client=mongomock.MongoClient(), database="mewbo_test_agentic"
+    )
+    store.create_run(_record("run-1", "ws-1", created_at="2026-06-01T00:00:00+00:00"))
+    store.create_run(_record("run-2", "ws-2", created_at="2026-06-02T00:00:00+00:00"))
+    store.create_run(_record("run-3", "ws-1", created_at="2026-06-03T00:00:00+00:00"))
+
+    assert [r.run_id for r in store.list_recent_runs(10)] == ["run-3", "run-2", "run-1"]
+    assert [r.run_id for r in store.list_recent_runs(2)] == ["run-3", "run-2"]
+
+
 # ---------------------------------------------------------------------------
 # Mongo store — same CRUD contract, skipped unless a live URI is configured
 # ---------------------------------------------------------------------------
@@ -295,6 +324,15 @@ class TestMongoAgenticSearchStore:
         assert [e["idx"] for e in store.load_run_events("run-1", after_idx=0)] == [1]
         assert store.cancel_run("run-1") is True
         assert store.cancel_run("run-1") is False
+
+    def test_mongo_list_recent_runs_newest_first_and_capped(self, store):
+        """list_recent_runs spans workspaces, newest-first, capped by limit."""
+        store.create_run(_record("run-1", "ws-1", created_at="2026-06-01T00:00:00+00:00"))
+        store.create_run(_record("run-2", "ws-2", created_at="2026-06-02T00:00:00+00:00"))
+        store.create_run(_record("run-3", "ws-1", created_at="2026-06-03T00:00:00+00:00"))
+
+        assert [r.run_id for r in store.list_recent_runs(10)] == ["run-3", "run-2", "run-1"]
+        assert [r.run_id for r in store.list_recent_runs(2)] == ["run-3", "run-2"]
 
     def test_mongo_past_query_cap_and_patch(self, store):
         """append_past_query caps at PAST_QUERY_CAP; update patches by run_id."""

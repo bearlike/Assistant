@@ -2,10 +2,7 @@
 from __future__ import annotations
 
 import datetime
-import json
-import ssl
-import urllib.error
-import urllib.request
+import shutil
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlparse
 
@@ -13,12 +10,17 @@ from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase
+from mewbo_graph.plugins.wiki._ctx import _clone_dir_for, emit_log, emit_phase
+from mewbo_graph.plugins.wiki._platform_api import (
+    api_get_json_with_chain,
+    github_api_base,
+)
 from mewbo_graph.plugins.wiki.clone import (  # noqa: F401 — _resolve_runtime is the per-module test seam
     _is_private_host,
     _resolve_runtime,
 )
 from mewbo_graph.plugins.wiki.grounder import _DEFAULT_GROUNDER_PATHS
+from mewbo_graph.wiki.credentials import CredentialScope
 
 if TYPE_CHECKING:
     from mewbo_core.classes import ActionStep
@@ -104,6 +106,26 @@ class WikiFinalizeTool(WikiSessionTool):
             if dropped:
                 emit_log(ctx, f"Dropped {dropped} stale page(s) not in this run's plan")
         pages = ctx.store.list_pages(ctx.slug)
+        page_count = len(pages)
+
+        # 3b. Outcome assertion: an index that wrote NO pages produced no wiki.
+        # ``page_count`` was computed, persisted onto the Project and logged as
+        # "Wiki ready: N pages" but never actually checked, so a run that reached
+        # here having never called wiki_submit_page still recorded itself
+        # complete. Zero pages is a FAILURE — mark the job terminally failed so it
+        # surfaces as a real error instead of a 0-page success.
+        if page_count == 0:
+            err = (
+                "cannot finalize: no pages were written — the index produced no "
+                "documentation"
+            )
+            ctx.store.append_job_event(ctx.job_id, {
+                "type": "error",
+                "error": {"code": "validation", "message": err},
+            })
+            ctx.store.update_job(ctx.job_id, status="failed", current_file=None)
+            return _err_result("validation", err)
+
         page_ids = {p.id for p in pages}
         if args.landingPageId not in page_ids:
             return _err_result(
@@ -111,8 +133,6 @@ class WikiFinalizeTool(WikiSessionTool):
                 f"landingPageId '{args.landingPageId}' not found in submitted pages "
                 f"({sorted(page_ids) or 'none'})",
             )
-
-        page_count = len(pages)
 
         # 4. Resolve identity from the persisted submission. The wizard
         # is the canonical source: it carries the explicit platform, the
@@ -126,14 +146,6 @@ class WikiFinalizeTool(WikiSessionTool):
                 "wiki submission is missing — cannot finalize without canonical identity",
             )
         repo_url = submission.get("repoUrl") or ""
-        # The token is stripped from the persisted submission for safety;
-        # the original lives in the in-process clone-token cache. Read it
-        # here so the description fetch can authenticate to private/internal
-        # platforms (e.g. Gitea on internal hosts that reject anon API
-        # calls). Cleared once finalize completes.
-        from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
-
-        token = CloneTokenCache.peek(ctx.job_id) or submission.get("token") or None
         source = submission.get("platform") or ""
         lang = submission.get("language") or "en"
         if not source:
@@ -143,16 +155,12 @@ class WikiFinalizeTool(WikiSessionTool):
             )
         host = _host_from_url(repo_url)
 
-        # Best-effort: fetch the repository description from the platform's
-        # public API so the landing tile carries real context instead of "".
-        # On a token-less refresh against a private host the fetch returns
-        # ""; in that case keep whatever description the previous successful
-        # run wrote rather than blowing it away.
-        desc = _fetch_description(repo_url=repo_url, platform=source, token=token, slug=ctx.slug)
-        if not desc:
-            existing = ctx.store.get_project(ctx.slug)
-            if existing is not None and existing.desc:
-                desc = existing.desc
+        # The description a reindex persists: a user's edited description wins,
+        # else the platform's public API, else whatever the previous successful run
+        # wrote (a token-less refresh against a private host fetches ""). All three
+        # tiers live in ``_resolve_project_desc`` — the read-preserve seam this and
+        # ``GraphOnlyIndexer`` share, so a rebuilt Project can't wipe an edit.
+        desc = _resolve_project_desc(ctx.store, ctx.slug, repo_url=repo_url, platform=source)
 
         # 5. Read git snapshot off the IndexingJob (written by clone) and
         #    detect grounder presence on the still-mounted clone dir. Both
@@ -164,7 +172,7 @@ class WikiFinalizeTool(WikiSessionTool):
         commit_short = commit_sha[:7] if commit_sha else None
         maintainer_edited = _detect_grounder(ctx.clone_dir)
 
-        # 5b. Completion correctness (GraphRAG ordering law, Gitea #35): the
+        # 5b. Completion correctness (GraphRAG ordering law): the
         # knowledge graph is the substrate every downstream feature (Q&A,
         # search, entities) reads. A run that reaches finalize with an EMPTY
         # graph "completed without creating the graph" — that is a FAILURE, not
@@ -174,8 +182,9 @@ class WikiFinalizeTool(WikiSessionTool):
         # a graph-less install (no backend) is not blocked here.
         if not _graph_is_populated(ctx):
             err = (
-                "cannot finalize: knowledge graph is empty — the graph build "
-                "did not run or produced no nodes"
+                "cannot finalize: the knowledge graph is empty or unreadable — "
+                "the graph build did not run, produced no nodes, or the store "
+                "could not be queried to confirm it"
             )
             ctx.store.append_job_event(ctx.job_id, {
                 "type": "error",
@@ -224,6 +233,32 @@ class WikiFinalizeTool(WikiSessionTool):
         # terminally failed so the completed project surfaces immediately.
         _supersede_stale_jobs(ctx)
 
+        # 7c. Supersede prior-commit ARTIFACTS. ``upsert_nodes`` never deleted by
+        # slug, so before this the store was the UNION of every commit ever
+        # indexed — a file deleted months ago still served to retrieval, and
+        # ``node_count`` meaningless as "the graph for this commit". Now that
+        # every node/edge/entity carries its commit, a completed index reaps every
+        # OTHER commit's graph + entity artifacts for the slug (``None``-stamped
+        # rows — QA-minted entities — are preserved). Pages are already pruned to
+        # this run's plan above, so they are not swept here. Best-effort: a store
+        # hiccup here must not undo the index that just succeeded.
+        if commit_sha:
+            try:
+                reaped = ctx.store.supersede_graph_artifacts(
+                    ctx.slug, keep_commit_sha=commit_sha
+                )
+                total = sum(reaped.values())
+                if total:
+                    emit_log(
+                        ctx,
+                        f"Superseded {total} artifact(s) from prior commits "
+                        f"({reaped})",
+                    )
+            except Exception as exc:  # pragma: no cover — best-effort cleanup
+                logging.info(
+                    "wiki_finalize: superseding prior-commit artifacts failed ({})", exc
+                )
+
         # 8. Emit finalize phase + complete event.
         emit_phase(ctx, "finalize")
         emit_log(ctx, f"Wiki ready: {page_count} pages, landing on {args.landingPageId}")
@@ -233,12 +268,9 @@ class WikiFinalizeTool(WikiSessionTool):
             "pageCount": page_count,
         })
 
-        # 9. Forget the cached clone-time token now that the job is done.
-        from mewbo_graph.wiki.tokens import CloneTokenCache  # noqa: PLC0415
-
-        CloneTokenCache.forget(ctx.job_id)
-
-        # Signal the loop to terminate: no post-finalize LLM turn needed.
+        # Signal the loop to terminate: no post-finalize LLM turn needed. There
+        # is no ephemeral clone-token cache to forget — the durable credential
+        # store IS the source of truth and re-index needs it to persist.
         self._terminate_run_pending = True
 
         return MockSpeaker(content=str({
@@ -273,13 +305,15 @@ def _host_from_url(url: str) -> str | None:
 def _split_owner_repo(slug: str) -> tuple[str, str] | None:
     """Pull ``(owner, repo)`` from a fully-qualified or legacy slug.
 
-    Canonical slug is ``host/owner/repo`` — the last two segments are the
-    owner and repo. Legacy ``owner/repo`` slugs still parse cleanly.
+    Delegates to :class:`CredentialScope`, which owns the slug grammar (last two
+    segments = owner/repo; trailing ``.git`` stripped; a legacy ``owner/repo``
+    and a GitLab-subgroup ``host/group/sub/proj`` both parse). ``None`` for a
+    host-only or unparseable slug — there is no repo to address.
     """
-    parts = [p for p in slug.split("/") if p]
-    if len(parts) < 2:
+    scope = CredentialScope.coerce(slug)
+    if scope is None or scope.owner is None or scope.repo is None:
         return None
-    return parts[-2], parts[-1].removesuffix(".git")
+    return scope.owner, scope.repo
 
 
 def _load_submission(ctx: Any) -> dict[str, Any] | None:
@@ -295,15 +329,76 @@ def _load_submission(ctx: Any) -> dict[str, Any] | None:
         return None
 
 
-def _fetch_description(*, repo_url: str, platform: str, token: str | None, slug: str) -> str:
+def _resolve_description(store: Any, slug: str, *, repo_url: str, platform: str) -> str:
+    """Best-effort repo description, resolved through the durable credential chain.
+
+    The description fetch is a SEPARATE process step from the clone, so it has no
+    git "winner" to inherit — it hands :func:`_fetch_description` the store+slug
+    and lets the shared chain-aware fetch walk the credentials itself (one retry
+    policy, in ``_platform_api.api_get_json_with_chain``). A revoked stored token
+    that 401s the API no longer shadows a valid ambient one.
+    """
+    return _fetch_description(
+        repo_url=repo_url, platform=platform, token=None, slug=slug, store=store
+    )
+
+
+def _resolve_project_desc(store: Any, slug: str, *, repo_url: str, platform: str) -> str:
+    """The description a (re)index should persist — user override wins.
+
+    THE read-preserve seam, shared by ``wiki_finalize`` AND ``GraphOnlyIndexer``
+    (which used to carry a copy of the last two tiers). ``Project`` is rebuilt
+    wholesale at every finalize, so without this an edited description would be
+    silently overwritten by the platform fetch on the very next reindex.
+
+    Precedence:
+
+    1. ``ProjectSettings.desc`` — an explicit user edit. Durable, survives reindex.
+    2. The platform API fetch (today's default: the repo's own description).
+    3. The previous ``Project`` record's ``desc`` — so a token-less refresh against
+       a private host, where the fetch returns "", doesn't blow away a description
+       a previous successful run wrote.
+
+    A store that predates the settings record simply yields ``None`` at tier 1 and
+    the behaviour is byte-identical to before.
+    """
+    try:
+        settings = store.get_project_settings(slug)
+    except Exception:  # pragma: no cover — never fail an index on the settings read
+        settings = None
+    if settings is not None and settings.desc:
+        return settings.desc
+
+    desc = _resolve_description(store, slug, repo_url=repo_url, platform=platform)
+    if not desc:
+        existing = store.get_project(slug)
+        if existing is not None and existing.desc:
+            desc = existing.desc
+    return desc
+
+
+def _fetch_description(
+    *,
+    repo_url: str,
+    platform: str,
+    token: str | None,
+    slug: str,
+    store: Any = None,
+) -> str:
     """Best-effort fetch of repo description from the platform's public API.
 
     Returns an empty string on any failure — the description is purely
-    cosmetic; never block indexing on this.
+    cosmetic; never block indexing on this. Shares the auth-header table + GHE
+    base branch + private-TLD TLS carve-out + guarded fetch + CHAIN RETRY with
+    ``freshness._compare_behind`` via ``_platform_api``.
+
+    *token* is the PREFERRED credential (tried first); *store* lets the fetch fall
+    through to the rest of the chain — and finally to an anonymous read — when the
+    remote REFUSES that one. With no *store* it is a single-credential fetch.
 
     Endpoints used per platform:
 
-    - github   : ``GET https://api.github.com/repos/{owner}/{repo}`` → ``description``
+    - github   : ``GET {api.github.com|<host>/api/v3}/repos/{owner}/{repo}`` → ``description``
     - gitea    : ``GET {origin}/api/v1/repos/{owner}/{repo}`` → ``description``
                   (works for self-hosted Gitea/Forgejo too)
     - gitlab   : ``GET {origin}/api/v4/projects/{owner%2Frepo}`` → ``description``
@@ -316,54 +411,33 @@ def _fetch_description(*, repo_url: str, platform: str, token: str | None, slug:
     if owner_repo is None:
         return ""
     owner, repo = owner_repo
-    headers: dict[str, str] = {"Accept": "application/json", "User-Agent": "MewboWiki/1.0"}
     parsed = urlparse(repo_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     api_url: str | None = None
     # API endpoint shape is determined by *platform* (the software), not host.
     # github.com and github.enterprise.acme.io both use the GitHub v3/v4 shape.
     if platform == "github":
-        # GitHub.com uses api.github.com; GitHub Enterprise lives at <host>/api/v3.
-        if parsed.hostname == "github.com":
-            api_url = f"https://api.github.com/repos/{owner}/{repo}"
-        else:
-            api_url = f"{origin}/api/v3/repos/{owner}/{repo}"
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        api_url = f"{github_api_base(parsed)}/repos/{owner}/{repo}"
     elif platform == "gitea":
         api_url = f"{origin}/api/v1/repos/{owner}/{repo}"
-        if token:
-            headers["Authorization"] = f"token {token}"
     elif platform == "gitlab":
         api_url = f"{origin}/api/v4/projects/{quote(f'{owner}/{repo}', safe='')}"
-        if token:
-            headers["PRIVATE-TOKEN"] = token
     elif platform == "bitbucket":
-        api_url = f"https://api.bitbucket.org/2.0/repositories/{owner}/{repo}"
         # Bitbucket uses Basic with app passwords; token-only is harder to
-        # construct portably — keep public fetch, skip auth header.
+        # construct portably — public, description-only fetch (no auth header).
+        api_url = f"https://api.bitbucket.org/2.0/repositories/{owner}/{repo}"
 
     if api_url is None:
         return ""
-    try:
-        # Self-signed certs on private TLDs (e.g. git.example.home) — same
-        # carve-out the clone tool uses for ``http.sslVerify=false``.
-        ctx_ssl: ssl.SSLContext | None = None
-        if _is_private_host(repo_url):
-            ctx_ssl = ssl.create_default_context()
-            ctx_ssl.check_hostname = False
-            ctx_ssl.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=8, context=ctx_ssl) as resp:
-            data = json.loads(resp.read().decode("utf-8") or "{}")
-    except (
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        json.JSONDecodeError,
-        TimeoutError,
-        OSError,
-    ) as exc:
-        logging.info("wiki_finalize: description fetch failed for %s: %s", slug, exc)
+    data = api_get_json_with_chain(
+        api_url,
+        platform=platform,
+        private_host=_is_private_host(repo_url),
+        store=store,
+        slug=slug,
+        preferred_token=token,
+    )
+    if data is None:
         return ""
     desc = data.get("description") or ""
     return desc.strip() if isinstance(desc, str) else ""
@@ -385,48 +459,89 @@ def _detect_grounder(clone_dir: Any) -> bool:
 def _graph_is_populated(ctx: Any) -> bool:
     """True iff the code graph holds at least one node for ``ctx.slug``.
 
-    The completion-correctness gate: "completed without creating the graph" is
-    a failure. Soft signal — if the graph backend is absent (a graph-less
-    install raises ``NotImplementedError``) or the query errors transiently, do
-    NOT block finalize (the wiki can still serve BM25 pages). Only a
-    present-but-EMPTY graph fails the run.
+    The completion-correctness gate: "completed without creating the graph" is a
+    failure. The two failure shapes are NOT the same question, and conflating
+    them is what made this gate toothless:
+
+    - ``NotImplementedError`` — the graph BACKEND is absent, by design, on a
+      lean graph-less install. That is a known capability gap rather than
+      uncertainty, and a BM25-only wiki must still be allowed to finalize.
+    - Anything else — the read did not happen, so nothing here knows whether the
+      graph is populated. That now fails CLOSED. It used to return ``True``,
+      which let a transient store error launder an unverified (possibly empty)
+      graph into a ``complete`` index. Refusing costs one re-drive; the recovery
+      path re-runs finalize once the store answers again.
     """
     try:
         return bool(ctx.store.query_graph(ctx.slug))
     except NotImplementedError:
         return True  # graph backend absent by design — don't block finalize
-    except Exception as exc:  # pragma: no cover — never fail finalize on a glitch
-        logging.info("wiki_finalize: graph check failed for %s (%s); allowing", ctx.slug, exc)
-        return True
+    except Exception as exc:
+        logging.warning(
+            "wiki_finalize: graph check FAILED for {} ({}: {}) — refusing to finalize",
+            ctx.slug, type(exc).__name__, exc,
+        )
+        return False
 
 
 def _supersede_stale_jobs(ctx: Any) -> None:
-    """Mark sibling non-terminal jobs for ``ctx.slug`` as failed (superseded).
+    """Retire this slug's other jobs — status AND their on-disk checkouts.
 
     A completed index retires earlier stuck attempts so they drop out of the
-    active-jobs surface and stop hiding the finished project. Best-effort: a
-    store hiccup must never undo the just-finished index.
+    active-jobs surface and stop hiding the finished project. Their clone
+    directories go with them, and this is the seam for it: the clone root is keyed
+    by job_id, so every re-index and every resume that mints a job leaves a full
+    working copy behind that nothing else ever revisits — they accumulate into
+    gigabytes of long-dead directories. A job terminating is the natural moment to
+    reap, and reaping HERE keeps it a bounded, per-slug sweep rather than a daemon
+    walking a shared root.
+
+    The just-finished job keeps its checkout: it is now the newest ``complete``
+    job for the slug, which is exactly the one ``resolve_qa_clone_dir`` hands to
+    the Q&A source-reading tools. Reaping the rest makes that resolution
+    unambiguous as a side effect.
+
+    Best-effort throughout: neither a store hiccup nor an undeletable directory
+    may undo the index that just succeeded.
     """
     terminal = {"complete", "failed", "cancelled"}
     try:
         siblings = ctx.store.list_jobs(ctx.slug)
     except Exception as exc:  # pragma: no cover — best-effort cleanup
-        logging.info("wiki_finalize: list_jobs for supersede failed (%s)", exc)
+        logging.info("wiki_finalize: list_jobs for supersede failed ({})", exc)
         return
     for job in siblings:
-        if job.job_id == ctx.job_id or job.status in terminal:
+        if job.job_id == ctx.job_id:
             continue
-        try:
-            ctx.store.update_job(job.job_id, status="failed")
-            ctx.store.append_job_event(job.job_id, {
-                "type": "error",
-                "error": {
-                    "code": "internal",
-                    "message": "superseded by a newer completed index",
-                },
-            })
-        except Exception as exc:  # pragma: no cover — best-effort
-            logging.info("wiki_finalize: supersede %s failed (%s)", job.job_id, exc)
+        if job.status not in terminal:
+            try:
+                ctx.store.update_job(job.job_id, status="failed")
+                ctx.store.append_job_event(job.job_id, {
+                    "type": "error",
+                    "error": {
+                        "code": "internal",
+                        "message": "superseded by a newer completed index",
+                    },
+                })
+            except Exception as exc:  # pragma: no cover — best-effort
+                logging.info("wiki_finalize: supersede {} failed ({})", job.job_id, exc)
+        _reap_clone_dir(job.job_id)
+
+
+def _reap_clone_dir(job_id: str) -> None:
+    """Delete the on-disk checkout of a job that is no longer the live one.
+
+    Resolves the path through the same ``_clone_dir_for`` every wiki tool uses, so
+    a relocated clone root (``MEWBO_WIKI_CLONE_ROOT``) is honoured and this can
+    never delete outside it. Never raises — a busy or unwritable directory is left
+    for the next completion to retry.
+    """
+    try:
+        target = _clone_dir_for(job_id)
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    except Exception as exc:  # pragma: no cover — best-effort
+        logging.info("wiki_finalize: reaping clone dir for {} failed ({})", job_id, exc)
 
 
 __all__ = [
@@ -435,8 +550,11 @@ __all__ = [
     "_host_from_url",
     "_split_owner_repo",
     "_fetch_description",
+    "_resolve_description",
+    "_resolve_project_desc",
     "_detect_grounder",
     "_graph_is_populated",
+    "_reap_clone_dir",
     "_supersede_stale_jobs",
     "_load_submission",
 ]

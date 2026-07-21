@@ -131,7 +131,7 @@ def test_cancel_unknown_job_returns_false(runtime):
 
 def test_start_persists_token_credential_by_slug(store, runtime):
     """A token submission durably persists a RepoCredential keyed by slug."""
-    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
 
     sub = WizardSubmission(
         repoUrl="https://git.example.com/org/repo",
@@ -143,25 +143,28 @@ def test_start_persists_token_credential_by_slug(store, runtime):
         filterMode="exclude", dirs=[], files=[],
     )
     WikiIndexingJob.start(sub, runtime=runtime, hook_manager=None)
-    cred = CredentialStore.load(store, "git.example.com/org/repo")
+    cred = CredentialStore.load(store, CredentialScope.from_slug("git.example.com/org/repo"))
     assert cred is not None
     assert cred.kind == "token"
     assert cred.value == "ghp_durable"
 
 
 def test_start_without_token_persists_no_credential(store, runtime, submission):
-    from mewbo_graph.wiki.credentials import CredentialStore
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
 
     WikiIndexingJob.start(submission, runtime=runtime, hook_manager=None)
-    assert CredentialStore.load(store, submission.slug) is None
+    assert CredentialStore.load(store, CredentialScope.from_slug(submission.slug)) is None
 
 
-def test_refresh_restores_persisted_credential(store, runtime):
-    """Re-index reconstructs a token-less submission, then restores the token
-    from the durable credential store so the clone authenticates."""
-    from mewbo_graph.wiki.credentials import CredentialStore
-    from mewbo_graph.wiki.tokens import CloneTokenCache
-    from mewbo_graph.wiki.types import Project, RepoCredential
+def test_refresh_leaves_durable_credential_resolvable(store, runtime):
+    """Re-index reconstructs a token-less submission; the durable credential the
+    initial submission saved stays untouched and resolvable — refresh performs
+    no restore step of its own. CloneTokenCache is gone (vestigial once every
+    token was durably saved at submission); the clone tool's own
+    ``resolve_chain`` reads the credential straight from the store at clone
+    time for the NEW job, so refresh has nothing to warm."""
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import Project
 
     slug = "git.example.com/org/repo"
     store.create_project(Project(
@@ -174,27 +177,28 @@ def test_refresh_restores_persisted_credential(store, runtime):
         depth="comprehensive", language="en", model="anthropic/claude-sonnet-4-6",
         filterMode="exclude", dirs=[], files=[],
     ), runtime=runtime, hook_manager=None)
-    assert CredentialStore.load(store, slug) == RepoCredential(
-        kind="token", value="ghp_orig", username=None,
-    )
+    cred = CredentialStore.load(store, CredentialScope.from_slug(slug))
+    assert cred is not None and cred.kind == "token" and cred.value == "ghp_orig"
 
-    # Refresh: the reconstructed submission has no token, but start() must
-    # warm CloneTokenCache from the restored credential.
+    # Refresh: the reconstructed submission has no token, and refresh does not
+    # touch the credential store — the durable credential remains exactly as
+    # saved, for the clone tool to resolve at clone time.
     refreshed = WikiIndexingJob.refresh(slug, runtime=runtime, hook_manager=None)
     assert refreshed.job_id != first.job_id
-    assert CloneTokenCache.peek(refreshed.job_id) == "ghp_orig"
+    cred_after = CredentialStore.load(store, CredentialScope.from_slug(slug))
+    assert cred_after is not None and cred_after.value == "ghp_orig"
 
 
 def test_refresh_swaps_retired_model_for_default(store, runtime, monkeypatch):
     """A stored submission whose model the proxy has retired is re-resolved to
     the configured wiki/llm default before the reindex starts — otherwise the
-    whole reindex fast-fails on an invalid-model 400 (the SideStage regression)."""
+    whole reindex fast-fails on an invalid-model 400 (the Beacon regression)."""
     from types import SimpleNamespace
 
     import mewbo_core.config as core_cfg
     from mewbo_graph.wiki.types import Project
 
-    slug = "git.example.com/bearlike/SideStage"
+    slug = "git.example.com/acme/beacon"
     store.create_project(Project(
         slug=slug, source="gitea", lang="Python",
         indexedAt="2026-06-07T00:00:00Z", pages=1, desc="x",
@@ -228,7 +232,7 @@ def test_refresh_swaps_retired_model_for_default(store, runtime, monkeypatch):
     assert "gemini-3-flash-preview" not in kw["user_query"]
 
 
-# ── WikiIndexingSessionEndHook (Gitea #56 / #58 defense-in-depth) ────────────
+# ── WikiIndexingSessionEndHook (defense-in-depth) ────────────
 
 
 def _make_non_terminal_job(store: JsonWikiStore, job_id: str, slug: str, status: str) -> str:
@@ -247,7 +251,7 @@ def _make_non_terminal_job(store: JsonWikiStore, job_id: str, slug: str, status:
 def test_indexing_session_end_hook_marks_non_terminal_job_interrupted(tmp_path) -> None:
     """When a non-terminal indexing job's session ends, mark it interrupted.
 
-    This is the Gitea #56 defense-in-depth: an infra failure inside a phase
+    This is the defense-in-depth: an infra failure inside a phase
     tool causes the LLM to exit cleanly (done_reason="completed" with an error
     field), leaving the wiki job in a scanning/queued state. The hook promotes
     it to 'interrupted' so JobRecovery picks it up on next restart.
@@ -313,3 +317,57 @@ def test_render_user_query_includes_ref_when_set(submission) -> None:
     # Placed between repoUrl/slug and platform so the block reads logically.
     assert rendered.index("ref: develop") < rendered.index("platform:")
     assert rendered.index("slug:") < rendered.index("ref: develop")
+
+
+# ── auth note derives from durable credential presence (Finder-B B4) ────────────
+
+
+def test_render_user_query_auth_note_credential_on_file(store, submission):
+    """[B4] A durable credential on file → 'credential on file', not 'public
+    repo'. Derived from the store, not submission.token — which refresh strips,
+    so a private-repo refresh used to render the wrong 'public repo' note."""
+    from mewbo_api.wiki.jobs import _render_user_query
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug(submission.slug),
+        RepoCredential(kind="token", value="ghp_x", username=None),
+    )
+    rendered = _render_user_query(submission, store=store)
+    assert "credential on file" in rendered
+    assert "token=null" in rendered
+
+
+def test_render_user_query_auth_note_none_on_file(store, submission):
+    """[B4] No durable credential → 'none on file — public repo assumed', still
+    instructing token=null in the note."""
+    from mewbo_api.wiki.jobs import _render_user_query
+
+    rendered = _render_user_query(submission, store=store)
+    assert "none on file" in rendered
+    assert "public repo assumed" in rendered
+    assert "token=null" in rendered
+
+
+def test_render_user_query_auth_note_host_scoped_credential(store):
+    """[B4] A HOST-scoped credential (shared across a host's repos) also counts
+    as 'on file' — the note mirrors what resolve_chain would find, not just the
+    repo scope."""
+    from mewbo_api.wiki.jobs import _render_user_query
+    from mewbo_graph.wiki.credentials import CredentialScope, CredentialStore
+    from mewbo_graph.wiki.types import RepoCredential
+
+    sub = WizardSubmission(
+        repoUrl="https://git.example.com/org/repo", slug="git.example.com/org/repo",
+        platform="gitea", token=None, depth="comprehensive", language="en",
+        model="anthropic/claude-sonnet-4-6", filterMode="exclude", dirs=[], files=[],
+    )
+    CredentialStore.save(
+        store,
+        CredentialScope.from_slug("git.example.com"),
+        RepoCredential(kind="token", value="ghp_host", username=None),
+    )
+    rendered = _render_user_query(sub, store=store)
+    assert "credential on file" in rendered

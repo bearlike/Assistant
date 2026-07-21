@@ -81,9 +81,9 @@ function parseNumberedText(text: string): ParsedFile {
 }
 
 const AGENT_ID_TAG_CLASS =
-  'text-[10px] font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]';
+  'text-2xs font-mono px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]';
 const MODEL_TAG_CLASS =
-  'text-[10px] font-mono text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
+  'text-2xs text-[hsl(var(--muted-foreground))] bg-[hsl(var(--muted))] px-1.5 py-0.5 rounded whitespace-nowrap';
 
 /**
  * Render a single line as a row in the viewer: line-number gutter + highlighted
@@ -101,7 +101,7 @@ function ViewerRow({
   return (
     <div className="flex hover:bg-[hsl(var(--code-border))]/50 transition-colors">
       <span
-        className="shrink-0 text-right text-[11px] text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-2 mr-2 leading-relaxed"
+        className="shrink-0 text-right text-2xs text-[hsl(var(--code-fg-subtle))] select-none border-r border-[hsl(var(--code-border))] pr-2 mr-2 leading-relaxed"
         style={{ width: `${gutterWidth}ch` }}
       >
         {lineNumber}
@@ -159,7 +159,7 @@ export function FileReadCard({
           {/* Dir breadcrumb (truncates first) + filename (always visible) */}
           {dir && (
             <span
-              className="text-[11px] text-[hsl(var(--muted-foreground))] font-mono truncate min-w-0"
+              className="text-2xs text-[hsl(var(--muted-foreground))] font-mono truncate min-w-0"
               title={path}
             >
               {dir}/
@@ -173,7 +173,7 @@ export function FileReadCard({
         </span>
       }
       badge={
-        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap border-[hsl(var(--agent-1)/0.3)] bg-[hsl(var(--agent-1)/0.1)] text-[hsl(var(--agent-1))]">
+        <span className="text-2xs font-medium px-1.5 py-0.5 rounded-full border whitespace-nowrap border-[hsl(var(--agent-1)/0.3)] bg-[hsl(var(--agent-1)/0.1)] text-[hsl(var(--agent-1))]">
           {rangeLabel}
           {parsed.truncated && ' · truncated'}
         </span>
@@ -184,10 +184,10 @@ export function FileReadCard({
       {/* Expanded body — file viewer with line gutter and syntax highlighting */}
       <div className="rounded-md overflow-hidden border border-[hsl(var(--code-border))] bg-[hsl(var(--code-body))] -mx-1">
         {/* Mini chrome bar with full path + copy */}
-        <div className="group/copy relative flex items-center gap-2 px-3 py-1.5 bg-[hsl(var(--code-chrome))] border-b border-[hsl(var(--code-border))]">
+        <div className="group/copy relative flex items-center gap-2 px-3 py-1.5 bg-[hsl(var(--code-chrome))] border-[hsl(var(--code-border))]">
           <FileText className="w-3 h-3 text-[hsl(var(--code-fg-muted))] shrink-0" />
           <span
-            className="text-[11px] font-mono text-[hsl(var(--code-fg-muted))] truncate flex-1 min-w-0"
+            className="text-2xs font-mono text-[hsl(var(--code-fg-muted))] truncate flex-1 min-w-0"
             title={path}
           >
             {path}
@@ -201,7 +201,7 @@ export function FileReadCard({
         {/* Content viewer */}
         <div className="font-mono text-xs max-h-[500px] overflow-auto py-1">
           {parsed.visibleLines === 0 ? (
-            <div className="px-3 py-3 text-[hsl(var(--code-fg-muted))]">
+            <div className="px-3 py-3 font-sans text-[hsl(var(--code-fg-muted))]">
               (empty file)
             </div>
           ) : (
@@ -216,7 +216,7 @@ export function FileReadCard({
           )}
 
           {parsed.truncated && (
-            <div className="px-3 pt-2 mt-1 border-t border-[hsl(var(--code-border))] text-[11px] text-[hsl(var(--code-fg-muted))] italic">
+            <div className="px-3 pt-2 mt-1 border-t border-[hsl(var(--code-border))] font-sans text-2xs text-[hsl(var(--code-fg-muted))] italic">
               {parsed.truncationNote ?? '… truncated'}
               {totalLines && ` · ${Math.max(0, totalLines - parsed.endLine)} more line(s) available`}
             </div>

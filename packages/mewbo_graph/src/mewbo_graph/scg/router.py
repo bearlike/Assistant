@@ -4,7 +4,7 @@ Routing is the graph's *only* query-time job: control routing. Given a natural
 -language query, the router embeds it, vector-searches seed nodes in the store,
 expands one hop along capability/route edges to assemble candidate
 :class:`RouteRecipe`s, and ranks them with a deterministic, **zero-LLM** score
-(``cosine(seed) + edge weight``). The agentic traversal engine (#19) consumes
+(``cosine(seed) + edge weight``). The agentic traversal engine consumes
 the ranked recipes; spending sub-agents is a downstream concern.
 
 This is the lightweight pre-rank, not the full hypothesis search. It mirrors
@@ -52,7 +52,7 @@ class ScgRouter:
     Dependency-injected with an :class:`ScgStore` and a query embedder (the wiki
     :class:`~mewbo_graph.wiki.embedder.Embedder` by default; tests inject a fake).
     An OPTIONAL :class:`~mewbo_graph.scg.memory_bridge.ScgMemoryBridge` makes
-    routing **memory-aware** (#76): when injected, the top-k learned connector
+    routing **memory-aware**: when injected, the top-k learned connector
     notes for the query boost pathways already known to produce results and damp
     discovered dead ends — a retrieval-plus-arithmetic step, NO LLM, so the
     zero-LLM routing core is preserved. Omit it (``None``) and routing is
@@ -104,9 +104,9 @@ class ScgRouter:
 
         The returned :class:`ScgMemoryBias` carries the per-capability anchored
         HINTS too, so the ``scg_route`` plugin tool can surface "how to call this
-        right" guidance on each recipe without re-reading memory (#76, deliv. 2).
+        right" guidance on each recipe without re-reading memory.
 
-        Honours the ambient :class:`ScgScope` (#75): a candidate recipe whose
+        Honours the ambient :class:`ScgScope`: a candidate recipe whose
         steps reach an out-of-scope source is dropped, AND a memory note anchored
         to an out-of-scope source contributes no bias — routing and learning both
         stay inside the workspace over the otherwise GLOBAL shared graph.
@@ -140,7 +140,7 @@ class ScgRouter:
             for key, weight in self._candidate_keys(node.source_key, inbound):
                 if key not in recipes:
                     continue
-                # cosine(seed) + edge weight + learned-memory boost (the #76 term;
+                # cosine(seed) + edge weight + learned-memory boost (the memory-bias term;
                 # 0.0 when the pathway's steps carry no learned signal).
                 score = sim + weight + bias.boost_for_steps(recipes[key].steps)
                 if score > best.get(key, float("-inf")):

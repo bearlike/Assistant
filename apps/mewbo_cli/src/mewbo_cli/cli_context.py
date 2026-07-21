@@ -50,3 +50,19 @@ class CommandContext:
     # every existing construction site unchanged.
     approval_callback: Callable[..., Any] | None = None
     hook_factory: Callable[[], HookManager | None] | None = None
+
+    def refuse_if_terminated(self, action: str) -> bool:
+        """Print a refusal and return ``True`` if the session is terminated.
+
+        Shared guard for command handlers that would otherwise run, steer, or
+        fork-resurrect a permanently terminated session: ``/fork``,
+        ``/retry``, ``/continue``, ``/edit``. Mirrors the ``Cannot {action}:
+        {reason}`` wording ``_run_recovery`` already uses for other refusals.
+        """
+        if not self.runtime.is_terminated(self.state.session_id):
+            return False
+        self.console.print(
+            f"Cannot {action}: session {self.state.session_id} is permanently terminated.",
+            style="yellow",
+        )
+        return True

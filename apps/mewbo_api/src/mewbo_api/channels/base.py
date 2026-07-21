@@ -35,6 +35,14 @@ class ChannelAdapter(Protocol):
     """
 
     platform: str
+    # Whether ``POST /api/webhooks/<platform>`` may reach this adapter at all.
+    # A polled channel (e.g. email/IMAP) has no push surface and therefore no
+    # signature to check — its ``verify_request``/``parse_inbound`` stubs exist
+    # only to satisfy this Protocol for callers that share it (mention gating,
+    # the completion hook), not to authenticate a webhook. ``webhook_receive``
+    # 404s such an adapter before calling either, rather than trusting a
+    # verification method that has nothing to verify.
+    supports_webhook: bool
 
     def verify_request(self, headers: dict[str, str], body: bytes) -> bool:
         """Return True if the webhook request is authentic."""

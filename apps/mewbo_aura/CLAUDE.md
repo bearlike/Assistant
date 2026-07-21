@@ -1,21 +1,30 @@
-> ↑ [root /CLAUDE.md](../../CLAUDE.md) · children: [data](app/src/main/java/com/mewbo/aura/data/CLAUDE.md) · [ui](app/src/main/java/com/mewbo/aura/ui/CLAUDE.md) · [voice](app/src/main/java/com/mewbo/aura/voice/CLAUDE.md) · [test](app/src/test/java/com/mewbo/aura/CLAUDE.md) · [redroid](tools/redroid/CLAUDE.md)
+> ↑ [root /CLAUDE.md](../../CLAUDE.md) · children: [data](app/src/main/java/com/mewbo/aura/data/CLAUDE.md) · [ui](app/src/main/java/com/mewbo/aura/ui/CLAUDE.md) · [voice](app/src/main/java/com/mewbo/aura/voice/CLAUDE.md) · [notify](app/src/main/java/com/mewbo/aura/notify/CLAUDE.md) · [di](app/src/main/java/com/mewbo/aura/di/CLAUDE.md) · [mock](app/src/main/java/com/mewbo/aura/mock/CLAUDE.md) · [debug](app/src/debug/java/com/mewbo/aura/CLAUDE.md) · [test](app/src/test/java/com/mewbo/aura/CLAUDE.md) · [redroid](tools/redroid/CLAUDE.md)
 
 # Mewbo Aura — Android Assistant Client
 
 Scope: `apps/mewbo_aura/` — native Kotlin + Jetpack Compose assistant app
 (orb overlay via the system assistant role + sessions/chat UI) over the
 existing Mewbo session REST+SSE API. The backend owns all logic; Aura is a
-thin, polished frontend. **Spec lineage: #175 (v1) → #176 (design v2) →
-#177 (v3: model picker, composer options + attachments, tool-call fold) →
-#178 (v4: default project + scope indicator + multi-line composer;
-text-first overlay handoff) → #181 (v5: voice-first — auto-listen on
+thin, polished frontend. **Spec lineage: v1 → design v2 →
+v3 (model picker, composer options + attachments, tool-call fold) →
+v4 (default project + scope indicator + multi-line composer;
+text-first overlay handoff) → v5 (voice-first — auto-listen on
 trigger, first turn streams in-overlay as a response card, second turn
-onward hands off; aurora shader rebuild)** — deviations are recorded
-there, never in ad-hoc docs here.
+onward hands off; aurora shader rebuild) → the Settings wave (per-tool
+device-capability toggles gated at the ONE `DeviceToolGate` seam — catalog
+intersect + executor `tool_disabled` refusal; a Streamlit-widgets flag; per-surface
+model defaults — app vs assist overlay, independently persisted) → the widget wave
+(Streamlit widget renderer: `widget_ready` event → reducer fold → a
+`WebViewAssetLoader` card serving the console-built offline stlite bundle bundled
+into the APK; `stlite` capability advertised + rendered at the SAME
+`streamlitWidgetsEnabled` seam; overlay shows a summary card, not the WebView)** —
+deviations are recorded there, never in ad-hoc docs here.
 
 ## CLAUDE.md tree (this app)
 
-The tree grew past 4 files — read the deepest one that applies before editing.
+The tree grew to ~29 files — read the deepest one that applies before editing. Nearly every
+substantive package now has its own CLAUDE.md so future session learnings accrue at the level that
+owns them; a new substantive package gets one.
 
 **Design system: [`DESIGN.md`](DESIGN.md) is the canonical statement of the visual laws, token
 values, provenance, and the regression registry ("never again" list).** Read it before ANY
@@ -28,13 +37,33 @@ disclaimer anchors once at the transcript end.
 | Scope | File |
 |---|---|
 | **Design system: laws, tokens, provenance, regression registry** | [`DESIGN.md`](DESIGN.md) |
-| App root: build, device matrix, layering, atomic-class rules | `CLAUDE.md` (this file) |
-| Data layer: wire contract, `TranscriptReducer` invariants | `app/src/main/java/com/mewbo/aura/data/CLAUDE.md` |
-| UI: theme, orb, chat rendering, screens (thin router) | `app/src/main/java/com/mewbo/aura/ui/CLAUDE.md` |
-| Shader family: `AuroraEdgeGlow`/`AuroraWashTop` rebuild rules | `app/src/main/java/com/mewbo/aura/ui/aurora/CLAUDE.md` |
-| Assist overlay: response card, orb tracking, draft-clear laws | `app/src/main/java/com/mewbo/aura/ui/overlay/CLAUDE.md` |
-| Composer: pill anatomy, dictation contract, style tokens | `app/src/main/java/com/mewbo/aura/ui/composer/CLAUDE.md` |
-| Voice: `AssistTurnMachine`, `VoiceInteractionSession` lifecycle, speak-along | `app/src/main/java/com/mewbo/aura/voice/CLAUDE.md` |
+| App root: build, device matrix, layering, atomic-class rules, iconography | `CLAUDE.md` (this file) |
+| **Data — hub**: layering + the advertise/answer seam | `app/src/main/java/com/mewbo/aura/data/CLAUDE.md` |
+| Data · REST (`AuraApi`, DTOs, `Response<>`-wrapped-vs-plain throw) | `app/src/main/java/com/mewbo/aura/data/api/CLAUDE.md` |
+| Data · SSE (`SessionStreamClient`, backlog replay, `trySend` hazard) | `app/src/main/java/com/mewbo/aura/data/sse/CLAUDE.md` |
+| Data · model (`SessionEvent`, `TranscriptReducer`, POISON ANCHOR, `PromotedTools`) | `app/src/main/java/com/mewbo/aura/data/model/CLAUDE.md` |
+| Data · repos (`RunRepository` `@Singleton`, fork/retry, `RunNotifications`) | `app/src/main/java/com/mewbo/aura/data/repo/CLAUDE.md` |
+| Data · device tools (catalog/executor, two-layer gate, launch gate) | `app/src/main/java/com/mewbo/aura/data/device/CLAUDE.md` |
+| Data · settings (`SettingsStore` keys, `KeystoreCipher`) | `app/src/main/java/com/mewbo/aura/data/settings/CLAUDE.md` |
+| **UI — hub**: thin router, Compose stability, one-chat-tree, a11y | `app/src/main/java/com/mewbo/aura/ui/CLAUDE.md` |
+| UI · theme (tokens, discipline, `AssistantExtras`, reduced-motion) | `app/src/main/java/com/mewbo/aura/ui/theme/CLAUDE.md` |
+| UI · orb + shared shader primitives (`GlslNoise`/`ClayFlowerSdf`) | `app/src/main/java/com/mewbo/aura/ui/orb/CLAUDE.md` |
+| UI · shader family (`AuroraEdgeGlow`/`AuroraWashTop`) | `app/src/main/java/com/mewbo/aura/ui/aurora/CLAUDE.md` |
+| UI · chat surface (`ChatScreen`/`Transcript`, message actions, scope row) | `app/src/main/java/com/mewbo/aura/ui/chat/CLAUDE.md` |
+| UI · promoted-tool action cards (`PromotedTools` allowlist trap) | `app/src/main/java/com/mewbo/aura/ui/chat/toolcards/CLAUDE.md` |
+| UI · Streamlit widget card (WebView ready-signal) | `app/src/main/java/com/mewbo/aura/ui/chat/widget/CLAUDE.md` |
+| UI · composer (`AuraComposer`, `RmsWaveform`, scope-row anchor) | `app/src/main/java/com/mewbo/aura/ui/composer/CLAUDE.md` |
+| UI · assist overlay render (`AssistUiState`) | `app/src/main/java/com/mewbo/aura/ui/overlay/CLAUDE.md` |
+| UI · shared vocabulary (`ActionSheet`, `MarkdownMessage`, `ErrorCard`…) | `app/src/main/java/com/mewbo/aura/ui/common/CLAUDE.md` |
+| UI · drawer + routes + `SessionActionsSheet` | `app/src/main/java/com/mewbo/aura/ui/navigation/CLAUDE.md` |
+| UI · recents view-state + rail helpers | `app/src/main/java/com/mewbo/aura/ui/sessions/CLAUDE.md` |
+| UI · chat search (client-side, title-only) | `app/src/main/java/com/mewbo/aura/ui/search/CLAUDE.md` |
+| UI · settings screen (7 sections) | `app/src/main/java/com/mewbo/aura/ui/settings/CLAUDE.md` |
+| **Turn-completion notifications** (FGS follow-a-run) | `app/src/main/java/com/mewbo/aura/notify/CLAUDE.md` |
+| **DI** — Hilt modules + the seam law | `app/src/main/java/com/mewbo/aura/di/CLAUDE.md` |
+| **Mock backend** (debug scripted backend) | `app/src/main/java/com/mewbo/aura/mock/CLAUDE.md` |
+| Voice: `AssistTurnMachine`, `VoiceInteractionSession`, speak-along | `app/src/main/java/com/mewbo/aura/voice/CLAUDE.md` |
+| Debug-variant tooling (preview hosts, fakes, mock) | `app/src/debug/java/com/mewbo/aura/CLAUDE.md` |
 | JVM test idioms: coroutine-scope house rules, scripted-fake traps | `app/src/test/java/com/mewbo/aura/CLAUDE.md` |
 | redroid dev container ops | `tools/redroid/CLAUDE.md` |
 
@@ -74,8 +103,14 @@ from `~/temp_folder/enterprise-ca.crt` by the `seedEnterpriseCa` task (override 
 `-Pmewbo.enterpriseCaSource=` / `AURA_ENTERPRISE_CA_SRC` / `AURA_ENTERPRISE_CA_B64`); an enterprise
 build fails loudly if it can't find the cert. **Never again:** `public*` APKs must not
 contain the CA — verify with `unzip -l <apk> | grep enterprise_ca` (public = empty, enterprise
-= `res/raw/enterprise_ca.crt`). Gitea prereleases (`0.0.XX-debug`) ship `enterpriseDebug`,
-built locally + attached via `tea`.
+= `res/raw/enterprise_ca.crt`). Prereleases (`0.0.XX-debug`) ship `enterpriseDebug`, built
+locally and attached to the release by hand.
+
+**Before any `assemble*Release`: build the console first** (`npm run build` in `apps/mewbo_console`,
+which also emits `dist/widget-host/`). A RELEASE build FAILS HARD when that bundle is
+absent (`syncWidgetHostAssets<Variant>` — a release must never silently ship the widget feature
+advertised-but-broken); debug builds only warn. Aura releases are built LOCALLY (above), so this is a
+one-command prerequisite, not CI wiring.
 
 ## Device matrix
 
@@ -111,6 +146,10 @@ to [`tools/redroid/CLAUDE.md`](tools/redroid/CLAUDE.md) — read that before tou
   carries `mockito-core` solely for tests needing a behaving `Uri`. See
   `app/src/test/java/com/mewbo/aura/CLAUDE.md` for how to actually use it, plus other JVM-test-only
   traps (coroutine-scope house idiom, scripted-fake replay semantics, ISO-timestamp parsing).
+- `androidx.compose.material:material-icons-extended` was added 2026-07-14 (BOM-managed by the compose
+  BOM → 1.7.8; per the § Iconography rule). R8 strips the unused glyphs in `release`; `debug` carries
+  the full aar. Its glyphs DEPEND on `material-icons-core`, so a jar grep for a CORE glyph (`Build`,
+  `Settings`) inside the extended aar returns 0 — that's expected, not a missing dependency.
 
 ## Recurring-401 rule + credential seeding
 
@@ -159,7 +198,7 @@ for a full release cycle because lint never ran until the final gate.
 
 ## Debug-variant tooling (src/debug)
 
-Debug builds ship: `LivenessShowcaseActivity` (6-page design-v2 visual
+Debug builds ship: `LivenessShowcaseActivity` (5-page design-v2 visual
 gallery — aurora wash/glow/edge, spark, and the orb states; supersedes the
 deleted `OrbShowcaseActivity`), `ChatPreviewActivity` (chat vocabulary on
 fake state, no network), `AssistOverlayPreviewActivity` (fast-loop overlay
@@ -193,12 +232,87 @@ ui/ (Compose)  →  viewmodels  →  data/ (repos → sse/api → model)
   OkHttp/Retrofit — all I/O goes through repositories.
 - All audio/speech code lives in `voice/` behind the `Transcriber` and
   `Synthesizer` interfaces. No app-layer audio code outside `voice/`.
+- **A capability advertised to the backend is serviced at the seam EVERY host shares, never at one
+  host's ViewModel.** `RunRepository.live()` — the one thing chat and the overlay both go through to
+  follow a run — builds `DeviceToolDispatch` into the flow it hands out, so a new entry point can't silently
+  re-break it. Advertising it in `sendQuery` while wiring the answer into `ChatViewModel` cost 66.8s
+  overlay turns (two 30s server timeouts) once already; the whole story lives in
+  `data/CLAUDE.md` § "Device tools" and `voice/CLAUDE.md` § "Device tools from the overlay".
 - One chat composable tree (`ChatTranscript`), reused as a COMPONENT by both hosts — never forked.
-  `MainActivity` nav is still the ONE app-navigation host; since v5/#181 the assist overlay ALSO
+  `MainActivity` nav is still the ONE app-navigation host; since v5 the assist overlay ALSO
   renders chat again (a `ResponseCard` for the first turn's streaming response, reusing the exact
   same `ChatTranscript` `ChatSurface` does), then hands off to `MainActivity` from the second
   interaction onward. See `ui/overlay/CLAUDE.md` and `voice/CLAUDE.md` for the full v5 contract —
-  superseded v4/#178's "overlay never renders chat" rule.
+  superseded v4's "overlay never renders chat" rule.
+
+## Turn-completion notifications (`notify/`)
+
+A `dataSync` foreground service follows a backgrounded run to its terminal event and posts a completion
+notification (landed 2026-07-14; full mechanics in [`notify/CLAUDE.md`](app/src/main/java/com/mewbo/aura/notify/CLAUDE.md)).
+The load-bearing app-level facts:
+
+- **`RunRepository` is now `@Singleton`.** The notification watcher is a THIRD follower of
+  `RunRepository.live()` (after chat and the overlay) and must share the ONE multicast SSE connection —
+  which only holds if all three share the repo instance. It was safe unscoped before only because the
+  `@Singleton DeviceToolExecutor`'s ledger deduped device answers across per-injector repos; a follower
+  that wants to SHARE the connection forces a true singleton. Its only state is the session-keyed
+  self-evicting `liveStreams` cache (no per-injector state → safe).
+- The seam is a `RunNotifications` `fun interface` declared DOWN in `data/repo` and bound to
+  `notify/`'s impl in `di/NotifyModule` — dependency flows down, never up. It fires on the three
+  run-START paths only.
+- The service is a `dataSync` FGS (not `shortService` — that ~3min cap would kill a long turn), started
+  at run-start while foregrounded (Android 12+ forbids a background FGS start), and `POST_NOTIFICATIONS`
+  is requested at first query-send with NO in-app pre-consent dialog (the OS grant is the sole gate).
+
+## Apps (Mewbo Apps sub-product) — `ui/apps/` + `data/repo/AppRepository`
+
+Native gallery/detail/create screens for the Mewbo Apps sub-product (LLM-built,
+trigger-maintained mini apps). The detail screen renders the app's stlite frontend
+through the SAME WebView seam widgets use. Load-bearing facts:
+
+- **`AppWebView` reuses `buildStliteWebView` — never a second WebView.** The widget
+  card's factory was already payload-agnostic (`buildWidgetWebView` took a
+  `messageJson: String`); it was renamed `buildWidgetWebView` → `buildStliteWebView`
+  (`private` → `internal`) and reused verbatim, zero logic changed. Its
+  ready-signal-gated `postPayloadOnce()` still owns the FIRST payload delivery
+  (never `onPageFinished` — the page posts `mewbo-widget-host-ready` when the kernel
+  is live).
+- **The refresh repost goes through an `AndroidView` `update` block, guarded by the
+  WebView's `tag`.** `factory` runs ONCE, so a later `refresh()` (toolbar, or after
+  a trigger pause/resume) that mints a new token + `messageJson` had nowhere to go.
+  The `tag` doubles as "the payload currently loaded": it is stamped in `factory`
+  too, so the FIRST `update` (which `AndroidView` fires immediately after `factory`)
+  sees an equal tag and SKIPS — leaving the true first delivery to
+  `postPayloadOnce`, never racing it. A LATER recomposition where `messageJson`
+  actually differs posts directly via `evaluateJavascript` + restamps the tag; an
+  unchanged `messageJson` is a no-op (the host page's `render()` tears down and
+  remounts the kernel on every post — a real cost, not free).
+- **Theoretical ready-gate race (documented, unreachable in practice).** The
+  `update`-block repost bypasses `postPayloadOnce`'s ready-gate, so IN THEORY a
+  pre-ready repost is dropped and the ready signal then delivers the stale factory
+  payload. Unreachable in practice: the ready signal fires local-asset-fast while a
+  refresh needs a human tap + a network round-trip. Left as-is; don't add a second
+  gate for it without a real repro.
+- **Payload = `mewbo-app-payload`, mirroring the console `host.ts` contract EXACTLY**
+  (`{type:"mewbo-app-payload", payload:{entrypoint, files, requirements,
+  app_context:{token, api_base, app_id}}, theme}`). Verified field-for-field against
+  `apps/mewbo_console/src/widget/host.ts` `parseAppMessage` + `types.ts` `AppContext`
+  — a field rename here is a cross-surface break. `token` is the whole `token_id`
+  (the bearer credential); `api_base` (NOT `base_url`).
+- **`apps` capability advertised UNCONDITIONALLY.** `DataModule`'s `AuthInterceptor`
+  sends `X-Mewbo-Capabilities` as a comma-joined list with `apps` always present
+  (`stlite` stays gated on `streamlitWidgetsEnabled`) — comma-separated parsing
+  verified against `backend.py`. Trigger pause/resume reuses the EXISTING global
+  `PATCH /api/triggers/{id}` (triggers stay owned by the trigger subsystem); if the
+  API ever ships an app-scoped pause route it is a one-method swap in
+  `AppRepository.setTriggerPaused`.
+- **`AppRepository` is `@Singleton`**, cache-then-refresh like `SessionRepository`;
+  mutations degrade to `null`/`false` on failure. The creation flow follows
+  `RunRepository.live(sessionId)` (the shared multicast SSE seam) for
+  `SessionEvent.AppReady`, rendering a light "Building…" line, not the full
+  `ChatTranscript`. `AppReady` is dropped by `TranscriptReducer` (never a chat item).
+- Accepted v1 gap: `app_updated` is not consumed — an open detail screen refreshes
+  manually only (mirrors the console + API-side note).
 
 ## Atomic class paradigm (Kotlin flavor)
 
@@ -214,6 +328,28 @@ dumping grounds.
 
 No `Color(`, dp radius, or `spring(` literals outside `ui/theme/`. All
 tokens come from `AuraTheme` / `AssistantExtras` (see `ui/CLAUDE.md`).
+
+## Iconography
+
+Icon sourcing has ONE order of preference, settled 2026-07-14 (user directive: never hand-roll an icon
+when an off-the-shelf one covers the case):
+
+1. **`material-icons-extended` first** for any NEW glyph (added to the catalog 2026-07-14 — build fact
+   below). A semantically-correct extended glyph beats a hand-rolled path every time.
+2. **`ui/chat/ChatIcons.kt`'s hand-rolled set is FROZEN LEGACY.** Existing reuses stay (a reused
+   hand-rolled glyph is not a "new hand-roll" — `ChatIcons.Clock`/`Fullscreen`/the drawer's archive
+   glyph are legitimate legacy reuses), but do NOT add a new hand-rolled path there. The recents-header
+   filter icon is the precedent: a hand-ported `filter_alt` path was DELETED in favor of
+   `Icons.Default.FilterAlt` once extended landed.
+3. **Brand/provider LOGOS have no Material analog, so they ARE hand-converted** — `ModelProviderIcons`
+   uses `res/drawable/ic_provider_*.xml` converted from MIT `@lobehub/icons` MONOCHROME SVGs (single
+   `currentColor` path → tintable, never the colored variants, per theme discipline). Each drawable
+   carries its upstream-source + license as an XML provenance comment.
+
+Two standing rules: **one icon weight per surface** (the drawer/settings are all `Icons.Filled.*`, so a
+new drawer glyph is Filled — don't mix Outlined in); and the ephemeral **Temporary project uses
+`Schedule` (a clock), NOT an `AutoDelete`/trash glyph** — a delete-affordance glyph next to a
+selectable, tappable row misreads as "tap to delete" (the delete-affordance trap).
 
 ## Testing
 

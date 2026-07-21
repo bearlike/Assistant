@@ -1,4 +1,4 @@
-"""Tests for memory-aware SCG routing (#76) — bias map + router integration.
+"""Tests for memory-aware SCG routing — bias map + router integration.
 
 ``docs/features-search.md``: "Before each query, the top-k relevant memory notes
 are retrieved via vector search and surfaced to ``scg_route``, biasing routing

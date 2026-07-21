@@ -1,4 +1,4 @@
-"""Tests for the structured-workspace → wiki-slug resolver (#51).
+"""Tests for the structured-workspace → wiki-slug resolver.
 
 A ``StructuredResponder`` session is NOT a registered wiki QA answer, so the
 old ``resolve_qa_ctx`` path (``find_qa_by_session`` → ``None``) left every wiki
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import Embedding, WikiPage, make_graph_node
+from mewbo_graph.wiki.types import Embedding, Project, WikiPage, make_graph_node
 
 # ── Fakes ──────────────────────────────────────────────────────────────────────
 
@@ -227,10 +227,13 @@ def test_grounded_structured_search_resolves_workspace_e2e(tmp_path: Path) -> No
 
 
 def test_grounded_structured_search_without_workspace_is_ungrounded(tmp_path: Path) -> None:
-    """The regression guard: NO workspace event → the old not-found error stands.
+    """The regression guard: NO workspace event AND no project → still ungrounded.
 
-    This is the pre-fix behaviour for a truly unscoped session; it proves the
-    fallback is gated on the workspace event, not blanket-applied.
+    It proves the workspace fallback is gated on the workspace event rather than
+    blanket-applied. It now also guards the project tier: a wiki IS seeded here,
+    and a session carrying no project identity at all must NOT be grounded into
+    it. Grounding an answer in an arbitrary repository's wiki is worse than
+    grounding it in none.
     """
     from mewbo_graph.plugins.wiki import search_pages as search_pages_mod
     from mewbo_graph.plugins.wiki.search_pages import WikiSearchPagesTool
@@ -243,7 +246,132 @@ def test_grounded_structured_search_without_workspace_is_ungrounded(tmp_path: Pa
 
     with patch.object(search_pages_mod, "_resolve_runtime", return_value=runtime):
         result = asyncio.run(tool.handle(step))
-    assert "wiki QA ctx not found" in str(result.content)
+    assert "no wiki indexed" in str(result.content)
+
+
+# ── Tier 3: an ordinary task session grounds in its own project's wiki ────────
+
+
+def _seed_project(wiki_store: JsonWikiStore, slug: str) -> None:
+    """Register *slug* as an INDEXED project, which is what tier 3 matches on."""
+    wiki_store.create_project(Project(
+        slug=slug, source="gitea", lang="Python",
+        indexedAt="2026-07-19T00:00:00Z", pages=1, desc="",
+    ))
+
+
+class _TaggedSessionStore(_FakeSessionStore):
+    """``_FakeSessionStore`` plus the tag reverse-index tier 3 also reads."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._tags: dict[str, list[str]] = {}
+
+    def tag(self, session_id: str, tag: str) -> None:
+        self._tags.setdefault(session_id, []).append(tag)
+
+    def tags_for_session(self, session_id: str) -> list[str]:
+        return list(self._tags.get(session_id, []))
+
+
+def test_ordinary_session_grounds_in_its_projects_wiki(tmp_path: Path) -> None:
+    """A plain task session bound to project "repo" resolves the indexed slug.
+
+    This is the whole point of the tier: nothing scopes the session — no QA
+    answer, no ``structured_workspace`` — so its own project is the binding.
+    """
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    sessions = _FakeSessionStore()
+    sessions.append_context_event("sess-task", {"project": "beacon"})
+
+    ctx = resolve_qa_ctx("sess-task", _runtime(wiki_store, sessions))
+
+    assert ctx is not None
+    assert ctx.slug == "git.example.com/acme/beacon"
+    # Shape-identical to the workspace tier, which is what makes every tool
+    # already safe under tier 2 safe here too.
+    assert ctx.answer_id is None
+
+
+def test_ordinary_session_matches_a_vcs_tag_by_owner_and_repo(tmp_path: Path) -> None:
+    """A pickup session's ``vcs:<owner/repo>`` tag is the PRECISE match key."""
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    sessions = _TaggedSessionStore()
+    sessions.tag("sess-pickup", "vcs:acme/beacon:issue:42")
+
+    ctx = resolve_qa_ctx("sess-pickup", _runtime(wiki_store, sessions))
+
+    assert ctx is not None
+    assert ctx.slug == "git.example.com/acme/beacon"
+
+
+def test_an_ambiguous_repo_name_refuses_to_resolve(tmp_path: Path) -> None:
+    """Same repo name under two owners → NO slug, never an arbitrary winner.
+
+    Answering from the wrong repository's wiki is worse than answering from
+    none, so the bare-name tier refuses rather than guesses.
+    """
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    _seed_project(wiki_store, "github.com/other/beacon")
+    sessions = _FakeSessionStore()
+    sessions.append_context_event("sess-ambig", {"project": "beacon"})
+
+    assert resolve_qa_ctx("sess-ambig", _runtime(wiki_store, sessions)) is None
+
+
+def test_a_projects_owner_repo_disambiguates_a_shared_name(tmp_path: Path) -> None:
+    """The precise key is tried FIRST, so a vcs tag resolves what a name cannot."""
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    _seed_project(wiki_store, "github.com/other/beacon")
+    sessions = _TaggedSessionStore()
+    sessions.append_context_event("sess-both", {"project": "beacon"})
+    sessions.tag("sess-both", "vcs:other/beacon:pr:7")
+
+    ctx = resolve_qa_ctx("sess-both", _runtime(wiki_store, sessions))
+
+    assert ctx is not None
+    assert ctx.slug == "github.com/other/beacon"
+
+
+def test_a_project_with_no_indexed_wiki_stays_ungrounded(tmp_path: Path) -> None:
+    """A real project that was never indexed resolves to nothing, not to a neighbour."""
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    sessions = _FakeSessionStore()
+    sessions.append_context_event("sess-other", {"project": "unindexed"})
+
+    assert resolve_qa_ctx("sess-other", _runtime(wiki_store, sessions)) is None
+
+
+def test_a_managed_worktree_matches_its_parent_project(tmp_path: Path) -> None:
+    """``project`` is an opaque ``managed:<uuid>`` there, so ``repo`` is the key."""
+    from mewbo_graph.plugins.wiki._ctx import resolve_qa_ctx
+
+    wiki_store = _wiki_store(tmp_path)
+    _seed_project(wiki_store, "git.example.com/acme/beacon")
+    sessions = _FakeSessionStore()
+    sessions.append_context_event(
+        "sess-wt", {"project": "managed:deadbeef", "repo": "beacon"}
+    )
+
+    ctx = resolve_qa_ctx("sess-wt", _runtime(wiki_store, sessions))
+
+    assert ctx is not None
+    assert ctx.slug == "git.example.com/acme/beacon"
 
 
 def test_emit_answer_refuses_grounded_structured_session(tmp_path: Path) -> None:

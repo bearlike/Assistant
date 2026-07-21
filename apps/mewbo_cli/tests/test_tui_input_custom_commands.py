@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for CustomCommandLoader (issue #155, epic #149)."""
+"""Tests for CustomCommandLoader."""
 
 from __future__ import annotations
 

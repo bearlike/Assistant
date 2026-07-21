@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Command palette provider + the #155 input installer (epic #149).
+"""Command palette provider + the rich input installer.
 
 Two things live here:
 
 - :class:`MewboCommandProvider` — a Textual :class:`~textual.command.Provider`
   for the built-in command palette (``ctrl+p``). It surfaces CLI commands +
   user-invocable skills + markdown custom commands + (optionally) MCP prompts.
-  We use Textual's built-in palette rather than hand-rolling one (per #155);
+  We use Textual's built-in palette rather than hand-rolling one;
   selecting an entry fills the input with the ``/command`` token (or the custom
   command's rendered body) ready to submit.
 - :func:`make_input_installer` — the post-mount :data:`AppInstaller` the
@@ -143,7 +143,7 @@ def make_input_installer(
     cwd_provider: Callable[[], str] | None = None,
     mcp_prompts_provider: McpPromptsProvider | None = None,
 ) -> Callable[[MewboApp], None]:
-    """Build the post-mount installer for the #155 rich input.
+    """Build the post-mount installer for the rich input.
 
     Args:
         command_registry: Has ``list_commands() -> list[str]`` (``/``-prefixed).

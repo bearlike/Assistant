@@ -61,7 +61,9 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_clone)
     # Git metadata + description fetch are best-effort I/O — stub them away.
     monkeypatch.setattr(graph_only_mod, "_git_rev_parse", lambda d, a: "abc1234")
-    monkeypatch.setattr(graph_only_mod, "_fetch_description", lambda **k: "")
+    # The description now resolves through the SHARED read-preserve seam (user
+    # override → platform fetch → previous record) that finalize also uses.
+    monkeypatch.setattr(graph_only_mod, "_resolve_project_desc", lambda *a, **k: "")
     # No embedder hits the proxy.
     monkeypatch.setattr(build_graph_mod, "_make_embedder", lambda: MagicMock(
         model="stub", embed_nodes=MagicMock(return_value=[])

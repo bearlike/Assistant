@@ -63,7 +63,7 @@ class SearchRunner(Protocol):
         ``source_platform`` (optional) is the originating client surface
         (console/mcp/api) — the orchestrated runner stamps it as the session's
         ``source_platform`` context event so the Langfuse trace carries
-        ``surface:<platform>`` instead of ``surface:unknown`` (#77). The echo
+        ``surface:<platform>`` instead of ``surface:unknown``. The echo
         runner ignores it.
         """
         ...

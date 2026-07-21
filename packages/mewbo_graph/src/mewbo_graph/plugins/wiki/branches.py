@@ -17,7 +17,14 @@ import subprocess
 from mewbo_core.common import get_logger
 from pydantic import BaseModel
 
-from mewbo_graph.plugins.wiki.clone import _inject_token, _is_private_host, _ssh_env_for
+from mewbo_graph.plugins.wiki.clone import (
+    _inject_token,
+    _is_private_host,
+    _redact,
+    _ssh_env_for,
+    build_ls_remote_command,
+    hardened_git_env,
+)
 
 logging = get_logger(name="mewbo_graph.plugins.wiki.branches")
 
@@ -40,29 +47,49 @@ class RemoteBranchLister:
     SSH key), then call :meth:`list_heads`. All state is injected; no store.
     """
 
-    def __init__(self, url: str, token: str | None = None, ssh_key: str | None = None) -> None:
-        """Bind the repo URL and the optional credential for this listing."""
+    def __init__(
+        self,
+        url: str,
+        token: str | None = None,
+        ssh_key: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        """Bind the repo URL and the optional credential for this listing.
+
+        *username* accompanies a token credential (a stored credential may carry
+        its own — e.g. a GitLab ``oauth2`` deploy token); it threads into
+        ``_inject_token`` exactly like the clone/freshness/validate paths, so a
+        username-bearing credential authenticates the branch-list step too rather
+        than always injecting ``x-access-token`` and 401-ing on those platforms.
+        """
         self.url = url
         self.token = token
         self.ssh_key = ssh_key
+        self.username = username
 
     def list_heads(self) -> RemoteBranches:
         """Return the remote's branch heads + default branch (from ``HEAD``'s symref).
 
-        Mirrors the clone tool's private-host TLS carve-out + SSH-key temp-file env;
-        the temp key is deleted in a ``finally``. Raises :class:`BranchListError`
-        (stderr scrubbed of any secret) on timeout or a non-zero exit.
+        Uses the SAME hardened builders as the clone/freshness paths
+        (:func:`build_ls_remote_command` — helper-disable + private-host TLS
+        carve-out + ``--symref``; :func:`hardened_git_env` — ``GIT_TERMINAL_PROMPT=0``
+        over the SSH/inherited env). Without that hardening this jobless endpoint
+        was the one ls-remote path where git could still reach the read-only
+        mounted credential helper and wedge on EBUSY, masking the real auth error.
+        The temp SSH key is deleted in a ``finally``; the stderr is secret-scrubbed
+        via the shared :func:`_redact`. Raises :class:`BranchListError` on timeout
+        or a non-zero exit.
         """
-        clone_url = _inject_token(self.url, self.token)
-        cmd: list[str] = ["git", "ls-remote", "--symref", clone_url, "HEAD", "refs/heads/*"]
-        # Self-hosted servers on private TLDs typically use self-signed certs —
-        # skip TLS verification for those hosts only (mirrors the clone path).
-        if _is_private_host(self.url):
-            cmd[1:1] = ["-c", "http.sslVerify=false"]
+        clone_url = _inject_token(self.url, self.token, self.username)
+        cmd = build_ls_remote_command(
+            clone_url, "HEAD", "refs/heads/*",
+            private_host=_is_private_host(self.url), symref=True,
+        )
 
         run_env, key_path = _ssh_env_for(self.ssh_key)
+        env = hardened_git_env(run_env)
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=30, env=run_env)
+            proc = subprocess.run(cmd, capture_output=True, timeout=30, env=env)
         except subprocess.TimeoutExpired as exc:
             raise BranchListError("git ls-remote timed out after 30s") from exc
         finally:
@@ -71,8 +98,7 @@ class RemoteBranchLister:
 
         if proc.returncode != 0:
             err_msg = (proc.stderr or b"").decode(errors="ignore").strip() or "git ls-remote failed"
-            for secret in filter(None, [self.token, self.ssh_key]):
-                err_msg = err_msg.replace(secret, "<redacted>")
+            err_msg = _redact(err_msg, [self.token or "", self.ssh_key or ""])
             raise BranchListError(err_msg)
 
         return self._parse(proc.stdout or b"")

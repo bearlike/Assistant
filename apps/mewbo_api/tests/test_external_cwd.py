@@ -1,4 +1,4 @@
-"""Tests for the external-cwd feature (Gitea #91).
+"""Tests for the external-cwd feature.
 
 Covers:
 1. Flag off (default) + cwd in body → 403 structured error, no session started.

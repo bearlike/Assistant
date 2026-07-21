@@ -38,9 +38,9 @@ export function EdgePanel({
       <Section title="Type">
         <div className="flex items-center gap-1.5">
           <span className={cn("w-3 h-[2px] rounded-full", EDGE_DOT[kind])} />
-          <span className="font-mono text-[11px]">{kind}</span>
+          <span className="text-2xs font-medium">{kind}</span>
           {label && (
-            <span className="text-[10px] text-[hsl(var(--muted-foreground))] italic">
+            <span className="text-2xs text-[hsl(var(--muted-foreground))] italic">
               {label}
             </span>
           )}
@@ -60,7 +60,7 @@ export function EdgePanel({
       {aggregated && aggregated.length > 0 && (
         <Section title={`Collapsed edges (${aggregated.length})`}>
           <details className="group">
-            <summary className="flex items-center gap-1.5 cursor-pointer select-none list-none text-[11px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+            <summary className="flex items-center gap-1.5 cursor-pointer select-none list-none text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
               <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
               {aggregated.length} constituent relationships
             </summary>
@@ -90,14 +90,14 @@ function Endpoint({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] uppercase tracking-wide text-[hsl(var(--muted-foreground))] w-8 shrink-0">
+      <span className="text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] w-8 shrink-0">
         {role}
       </span>
       <div className="flex-1 min-w-0">
         {node ? (
           <NodeLinkRow node={node} onNavigate={onNavigate} />
         ) : (
-          <span className="font-mono truncate text-[11px] text-[hsl(var(--muted-foreground))]">
+          <span className="font-mono truncate text-2xs text-[hsl(var(--muted-foreground))]">
             {id}
           </span>
         )}
@@ -120,10 +120,10 @@ function ConstituentEdge({
   const src = index.node(source);
   const tgt = index.node(target);
   return (
-    <li className="text-[11px]">
-      <div className="flex items-center gap-1 text-[10px] text-[hsl(var(--muted-foreground))] mb-0.5">
+    <li className="text-2xs">
+      <div className="flex items-center gap-1 text-2xs text-[hsl(var(--muted-foreground))] mb-0.5">
         <span className={cn("w-2.5 h-[2px] rounded-full", EDGE_DOT[kind])} />
-        <span className="font-mono">{kind}</span>
+        <span className="font-medium">{kind}</span>
       </div>
       <div className="ml-3 flex items-center gap-1 truncate">
         <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", kindDot(src?.data.kind ?? "File"))} />
@@ -131,17 +131,17 @@ function ConstituentEdge({
           type="button"
           disabled={!onNavigate}
           onClick={() => onNavigate?.(source)}
-          className="font-mono truncate hover:text-[hsl(var(--primary))] disabled:hover:text-inherit"
+          className="font-mono truncate hover:text-[hsl(var(--primary-text))] disabled:hover:text-inherit"
         >
           {src?.data.label ?? source}
         </button>
-        <ArrowRight className="h-2.5 w-2.5 shrink-0 text-[hsl(var(--muted-foreground))]" />
+        <ArrowRight className="size-3 shrink-0 text-[hsl(var(--muted-foreground))]" />
         <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", kindDot(tgt?.data.kind ?? "File"))} />
         <button
           type="button"
           disabled={!onNavigate}
           onClick={() => onNavigate?.(target)}
-          className="font-mono truncate hover:text-[hsl(var(--primary))] disabled:hover:text-inherit"
+          className="font-mono truncate hover:text-[hsl(var(--primary-text))] disabled:hover:text-inherit"
         >
           {tgt?.data.label ?? target}
         </button>

@@ -1,11 +1,11 @@
 """RunEventStreamer — project a live session transcript onto the run event log.
 
 The root-cause fix for "the console sits on *Starting search…* for the whole
-run" (#77): the orchestrated runner used to drive ``run_sync`` to completion and
+run": the orchestrated runner used to drive ``run_sync`` to completion and
 then ``_settle`` batch-replayed EVERY ``agent_*`` event at the end, so a 2m42s
 run emitted a single ``run_started`` followed by 53 events in one burst.
 
-The mechanism reuses the SideStage streaming seam verbatim — the core
+The mechanism reuses the existing streaming seam verbatim — the core
 ``SessionEventBus`` (``session_event_bus.py``), the same in-process per-session
 pub/sub the realtime ``/v1/draft/stream`` and the console SSE generator already
 ride. No new transport: the streamer *subscribes* to the backing session before
@@ -279,10 +279,10 @@ class CoordinatorTrace:
 class ResultsProjection:
     """Parse an ``scg_results`` tool_result into wire :class:`SearchResult`s.
 
-    The ``scg_results`` SessionTool is transcript-as-transport (#95): it validates
+    The ``scg_results`` SessionTool is transcript-as-transport: it validates
     + echoes, the api projects. This static maps each emitted entry onto a
     STABLE id — ``r-<run_id8>-<n>`` for the root's emit, ``r-<run_id8>-<agent8>-<n>``
-    for a probe's (#102: probes emit their own cards; the agent suffix keeps
+    for a probe's (probes emit their own cards; the agent suffix keeps
     concurrent emitters collision-free) — so the live stream and settle
     reconciliation mint the same ids — the dedup key that keeps a result from
     being emitted twice. Both the live ``_project`` and settle read through here
@@ -374,7 +374,7 @@ class ResultsProjection:
         Drops any entry that fails the wire model (an ungrounded/malformed card)
         rather than failing the whole projection — the tool already validated on
         the way in, this is the lenient read side. Fields map honestly onto
-        ``SearchResult``: ``confidence`` is surfaced verbatim on the wire (#102)
+        ``SearchResult``: ``confidence`` is surfaced verbatim on the wire
         AND folded into ``relevance`` ONLY when ``relevance`` was not supplied
         (never overwriting an explicit rank) — keeping the strongest available
         signal on the projected card so the settle metrics can read it.
@@ -403,7 +403,7 @@ class ResultsProjection:
         ``relevance`` carries the entry's explicit rank; absent (or 0), the
         entry's ``confidence`` is folded in as the best available signal so the
         card and the settle metrics aren't blind. ``confidence`` ALSO rides its
-        own wire field verbatim (#102) so the console can render the emitting
+        own wire field verbatim so the console can render the emitting
         agent's per-card certainty beside the relevance rank.
         """
         raw_kind = str(entry.get("kind") or "docs")
@@ -462,7 +462,7 @@ class RunEventStreamer:
 
         ``store`` is the agentic-search run store (typed ``Any`` only because the
         dual JSON/Mongo base is injected by the caller); ``bus`` is the core
-        per-session pub/sub the SideStage streaming seam already uses.
+        per-session pub/sub the realtime streaming seam already uses.
         """
         self._run_id = run_id
         self._store = store
@@ -470,7 +470,7 @@ class RunEventStreamer:
         self._lock = threading.Lock()
         self._agents: dict[str, _LaneState] = {}
         self._order: list[str] = []
-        # The root coordinator lane opens on the first root ``tool_result`` (#95);
+        # The root coordinator lane opens on the first root ``tool_result``;
         # its slot orders with the probe lanes by event arrival (first-seen
         # ordinal), so a root-inline run still streams transparency. ``None`` until
         # opened; ``done`` flips at settle's ``agent_done``.
@@ -564,11 +564,11 @@ class RunEventStreamer:
 
         Three event classes share this seam: a probe's ``sub_agent`` lifecycle
         (the parent's view of its children), the ROOT coordinator's
-        ``tool_result`` events (#95), and a PROBE's own ``tool_result`` events.
+        ``tool_result`` events, and a PROBE's own ``tool_result`` events.
         The last class exists because a child loop INHERITS the parent's
         ``event_logger`` (core ``AgentContext.child``) — probe tool calls land
         on THIS session's transcript/bus stamped with the probe's ``agent_id``
-        (#102; the original #95 premise that they "live in the probes' own
+        (an earlier premise that they "live in the probes' own
         sessions" was wrong, verified live). A probe ``tool_result`` must
         therefore be classified by ``payload.agent_id`` against the known probe
         lanes (the spawn's ``sub_agent`` ``start`` always precedes the child's
@@ -602,7 +602,7 @@ class RunEventStreamer:
             return agent_id if agent_id in self._agents else None
 
     def _project_probe_tool(self, emitter: str, payload: dict[str, Any]) -> None:
-        """Project a probe's own ``tool_result`` (#102).
+        """Project a probe's own ``tool_result``.
 
         A probe's ``scg_results`` emit reaches the run log as ITS result cards
         (probe-salted stable ids) AND credits the probe lane. Every OTHER probe
@@ -611,7 +611,7 @@ class RunEventStreamer:
         EVIDENCE: a probe's only real data fetch
         (``mcp_github_search_repositories``) was dropped entirely, so the lane
         showed just prompt + "completed". The probe's terminal evidence still
-        rides its ``stop`` summary (#86); these digests are the in-flight steps.
+        rides its ``stop`` summary; these digests are the in-flight steps.
         """
         if ResultsProjection.is_results_event(payload):
             self._record_related_questions(payload)
@@ -699,7 +699,7 @@ class RunEventStreamer:
             )
 
     def _project_coordinator(self, payload: dict[str, Any]) -> None:
-        """Project one root ``tool_result`` onto the coordinator lane (#95).
+        """Project one root ``tool_result`` onto the coordinator lane.
 
         Opens the lane on the FIRST root tool_result (its slot orders with the
         probe lanes by event arrival). Each event → one secret-free digest line
@@ -837,7 +837,7 @@ class RunEventStreamer:
                 ),
             )
 
-    # -- coordinator + results settle (the root-inline lane, #95) ----------
+    # -- coordinator + results settle (the root-inline lane) ----------
 
     def coordinator_opened(self) -> bool:
         """True when the root coordinator lane opened (any root tool_result ran)."""

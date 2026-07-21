@@ -27,7 +27,7 @@ export function ModelSummary({ models = [], current, className = '' }: Props) {
 
   if (unique.length === 0) return null;
 
-  const labelClass = `text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate ${className}`.trim();
+  const labelClass = `text-2xs text-[hsl(var(--muted-foreground))] truncate ${className}`.trim();
 
   if (unique.length === 1) {
     return <ModelLabel modelId={unique[0]} className={labelClass} />;
@@ -46,7 +46,9 @@ export function ModelSummary({ models = [], current, className = '' }: Props) {
           title={`${unique.length} models used — click to see all`}
         >
           <ModelLabel modelId={headline} className={labelClass} />
-          <span className="shrink-0 text-[10px] font-mono text-[hsl(var(--muted-foreground))] opacity-70">
+          {/* No opacity here: the "+N" already sits on --muted-foreground, and
+              fading that token further is what pushed it under AA contrast. */}
+          <span className="shrink-0 text-2xs text-[hsl(var(--muted-foreground))]">
             ·&nbsp;+{extra}
           </span>
         </button>
@@ -56,7 +58,7 @@ export function ModelSummary({ models = [], current, className = '' }: Props) {
         align="start"
         className="w-auto min-w-[180px] max-w-[280px] p-2"
       >
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5 px-1">
+        <p className="text-2xs font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))] mb-1.5 px-1">
           Models used
         </p>
         <ul className="flex flex-col gap-0.5">
@@ -69,10 +71,10 @@ export function ModelSummary({ models = [], current, className = '' }: Props) {
               >
                 <ModelLabel
                   modelId={id}
-                  className="text-[11px] font-mono text-[hsl(var(--foreground))] truncate"
+                  className="text-2xs text-[hsl(var(--foreground))] truncate"
                 />
                 {isCurrent && (
-                  <span className="shrink-0 text-[9px] font-medium text-[hsl(var(--muted-foreground))] border border-[hsl(var(--border))] rounded-sm px-1 py-px leading-none">
+                  <span className="shrink-0 text-2xs font-medium text-[hsl(var(--muted-foreground))] border border-[hsl(var(--border))] rounded-sm px-1 py-px leading-none">
                     current
                   </span>
                 )}

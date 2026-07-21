@@ -1,4 +1,4 @@
-"""Tests for cli_diffview.DiffView — TDD for task #153.
+"""Tests for cli_diffview.DiffView.
 
 Test cases (required):
   1. split-vs-unified threshold: width 200 → split, width 80 → unified.

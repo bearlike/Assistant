@@ -24,7 +24,16 @@ def test_icons_tool_pending() -> None:
 
 
 def test_icons_agent_state_keys() -> None:
-    expected = {"submitted", "running", "completed", "failed", "cancelled", "rejected"}
+    expected = {
+        "submitted",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "rejected",
+        "blocked",
+        "unmet_goal",
+    }
     assert set(ICONS.agent_state.keys()) == expected
 
 
@@ -50,6 +59,25 @@ def test_icons_agent_state_cancelled() -> None:
 
 def test_icons_agent_state_rejected() -> None:
     assert ICONS.agent_state["rejected"] == "⊘"
+
+
+def test_icons_agent_state_blocked() -> None:
+    assert ICONS.agent_state["blocked"] == "⚠"
+
+
+def test_icons_agent_state_unmet_goal() -> None:
+    assert ICONS.agent_state["unmet_goal"] == "◎"
+
+
+def test_icons_agent_state_style_keys_match_glyph_keys() -> None:
+    """Every glyph state must carry a color role — no key drift between the two."""
+    assert set(ICONS.agent_state_style.keys()) == set(ICONS.agent_state.keys())
+
+
+def test_icons_agent_state_style_blocked_and_unmet_goal_share_warning() -> None:
+    """Mirrors the console's StatusBadge: both tint warning, differ by glyph only."""
+    assert ICONS.agent_state_style["blocked"] == "warning"
+    assert ICONS.agent_state_style["unmet_goal"] == "warning"
 
 
 def test_icons_agent_state_is_read_only() -> None:

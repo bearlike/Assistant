@@ -1,4 +1,5 @@
 import { API_BASE, API_KEY } from "./client";
+import { apiFetch } from "./httpBase";
 
 export type IdeStatus = "pending" | "starting" | "ready";
 
@@ -76,7 +77,7 @@ export async function createIde(
   sessionId: string,
   signal?: AbortSignal
 ): Promise<IdeInstance> {
-  const response = await fetch(withBase(`/api/sessions/${sessionId}/ide`), {
+  const response = await apiFetch(withBase(`/api/sessions/${sessionId}/ide`), {
     method: "POST",
     headers: jsonHeaders(),
     signal,
@@ -89,7 +90,7 @@ export async function getIde(
   sessionId: string,
   signal?: AbortSignal
 ): Promise<IdeInstance | null> {
-  const response = await fetch(withBase(`/api/sessions/${sessionId}/ide`), {
+  const response = await apiFetch(withBase(`/api/sessions/${sessionId}/ide`), {
     headers: authHeaders(),
     signal,
   });
@@ -103,7 +104,7 @@ export async function extendIde(
   body: { hours: number } | { expires_at: string },
   signal?: AbortSignal
 ): Promise<IdeInstance> {
-  const response = await fetch(
+  const response = await apiFetch(
     withBase(`/api/sessions/${sessionId}/ide/extend`),
     {
       method: "POST",
@@ -120,7 +121,7 @@ export async function stopIde(
   sessionId: string,
   signal?: AbortSignal
 ): Promise<boolean> {
-  const response = await fetch(withBase(`/api/sessions/${sessionId}/ide`), {
+  const response = await apiFetch(withBase(`/api/sessions/${sessionId}/ide`), {
     method: "DELETE",
     headers: authHeaders(),
     signal,

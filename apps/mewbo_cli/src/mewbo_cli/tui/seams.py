@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Stable extension seams for the Mewbo TUI (issue #150, epic #149).
+"""Stable extension seams for the Mewbo TUI.
 
 These four small, documented injection points are the keystone deliverable:
 later children add a widget/behaviour by *registering at a seam* — never by
 editing ``MewboApp`` or other shared wiring. Each seam is one atomic class:
 
 - :class:`MessageRendererRegistry` — keyed message/tool renderers + a generic
-  fallback. Consumed by the transcript child (#152).
+  fallback. Consumed by the transcript child.
 - :class:`SidebarSlotRegistry` — ordered sidebar slot factories. Consumed by
-  the agent-panel/status child (#156).
+  the agent-panel/status child.
 - :class:`PermissionGateway` — the tool-approval ``approval_callback`` threaded
-  into ``SessionRuntime.run_sync``. Consumed by the permission child (#154).
+  into ``SessionRuntime.run_sync``. Consumed by the permission child.
 - :class:`InputGateway` — the input completion source. Consumed by the
-  input/completion child (#155).
+  input/completion child.
 
 The seams deliberately carry *no* product behaviour beyond a safe default —
 they exist so the App stays closed to modification while open to extension.
@@ -67,7 +67,7 @@ def _default_message_renderer(item: TranscriptItem) -> RenderableType:
 class MessageRendererRegistry:
     """Route a :class:`TranscriptItem` to a renderer keyed by its ``kind``.
 
-    The transcript child (#152) registers rich renderers (assistant markdown,
+    The transcript child registers rich renderers (assistant markdown,
     tool cards, diffs) via :meth:`register` without touching ``MewboApp``::
 
         app.messages.register("tool", render_tool_card)
@@ -108,7 +108,7 @@ SidebarSlot = Callable[[], "Widget"]
 class SidebarSlotRegistry:
     """Ordered registry of sidebar slot factories.
 
-    The agent-panel/status child (#156) registers fleet-tree, context-%, cost
+    The agent-panel/status child registers fleet-tree, context-%, cost
     and branch slots without touching ``MewboApp``::
 
         app.sidebar_slots.register("fleet", build_fleet_tree, order=10)
@@ -148,7 +148,7 @@ class PermissionGateway:
     ``auto_approve`` (read live each call, so ``/automatic`` mid-session takes
     effect) short-circuits to approve. Otherwise the injected ``decision`` runs;
     its default is **deny** (esc=deny safe default) until the permission child
-    (#154) swaps in the modal-backed decision::
+    swaps in the modal-backed decision::
 
         app.permission.set_decision(modal_decision_fn)
     """
@@ -164,7 +164,7 @@ class PermissionGateway:
         self._decision: PermissionDecision = decision or (lambda step: False)
 
     def set_decision(self, decision: PermissionDecision) -> None:
-        """Replace the decision used when auto-approve is off (#154)."""
+        """Replace the decision used when auto-approve is off."""
         self._decision = decision
 
     def __call__(self, step: ActionStep) -> bool:
@@ -184,7 +184,7 @@ CompletionProvider = Callable[[str], list[str]]
 class InputGateway:
     """Input-completion injection point consulted by the input widget.
 
-    The input/completion child (#155) replaces the default (empty) provider
+    The input/completion child replaces the default (empty) provider
     with the full ``@file`` / ``/command`` / skill completer::
 
         app.input.set_completion_provider(mewbo_completion_fn)
@@ -198,7 +198,7 @@ class InputGateway:
         self._provider: CompletionProvider = provider or (lambda text: [])
 
     def set_completion_provider(self, provider: CompletionProvider) -> None:
-        """Replace the completion source (#155)."""
+        """Replace the completion source."""
         self._provider = provider
 
     def complete(self, text: str) -> list[str]:

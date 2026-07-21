@@ -1,4 +1,4 @@
-"""Tests for the #48 ``on_event`` hook surface.
+"""Tests for the ``on_event`` hook surface.
 
 ``on_event`` hooks run on the event-append hot path (via the SessionEventBus
 observer), so they must be fire-and-forget / non-blocking and failure-isolated.
@@ -102,6 +102,23 @@ class TestHttpEventHook:
         with patch("mewbo_core.hooks._fire_http") as fire:
             hook("s1", _event("tool_result"))
         fire.assert_not_called()
+
+    def test_large_payload_truncated_keys_preserved(self):
+        """A large event value is truncated, not dropped — every key survives."""
+        entry = HookEntry(type="http", url="http://hook.local/event")
+        hook = _make_http_event_hook(entry)
+        big_event = _event("tool_result", text="x" * 5000)
+        with patch("mewbo_core.hooks._fire_http") as fire:
+            hook("s1", big_event)
+        fire.assert_called_once()
+        _url, payload, _headers, _timeout = fire.call_args[0]
+        record = payload["record"]
+        # Shape preserved: same keys, nested payload dict untouched structurally.
+        assert set(record.keys()) == set(big_event.keys())
+        assert set(record["payload"].keys()) == set(big_event["payload"].keys())
+        # The oversized string value is capped, not removed.
+        assert len(record["payload"]["text"]) == 2000
+        assert record["type"] == "tool_result"
 
 
 # -- load_from_config wires on_event by type --------------------------------

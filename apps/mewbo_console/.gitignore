@@ -14,6 +14,10 @@ dist-ssr
 test-results
 .env
 
+# Vendored Pyodide runtime + boot wheels (materialized by scripts/fetch-pyodide.mjs
+# at build/postinstall — ~26 MB of binary blobs, never committed).
+public/pyodide/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -28,3 +32,5 @@ test-results
 # Re-include shadcn/ui scaffolding (root .gitignore excludes lib/ for Python packaging)
 !src/lib/
 !src/lib/**
+# playwright-cli browser scratch (agent tooling)
+.playwright-cli/

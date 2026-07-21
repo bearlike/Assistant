@@ -110,8 +110,8 @@ class DraftStreamer:
         )
 
         # Attach the Langfuse CallbackHandler so the streamed generation EXPORTS
-        # (the surrounding ``langfuse_session_context`` only propagates attributes
-        # — #87). Built ONCE before the stream, so TTFT never pays for a per-token
+        # (the surrounding ``langfuse_session_context`` only propagates attributes).
+        # Built ONCE before the stream, so TTFT never pays for a per-token
         # cost; the handler exports asynchronously off the hot path. ``{}`` (no-op)
         # when Langfuse is disabled, so the tool-light invariant is preserved.
         invoke_config = langfuse_invoke_config(

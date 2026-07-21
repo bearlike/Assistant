@@ -14,8 +14,8 @@ import type { ApiKeySummary } from '../api/client';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { CopyButton } from './CopyButton';
-import { cn } from '../lib/utils';
-import { sectionTitleCls } from './settings/styles';
+import { ErrorAlert } from './ErrorAlert';
+import { SettingsCard } from './settings/SettingsCard';
 import {
   Form,
   FormControl,
@@ -31,88 +31,18 @@ import {
   DialogDescription,
   DialogFooter,
 } from './ui/dialog';
+import { ConfirmDialog } from './ui/confirm-dialog';
+import { formatDateTime } from '../utils/time';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatDate(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(new Date(iso));
-  } catch {
-    return iso;
-  }
-}
-
-function InlineError({ error, fallback }: { error: unknown; fallback: string }) {
-  const message = error instanceof Error ? error.message : fallback;
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-[hsl(var(--destructive))]/30 bg-[hsl(var(--destructive))]/10 px-3 py-2.5">
-      <AlertTriangle className="w-4 h-4 text-[hsl(var(--destructive))] shrink-0 mt-0.5" />
-      <p className="text-xs text-[hsl(var(--destructive))]">{message}</p>
-    </div>
-  );
-}
 
 const createKeySchema = z.object({
   label: z.string().trim().min(1, 'Label is required'),
 });
 
 type CreateKeyValues = z.infer<typeof createKeySchema>;
-
-// ---------------------------------------------------------------------------
-// Revoke-confirm dialog
-// ---------------------------------------------------------------------------
-
-interface RevokeDialogProps {
-  keyItem: ApiKeySummary | null;
-  onConfirm: () => void;
-  onCancel: () => void;
-  revoking: boolean;
-}
-
-function RevokeDialog({ keyItem, onConfirm, onCancel, revoking }: RevokeDialogProps) {
-  return (
-    <Dialog open={keyItem !== null} onOpenChange={(open) => { if (!open) onCancel(); }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Revoke API key?</DialogTitle>
-          <DialogDescription>
-            This will permanently revoke{' '}
-            <span className="font-medium text-[hsl(var(--foreground))]">
-              {keyItem?.label || 'this key'}
-            </span>
-            . Any application using it will immediately lose access. This action cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="ghost" size="md" onClick={onCancel} disabled={revoking}>
-            Cancel
-          </Button>
-          <Button
-            variant="neutral"
-            tone="danger"
-            size="md"
-            onClick={onConfirm}
-            disabled={revoking}
-            leadingIcon={
-              revoking ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Trash2 className="w-4 h-4" />
-              )
-            }
-          >
-            {revoking ? 'Revoking…' : 'Revoke key'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Show-new-key dialog
@@ -130,7 +60,7 @@ function NewKeyDialog({ plaintext, onClose }: NewKeyDialogProps) {
         <DialogHeader>
           <DialogTitle>API key created</DialogTitle>
           <DialogDescription>
-            Copy this key now — it will not be shown again.
+            Copy this key now. It will not be shown again.
           </DialogDescription>
         </DialogHeader>
 
@@ -169,17 +99,32 @@ function NewKeyDialog({ plaintext, onClose }: NewKeyDialogProps) {
 function KeyStatusPill({ revoked }: { revoked: boolean }) {
   if (revoked) {
     return (
-      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none bg-[hsl(var(--destructive))]/15 text-[hsl(var(--destructive))] border border-[hsl(var(--destructive))]/20">
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-2xs font-medium leading-none bg-[hsl(var(--destructive))]/15 text-[hsl(var(--destructive-text))] border border-[hsl(var(--destructive))]/20">
         Revoked
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none bg-[hsl(var(--success))]/15 text-[hsl(var(--success))] border border-[hsl(var(--success))]/20">
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-2xs font-medium leading-none bg-[hsl(var(--success))]/15 text-[hsl(var(--success))] border border-[hsl(var(--success))]/20">
       Active
     </span>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Card copy
+// ---------------------------------------------------------------------------
+
+const CREATE_CARD_DESCRIPTION =
+  'A key authenticates calls to the REST API and the MCP server on your behalf.\n\n' +
+  'The key is shown in full exactly once, right after you create it. Copy it then, because ' +
+  'Mewbo cannot show it to you again.\n\n' +
+  'Give CI and other automation their own labeled key rather than the API master token ' +
+  '(Server & Storage → API Server). A labeled key can be revoked on its own, without locking ' +
+  'every other caller out.';
+
+const ISSUED_CARD_DESCRIPTION =
+  'Revoking a key takes effect immediately and cannot be undone. Anything still using it loses access at once.';
 
 // ---------------------------------------------------------------------------
 // Main view
@@ -238,73 +183,68 @@ export function ApiKeysView() {
     <div className="space-y-4">
 
       {/* Create new key */}
-      <section className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
-        <h2 className={cn(sectionTitleCls, "mb-3")}>Create a new key</h2>
+      <SettingsCard title="Create a new key" description={CREATE_CARD_DESCRIPTION}>
         <Form {...form}>
-            <form onSubmit={handleCreate} className="flex items-start gap-2">
-              <FormField
-                control={form.control}
-                name="label"
-                render={({ field }) => (
-                  <FormItem className="flex-1 space-y-1">
-                    <FormControl>
-                      <Input
-                        {...field}
-                        type="text"
-                        placeholder="Key label (e.g. my-agent)"
-                        disabled={createM.isPending}
-                        aria-label="New key label"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                disabled={createM.isPending}
-                leadingIcon={
-                  createM.isPending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Plus className="w-4 h-4" />
-                  )
-                }
-              >
-                {createM.isPending ? 'Creating…' : 'Create key'}
-              </Button>
-            </form>
-          </Form>
+          <form onSubmit={handleCreate} className="flex items-start gap-2">
+            <FormField
+              control={form.control}
+              name="label"
+              render={({ field }) => (
+                <FormItem className="flex-1 space-y-1">
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type="text"
+                      placeholder="Key label (e.g. my-agent)"
+                      disabled={createM.isPending}
+                      aria-label="New key label"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              disabled={createM.isPending}
+              leadingIcon={
+                createM.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )
+              }
+            >
+              {createM.isPending ? 'Creating…' : 'Create key'}
+            </Button>
+          </form>
+        </Form>
 
         {createM.error && (
-          <div className="mt-2">
-            <InlineError error={createM.error} fallback="Failed to create key" />
-          </div>
+          <ErrorAlert
+            error={createM.error}
+            fallback="Failed to create key"
+            className="mt-2"
+          />
         )}
-      </section>
+      </SettingsCard>
 
       {/* Keys list */}
-      <section className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
-        <h2 className={cn(sectionTitleCls, "mb-3")}>
-          Issued keys
-          {keys.length > 0 && (
-            <span className="ml-2 text-xs font-normal text-[hsl(var(--muted-foreground))]">
-              ({keys.length})
-            </span>
-          )}
-        </h2>
-
+      <SettingsCard
+        title={keys.length > 0 ? `Issued keys (${keys.length})` : 'Issued keys'}
+        description={ISSUED_CARD_DESCRIPTION}
+      >
         {revokeM.error && (
-          <div className="mb-2">
-            <InlineError error={revokeM.error} fallback="Failed to revoke key" />
-          </div>
+          <ErrorAlert
+            error={revokeM.error}
+            fallback="Failed to revoke key"
+            className="mb-2"
+          />
         )}
 
-        {listError && (
-          <InlineError error={listError} fallback="Failed to load keys" />
-        )}
+        {listError && <ErrorAlert error={listError} fallback="Failed to load keys" />}
 
         {listLoading && (
           <div className="flex items-center justify-center py-8">
@@ -313,7 +253,13 @@ export function ApiKeysView() {
         )}
 
         {!listLoading && !listError && keys.length === 0 && (
-          <p className="text-sm text-[hsl(var(--muted-foreground))]">No keys issued yet.</p>
+          <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-4 py-6 text-center">
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">No keys issued yet.</p>
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+              Create one above for each caller, whether that is a CI job, a script, or an MCP
+              client, so you can revoke that one without cutting off the rest.
+            </p>
+          </div>
         )}
 
         {!listLoading && keys.length > 0 && (
@@ -334,14 +280,14 @@ export function ApiKeysView() {
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-xs text-[hsl(var(--muted-foreground))]">
-                        Created {formatDate(k.created_at)}
+                        Created {formatDateTime(k.created_at)}
                       </span>
                       {k.revoked_at && (
                         <span className="text-xs text-[hsl(var(--muted-foreground))]">
-                          Revoked {formatDate(k.revoked_at)}
+                          Revoked {formatDateTime(k.revoked_at)}
                         </span>
                       )}
-                      <span className="text-[10px] font-mono text-[hsl(var(--muted-foreground))]">
+                      <span className="text-2xs font-mono text-[hsl(var(--muted-foreground))]">
                         id:{k.id}
                       </span>
                     </div>
@@ -366,18 +312,31 @@ export function ApiKeysView() {
             })}
           </div>
         )}
-      </section>
+      </SettingsCard>
 
       {/* Dialogs */}
       <NewKeyDialog
         plaintext={newKeyPlaintext}
         onClose={() => setNewKeyPlaintext(null)}
       />
-      <RevokeDialog
-        keyItem={revokeTarget}
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="Revoke API key?"
+        description={
+          <>
+            This will permanently revoke{' '}
+            <span className="font-medium text-[hsl(var(--foreground))]">
+              {revokeTarget?.label || 'this key'}
+            </span>
+            . Any application using it will immediately lose access. This action cannot be undone.
+          </>
+        }
+        confirmLabel="Revoke key"
+        pendingLabel="Revoking…"
+        confirmIcon={<Trash2 className="w-4 h-4" />}
+        pending={revokeM.isPending}
         onConfirm={handleRevokeConfirm}
         onCancel={() => setRevokeTarget(null)}
-        revoking={revokeM.isPending}
       />
     </div>
   );

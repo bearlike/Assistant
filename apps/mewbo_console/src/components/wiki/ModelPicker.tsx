@@ -31,6 +31,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { FOCUS_RING } from "@/components/ui/focus-ring";
 
 import { ModelBrandIcon } from "../ModelBrandIcon";
 import { formatModelName } from "../../utils/model";
@@ -60,11 +61,11 @@ interface ModelPickerProps {
  */
 export function ModelMenu({
   value,
-  onPick,
+  onSelect,
   defaultLabel,
 }: {
   value: string;
-  onPick: (modelId: string) => void;
+  onSelect: (modelId: string) => void;
   defaultLabel?: string;
 }) {
   const { models, loading } = useModels();
@@ -82,7 +83,7 @@ export function ModelMenu({
   const isDefault = !value && defaultLabel != null;
   return (
     <Command>
-      <CommandInput placeholder="Filter models…" className="h-7 py-1 text-xs" />
+      <CommandInput placeholder="Filter models…" className="h-7 py-1" />
       <CommandList className="max-h-[320px]">
         <CommandEmpty className="py-3 text-center text-xs text-[hsl(var(--muted-foreground))]">
           {loading ? "Loading…" : "No matches."}
@@ -91,9 +92,9 @@ export function ModelMenu({
           {defaultLabel != null && (
             <CommandItem
               value="__default__"
-              onSelect={() => onPick("")}
+              onSelect={() => onSelect("")}
               className={cn(
-                "flex items-center gap-2 px-3 py-1.5 text-xs rounded-none cursor-pointer aria-selected:bg-[hsl(var(--accent))]",
+                "flex items-center gap-2 px-3 py-1.5 text-sm rounded-none cursor-pointer aria-selected:bg-[hsl(var(--accent))]",
                 isDefault && "font-medium"
               )}
             >
@@ -107,10 +108,10 @@ export function ModelMenu({
               <CommandItem
                 key={id}
                 value={id}
-                onSelect={() => onPick(id)}
+                onSelect={() => onSelect(id)}
                 title={unsupported ? "Not supported for chat or agents" : undefined}
                 className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 text-xs rounded-none cursor-pointer aria-selected:bg-[hsl(var(--accent))]",
+                  "flex items-center gap-2 px-3 py-1.5 text-sm rounded-none cursor-pointer aria-selected:bg-[hsl(var(--accent))]",
                   value === id && "font-medium",
                   unsupported && "text-[hsl(var(--muted-foreground))]"
                 )}
@@ -118,7 +119,7 @@ export function ModelMenu({
                 <ModelBrandIcon modelId={id} size={14} />
                 <span className="truncate">{formatModelName(id)}</span>
                 {id.includes("/") && (
-                  <span className="text-[10px] text-[hsl(var(--muted-foreground))] truncate ml-auto">
+                  <span className="text-2xs text-[hsl(var(--muted-foreground))] truncate ml-auto">
                     {id}
                   </span>
                 )}
@@ -151,7 +152,7 @@ export function ModelPicker({
   const triggerClass =
     variant === "compact"
       ? "inline-flex items-center gap-1.5 px-2.5 h-7 max-w-[220px] rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-xs text-[hsl(var(--foreground))] whitespace-nowrap hover:bg-[hsl(var(--accent))] transition-colors"
-      : "inline-flex items-center gap-2 px-3 h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--input))] text-sm text-[hsl(var(--foreground))] whitespace-nowrap hover:border-[hsl(var(--border-strong))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/40 transition-colors";
+      : `inline-flex items-center gap-2 px-3 h-11 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-sm text-[hsl(var(--foreground))] whitespace-nowrap hover:border-[hsl(var(--border-strong))] ${FOCUS_RING} transition-colors`;
 
   const isDefault = !value && defaultLabel != null;
   return (
@@ -173,8 +174,8 @@ export function ModelPicker({
           )}
           <span
             className={cn(
-              "font-mono truncate min-w-0 flex-1 text-left",
-              variant === "compact" ? "text-[11px]" : "text-xs"
+              "truncate min-w-0 flex-1 text-left",
+              variant === "compact" ? "text-2xs" : "text-xs"
             )}
           >
             {isDefault ? defaultLabel : formatModelName(value)}
@@ -188,7 +189,7 @@ export function ModelPicker({
         collisionPadding={16}
         className="w-[340px] max-w-[calc(100vw-2rem)] p-0 rounded-lg border-[hsl(var(--border-strong))] bg-[hsl(var(--popover))] overflow-hidden"
       >
-        <ModelMenu value={value} onPick={pick} defaultLabel={defaultLabel} />
+        <ModelMenu value={value} onSelect={pick} defaultLabel={defaultLabel} />
       </PopoverContent>
     </Popover>
   );
@@ -209,7 +210,7 @@ export function ModelChip({
   return (
     <span className={cn("inline-flex items-center gap-1.5", className)}>
       <ModelBrandIcon modelId={modelId} size={12} />
-      <span className="font-mono text-xs text-[hsl(var(--foreground))]">
+      <span className="text-xs text-[hsl(var(--foreground))]">
         {formatModelName(modelId)}
       </span>
     </span>

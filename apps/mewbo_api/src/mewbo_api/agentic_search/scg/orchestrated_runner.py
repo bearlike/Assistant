@@ -85,7 +85,7 @@ logging = get_logger(name="api.agentic_search.scg.orchestrated_runner")
 
 RunTerminalStatus = Literal["completed", "failed", "cancelled"]
 
-# Kind label for the synthetic root-coordinator lane (#95) — distinct from the
+# Kind label for the synthetic root-coordinator lane — distinct from the
 # probe kind so the console can style the root-inline lane separately.
 _COORDINATOR_KIND = "coordinator"
 
@@ -224,7 +224,7 @@ class OrchestratedSearchRunner:
                 message="No SessionRuntime wired for the orchestrated runner.",
             )
 
-        # The workspace binding seam (#77): the ONE place a workspace confers the
+        # The workspace binding seam: the ONE place a workspace confers the
         # ``scg`` capability + graph traversal tools + the source scope. The same
         # seam the structured graph-first path reuses.
         binding = WorkspaceGraphBinding.for_workspace(workspace, run.allowed_tools)
@@ -235,7 +235,7 @@ class OrchestratedSearchRunner:
             )
         except Exception as exc:  # noqa: BLE001 — surface as a structured error
             _emit_started(run.session_id)
-            logging.warning("scg-search run %s failed to seed: %s", run.run_id, exc)
+            logging.warning("scg-search run {} failed to seed: {}", run.run_id, exc)
             return self._fail(run, store=store, code="internal", message=str(exc))
 
         # The real session is resolved — emit ``run_started`` with the genuine id.
@@ -256,10 +256,10 @@ class OrchestratedSearchRunner:
             run.run_id, session_id=session_id, allowed_tools=actual_grant
         )
 
-        # Live projection (#77): subscribe to the backing session's event bus
+        # Live projection: subscribe to the backing session's event bus
         # BEFORE the drive so each probe's ``sub_agent`` event is projected onto
         # the run log AS it happens — the console reveals lanes live instead of
-        # waiting for the whole run to finish. Reuses the SideStage SessionEventBus
+        # waiting for the whole run to finish. Reuses the existing SessionEventBus
         # seam, not a new transport.
         streamer = RunEventStreamer(
             run_id=run.run_id, store=store, bus=get_session_event_bus()
@@ -284,6 +284,11 @@ class OrchestratedSearchRunner:
                         skill_instructions=load_playbook("scg-search"),
                         approval_callback=auto_approve,
                         should_cancel=cancel_event.is_set,
+                        # The run's opted-in cross-model fallback ladder;
+                        # ``None`` inherits the configured policy — a stable,
+                        # long-standing ``run_sync`` kwarg (unlike
+                        # ``enable_skills`` below, it needs no signature guard).
+                        fallback_models=run.fallback_models,
                         # The scg-search playbook is the ONLY trusted system-prompt
                         # extension — opt out of generic skill auto-injection.
                         **_skills_opt_out(runtime),
@@ -302,7 +307,7 @@ class OrchestratedSearchRunner:
             except Exception as exc:  # noqa: BLE001 — settle as structured failure
                 streamer.stop()
                 logging.warning(
-                    "scg-search run %s failed to drive: %s", run.run_id, exc
+                    "scg-search run {} failed to drive: {}", run.run_id, exc
                 )
                 self._fail(run, store=store, code="internal", message=str(exc))
 
@@ -345,17 +350,17 @@ class OrchestratedSearchRunner:
         The session tag is ``agentic_search:run:<run_id>`` so ``TraceProvenance``
         classifies it ``search`` / ``session_type=search_run`` — NOT the
         ``scg_map`` mislabel the old ``agentic_search:scg:`` tag produced (a
-        search RUN is not a map; ``scg:map:`` is the mapper's own tag). #77.
+        search RUN is not a map; ``scg:map:`` is the mapper's own tag).
 
         ``source_platform`` (when the route forwards it) is stamped as the
         session's surface context event so the Langfuse trace reads
-        ``surface:<platform>`` instead of ``surface:unknown`` (#77).
+        ``surface:<platform>`` instead of ``surface:unknown``.
         """
         session_tag = f"agentic_search:run:{run.run_id}"
         session_id = runtime.resolve_session(session_tag=session_tag)
 
         # Capability advertisement + quarantined untrusted instructions — the
-        # ONE seam (#77). Advertising ``scg`` lets spawn_agent look up the
+        # ONE seam. Advertising ``scg`` lets spawn_agent look up the
         # scg-search / scg-path-probe AgentDefs (gating mirrors wiki jobs.py).
         for context in binding.context_events:
             runtime.append_context_event(session_id, context)
@@ -388,6 +393,7 @@ class OrchestratedSearchRunner:
         records: list[dict[str, Any]],
         summary: dict[str, Any],
         streamer: RunEventStreamer | None = None,
+        allow_amend: bool = False,
     ) -> RunPayload | None:
         """Reconcile a finished session transcript onto the run event log.
 
@@ -402,18 +408,24 @@ class OrchestratedSearchRunner:
         ``answer_delta*`` typewriter + ``answer_ready``; the terminal status
         comes from *summary* (see :meth:`_run_status`). A record the cancel
         route already settled is left untouched — never a second terminal event.
+
+        ``allow_amend`` is the ONE sanctioned exception: set only by
+        :meth:`reconcile_after_recovery`, it lets a prior ``failed`` settlement
+        be re-settled when the backing session actually went on to complete.
+        The normal in-band drive/cancel race (this parameter left ``False``)
+        is unaffected — a ``completed``/``cancelled`` record is still final.
         """
-        if self._already_settled(store, run.run_id):
+        if self._already_settled(store, run.run_id, allow_amend_from_failed=allow_amend):
             return None
 
         trace = self._build_trace(records)
-        # Probe lanes are the classification key for tool_result events (#102):
+        # Probe lanes are the classification key for tool_result events:
         # a child loop inherits the parent's event_logger, so probe tool calls
         # land on THIS transcript stamped with the probe's agent_id — they must
         # never read as root/coordinator activity. Same classifier as the live
         # streamer (agent_id ∈ probe lanes), so live and settle agree.
         probe_ids = {agent.agent_id for agent in trace}
-        # The root coordinator's own tool activity (#95): a root-inline run (fast
+        # The root coordinator's own tool activity: a root-inline run (fast
         # tier, no probe sub-agents) streams nothing through the probe lanes, so
         # the root's ``tool_result`` events are projected as one extra lane. Its
         # slot is its first-seen ordinal across the MERGED stream (probes +
@@ -423,8 +435,8 @@ class OrchestratedSearchRunner:
         coordinator_slot = self._assign_lane_slots(records, trace, probe_ids)
         coordinator_lines = self._build_coordinator_lines(records, probe_ids)
         # ``scg_results`` emits the discrete result cards (transcript-as-transport):
-        # the root emits once before synthesis; each probe may emit its own cards
-        # (#102). The api projects every emit, ids salted by the emitting probe.
+        # the root emits once before synthesis; each probe may emit its own cards.
+        # The api projects every emit, ids salted by the emitting probe.
         results, emitter_counts, returned_counts = self._build_results(
             run.run_id, records, probe_ids
         )
@@ -491,12 +503,19 @@ class OrchestratedSearchRunner:
         )
 
         if status == "failed":
+            # ``trace``/``results`` are already built (and already emitted
+            # to the event log above, live or via the no-streamer branch) —
+            # carry them onto the failed SNAPSHOT too, so ``GET /runs/{id}``
+            # stops reporting ``task_result=""`` beside grounded probe evidence
+            # the event log already shows. Not re-emitted here (already done).
             return self._fail(
                 run,
                 store=store,
                 code="agent_error",
                 message=err
                 or f"run ended: {summary.get('done_reason') or 'unknown'}",
+                partial_trace=trace,
+                partial_results=results,
             )
 
         # Kick off the follow-up suggestions in PARALLEL with the answer reveal —
@@ -511,12 +530,12 @@ class OrchestratedSearchRunner:
                     store.append_run_event(run.run_id, events.answer_delta(text=chunk))
             store.append_run_event(run.run_id, events.answer_ready(answer=answer))
 
-        # Honest elapsed: started_at/created_at ISO → settle, in ms (#95). The
+        # Honest elapsed: started_at/created_at ISO → settle, in ms. The
         # old hardcoded 0 read ``0ms`` next to a ~3-minute run. The terminal
         # ``run_done`` is emitted below, AFTER the related-questions event, so the
         # stream (which closes on run_done) still delivers the follow-ups.
         total_ms = self._elapsed_ms(run)
-        # The persisted trace ALSO carries the synthetic coordinator lane (#95)
+        # The persisted trace ALSO carries the synthetic coordinator lane
         # so a zero-probe run's snapshot stops showing ``trace:[]`` beside a real
         # answer. The coordinator's ``result`` stays "" (its synthesis is the
         # answer, never duplicated into a lane response).
@@ -566,7 +585,12 @@ class OrchestratedSearchRunner:
             run.run_id,
             session_id=session_id,
             status=status,
-            completed_at=utc_now_iso(),
+            # Prefer the transcript's own completion timestamp over wall
+            # clock — the honest source when this settle is a post-recovery
+            # amend running long after the session actually finished (wall
+            # clock at settle time would read as "just now", which is wrong
+            # for a run that completed minutes ago).
+            completed_at=self._completion_event_ts(records) or utc_now_iso(),
             total_ms=total_ms,
             payload=payload,
         )
@@ -576,10 +600,26 @@ class OrchestratedSearchRunner:
         return payload
 
     @staticmethod
-    def _already_settled(store: Any, run_id: str) -> bool:
-        """True when the record is already terminal (e.g. the cancel route won)."""
+    def _already_settled(
+        store: Any, run_id: str, *, allow_amend_from_failed: bool = False
+    ) -> bool:
+        """True when the record is terminal and this settle attempt must not proceed.
+
+        A ``completed``/``cancelled`` record is final — never revisited (the
+        cancel-vs-drive race this guard originally exists for). A ``failed``
+        record is the ONE sanctioned exception: when the caller is an
+        explicit post-recovery reconcile (``allow_amend_from_failed=True``), a
+        prior ``failed`` settlement is amendable, since the backing session
+        went on to actually complete — without this, the record stays wrong
+        forever. The in-band drive/cancel race never sets the flag, so their
+        mutual exclusion is unchanged.
+        """
         record = store.get_run(run_id)
-        return record is not None and record.status in TERMINAL_RUN_STATUSES
+        if record is None or record.status not in TERMINAL_RUN_STATUSES:
+            return False
+        if allow_amend_from_failed and record.is_amendable_to_completed():
+            return False
+        return True
 
     @staticmethod
     def _run_status(summary: dict[str, Any]) -> RunTerminalStatus:
@@ -611,6 +651,11 @@ class OrchestratedSearchRunner:
         if status == "completed":
             return "completed"
         if status == "canceled":
+            return "cancelled"
+        if status == "terminated":
+            # A hard-terminated backing session is a deliberate KILL, not
+            # a run failure — map it to ``cancelled`` so the console renders the
+            # neutral cancelled terminal, never a red ``agent_error``.
             return "cancelled"
         return "failed"
 
@@ -950,8 +995,8 @@ class OrchestratedSearchRunner:
 
         A ``tool_result`` in this transcript is NOT always the root's: probe
         tool calls ride the same transcript stamped with the probe's
-        ``agent_id`` (the child loop inherits the parent's event_logger — #102
-        corrected the #95 own-sessions premise), so any payload whose
+        ``agent_id`` (the child loop inherits the parent's event_logger — this
+        corrected an earlier own-sessions premise), so any payload whose
         ``agent_id`` is a probe lane is excluded here exactly as the live
         streamer excludes it. Each remaining event becomes one secret-free
         :class:`CoordinatorTrace` digest line (the SAME projection the live
@@ -975,7 +1020,7 @@ class OrchestratedSearchRunner:
     ) -> tuple[list[SearchResult], dict[str, int], dict[str, int]]:
         """Collect the run's result cards + per-emitter kept & returned counts.
 
-        Transcript-as-transport (#95/#102): the root emits once before the
+        Transcript-as-transport: the root emits once before the
         synthesis; each probe may emit its own grounded cards. The api projects
         every entry onto a stable-id :class:`SearchResult` via
         :class:`ResultsProjection` (the SAME read the live stream uses, salted
@@ -1165,10 +1210,75 @@ class OrchestratedSearchRunner:
         err = completion.get("error") or completion.get("last_error")
         return text, str(err) if err else None
 
+    @staticmethod
+    def _completion_event_ts(records: list[dict[str, Any]]) -> str | None:
+        """The last ``completion`` event's own timestamp, or ``None`` if absent.
+
+        A settle that runs long after the session actually finished (a
+        post-recovery amend, minutes or hours later) must date ``completed_at``
+        from the transcript, not wall clock — else the record claims the run
+        just finished when it really finished when the session did.
+        """
+        ts: str | None = None
+        for rec in records:
+            if rec.get("type") == "completion":
+                candidate = rec.get("ts") or (rec.get("payload") or {}).get("ts")
+                if candidate:
+                    ts = str(candidate)
+        return ts
+
+    # -- Post-recovery amend -------------------------------------------------
+
+    def reconcile_after_recovery(
+        self, run: RunRecord, *, store: Any, runtime: Any
+    ) -> RunPayload | None:
+        """Amend a terminal-``failed`` run to ``completed`` after a session recovery.
+
+        The ONE sanctioned post-terminal transition this class supports: a run
+        settled ``failed`` by :meth:`_fail` can have its backing session
+        recover and actually finish afterward (via whatever recovery path the
+        caller drove) — without this, :meth:`_already_settled` guarantees the
+        record stays wrong forever, discarding the recovered work. Callers
+        (a session-recovery seam) invoke this AFTER the backing session
+        reaches a terminal state.
+
+        Refuses (returns ``None``, no store write) unless ALL hold: the record
+        is currently ``failed``; its ``session_id`` is a real backing session
+        (not the echo-runner tag placeholder — nothing to recover there); and
+        the session's OWN terminal status (via ``summarize_session``, the
+        engine's single status chokepoint) is genuinely ``completed`` — never
+        amends toward ``cancelled`` or any other outcome, only this one
+        direction.
+        """
+        if not run.is_amendable_to_completed():
+            return None
+        if run.is_echo_backed:
+            return None
+        summary = runtime.summarize_session(run.session_id)
+        if self._run_status(summary) != "completed":
+            return None
+        records = runtime.load_events(run.session_id)
+        return self._settle(
+            run,
+            store=store,
+            session_id=run.session_id,
+            records=records,
+            summary=summary,
+            streamer=None,
+            allow_amend=True,
+        )
+
     # -- Failure terminal ---------------------------------------------------
 
     def _fail(
-        self, run: RunRecord, *, store: Any, code: str, message: str
+        self,
+        run: RunRecord,
+        *,
+        store: Any,
+        code: str,
+        message: str,
+        partial_trace: list[TraceAgent] | None = None,
+        partial_results: list[SearchResult] | None = None,
     ) -> RunPayload:
         """Append an ``error`` terminal + persist a failed snapshot; return it.
 
@@ -1177,7 +1287,20 @@ class OrchestratedSearchRunner:
         terminal event (no second status channel). A no-op (beyond returning
         the failed payload) when the record is already terminal — the cancel
         route settles first and must never be followed by a second terminal.
+
+        ``partial_trace`` / ``partial_results`` carry whatever grounded
+        evidence the run gathered before it failed — a failure that discards
+        87 successful probe calls into ``task_result=""`` is the defect this
+        closes. ``RunPayload.partial`` marks the snapshot honestly. Only
+        :meth:`_settle`'s failed-status branch supplies them today, and by the
+        time it calls here the events are ALREADY on the log (live or via the
+        no-streamer branch, both unconditional on status) — this only attaches
+        them to the SNAPSHOT, never re-emits. A caller with genuinely
+        un-emitted partial evidence (e.g. a mid-drive exception) would need to
+        emit it before calling here, mirroring that same no-streamer pattern.
         """
+        trace = list(partial_trace or [])
+        results = list(partial_results or [])
         payload = RunPayload(
             run_id=run.run_id,
             session_id=run.session_id,
@@ -1188,6 +1311,9 @@ class OrchestratedSearchRunner:
             model=run.model,
             total_ms=self._elapsed_ms(run),
             error=message,
+            trace=trace,
+            results=results,
+            partial=bool(trace or results),
         )
         if self._already_settled(store, run.run_id):
             return payload
@@ -1205,7 +1331,7 @@ class OrchestratedSearchRunner:
             payload=payload,
         )
         store.update_past_query(
-            run.workspace_id, run.run_id, status="failed", results=0
+            run.workspace_id, run.run_id, status="failed", results=len(results)
         )
         return payload
 

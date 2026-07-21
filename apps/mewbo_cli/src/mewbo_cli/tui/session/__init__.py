@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session UX feature package for the Mewbo TUI (#157).
+"""Session UX feature package for the Mewbo TUI.
 
 Holds the per-turn workspace checkpointer (:mod:`.rewind`), the cheap
 auto-titler (:mod:`.autotitle`) and the post-mount installer (:mod:`.install`)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TodoPanel — the pinned Plan/Todo dock (sidebar facet, #161 / #156).
+"""TodoPanel — the pinned Plan/Todo dock (sidebar facet).
 
 Extracted from the old combined ``AgentPanel`` so the sidebar splits into clear
 sections (Fleet · Plan · Context). This widget owns ONLY the plan surface: an
@@ -8,7 +8,7 @@ in-progress · ``•`` pending) when the producer supplies per-item state, and a
 queue pill (``▸ k queued``) for messages queued while a turn runs.
 
 It is fed by injected providers (a :class:`TodoState` source — the hub's
-authoritative ``todos`` event via ``AgentTranscriptHub.root_todos``, #173 — and a
+authoritative ``todos`` event via ``AgentTranscriptHub.root_todos`` — and a
 queued-count source) so it is fully testable without a run, and driven from any
 thread via :meth:`apply` (the controller marshals it through
 ``app.call_from_thread``). No plan ⇒ no items ⇒ the dock renders nothing (todos

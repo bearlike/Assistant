@@ -1,5 +1,5 @@
 /**
- * Workspace SCG graph dialog tests (#79) — post graph-3d unification.
+ * Workspace SCG graph dialog tests — post graph-3d unification.
  *
  * ``WorkspaceGraphDialog`` no longer forks a Cytoscape renderer: it injects the
  * search-domain ``SCG_GRAPH_THEME`` + a node inspector into the SHARED 3D
@@ -103,7 +103,7 @@ const mappedGraph: WorkspaceGraph = {
   },
 }
 
-/** A workspace whose every source is still a ghost — the #79 "map a source" path. */
+/** A workspace whose every source is still a ghost — the "map a source" path. */
 const allUnmappedGraph: WorkspaceGraph = {
   scope: ["github", "notion"],
   nodes: [
@@ -130,7 +130,12 @@ function settled(graph: WorkspaceGraph): WgQuery {
 function renderDialog(graph: WorkspaceGraph, onMapSource = vi.fn()) {
   vi.mocked(useWorkspaceGraph).mockReturnValue(settled(graph))
   const utils = render(
-    <WorkspaceGraphDialog open workspace={workspace} onClose={vi.fn()} onMapSource={onMapSource} />,
+    <WorkspaceGraphDialog
+      open
+      onOpenChange={vi.fn()}
+      workspace={workspace}
+      onMapSource={onMapSource}
+    />,
   )
   return { ...utils, onMapSource }
 }

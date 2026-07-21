@@ -22,14 +22,14 @@ import com.mewbo.aura.ui.theme.AuraMotion
 import com.mewbo.aura.ui.theme.LocalAssistantExtras
 
 // AGSL (RuntimeShader, API 33+). A full-bleed top wash: gold blended to green across the width
-// (Gitea #181, pixel-sampled from four real-device captures — supersedes the Rev C "purple↔amber"
+// (pixel-sampled from four real-device captures — supersedes the Rev C "purple↔amber"
 // eyeballed estimate, which no capture ever showed), fading to nothing by
 // [AuraColors.auroraWashTopFadeHeightFraction] of the screen height (§3.3, S1). The color "drift"
 // (M4: "drifting hue slowly") is approximated cheaply by sliding the gold/green blend boundary
 // left-right over time rather than a full HSV hue rotation — visually reads as the gradient
-// breathing/living, at a fraction of the shader cost. A tiny value-noise dither breaks 8-bit
+// breathing/living, at a fraction of the shader cost. The shared [GlslNoise.ditherPremul] breaks 8-bit
 // banding on the smooth vertical falloff (the one place this brief calls out banding risk
-// explicitly; #181 reconfirmed zero banding in every real capture, so this stays mandatory).
+// explicitly; reconfirmed zero banding in every real capture, so this stays mandatory).
 private val AURORA_WASH_SHADER_SRC = """
 uniform float2 iResolution;
 uniform float iTime;
@@ -51,11 +51,14 @@ half4 main(float2 fragCoord) {
     // smoothstep keeps the vertical falloff itself banding-free.
     float verticalFade = 1.0 - smoothstep(0.0, iFadeHeightFraction, uv.y);
 
-    float dither = (valueNoise(fragCoord * 0.5) - 0.5) * (3.0 / 255.0);
-    col += dither;
-
     float alpha = clamp(verticalFade * iIntensity, 0.0, 1.0);
-    return half4(col * alpha, alpha);
+
+    // Mandatory dither (Rule 3), via the ONE shared primitive, on the PREMULTIPLIED colour (see
+    // [GlslNoise.ditherPremul]: dithering before the `* alpha` scales the perturbation by alpha and
+    // neuters it exactly where the falloff is flattest). This replaces a hand-rolled
+    // `valueNoise(fragCoord * 0.5)` at 3/255 — value noise is spatially CORRELATED, which is the one
+    // thing a dither must never be: it smears banding into blotches instead of breaking it.
+    return half4(ditherPremul(col * alpha, alpha, fragCoord), alpha);
 }
 """
 
@@ -94,9 +97,9 @@ internal object AuroraWashUniformMath {
 }
 
 /**
- * Full-bleed top wash (§3.3, S1, M3/M4): gold-to-green gradient (Gitea #181 measured) fading to
+ * Full-bleed top wash (§3.3, S1, M3/M4): gold-to-green gradient (measured) fading to
  * canvas by [AuraColors.auroraWashTopFadeHeightFraction], with slow hue drift while active — active
- * for [AuroraState.Resting] (landing/idle, #181: real captures show it visibly present at rest, not
+ * for [AuroraState.Resting] (landing/idle: real captures show it visibly present at rest, not
  * only during generation) as well as [AuroraState.Thinking]/[AuroraState.Streaming]. Renders BEHIND
  * content and never tints text/icons/touch targets (§3.3 rule) — callers place it as the
  * bottom-most layer in a `Box`. Draws nothing once fully settled to [AuroraState.Hidden] (skips the
@@ -106,7 +109,7 @@ internal object AuroraWashUniformMath {
 fun AuroraWashTop(state: AuroraState, modifier: Modifier = Modifier) {
     val extras = LocalAssistantExtras.current
     val target = AuroraWashUniformMath.targetIntensity(state)
-    // Gitea #181 fix wave, finding 7: kept as an un-destructured State<Float> (no `by`) - see
+    // kept as an un-destructured State<Float> (no `by`) - see
     // AuroraEdgeGlow.kt's identical fix for the full rationale (composable-scope `by` reads
     // subscribe this composable to recompose on every animation frame; onDrawBehind's `.value`
     // read below doesn't). The render-or-not decision routes through derivedStateOf instead, which
