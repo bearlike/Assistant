@@ -316,7 +316,7 @@ Each `exit_plan_mode` call increments a per-session counter stored at `<plan_dir
 
 During exploration Mewbo enforces a shell allowlist via `agent.plan_mode_shell_allowlist`. Only commands whose first token matches a configured prefix are permitted. Commands containing an unquoted pipe (`|`), redirect (`>`, `<`), chain (`&`, `;`), variable expansion (`$`), or command substitution (`` ` ``) are rejected regardless of the allowlist. Prefixes match at word boundaries. For example, `"git log"` matches `"git log --oneline"` but not `"git logger"`. An empty list blocks shell access entirely.
 
-`agent.plan_mode_allow_mcp` defaults to `true`; MCP tools are available in plan mode unless explicitly disabled.
+MCP tools are never mode-filtered in plan mode: Mewbo cannot classify a third-party MCP tool's effect, so the plan-mode filter admits every MCP tool unconditionally rather than guessing.
 
 ---
 

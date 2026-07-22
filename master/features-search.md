@@ -1,7 +1,7 @@
 # Agentic Search
 
 <div style="display: flex; justify-content: center;">
-  <img src="../assets/img/mewbo-search-01-landing.jpg" alt="The Agentic Search landing page in the Mewbo Console: a question box scoped to the OSS Repo Scout workspace on the Fast tier, chips showing 6 of 7 sources mapped, graph node-edge counts, and memory notes, above a grid of saved workspaces (Knowledge graph, SideStage Ops, OSS Repo Scout)" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../assets/img/mewbo-search-01-landing.jpg" alt="The Agentic Search landing page in the Mewbo Console: a question box scoped to the OSS Repo Scout workspace on the Fast tier, chips showing 6 of 7 sources mapped, graph node-edge counts, and memory notes, above a grid of saved workspaces (Knowledge graph, Beacon Ops, OSS Repo Scout)" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 Ask a question in plain English and Mewbo searches across everything you've connected. A coordinating agent decomposes the question, routes each part to the right sources via the [Source Capability Graph](features-search-scg.md), fans out probe agents to execute the retrieval, and synthesises one ranked answer with citations and a full agent trace.
@@ -27,10 +27,6 @@ Each card also has a graph button. It opens the workspace's capability graph in 
 - **Entity**: abstract concepts resolved across sources.
 
 Sources you enabled but have not yet mapped appear as ghost nodes with a hint to map them, so a half-configured workspace is visible at a glance instead of silently smaller.
-
-<div style="display: flex; justify-content: center;">
-  <img src="../assets/img/mewbo-search-03-capability-graph.jpg" alt="A workspace capability graph dialog for OSS Repo Scout showing 86 nodes and 95 edges in a force-directed view, with a node filter, a Capability/Capabilities/Memory layer legend, and a re-layout control" style="width: 100%; max-width: 960px; height: auto;" />
-</div>
 
 ---
 

@@ -1,9 +1,5 @@
 # The Knowledge Graph
 
-<div style="display: flex; justify-content: center;">
-  <img src="../assets/img/mewbo-wiki-03-graph.jpg" alt="The MewboWiki knowledge graph view rendering thousands of nodes and edges for a repository, with a legend counting files, classes, functions, methods, and interfaces" style="width: 100%; max-width: 960px; height: auto;" />
-</div>
-
 Every indexed repository ships with a **Graph** view: a live, interactive 3D map of the codebase, built from the same index that backs the pages. Orbit, zoom, and fly through the structure to explore it. Nodes are coloured by symbol type (file, class, function, method, interface) and the legend counts each. The directory tree drives a folder-collapse level of detail: collapse a folder into a single node to keep even a large repository readable, then expand it to drill back in. Use the view to find the dense centres of a project, trace how a subsystem connects to the rest, or jump from a symbol to the page that documents it. Agentic Search reuses the very same 3D view to render a workspace's capability graph, so the wiki and search share one graph explorer.
 
 This graph is more than a picture. It is the substrate the whole wiki stands on. It carries the wiki from single-file lookups to repository scale, and it is what makes [Ask MewboWiki](features-wiki-qa.md) fast and authoritative.

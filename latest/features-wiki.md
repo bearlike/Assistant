@@ -1,7 +1,7 @@
 # Agentic Wiki
 
 <div style="display: flex; justify-content: center;">
-  <img src="../assets/img/mewbo-wiki-01-landing.jpg" alt="The Agentic Wiki landing page in the Mewbo Console: a repository URL field with a Generate Wiki button, a resumable 'Incomplete indexes' notice, and cards for already-indexed projects (bearlike/SideStage, bearlike/Assistant, bearlike/Grove) showing their host, branch, and page counts" style="width: 100%; max-width: 960px; height: auto;" />
+  <img src="../assets/img/mewbo-wiki-01-landing.jpg" alt="The Agentic Wiki landing page in the Mewbo Console: a repository URL field with a Generate Wiki button, a resumable 'Incomplete indexes' notice, and cards for already-indexed projects (acme/beacon, bearlike/Assistant, bearlike/Grove) showing their host, branch, and page counts" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
 
 Paste a repository URL and Mewbo writes the documentation for it. The **Agentic Wiki** indexes a codebase, maps its structure into a code memory graph, and generates a navigable, grounded wiki. Every page is backed by the source files it describes. Ask a question about the repo and a sub-agent answers from that same graph: fast, authoritative, and grounded in the code itself.
@@ -22,7 +22,6 @@ A generated wiki is a full documentation site for one repository:
 <div class="swiper ms-shots">
 <div class="swiper-wrapper">
 <div class="swiper-slide"><figure><img loading="lazy" src="../assets/img/mewbo-wiki-02-overview.jpg" alt="A MewboWiki overview page for Grove showing the Grove Overview article with a runtime-model flow diagram, a left-hand page index, an On this page outline, Refresh and Re-index controls, and an Ask MewboWiki question box" /><figcaption>Prose pages with flow diagrams, grounded in the source files they cite</figcaption></figure></div>
-<div class="swiper-slide"><figure><img loading="lazy" src="../assets/img/mewbo-wiki-03-graph.jpg" alt="The MewboWiki knowledge graph view rendering thousands of nodes and edges for a repository, with a legend counting files, classes, functions, methods, and interfaces" /><figcaption>The whole repository as a live, zoomable knowledge graph</figcaption></figure></div>
 <div class="swiper-slide"><figure><img loading="lazy" src="../assets/img/mewbo-wiki-08-qna.jpg" alt="An Ask MewboWiki answer to 'What is this project for?': a summary card, an expandable Cited Sources list, a Retrieval details panel listing the pages accessed and the model used, and a cited answer with inline wiki citation chips and a follow-up question box" /><figcaption>Ask MewboWiki: cited answers with the exact sources that backed them</figcaption></figure></div>
 <div class="swiper-slide"><figure><img loading="lazy" src="../assets/img/mewbo-wiki-07-badge.jpg" alt="The 'Add the wiki badge' popover in MewboWiki, previewing an 'Ask Mewbo Wiki' badge and the markdown snippet to drop into a repository README, beside the Edit Wiki, Graph, Copy badge, and Copy link toolbar" /><figcaption>Copy a README badge that links straight back to the wiki</figcaption></figure></div>
 </div>

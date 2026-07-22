@@ -13,6 +13,8 @@ Device tools round-trip between your server and your phone. Nothing runs on the 
 
 If a call arrives after it has expired, or an action fails, Aura reports that back too, so the assistant is never left waiting on a silent tool.
 
+This works the same wherever you asked from. Whichever surface is following the conversation runs the tool call, so a question asked from the assist overlay is served exactly as it is in the app. The three tools that hand a job to the clock app (set alarm, set timer, dismiss alarm) are the one exception worth knowing about: they need Aura to be on screen, either as the app or as the assist overlay, because Android only lets an app open another app's screen while it is visible.
+
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-aura-04-device-tools.png" alt="Aura chat turn asking for the phone's battery level, with the tool-activity fold expanded to show the device_get_battery call and a checkmark, followed by the assistant's answer using that result" style="width: 100%; max-width: 360px; height: auto;" />
 </div>

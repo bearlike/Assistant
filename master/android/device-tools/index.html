@@ -606,7 +606,7 @@
           
           <a data-slot="button" id="next-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
-            href="../../api/">
+            href="../../apps/">
             <span class="sr-only">Next</span>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -637,6 +637,7 @@
 <li><strong>Aura reports back.</strong> Aura posts the result to <a href="../../rest-api/#tag/sessions" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/api/sessions/{session_id}/device_tools/{call_id}/result</span></a>, and the assistant continues its answer using what came back.</li>
 </ol>
 <p>If a call arrives after it has expired, or an action fails, Aura reports that back too, so the assistant is never left waiting on a silent tool.</p>
+<p>This works the same wherever you asked from. Whichever surface is following the conversation runs the tool call, so a question asked from the assist overlay is served exactly as it is in the app. The three tools that hand a job to the clock app (set alarm, set timer, dismiss alarm) are the one exception worth knowing about: they need Aura to be on screen, either as the app or as the assist overlay, because Android only lets an app open another app's screen while it is visible.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-aura-04-device-tools.png" alt="Aura chat turn asking for the phone's battery level, with the tool-activity fold expanded to show the device_get_battery call and a checkmark, followed by the assistant's answer using that result" style="width: 100%; max-width: 360px; height: auto;" />
 </div>
@@ -654,7 +655,7 @@
 <p>Because the phone's permission system is the only gate, you manage what the assistant can do the same way you manage any app: in Android's own permission settings. Turn a permission off and the matching tool disappears from what the assistant can reach.</p>
 </div>
 <h2 id="tools">Available tools</h2>
-<p>Aura ships the following device tools. The exact set advertised in any session is filtered down to the ones your phone currently permits. The catalog of every tool this build carries lives in <a href="https://github.com/bearlike/Assistant/blob/ba11d215/apps/mewbo_aura/app/src/main/java/com/mewbo/aura/data/device/DeviceToolCatalog.kt" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>DeviceToolCatalog.kt</span></a>.</p>
+<p>Aura ships the following device tools. The exact set advertised in any session is filtered down to the ones your phone currently permits. The catalog of every tool this build carries lives in <a href="https://github.com/bearlike/Assistant/blob/06941ffc/apps/mewbo_aura/app/src/main/java/com/mewbo/aura/data/device/DeviceToolCatalog.kt" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>DeviceToolCatalog.kt</span></a>.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -746,8 +747,8 @@
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 ml-auto shadow-none"
-        href="../../api/">
-        <span class="max-[500px]:hidden">Get Started</span>
+        href="../../apps/">
+        <span class="max-[500px]:hidden">Overview</span>
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             class="tabler-icon tabler-icon-arrow-right ">
@@ -1017,6 +1018,9 @@
     
       
     
+  
+
+  
   
 
   
