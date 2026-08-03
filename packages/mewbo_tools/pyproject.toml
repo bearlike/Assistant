@@ -11,7 +11,7 @@ license = { text = "MIT" }
 
 dependencies = [
   "mewbo-core>=0.0.10",
-  "langchain-mcp-adapters>=0.2.1,<0.3.0",
+  "langchain-mcp-adapters>=0.2.1,<0.4.0",
   "prompt-toolkit>=3.0.47,<4.0.0",
   "pygments>=2.17.0,<3.0.0",
   "requests>=2.32.0,<3.0.0",
