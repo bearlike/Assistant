@@ -177,32 +177,34 @@ Every session has a single `AgentHypervisor` instance shared across the entire a
 
 ```mermaid
 stateDiagram-v2
-    [*] --> submitted : spawn_agent called
+    [*] --> rejected : permanent refusal (unresolvable project, unknown agent_type, model unavailable)
+    [*] --> submitted : admission accepts (immediately, or once a slot frees)
     submitted --> running : execution begins
     running --> completed : natural completion (no tool calls)
     running --> failed : unhandled exception
     running --> cancelled : steer_agent cancel / parent cancelled
-    running --> rejected : admission control (max_concurrent reached)
     completed --> [*]
     failed --> [*]
     cancelled --> [*]
     rejected --> [*]
 ```
 
+Admission runs before a child is registered, and it is a gate with exactly two outcomes. An **accepted** spawn is registered immediately: it receives an `agent_id`, enters the hypervisor's registry, and starts in `submitted`, whether or not a concurrency slot is free at that moment. A `submitted` child holding no slot yet is fully visible to `check_agents` throughout, and moves to `running` on its own the moment a sibling completes and releases a slot; a parent waiting on that child's result does not itself consume a slot for the wait, only a `running` agent does. A **rejected** spawn is never registered at all. It is reserved for a refusal that would be identical on retry: an unresolvable `project`, an unknown `agent_type`, or a model this deployment cannot serve. Reaching `agent.max_concurrent` running agents is never one of those reasons; it only delays a `submitted` child's move to `running`.
+
 Agents run until the model returns a text response with no tool calls. This is **natural completion**. There is no hard step limit. Safety comes from `agent.llm_call_timeout`, stall detection, and `agent.session_step_budget`.
 
 ### Spawning semantics
 
-Root spawns (depth = 0) are non-blocking: the call returns `{agent_id, status: "submitted"}` immediately and `_run_child_lifecycle` stores the `AgentResult` on the `AgentHandle` when the child finishes. Sub-agent spawns (depth ≥ 1) are blocking and return an `AgentResult` JSON payload inline.
+Root spawns (depth = 0) are non-blocking: the call returns an envelope with an `agent_id` immediately, `status: "submitted"` whether or not a slot was free at that moment, and `_run_child_lifecycle` stores the `AgentResult` on the `AgentHandle` when the child finishes. A permanently refused root spawn returns `status: "rejected"` with no `agent_id` instead. Sub-agent spawns (depth ≥ 1) are blocking: the call waits for the child to reach a terminal state, including any time it spends `submitted` before a slot frees, and returns an `AgentResult` JSON payload inline. Capacity is never a reason a blocking spawn fails, and the parent's own wait consumes no slot; only the same permanent-refusal reasons stop a blocking spawn.
 
-`spawn_agent(task, model, allowed_tools, denied_tools, acceptance_criteria, agent_type)` is the full signature. The `max_steps` parameter is deprecated and not enforced. Sub-agents inherit the parent's `approval_callback` so write, edit, and shell tools work in API and headless contexts.
+`task` is the only required parameter of `spawn_agent`. The rest are optional: `model`, `allowed_tools`, `denied_tools`, `acceptance_criteria`, `agent_type`, `project`, `retry`, `summary_kind`, `capability_mode`, `workspace_mode`, `approval_policy`, `contract`, and `verification`. `max_steps` is accepted but not enforced — sub-agents run to natural completion. Sub-agents inherit the parent's `approval_callback` so write, edit, and shell tools work in API and headless contexts. `spawn_agents(tasks=[...])` fans multiple independent sub-agents out from one call; see [Sub-agents → Spawning multiple sub-agents at once](features-agents.md#spawning-multiple-sub-agents-at-once) for the batch outcome shape.
 
 ### AgentResult
 
 | Field | Type | Description |
 |---|---|---|
 | `content` | string | Primary output text |
-| `status` | string | `completed`, `failed`, `partial`, or `cannot_solve` |
+| `status` | string | `completed`, `failed`, `partial`, `cannot_solve`, or `cancelled` |
 | `steps_used` | integer | Number of tool steps executed |
 | `summary` | string | Compressed summary (≤ 500 chars) for parent context |
 | `warnings` | array | Non-fatal issues encountered |
@@ -396,7 +398,7 @@ All `.mcp.json` files are normalised before merging:
 | `mcpServers` | `servers` | Claude Code / VS Code schema compatibility |
 | `type` | `transport` | Both removed after normalization to avoid leaks |
 | `http_headers` | `headers` | Key rename |
-| `transport: "http"` | `transport: "streamable_http"` | Legacy alias |
+| `transport: "http"` | `transport: "streamable_http"` | Accepted alias |
 | `command` present, no `transport` | `transport: "stdio"` | Inferred |
 | `${VAR}` / `$VAR` in values | Expanded from process environment | Unresolved vars left as-is |
 
@@ -411,7 +413,7 @@ All `.mcp.json` files are normalised before merging:
 | Call timeout | 60 seconds per tool invocation. |
 | Concurrent connects | Up to 5 servers connect in parallel at startup. |
 
-The legacy one-shot client is a fallback when the pool is unavailable.
+A one-shot client is the fallback when the pool is unavailable.
 
 ---
 
@@ -455,7 +457,7 @@ sequenceDiagram
     Console->>User: Open /ide/{id}/ in new tab
 ```
 
-The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/mewbo/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. [`POST /api/sessions/{id}/ide/extend`](endpoint:POST /api/sessions/{id}/ide/extend) overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
+The session's project directory is mounted at `/home/coder/project`. A deadline file is bind-mounted at `/mewbo/deadline`. The container's internal watchdog reads it on a 15-second interval and self-terminates when the epoch passes. `POST /api/sessions/{session_id}/ide/extend` overwrites the deadline file and updates MongoDB. `DELETE` force-removes the container, deadline file, and MongoDB document.
 
 ---
 
@@ -512,7 +514,7 @@ flowchart TD
 
 **Precedence.** Plugin skills do not override personal (`~/.claude/skills/`) or project-local (`.claude/skills/`) skills with the same name. Plugin MCP servers are merged additively. Later plugins do not overwrite earlier ones for the same server name. Plugin hooks are format-translated and merged into the live `HooksConfig`.
 
-`PluginsConfig` lives in `config.py` and defines `registry_paths` and `marketplaces`. The CLI exposes `/plugins`; the API exposes `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, and [`DELETE /api/plugins/<name>`](endpoint:DELETE /api/plugins/<name>); the console renders `PluginsView`.
+`PluginsConfig` lives in `config.py` and defines `enabled`, `enabled_plugins`, `marketplaces`, `marketplace_default_host`, and `install_path`. The CLI exposes `/plugins`; the API exposes `GET/POST /api/plugins`, `GET/POST /api/plugins/marketplace`, and [`DELETE /api/plugins/{plugin_name}`](endpoint:DELETE /api/plugins/{plugin_name}); the console renders `PluginsView`.
 
 See [Session tools](#session-tools) for plugin-contributed per-agent stateful tools.
 
@@ -542,7 +544,7 @@ Plugin-owned agent bodies and skill bodies can reference three placeholders. Sub
 
 A **session tool** is a per-agent stateful tool whose lifecycle is coupled to one specific agent instance rather than the global `ToolRegistry`. The handler holds state (accumulated across calls within the agent's run), declares its own OpenAI function schema, and can signal clean loop termination independently of the model's final text response. The core `ExitPlanModeTool` is a session tool. The widget-builder's `SubmitWidgetTool` is a session tool contributed by a plugin.
 
-Session tools are defined in [`session_tools.py`](repo:packages/mewbo_core/src/mewbo_core/session_tools.py).
+Session tools are defined in [`session_tools.py`](repo:packages/mewbo_core/src/mewbo_core/tooling/session_tools.py).
 
 ### Protocol
 
@@ -623,7 +625,7 @@ Chat-platform adapters implement the `ChannelAdapter` protocol ([`channels/base.
 | `send_response` | Deliver the final answer back to the channel |
 | `system_context` | Injected into the LLM system prompt. Makes the model aware it is communicating through this adapter |
 
-`ChannelRegistry` lookup and `DeduplicationGuard` replay protection are shared. The webhook endpoint [`POST /api/webhooks/<platform>`](endpoint:POST /api/webhooks/<platform>) authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call `_process_inbound()` directly from their own poller instead of via the webhook route.
+`ChannelRegistry` lookup and `DeduplicationGuard` replay protection are shared. The webhook endpoint `POST /api/webhooks/<platform>` authenticates via HMAC (not API key). Poll-driven channels (e.g. Email) call `_process_inbound()` directly from their own poller instead of via the webhook route.
 
 The shared `_process_inbound()` pipeline in [`routes.py`](repo:apps/mewbo_api/src/mewbo_api/channels/routes.py) runs dedup → mention gate → session resolve → commands → LLM for every channel. `requires_mention(message)` is optional on the adapter for dynamic mention gating (Email uses this to skip the `@Mewbo` requirement on 1-to-1 threads).
 

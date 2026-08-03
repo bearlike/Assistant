@@ -313,6 +313,16 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "offset": {
+          "description": "Documents skipped before this page, in sort order.",
+          "example": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "More documents exist past this page \u2014 re-read at `offset + len(documents)`.",
+          "example": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -472,7 +482,7 @@
           "type": "boolean"
         },
         "mode": {
-          "description": "'agentic' (wakes the maintainer; the legacy default) or 'code' (synchronously invocable via GET/POST .../pipelines/<name>).",
+          "description": "'agentic' (wakes the maintainer; the default) or 'code' (synchronously invocable via GET/POST .../pipelines/<name>).",
           "example": "agentic",
           "type": "string"
         },
@@ -678,6 +688,31 @@
       "required": [
         "version"
       ],
+      "type": "object"
+    },
+    "AppSession": {
+      "properties": {
+        "created": {
+          "description": "Whether a session was freshly minted for this call.",
+          "example": false,
+          "type": "boolean"
+        },
+        "session_id": {
+          "description": "The app's maintainer session (or its builder session for a draft that never submitted).",
+          "example": "7c1f0a84b2c39e2d",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AppSessionRequest": {
+      "properties": {
+        "new_session": {
+          "description": "Open an ADDITIONAL session against this app instead of reusing its maintainer (default false). A fresh session is bound by its tag and is read-plus-stage: it can read and stage the app, but cannot write its data plane, run its pipelines, or resubmit it.",
+          "example": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AppSpec": {
@@ -1250,6 +1285,14 @@
             "llm.api_key": true
           },
           "type": "object"
+        },
+        "storage": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ConfigWriteAccess"
+            }
+          ],
+          "description": "Whether the configuration store is currently writable."
         }
       },
       "type": "object"
@@ -1275,6 +1318,41 @@
         },
         "message": {
           "example": "Validation failed",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ConfigWriteAccess": {
+      "properties": {
+        "code": {
+          "description": "Machine-readable reason the store is unwritable, absent when writable.",
+          "example": "read_only",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable reason the store is unwritable, absent when writable.",
+          "example": "The configuration file lives on a read-only mount.",
+          "type": "string"
+        },
+        "writable": {
+          "description": "Whether the server can currently persist configuration changes.",
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ConfigWriteError": {
+      "properties": {
+        "code": {
+          "description": "Machine-readable failure reason: `read_only`, `permission_denied`, `no_space`, or `io_error`.",
+          "example": "read_only",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable, actionable reason the write failed.",
+          "example": "The configuration file lives on a read-only mount.",
           "type": "string"
         }
       },
@@ -2084,6 +2162,11 @@
           "description": "Single-use token carried on the `user_question` event this answers.",
           "example": "Q1sT9x...redacted",
           "type": "string"
+        },
+        "notes": {
+          "description": "Optional free text the user typed alongside the selections (at most 4000 characters). Answers no single question; carries whatever the event's `notes_placeholder` invited.",
+          "example": "The staging cluster is mid-migration until Friday.",
+          "type": "string"
         }
       },
       "required": [
@@ -2094,6 +2177,15 @@
     },
     "QuestionAnswered": {
       "properties": {
+        "delivery": {
+          "description": "Where the answer landed: `run` \u2014 the blocked `ask_user_question` call resolved with it; `message` \u2014 the wait had ended, so it arrived as a new user turn.",
+          "enum": [
+            "run",
+            "message"
+          ],
+          "example": "run",
+          "type": "string"
+        },
         "resolved": {
           "example": true,
           "type": "boolean"
@@ -2625,6 +2717,11 @@
           "example": 2,
           "type": "integer"
         },
+        "probes_rejected": {
+          "description": "Probe spawn attempts PERMANENTLY refused \u2014 an unresolvable project, an unknown agent type, an unavailable model \u2014 never a capacity wait (an over-subscribed spawn is accepted and dispatched once a slot frees, so it counts in 'probes' instead). Never counted in 'probes', which is STARTED lanes only. 'probes + probes_rejected' is what the run actually intended to spawn.",
+          "example": 0,
+          "type": "integer"
+        },
         "search_ms": {
           "example": 2200,
           "type": "integer"
@@ -2979,6 +3076,21 @@
       },
       "type": "object"
     },
+    "SessionDiffStat": {
+      "properties": {
+        "additions": {
+          "description": "Lines the session's edits added, summed.",
+          "example": 128,
+          "type": "integer"
+        },
+        "deletions": {
+          "description": "Lines the session's edits removed, summed.",
+          "example": 34,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "SessionEvent": {
       "properties": {
         "payload": {
@@ -3177,6 +3289,37 @@
       },
       "required": [
         "text"
+      ],
+      "type": "object"
+    },
+    "SessionPinResponse": {
+      "properties": {
+        "pinned": {
+          "example": true,
+          "type": "boolean"
+        },
+        "pinned_at": {
+          "description": "ISO pin time, or null once unpinned.",
+          "example": "2026-06-15T18:24:05.412903+00:00",
+          "type": "string"
+        },
+        "session_id": {
+          "example": "9e2d47c1a0b34f12",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SessionProjectRebindRequest": {
+      "properties": {
+        "project": {
+          "description": "Name of the project to bind the session to \u2014 a configured project, or `managed:<project_id>` for a server-managed one. Its directory is resolved server-side and stored with it, so the next turn runs there. This is the only accepted field; any other, `cwd` included, is a 400.",
+          "example": "Assistant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
       ],
       "type": "object"
     },
@@ -3435,6 +3578,14 @@
           "example": "2026-06-15T18:24:05.412903+00:00",
           "type": "string"
         },
+        "diff_stat": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SessionDiffStat"
+            }
+          ],
+          "description": "Line counts summed over the session's file edits. Absent when the session changed no files."
+        },
         "done_reason": {
           "example": "completed",
           "type": "string"
@@ -3453,6 +3604,26 @@
           ],
           "example": "user",
           "type": "string"
+        },
+        "pinned": {
+          "description": "Present (`true`) only on a pinned session \u2014 an unpinned row omits both this key and `pinned_at` rather than carrying `false`.",
+          "example": false,
+          "type": "boolean"
+        },
+        "pinned_at": {
+          "description": "When the session was pinned. Absent on an unpinned session.",
+          "example": "2026-06-15T18:24:05.412903+00:00",
+          "type": "string"
+        },
+        "projects": {
+          "description": "Every project identity the session's context has ever bound to \u2014 an auto-select session that switched mid-task carries each one it moved through, not just its current binding. Absent when the session has bound to no project.",
+          "example": [
+            "Assistant"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "recoverable": {
           "example": false,
@@ -3584,6 +3755,16 @@
     },
     "SessionsListResponse": {
       "properties": {
+        "limit": {
+          "description": "Echoed back only when the request supplied `limit`.",
+          "example": 50,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Echoed back only when the request supplied `limit`.",
+          "example": 0,
+          "type": "integer"
+        },
         "sessions": {
           "items": {
             "$ref": "#/definitions/SessionSummary"
@@ -6082,7 +6263,7 @@
     },
     "/api/apps/{app_id}/data/{collection}": {
       "get": {
-        "description": "Read-only \u2014 no write verb exists on this route.",
+        "description": "Read-only \u2014 no write verb exists on this route.\n\n`O(collection)`, bounded: at most `_MAX_DATA_LIMIT` documents per call.\nWalk a larger collection with `offset`; `truncated` says when to.",
         "operationId": "get_app_data",
         "parameters": [
           {
@@ -6098,9 +6279,15 @@
             "type": "string"
           },
           {
-            "description": "Max documents (<=500).",
+            "description": "Page size (<=500). A larger value is capped, and the response's `truncated` flag reports that more remain.",
             "in": "query",
             "name": "limit",
+            "type": "integer"
+          },
+          {
+            "description": "Documents to skip before this page, in sort order.",
+            "in": "query",
+            "name": "offset",
             "type": "integer"
           }
         ],
@@ -6135,7 +6322,7 @@
             "apikey": []
           }
         ],
-        "summary": "Query a collection",
+        "summary": "Query one page of a collection",
         "tags": [
           "Apps"
         ]
@@ -6644,6 +6831,65 @@
         ]
       }
     },
+    "/api/apps/{app_id}/session": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "Gated `apps.admin` (the management tier, alongside pause/resume/rearm/\nrollback) rather than `apps.use`: unlike a render token, the session\nthis hands back can drive `submit_app`/`app_data` on the app, so it\ncarries the same authority as pausing or rolling it back, not as opening\nits rendered frontend.\n\nAn optional `{\"new_session\": true}` body mints an additional session instead\nof reusing the maintainer \u2014 the composer's shape; see the controller.",
+        "operationId": "post_app_session",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AppSessionRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app's existing maintainer session.",
+            "schema": {
+              "$ref": "#/definitions/AppSession"
+            }
+          },
+          "201": {
+            "description": "A maintainer session was minted for this app.",
+            "schema": {
+              "$ref": "#/definitions/AppSession"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Return the app's maintainer session, minting one on first call",
+        "tags": [
+          "Apps"
+        ]
+      }
+    },
     "/api/apps/{app_id}/system": {
       "get": {
         "operationId": "get_app_system",
@@ -6899,11 +7145,11 @@
     },
     "/api/config": {
       "get": {
-        "description": "Return the current configuration with protected and secret values stripped, plus a `secrets` map reporting which secret fields are set (true/false) without revealing their values. Update with PATCH on the same path.\nReturns the current configuration with protected and secret values\nstripped, plus a `secrets` map reporting which secret fields are set\n(true or false) without revealing their values.",
+        "description": "Return the current configuration with protected and secret values stripped, plus a `secrets` map reporting which secret fields are set (true/false) without revealing their values, and a `storage` object reporting whether the server can currently persist configuration changes \u2014 checked up front so a client can warn a user before they edit and save. Update with PATCH on the same path.\nReturns the current configuration with protected and secret values\nstripped, plus a `secrets` map reporting which secret fields are set\n(true or false) without revealing their values, and a `storage` object\nreporting whether the server can currently persist configuration\nchanges.",
         "operationId": "get_config_resource",
         "responses": {
           "200": {
-            "description": "Configuration values and secret status map.",
+            "description": "Configuration values, secret status map, and storage writability.",
             "schema": {
               "$ref": "#/definitions/ConfigResponse"
             }
@@ -6926,7 +7172,7 @@
         ]
       },
       "patch": {
-        "description": "Deep-merge the request body into the stored configuration, validate the result, and persist it. Attempts to modify protected fields are rejected with 403. A merge that fails validation returns 422 with the validation errors and changes nothing. Mirrors the shape served by GET /api/config/schema.\nDeep-merges the request body into the stored configuration, validates\nthe result, and persists it. Attempts to modify protected fields are\nrejected with 403. A merge that fails validation returns 422 with the\nvalidation errors and changes nothing.",
+        "description": "Deep-merge the request body into the stored configuration, validate the result, and persist it. Attempts to modify protected fields are rejected with 403. A merge that fails validation returns 422 with the validation errors and changes nothing. If the merged configuration is valid but cannot be written to disk (e.g. a read-only mount), returns 500 with a machine-readable `code` and an actionable `message`; nothing changes. Mirrors the shape served by GET /api/config/schema.\nDeep-merges the request body into the stored configuration, validates\nthe result, and persists it. Attempts to modify protected fields are\nrejected with 403. A merge that fails validation returns 422 with the\nvalidation errors and changes nothing. If the write itself fails (e.g.\nthe configuration store is on a read-only mount), returns 500 with a\nmachine-readable `code` and an actionable `message`; nothing changes.",
         "operationId": "patch_config_resource",
         "parameters": [
           {
@@ -6967,6 +7213,12 @@
             "description": "Merged configuration failed validation; nothing was saved.",
             "schema": {
               "$ref": "#/definitions/ConfigValidationError"
+            }
+          },
+          "500": {
+            "description": "The configuration is valid but could not be persisted; nothing was saved.",
+            "schema": {
+              "$ref": "#/definitions/ConfigWriteError"
             }
           }
         },
@@ -7605,7 +7857,7 @@
     },
     "/api/sessions": {
       "get": {
-        "description": "List one summary per session \u2014 status, title, timestamps, and an `origin` describing what created it (the `SessionSummary` model carries the full set of values). Archived sessions are hidden unless `include_archived=true`.\nReturns one summary per session with status, title, timestamps, and an\n`origin` field describing what created it (the `SessionSummary` model\ncarries the full set of values). Archived sessions are hidden unless\n`include_archived=true`.",
+        "description": "List one summary per session \u2014 status, title, timestamps, and an `origin` describing what created it (the `SessionSummary` model carries the full set of values). Pinned sessions sort first, then newest first. Archived sessions are hidden unless `include_archived=true`. Unpaginated by default; pass `limit` to page through the most recently active sessions.\nReturns one summary per session with status, title, timestamps, and an\n`origin` field describing what created it (the `SessionSummary` model\ncarries the full set of values). Pinned sessions sort first, then newest\nfirst. Archived sessions are hidden unless `include_archived=true`.\nUnpaginated (returns the whole store) unless `limit` is given, matching\nevery consumer written before pagination existed; passing `limit`\nnarrows both the response AND, on the MongoDB driver, the store read\nbehind it.\n\n`project` is REPEATABLE rather than comma-separated \u2014 a project identity\nis an opaque string this route must not re-split, and Werkzeug already\ngives the multi-value read for free. `pinned` is absent-vs-false\ntri-state, so it reads the raw arg before `_parse_bool` (which cannot\ntell \"omitted\" from \"false\").\n\nThe filters and the page compose in ONE order: every `SessionListQuery`\npredicate is decided at the store, and only what it admitted is paged.\nPaging first would make `?pinned=true&limit=50` return the pinned\nsessions among the newest 50 candidates rather than the newest 50 pinned\nsessions.",
         "operationId": "get_sessions",
         "parameters": [
           {
@@ -7613,6 +7865,30 @@
             "in": "query",
             "name": "include_archived",
             "type": "boolean"
+          },
+          {
+            "description": "Repeat to widen: `?project=a&project=b` lists sessions that worked in EITHER. A session accumulates every project it binds to, so an auto-select session that switched mid-task matches each one.",
+            "in": "query",
+            "name": "project",
+            "type": "string"
+          },
+          {
+            "description": "Set to true for pinned sessions only, false for unpinned only. Omit to list both \u2014 pinning is normally an ordering, not a filter.",
+            "in": "query",
+            "name": "pinned",
+            "type": "boolean"
+          },
+          {
+            "description": "Cap the number of most-recently-active sessions examined. Omit to examine every candidate. Applied AFTER `pinned`/`project`/`include_archived` have narrowed the candidate set, so a filtered page is a page of the filtered sessions. Still bounds candidates rather than guaranteeing a row count \u2014 an examined session with no visible turn counts against `limit` without producing a row.",
+            "in": "query",
+            "name": "limit",
+            "type": "integer"
+          },
+          {
+            "description": "Candidates to skip before applying `limit`. Ignored without `limit`.",
+            "in": "query",
+            "name": "offset",
+            "type": "integer"
           }
         ],
         "responses": {
@@ -8024,7 +8300,7 @@
     },
     "/api/sessions/{session_id}/events": {
       "get": {
-        "description": "Return the session's event timeline plus authoritative run state \u2014 `running`, `status`, `done_reason`, `title`, and `recoverable`. Pass `after` (the `ts` of your last event) to fetch only newer events while polling; the status fields are always computed from the full transcript. Prefer the stream endpoint for push delivery.\nReturns the session's event timeline plus authoritative run state:\n`running`, `status`, `done_reason`, `title`, and `recoverable`. Pass\n`after` to fetch only new events while polling; the status fields are\nalways computed from the full transcript. Prefer the stream endpoint\nwhen you want push delivery.",
+        "description": "Return the session's event timeline plus authoritative run state \u2014 `running`, `status`, `done_reason`, `title`, and `recoverable`. Pass `after` (the `ts` of your last event) to fetch only newer events while polling; the status fields always describe the WHOLE session, never the returned window. Prefer the stream endpoint for push delivery.\nReturns the session's event timeline plus authoritative run state:\n`running`, `status`, `done_reason`, `title`, and `recoverable`. Pass\n`after` to fetch only new events while polling; the status fields always\ndescribe the WHOLE session, never the returned window. Prefer the stream\nendpoint when you want push delivery.",
         "operationId": "get_session_events",
         "parameters": [
           {
@@ -8035,7 +8311,7 @@
             "type": "string"
           },
           {
-            "description": "Return only events with a timestamp strictly after this value. Use the `ts` of the last event you received.",
+            "description": "Return only events with a timestamp strictly after this value. Use the `ts` of the last event you received, percent-encoded \u2014 these timestamps contain `+`, which is otherwise decoded as a space. A value that is not an ISO-8601 timestamp is rejected with 400 rather than silently returning the whole transcript.",
             "in": "query",
             "name": "after",
             "type": "string"
@@ -8052,6 +8328,12 @@
             "description": "Events plus authoritative session status.",
             "schema": {
               "$ref": "#/definitions/SessionEventsResponse"
+            }
+          },
+          "400": {
+            "description": "The `after` cursor is not an ISO-8601 timestamp.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope400"
             }
           },
           "401": {
@@ -8410,6 +8692,92 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/pin": {
+      "delete": {
+        "description": "Unpin the session, restoring its ordinary recency ordering.\nRestores the session's ordinary recency ordering.",
+        "operationId": "delete_session_pin",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session unpinned.",
+            "schema": {
+              "$ref": "#/definitions/SessionPinResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Unpin a session",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "post": {
+        "description": "Pin the session so it sorts first in `GET /api/sessions`, ahead of every unpinned session regardless of recency. Pinning is an ORDERING, not a filter: a pinned session stays subject to every other active filter. Reversible with DELETE on the same path.\nSorts the session first in the list, ahead of every unpinned session.\nReversible with DELETE on the same path.",
+        "operationId": "post_session_pin",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session pinned.",
+            "schema": {
+              "$ref": "#/definitions/SessionPinResponse"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError404"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Pin a session",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/plan.md": {
       "get": {
         "description": "Return the session's current `plan.md` as `text/markdown`. A plan file exists only after a plan-mode run has written one; otherwise the call returns 404.\nReturns the session's current `plan.md` as `text/markdown`. A plan\nfile exists only after a plan-mode run has written one; otherwise the\ncall returns 404.",
@@ -8533,6 +8901,70 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/project": {
+      "put": {
+        "description": "Bind the session to a different project. `editable.project` is false on a session created for a purpose, so an ordinary query cannot re-scope one in passing \u2014 that guard is what stops a stray request silently moving a session, and this route is the deliberate action beside it rather than a way around it. The project's directory is resolved server-side and stored with the name, so the next turn runs there. Only `project` is accepted: any other field, including `cwd`, is a 400. Returns the same body as GET /api/sessions/{session_id}/spec.\nMoves the session onto another project and re-resolves the working\ndirectory it runs in, persisting both together. Returns the updated\nbinding in the same shape as GET /api/sessions/{session_id}/spec.",
+        "operationId": "put_session_project_view",
+        "parameters": [
+          {
+            "description": "Session id returned by POST /api/sessions.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SessionProjectRebindRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rebound; body is the updated binding.",
+            "schema": {
+              "$ref": "#/definitions/SessionSpecResponse"
+            }
+          },
+          "400": {
+            "description": "The body named no project, named one that is not configured or has no directory, or carried a field other than `project`.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/ApiMessageError401"
+            }
+          },
+          "404": {
+            "description": "No session with that id exists.",
+            "schema": {
+              "$ref": "#/definitions/ApiErrorEnvelope404"
+            }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Rebind the session's project",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/query": {
       "post": {
         "description": "Start an asynchronous run for `query` and return 202 immediately; follow progress via the events or stream endpoints. The slash commands `/terminate` and `/status` are handled inline without starting a run (`/status` returns 200 with the session state). A session runs one turn at a time, so a second call while one is active returns 409. `@file`/`@dir`/`@diff`/`@url` references in the query are expanded before the run.\nStarts an asynchronous run for `query` on the session and returns 202\nimmediately; follow progress via the events or stream endpoints. The\nslash commands `/terminate` and `/status` are handled inline without\nstarting a run. A session executes one run at a time, so a second\ncall while one is active returns 409.",
@@ -8611,7 +9043,7 @@
     },
     "/api/sessions/{session_id}/questions/{call_id}/answer": {
       "post": {
-        "description": "Answer a pending `user_question` event (emitted while the agent blocks on its `ask_user_question` tool call \u2014 see the `ask_user` entry in `X-Mewbo-Capabilities`). The caller presents the single-use `call_token` carried on that event, proving session-stream read access and preventing replay (same threat model as device tools \u2014 not proof of WHICH surface answered; the `X-Mewbo-Surface` header is recorded as `answered_via` on the resulting `user_question_answered` event). One item per question, `selected_indexes` XOR `text`; free text is always accepted. First answer wins: a later POST returns 409 while the run is still reading it, then 404.\nDelivers the human's answers for a pending `user_question` event;\nthe blocked `ask_user_question` tool call resolves with them. One\nanswer item per question (`selected_indexes` XOR `text`).",
+        "description": "Answer a `user_question` event (emitted while the agent blocks on its `ask_user_question` tool call \u2014 see the `ask_user` entry in `X-Mewbo-Capabilities`). The caller presents the single-use `call_token` carried on that event, proving session-stream read access and preventing replay (same threat model as device tools \u2014 not proof of WHICH surface answered; the `X-Mewbo-Surface` header is recorded as `answered_via` on the resulting `user_question_answered` event). One item per question, `selected_indexes` XOR `text`; free text is always accepted, and an optional `notes` string carries whatever the question's `notes_placeholder` invited.\n\n**A question stays answerable until it is answered.** While the run is still blocked the answer resolves that tool call directly (`delivery: \"run\"`). Once the wait has ended \u2014 the call's `timeout_seconds` elapsed, a steer superseded it, the run finished, or the process restarted \u2014 the answer is recovered against the durable event and delivered as a new user turn instead (`delivery: \"message\"`), steering an active run or re-engaging an idle one. Only a real prior answer (409) or a terminated session (410) refuses one.\nDelivers the human's answers for a `user_question` event. While the\nrun is blocked the `ask_user_question` call resolves with them\n(`delivery: \"run\"`); once the wait has ended they arrive as a new user\nturn instead (`delivery: \"message\"`). One answer item per question\n(`selected_indexes` XOR `text`), plus optional `notes`.",
         "operationId": "post_session_question_answer",
         "parameters": [
           {
@@ -8639,13 +9071,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Answer delivered; the blocked tool call resolves.",
+            "description": "Answer accepted; `delivery` names where it landed.",
             "schema": {
               "$ref": "#/definitions/QuestionAnswered"
             }
           },
           "400": {
-            "description": "The request body is malformed.",
+            "description": "The request body is malformed, or `notes` exceeds the cap.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError400"
             }
@@ -8657,21 +9089,27 @@
             }
           },
           "403": {
-            "description": "`call_token` does not match the pending question.",
+            "description": "`call_token` does not match the question.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError403"
             }
           },
           "404": {
-            "description": "No pending question with that `call_id` (unknown, superseded, or already read).",
+            "description": "No question with that `call_id` in this session.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError404"
             }
           },
           "409": {
-            "description": "An answer was already delivered for this question.",
+            "description": "An answer was already delivered, or the session could not accept this one.",
             "schema": {
               "$ref": "#/definitions/ApiMessageError409"
+            }
+          },
+          "410": {
+            "description": "Session is permanently terminated.",
+            "schema": {
+              "$ref": "#/definitions/SessionTerminatedError"
             }
           },
           "422": {
@@ -8686,7 +9124,7 @@
             "apikey": []
           }
         ],
-        "summary": "Answer a pending user question",
+        "summary": "Answer a user question",
         "tags": [
           "Sessions"
         ]
@@ -8846,7 +9284,7 @@
     },
     "/api/sessions/{session_id}/stream": {
       "get": {
-        "description": "Open a Server-Sent Events stream. The stored backlog is replayed first, then new events are pushed as they happen (`data: <json>` frames). Heartbeat comments keep the connection alive and a terminal `stream_end` frame is sent when the run finishes. EventSource cannot set headers, so the key may be passed as the `api_key` query param.\nOpens a Server-Sent Events stream. The stored backlog is replayed\nfirst, then new events are pushed as they happen. Heartbeat comments\nkeep the connection alive, and a terminal `stream_end` frame is sent\nwhen the run finishes. Because EventSource cannot set headers, the API\nkey may be passed as the `api_key` query parameter instead.",
+        "description": "Open a Server-Sent Events stream. The stored backlog is replayed first (trimmed by `after` when given), then new events are pushed as they happen (`data: <json>` frames). A `session_state` frame carrying `running`, `status`, `done_reason`, `title`, `recoverable` and `terminated` is emitted after the replay and again before the stream closes, so a client needs no second endpoint for run state. Heartbeat comments keep the connection alive and a terminal `stream_end` frame is sent when the run finishes. EventSource cannot set headers, so the key may be passed as the `api_key` query param.\nOpens a Server-Sent Events stream. The stored backlog is replayed\nfirst (trimmed by `after` when given), then new events are pushed as\nthey happen. A `session_state` frame carries the authoritative run\nstate after the replay and again before the stream closes. Heartbeat\ncomments keep the connection alive, and a terminal `stream_end` frame\nis sent when the run finishes. Because EventSource cannot set headers,\nthe API key may be passed as the `api_key` query parameter instead.",
         "operationId": "get_session_stream",
         "parameters": [
           {
@@ -8861,6 +9299,12 @@
             "in": "query",
             "name": "api_key",
             "type": "string"
+          },
+          {
+            "description": "Replay only events at or after this timestamp. Pass the `ts` of the last event you received when reconnecting, so a resumed stream costs the delta instead of the whole transcript. The bound is INCLUSIVE \u2014 the timestamp you pass is re-sent, because several events can share one \u2014 so de-duplicate by event content.",
+            "in": "query",
+            "name": "after",
+            "type": "string"
           }
         ],
         "responses": {
@@ -8872,6 +9316,9 @@
             "schema": {
               "$ref": "#/definitions/ApiMessageError401"
             }
+          },
+          "503": {
+            "description": "Too many streams already open. Retry after `Retry-After`."
           }
         },
         "security": [

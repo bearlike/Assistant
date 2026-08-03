@@ -211,7 +211,7 @@
     <div class="container-wrapper 3xl:fixed:px-0 px-6">
         <div class="3xl:fixed:container ms-header-tabs__rail">
             <a class="ms-header-tabs__item" href="..">
-                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 7v14m-9-3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4a4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3a3 3 0 0 0-3-3z"/></svg></span>
+                <span class="ms-header-tabs__icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15px" height="15px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v16m8.001-2A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2a5 5 0 0 1 4-2z"/></svg></span>
                 <span>Documentation</span>
             </a>
             <a class="ms-header-tabs__item" href="../terminal/">
@@ -736,7 +736,7 @@
 <p>Or attach to the live stream with <a href="../rest-api/#tag/sessions" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/api/sessions/{session_id}/stream</span></a>. This is Server-Sent Events, so pass the key as a query parameter:</p>
 <div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;http://localhost:5125/api/sessions/9e2d47c1a0b34f12/stream?api_key=</span><span class="nv">$MEWBO_API_KEY</span><span class="s2">&quot;</span>
 </code></pre></div>
-<p>The stream replays the stored backlog once, then pushes each new event the moment it is appended. A terminal <code>stream_end</code> event marks the run finished.</p>
+<p>The stream replays the stored backlog once, then pushes each new event the moment it is appended. Pass <code>after</code> with a timestamp to resume a dropped connection without re-downloading the transcript, and watch for the <code>session_state</code> frame carrying the same authoritative run state the polling response returns. A terminal <code>stream_end</code> event marks the run finished. See <a href="building-a-client/">Building a Client</a> for the full contract.</p>
 <h2 id="what-is-in-this-section">What is in this section</h2>
 <div class="table-wrapper"><table>
 <thead>

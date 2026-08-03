@@ -102,7 +102,7 @@ Or attach to the live stream with [GET /api/sessions/{session_id}/stream](endpoi
 curl -N "http://localhost:5125/api/sessions/9e2d47c1a0b34f12/stream?api_key=$MEWBO_API_KEY"
 ```
 
-The stream replays the stored backlog once, then pushes each new event the moment it is appended. A terminal `stream_end` event marks the run finished.
+The stream replays the stored backlog once, then pushes each new event the moment it is appended. Pass `after` with a timestamp to resume a dropped connection without re-downloading the transcript, and watch for the `session_state` frame carrying the same authoritative run state the polling response returns. A terminal `stream_end` event marks the run finished. See [Building a Client](building-a-client.md) for the full contract.
 
 ## What is in this section
 

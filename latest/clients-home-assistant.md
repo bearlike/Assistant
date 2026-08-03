@@ -18,7 +18,7 @@ See [Get Started](getting-started.md) to run the API that this integration talks
 
 The Home Assistant Assist pipeline captures the wake word and the utterance. It hands the transcript to the Mewbo conversation agent. The agent sends the text to the Mewbo API and speaks the reply back through text to speech.
 
-Each turn is a single synchronous call to [`POST /api/query`](endpoint:POST /api/query), the legacy query endpoint. The agent posts the utterance as the `query` field and reads one JSON response back. That response carries the reply text, the run `context`, and a `session_id`. Nothing is streamed.
+Each turn is a single synchronous call to [`POST /api/query`](endpoint:POST /api/query), the synchronous query endpoint. The agent posts the utterance as the `query` field and reads one JSON response back. That response carries the reply text, the run `context`, and a `session_id`. Nothing is streamed.
 
 ```mermaid
 sequenceDiagram
@@ -40,7 +40,7 @@ The agent tracks each conversation in memory rather than through server-side ses
    `custom_components/mewbo_conversation/`.
 3. In Home Assistant, add the "Mewbo" conversation integration and set:
    - Base URL: the API base URL, for example `http://host:5125`. The Docker stack publishes the API on host port 5125. A local `uv run mewbo-api` dev server listens on 5124.
-   - API key: the key you enter is stored with the config entry and sent as the `X-API-KEY` header on every request. It must match a token your server accepts — the server's `api.master_token`, or a revocable key minted via [`POST /api/keys`](endpoint:POST /api/keys). Legacy entries created before the key was wired carry no stored key; they fall back to the old placeholder token and log a deprecation warning, so re-add the integration to set your key.
+   - API key: the key you enter is stored with the config entry and sent as the `X-API-KEY` header on every request. It must match a token your server accepts — the server's `api.master_token`, or a revocable key minted via [`POST /api/keys`](endpoint:POST /api/keys). A config entry with no stored key falls back to a default token and logs a warning; re-add the integration to set your key.
    - Timeout: how long to wait for a reply, in seconds.
 
 ## Optional: enable the Home Assistant tool

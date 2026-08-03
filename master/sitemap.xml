@@ -2,278 +2,282 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://docs.mewbo.com/master/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/authentication-providers/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/authentication/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/clients-email/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/clients-home-assistant/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/clients-mcp/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/clients-nextcloud-talk/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/configuration/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/core-orchestration/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/deployment-docker/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/deployment-production/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/deployment-storage/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-agents/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-builtin-tools/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-compaction/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-lsp/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-mcp/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-monitors/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-permissions-hooks/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-plan-mode/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-plugins/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-policies/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-search-scg/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-search/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-skills/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-token-usage/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-wiki-graph/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-wiki-indexing/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-wiki-qa/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-wiki/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/features-worktrees/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/getting-started/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-authelia/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-authentik/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-aws/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-entra-id/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-google/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-keycloak/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/integrations-ldap/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/llm-setup/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/project-configuration/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/reference/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/rest-api/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/session-runtime/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/troubleshooting/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/android/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/android/chat/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/android/device-tools/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/android/install/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/android/voice/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/automation/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/building-a-client/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/device-tools/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/structured-outputs/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/api/triggers/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/apps/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/apps/building/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/apps/operating/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/terminal/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/terminal/agent-fleet/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/terminal/configuration/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/terminal/interface/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/terminal/remote-sync/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/web/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/web/ide/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
+    </url>
+    <url>
+         <loc>https://docs.mewbo.com/master/web/panels/</loc>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/web/search-and-wiki/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/web/sessions/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
     <url>
          <loc>https://docs.mewbo.com/master/web/widgets/</loc>
-         <lastmod>2026-07-22</lastmod>
+         <lastmod>2026-08-03</lastmod>
     </url>
 </urlset>

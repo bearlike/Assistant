@@ -43,7 +43,7 @@ The Agentic Wiki has three moving parts. Start wherever matches what you want to
     <iconify-icon icon="lucide:database" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Indexing &amp; Generation</span>
-  <span class="ms-card__body">Point at a repo and a six-phase agent run clones it, lifts its code into a graph, and writes the pages. Scope the index with a short wizard, then re-index on demand as the code changes.</span>
+  <span class="ms-card__body">Point at a repo and a seven-phase agent run clones it, lifts its code into a graph, and writes the pages. Scope the index with a short wizard, then re-index on demand as the code changes.</span>
 </a>
 
 <a class="ms-card" href="features-wiki-qa/">
@@ -78,7 +78,7 @@ uv sync --extra wiki
 uv run mewbo-api
 ```
 
-The [`/v1/wiki/*`](endpoint:/v1/wiki) routes mount only when the extras resolve; without them the server starts cleanly with the feature absent. Persisting wikis and live indexing progress use the MongoDB storage backend.
+The `/v1/wiki/*` routes mount only when the extras resolve; without them the server starts cleanly with the feature absent. Persisting wikis and live indexing progress use the MongoDB storage backend.
 
 > [!NOTE] Private-repo tokens are remembered
 > Access tokens entered during the indexing wizard are persisted, so re-index runs don't prompt you again. If a token is revoked or expires, the next re-index detects the failure and prompts for a replacement.

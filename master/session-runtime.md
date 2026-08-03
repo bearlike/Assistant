@@ -33,8 +33,8 @@ Event payload notes:
 
 ## Minimal usage (Python)
 ```python
-from mewbo_core.session_runtime import SessionRuntime
-from mewbo_core.session_store import SessionStore
+from mewbo_core.loop.session_runtime import SessionRuntime
+from mewbo_core.session.session_store import SessionStore
 
 runtime = SessionRuntime(session_store=SessionStore())
 session_id = runtime.resolve_session(session_tag="primary")
@@ -76,7 +76,7 @@ Every session has an **origin**: the surface or subsystem that created it. Origi
 
 | Origin | Classified when |
 |--------|-----------------|
-| `wiki` | Session is tagged `wiki:job` (indexing run) or `wiki:qa` (Q&A query) |
+| `wiki` | Session is tagged `wiki:job` (indexing run), `wiki:qa` (Q&A query), `wiki:act` (scoped refresh) or `wiki:maintain` (on-demand maintainer) |
 | `search` | Session is tagged `agentic_search` |
 | `structured` | Session is tagged `structured:run` ([`POST /v1/structured`](endpoint:POST /v1/structured) agentic mode, including MCP `structured_query`) or `structured:fast` (`POST /v1/structured` with `mode:"synthesis"`) |
 | `draft` | Session is tagged `draft:stream` ([`POST /v1/draft/stream`](endpoint:POST /v1/draft/stream)) |
@@ -85,7 +85,7 @@ Every session has an **origin**: the surface or subsystem that created it. Origi
 | `channel` | Session carries a channel tag with a `:room:` or `:thread:` segment, such as `nextcloud-talk:room:<token>` |
 | `user` | Everything else: direct console, CLI, or API sessions |
 
-The `structured` and `draft` origins come from the realtime endpoints. Those endpoints used to be sessionless. They now mint real sessions, so every structured query and draft stream is browsable in the session list and carries a full transcript.
+The `structured` and `draft` origins come from the realtime endpoints. Those endpoints mint real sessions, so every structured query and draft stream is browsable in the session list and carries a full transcript.
 
 The `apps` origin covers Mewbo Apps sessions: one builder session per app creation, plus one long-lived maintainer session that the app's pipelines wake to apply changes. These are background product sessions rather than tasks you started, so they stay hidden behind the origin filter by default.
 

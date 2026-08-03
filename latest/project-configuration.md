@@ -9,6 +9,35 @@ The same mechanism handles MCP tool configuration, skills, and local overrides.
 
 ---
 
+## Choosing a workspace
+
+Every session runs somewhere on disk, and there are three ways to pick where.
+
+| Choice | Where the session starts | Pick this when |
+|---|---|---|
+| Temporary directory (default) | A fresh, empty scratch directory that exists only for the session | The task does not need an existing codebase: a one-off script, a calculation, a question with no repository behind it |
+| A named project | The directory you choose before the session starts | You already know which project the work belongs to |
+| Auto | A temporary directory at first, then wherever the model decides | The right project is not obvious up front, or the task genuinely touches more than one project |
+
+The first two choices are fixed for the life of the session: you name the working directory, or you leave it unset and Mewbo defaults to a scratch directory. Auto is dynamic. The session still starts in a temporary directory like the default case, but two tools are bound to it that let the model find the project the task actually needs and move into it, then change its mind later if the task grows to cover more than one.
+
+### What the model sees in auto mode
+
+`list_projects` enumerates every project Mewbo currently knows about: directories an operator registered by hand, projects and worktrees Mewbo manages itself, and git repositories that have been registered but not necessarily checked out anywhere. Each entry reports a key, a name, its kind, a description, whether it is currently available, and its repository slug and branch when known. A registered repository with no local checkout still appears in the list, so the model can see that it exists; it cannot be worked in until something checks it out, and `switch_project` refuses a key pointing at one until then.
+
+`switch_project` takes a key from that list and moves the session into it. The working directory moves, the project's own instruction files are picked up the same way described below, and any sub-agent spawned after the switch inherits the new directory too. A sub-agent already running when the switch happens keeps the directory it started in; the switch moves the session going forward, not agents already in flight. The model can call `switch_project` repeatedly, and a task that legitimately spans several projects is expected to.
+
+Two limits are worth knowing, because both are deliberate rather than gaps:
+
+- **A switch never grants the agent more tools than it started with.** The tool registry is rebuilt for the new directory, but the set of tools bound to the agent narrows to what the run already held; a project's own `.mcp.json` servers are not admitted partway through a run. Otherwise moving between projects would be a way to acquire tools the caller never granted. Start a fresh session against that project and its servers resolve normally.
+- **Skills accumulate rather than being replaced.** The registry also holds plugin-contributed and user-level skills, and a fresh scan of the new directory alone would drop them. Carrying the previous project's skills costs less than losing those.
+
+A parent agent can also hand a sub-agent its own project at the moment it spawns it, independent of any switch. That is what lets one session run a fleet of agents in one repository while another fleet works in a second, all under the same session.
+
+Both tools exist only for the top-level agent, and only while the session is in auto mode. A sub-agent works in whatever directory it was spawned into or later switched to by its own parent; it never re-scopes the whole session. See [Built-in Tools](features-builtin-tools.md#list_projects) for the full parameter and result reference.
+
+---
+
 ## Instruction file loading
 
 ### Upward pass: content injected at startup
@@ -86,7 +115,7 @@ All `.mcp.json` files are normalized before merging, so you can mix schemas free
 | `mcpServers` | `servers` | Claude Code / VS Code schema compatibility |
 | `type` | `transport` | Both keys removed after normalization to avoid leaks |
 | `http_headers` | `headers` | Direct rename |
-| `transport: "http"` | `transport: "streamable_http"` | Legacy alias |
+| `transport: "http"` | `transport: "streamable_http"` | Accepted alias |
 | `command` present, no `transport` | `transport: "stdio"` | Inferred |
 | `${VAR}` / `$VAR` in values | Expanded from process environment | Unresolved vars left as-is |
 

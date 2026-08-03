@@ -33,7 +33,7 @@ Agent definitions themselves are `.md` files with YAML frontmatter, registered f
 
 ### Blocking vs. non-blocking
 
-**When the root agent spawns, the call is non-blocking.** The call returns immediately with an ID:
+**When the root agent spawns, the call is non-blocking.** The call returns immediately with an agent ID, whether or not a concurrency slot is free:
 
 ```json
 {
@@ -44,11 +44,58 @@ Agent definitions themselves are `.md` files with YAML frontmatter, registered f
 }
 ```
 
+`status` is `"submitted"` regardless of whether a slot was free at spawn time: the agent is registered and visible to `check_agents` either way, and starts running on its own the moment a slot frees up if none was available yet. Reaching `agent.max_concurrent` (see [Configuration](#configuration)) is never a reason a spawn fails, and a parent waiting on a child does not itself consume a slot for that wait; only a running agent does.
+
+A spawn is refused outright instead, `status: "rejected"` with no `agent_id`, only when the outcome would be identical on retry: an unresolvable `project`, an unknown `agent_type`, or a model this deployment cannot serve. The response names the reason so the caller does not retry unchanged.
+
 The agent runs in the background. Use `check_agents` to poll or wait for completion.
 
-**When a sub-agent itself spawns a deeper agent, the call is blocking.** The deeper call waits for the child to finish and returns the result inline, so a mid-level agent reads the outcome the moment it is available.
+**When a sub-agent itself spawns a deeper agent, the call is blocking.** The deeper call waits for the child to reach a terminal state, including any time it spends `submitted` before a slot frees, and returns the result inline, so a mid-level agent reads the outcome the moment it is available. Concurrency never fails a blocking spawn either; only the same permanent-refusal reasons above do.
 
 Sub-agents run until the model returns a text response without any more tool calls. That is natural completion. There is no hard step limit. Safety comes from per-call timeouts, stall detection, and the session-wide step budget.
+
+---
+
+## Spawning multiple sub-agents at once
+
+`spawn_agents` fans a batch of independent sub-agents out from one call, the preferred path over issuing several separate `spawn_agent` calls since it guarantees every entry is admitted together in one turn. Each entry takes the same fields as `spawn_agent`.
+
+```json
+{
+  "tasks": [
+    {"task": "Summarize module A"},
+    {"task": "Summarize module B"},
+    {"task": "Summarize module C"}
+  ]
+}
+```
+
+Every entry that is not a permanent refusal is admitted in the same call: it gets its own `agent_id` and comes back `status: "submitted"`, whether or not a concurrency slot is free for it yet, and each one starts running on its own as a slot becomes available. A 26-entry batch against the default `agent.max_concurrent` of 20, for example, admits all 26: 20 start running right away, 6 stay `"submitted"` until a slot frees, and none are `"rejected"`. The response reports each entry plus totals:
+
+```json
+{
+  "kind": "agent_batch",
+  "text": "Spawned 26/26 agent(s). Use check_agents to monitor progress and collect results.",
+  "agents": [
+    {"index": 0, "agent_id": "a1b2c3d4-...", "status": "submitted", "task": "Summarize module A"},
+    {"index": 1, "agent_id": "e5f6a7b8-...", "status": "submitted", "task": "Summarize module B"}
+  ],
+  "agent_ids": ["a1b2c3d4-...", "e5f6a7b8-..."],
+  "accepted": 26,
+  "spawned": 26,
+  "dispatched": 20,
+  "deferred": 6,
+  "rejected": 0
+}
+```
+
+`accepted` is how many entries became real agents; `spawned` carries the same
+number under its historical name. `dispatched` and `deferred` split that total
+into the ones running now and the ones waiting for a slot — a scheduling fact
+reported as a count, never as a per-agent `status`, so no client has to learn a
+state beyond the six an agent can actually be in.
+
+`status` is `"rejected"` only for a permanent refusal, the same reasons a single `spawn_agent` call can be refused for. A rejected entry's `agent_id` is `null` and its `reason` field names why, without affecting its siblings. `agent_ids` preserves order, so index `i` always names `tasks[i]`. Monitor every entry with `check_agents`; a `submitted` entry not yet running reports the same way as one that already is.
 
 ---
 
@@ -97,7 +144,7 @@ When a sub-agent finishes, its result is a structured object:
 | Field | Type | Description |
 |---|---|---|
 | `content` | string | Primary output text |
-| `status` | string | `completed`, `failed`, or `cannot_solve` |
+| `status` | string | `completed`, `failed`, `partial`, `cannot_solve`, or `cancelled` |
 | `steps_used` | integer | Number of tool steps executed |
 | `summary` | string | Compressed summary (≤ 500 chars) for the parent's context |
 | `warnings` | array | Non-fatal issues encountered |
@@ -113,14 +160,15 @@ All keys live under `agent` in [`configs/app.json`](configuration.md#agent).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `agent.enabled` | boolean | `true` | Enable or disable sub-agent spawning |
 | `agent.max_depth` | integer | `5` | Maximum nesting depth (minimum `1` = no sub-agents) |
-| `agent.max_concurrent` | integer | `20` | Maximum number of agents that may run at the same time |
+| `agent.max_concurrent` | integer | `20` | Maximum number of agents that may be **running** at the same time |
 | `agent.default_sub_model` | string | `""` | Default model for sub-agents; inherits root model when empty |
 | `agent.allowed_models` | array | `[]` | Allowlist of models sub-agents may use; empty = unrestricted |
-| `agent.llm_call_timeout` | float | `60.0` | Per-call timeout in seconds for a single model invocation |
+| `agent.llm_call_timeout` | float | `120.0` | Per-call timeout in seconds for a single model invocation |
 | `agent.llm_call_retries` | integer | `2` | Retries on the primary model before cascading to `llm.fallback_models` |
 | `agent.default_denied_tools` | array | `[]` | Tool IDs denied to all sub-agents globally |
+
+`agent.max_concurrent` bounds how many agents may run at once, not how many may be spawned: a spawn beyond it is never refused, it is admitted immediately with a real `agent_id` and starts running on its own once a slot frees up. Whether that is one `spawn_agent` call too many or a wide `spawn_agents` batch, the extra agents wait their turn rather than being turned away. The pool is per-run, not global: concurrent sessions never contend with each other over it, so this setting only ever bounds the width of a single session's own fan-out. Raise it when a workload's natural fan-out regularly exceeds the default, for example a wide review batch, or an orchestrator whose sub-agents each spawn agents of their own, so more of it runs in parallel instead of waiting its turn. Lower it, as in the first example below, when a deployment's own resources (LLM gateway concurrency, host CPU/memory) are the binding constraint rather than wall-clock time.
 
 **Example.** Limit sub-agents to a fast model and cap concurrency for a resource-constrained environment:
 
@@ -130,6 +178,16 @@ All keys live under `agent` in [`configs/app.json`](configuration.md#agent).
     "max_concurrent": 5,
     "default_sub_model": "anthropic/claude-haiku-4-5",
     "allowed_models": ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"]
+  }
+}
+```
+
+**Example.** Raise concurrency for a workload with wide, genuinely parallel fan-out:
+
+```json
+{
+  "agent": {
+    "max_concurrent": 50
   }
 }
 ```

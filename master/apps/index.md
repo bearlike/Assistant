@@ -24,6 +24,12 @@ flowchart LR
 - **Your app live-reads.** Every rerun renders the current collections, never a frozen copy.
 - **Model runs return only for repair.** A failed pipeline run starts a maintainer repair run. Nothing else does.
 
+A built app looks like this once it is live. `LLM Model Compare` filters and ranks models by capability, and its own pipelines refresh the underlying snapshots daily.
+
+<div style="display: flex; justify-content: center;">
+  <img src="../assets/img/mewbo-apps-01-detail.png" alt="A live Mewbo App called LLM Model Compare, version 1, marked Live. A left filter rail covers creator or provider, release year, capabilities, minimum intelligence index, minimum output tokens per second, and maximum blended cost. The center shows stat tiles and a bar chart ranked by Coding, followed by a ranked list. A right rail shows Health with last refreshed and next refresh time and the maintainer, Recent runs, Pipelines refreshing daily, the Cron schedule, and Versions." style="width: 100%; max-width: 960px; height: auto;" />
+</div>
+
 ---
 
 ## What you get

@@ -28,7 +28,7 @@ All three are session-backed. Every run leaves an auditable transcript and a Lan
 
 ## How it works
 
-POST a query and a JSON Schema to [/v1/structured](endpoint:POST /v1/structured). Mewbo starts an agentic session internally. The session can call grounding tools, search connected sources, and use its knowledge to assemble the answer. When it is ready, the session calls an [EmitStructuredResponse](repo:packages/mewbo_core/src/mewbo_core/structured_response.py) tool that validates the payload against your schema. If the object does not match, the model is asked to fix it through the normal tool-result loop. No special control mechanism is needed.
+POST a query and a JSON Schema to [/v1/structured](endpoint:POST /v1/structured). Mewbo starts an agentic session internally. The session can call grounding tools, search connected sources, and use its knowledge to assemble the answer. When it is ready, the session calls an [EmitStructuredResponse](repo:packages/mewbo_core/src/mewbo_core/loop/structured_response.py) tool that validates the payload against your schema. If the object does not match, the model is asked to fix it through the normal tool-result loop. No special control mechanism is needed.
 
 The POST returns a run handle right away. Runs that finish within a few seconds come back inline with `status: "completed"` and the output attached. For everything else, poll [GET /v1/structured/{run_id}](endpoint:GET /v1/structured/{run_id}), or attach to the live event stream (see below).
 
@@ -251,7 +251,7 @@ uv run mewbo-api
 Without the extras the endpoint still works for schema-constrained sessions. Workspace grounding is silently skipped when the extra is absent. Graph-first grounding additionally needs the Source Capability Graph: enable `scg.enabled` and map at least one of the workspace's sources. See [Agentic Search](../features-search.md).
 
 > [!NOTE] Going deeper
-> Structured runs are ordinary agentic sessions under the hood. They use the same [ToolUseLoop](repo:packages/mewbo_core/src/mewbo_core/tool_use_loop.py) and [Sub-agent](../features-agents.md) model. The schema constraint and `EmitStructuredResponse` tool are layered on top, not a separate execution path. The graph-first discipline is the same story: a capability grant plus a playbook on the same loop, not a second engine.
+> Structured runs are ordinary agentic sessions under the hood. They use the same [ToolUseLoop](repo:packages/mewbo_core/src/mewbo_core/loop/tool_use_loop.py) and [Sub-agent](../features-agents.md) model. The schema constraint and `EmitStructuredResponse` tool are layered on top, not a separate execution path. The graph-first discipline is the same story: a capability grant plus a playbook on the same loop, not a second engine.
 
 ## Next steps
 

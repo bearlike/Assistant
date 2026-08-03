@@ -1,13 +1,13 @@
 # MCP Tools
 
-Model Context Protocol (MCP) tools extend Mewbo with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Mewbo' built-in tools and are available to every session.
+Model Context Protocol (MCP) tools extend Mewbo with external tool servers. Any MCP-compatible server can be plugged in via a config file. This includes file systems, databases, APIs, code execution environments, and search engines. Tools contributed by MCP servers appear in the tool registry alongside Mewbo's built-in tools and are available to every session.
 
 > [!TIP] Drop-in compatible with Claude Code and VS Code
 > Mewbo reads the same `.mcp.json` / `mcp.json` schema, accepting both the `servers` (Mewbo-native) and `mcpServers` (Claude Code / VS Code) top-level keys. Environment variable expansion follows the same `${VAR}` convention. If you already have an MCP config for another tool, copy it in and it will work unchanged. See the official [Model Context Protocol](https://modelcontextprotocol.io) specification.
 
 ## Configuring MCP servers
 
-Define the servers you want the assistant to reach through a JSON config. The primary file is [`configs/mcp.json`](repo:configs/mcp.json) at the repo root (or `$MEWBO_HOME/mcp.json` for a global install).
+Define the servers you want the assistant to reach through a JSON config. The primary file is `configs/mcp.json` at the repo root (or `$MEWBO_HOME/mcp.json` for a global install).
 
 **Example `configs/mcp.json`:**
 
@@ -55,17 +55,19 @@ Configure it under `agent.tool_search` in `app.json`:
 
 | `mode` | Behaviour |
 |--------|-----------|
-| `auto` *(default)* | Defer only when the number of deferrable tools exceeds `auto_threshold` (default `25`). Lean or zero-MCP sessions keep verbatim binding and pay nothing; large fleets are spared the per-turn cost. |
-| `on` | Always defer MCP / deferrable tools. |
+| `on` *(default)* | Always defer MCP / deferrable tools. No MCP tool occupies the context window until the model asks for it. |
+| `auto` | Defer only when the number of deferrable tools exceeds `auto_threshold` (default `25`). |
 | `off` | Never defer. Every schema is bound on turn one. |
 
 ```json
 {
   "agent": {
-    "tool_search": { "mode": "auto", "auto_threshold": 25 }
+    "tool_search": { "mode": "on" }
   }
 }
 ```
+
+`on` costs a zero-MCP session nothing: deferral engages only when the deferrable set is non-empty, so with no MCP servers configured `on` and `off` bind an identical list. The only range where `auto` differs is 1 to `auto_threshold` tools — and there it binds every one of those schemas verbatim on every turn. Because the gate is a tool *count*, adding or removing a server can silently move a deployment across the cliff in either direction, which is why the adaptive mode is not the default.
 
 The `tool_search` tool is always available (it is exempt from `allowed_tools` scoping), so even a tightly scoped sub-agent can still reach its deferred tools. A model that cannot reliably issue a `tool_search` call simply sees no MCP tools for that turn. That is a graceful degradation rather than an error.
 
@@ -79,7 +81,7 @@ You can control which MCP tools are bound to a session:
 
 ## Per-project MCP config
 
-Drop a `.mcp.json` file at your project root. When you start a session inside that project, its servers are merged with the global [`configs/mcp.json`](repo:configs/mcp.json) automatically. You can also place `.mcp.json` files deeper in the tree for sub-package–specific tools.
+Drop a `.mcp.json` file at your project root. When you start a session inside that project, its servers are merged with the global `configs/mcp.json` automatically. You can also place `.mcp.json` files deeper in the tree for sub-package–specific tools.
 
 **Example project `.mcp.json`:**
 
@@ -115,7 +117,7 @@ Edits to `mcp.json` are picked up on the next session start. Start a new session
 | `Tool 'X' not found on server 'Y' after reconnect` | The tool was removed from the server between sessions. |
 | Session starts but MCP tools missing | An `allowed_tools` filter excluded them; check the console tool selector or the API payload. |
 
-See also: [Troubleshooting](reference.md) for the general debugging methodology.
+See also: [Troubleshooting](troubleshooting.md) for the general debugging methodology.
 
 ---
 

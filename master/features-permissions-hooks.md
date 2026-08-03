@@ -89,7 +89,7 @@ See [configuration.md](configuration.md#permissions) for field descriptions.
 
 ## Hooks
 
-Hooks run custom code at specific moments in a session's life. They are declared in the `hooks` section of [`configs/app.json`](repo:configs/app.example.json). A failing hook is logged as a warning and never blocks execution, so hooks are safe to use for side effects even if the external endpoint is flaky.
+Hooks run custom code at specific moments in a session's life. They are declared in the `hooks` section of `configs/app.json`; see [`configs/app.example.json`](repo:configs/app.example.json) for a starting point. A failing hook is logged as a warning and never blocks execution, so hooks are safe to use for side effects even if the external endpoint is flaky.
 
 ### When hooks fire
 
@@ -99,6 +99,9 @@ Hooks run custom code at specific moments in a session's life. They are declared
 | `on_session_end` | A session ends, whether it succeeded or errored |
 | `pre_tool_use` | Just before a tool call executes |
 | `post_tool_use` | Just after a tool call returns |
+| `on_event` | Every time an event is appended to a session transcript |
+
+`on_event` is the firehose: it sees every transcript record, not just tool calls. Because it sits on the append hot path, both hook types fire it without waiting, so a slow hook never delays the session. Its `matcher` is matched against the event **type** (for example `tool_result` or `context_compacted`) rather than a `tool_id`.
 
 ### Two hook types
 
@@ -115,6 +118,9 @@ Mewbo sets these environment variables on the subprocess:
 | `MEWBO_TOOL_ID` | `pre_tool_use`, `post_tool_use` | Tool identifier |
 | `MEWBO_OPERATION` | `pre_tool_use`, `post_tool_use` | Operation name |
 | `MEWBO_TOOL_RESULT` | `post_tool_use` | First 2 000 characters of the result |
+| `MEWBO_EVENT_TYPE` | `on_event` | Event type of the appended record |
+
+An `on_event` command hook also receives the full event record as JSON on stdin.
 
 Example. Send a desktop notification when a session ends:
 
@@ -152,6 +158,16 @@ Payload for `post_tool_use`:
   "tool_id": "aider_shell_tool",
   "operation": "run",
   "result_preview": "stdout output (first 2000 chars)"
+}
+```
+
+Payload for `on_event`, where `record` is the transcript event with its string values truncated:
+
+```json
+{
+  "event": "session_event",
+  "session_id": "abc123",
+  "record": { "type": "tool_result", "ts": "...", "...": "..." }
 }
 ```
 
@@ -230,6 +246,7 @@ Add a `matcher` (an `fnmatch` pattern) to any hook entry to restrict which tool 
 | `hooks.post_tool_use` | list | `[]` | Hooks executed after each tool invocation. |
 | `hooks.on_session_start` | list | `[]` | Hooks executed when a new session begins. |
 | `hooks.on_session_end` | list | `[]` | Hooks executed when a session ends. |
+| `hooks.on_event` | list | `[]` | Fire-and-forget hooks executed for every event appended to a session transcript. The matcher fnmatches the event type. |
 
 Each entry in a hooks list accepts:
 
@@ -239,7 +256,7 @@ Each entry in a hooks list accepts:
 | `command` | string | `""` | Shell command to run (`type=command`) |
 | `url` | string | `""` | POST target (`type=http`) |
 | `headers` | object | `{}` | Extra HTTP headers (`type=http`) |
-| `matcher` | string \| null | `null` | fnmatch pattern on `tool_id`; `null` matches all |
+| `matcher` | string \| null | `null` | fnmatch pattern on `tool_id` (on the event type for `on_event`); `null` matches all |
 | `timeout` | integer | `30` | Max seconds to wait for the hook |
 
 See [configuration.md](configuration.md) for the full config schema.

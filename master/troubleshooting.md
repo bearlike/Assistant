@@ -39,7 +39,7 @@ Fix: Check [`GET /api/tools`](endpoint:GET /api/tools) (API) or `/mcp` (CLI) to 
 
 Causes:
 
-- [`configs/mcp.json`](repo:configs/mcp.json) path doesn't match the container mount (Docker: paths must be identical between host and container).
+- `configs/mcp.json` path doesn't match the container mount (Docker: paths must be identical between host and container).
 - Project `.mcp.json` not merged. CWD not set correctly in the request.
 - Key name mismatch: both `mcpServers` and `servers` are accepted. Verify the key in your config file.
 
@@ -63,7 +63,7 @@ Fix: Verify the project directory is mounted at the exact same path as on the ho
 Checks:
 
 1. Both services use host networking. Verify nothing else is on ports 5125 or 3001.
-2. `HOST_UID` and `HOST_GID` must match your actual user: run `id` to find them.
+2. `MEWBO_HOST_UID` and `MEWBO_HOST_GID` must match your actual user: run `id` to find them.
 3. Volume paths must match exactly between host and container.
 4. Check logs: `docker compose logs -f mewbo-api`.
 
@@ -121,7 +121,7 @@ Standard path: `fetch_traces` → `fetch_trace(include_observations=true)` → `
 | Mistake | Fix |
 |---------|-----|
 | Model name without provider prefix | Use `anthropic/model`, not just `model` |
-| `MASTER_API_TOKEN` left as default | Change before exposing to the network |
-| `VITE_API_KEY` doesn't match `MASTER_API_TOKEN` | They must be identical |
+| `MEWBO_MASTER_API_TOKEN` left as default | Change before exposing to the network |
+| `MEWBO_VITE_API_KEY` doesn't match `MEWBO_MASTER_API_TOKEN` | They must be identical |
 | Empty `api_base` with proxy model names | Set `llm.api_base` to your proxy URL |
 | Mounted project at different path than host | Container path must equal host path |

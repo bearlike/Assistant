@@ -2,6 +2,11 @@
 
 A session is one conversation with the agent. The console is built around watching sessions run. This page covers the session list, the composer that starts a session, what you see while a run is live, and how to resume a session that stopped.
 
+<video controls preload="metadata" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 2rem auto 0;">
+  <source src="../../assets/videos/mewbo-tasks-demo.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
 ## The session list and landing page
 
 <div style="display: flex; justify-content: center;">
@@ -14,7 +19,7 @@ Not every session is yours to read. The console spawns sessions internally for w
 
 By default you see sessions you started and sessions from chat channels. The origin filter, a dropdown on the list, lets you reveal the rest. Wiki, search, realtime, Mewbo Apps, and mobile sessions sit behind it. App sessions are the ones that build and maintain a Mewbo App, so they belong to the Apps product rather than to your task list. Mobile sessions belong to the Aura Android client and scope themselves to its own rail. The filter and the badge live in [`HomeView`](repo:apps/mewbo_console/src/components/HomeView.tsx).
 
-On a session detail page, a persistent left panel, [`TaskSidebar`](repo:apps/mewbo_console/src/components/TaskSidebar.tsx), lists your recent tasks so you can switch between them without leaving the run. It honors the same default origin filter as the landing page. On a phone it collapses into a drawer.
+On a session detail page, the Tasks section of the persistent left rail, [`sections.tsx`](repo:apps/mewbo_console/src/components/nav-rail/sections.tsx), lists your recent tasks so you can switch between them without leaving the run. It honors the same default origin filter as the landing page. On a phone the rail becomes an off-canvas drawer.
 
 ## Start a session with the composer
 
@@ -71,6 +76,12 @@ You do not have to wait for a run to finish. The composer stays alive during a r
 **Share and export.** Share a session to get a read-only link that works without authentication. Export a session to download its full payload.
 
 The exact request shapes for steering, forking, sharing, and export live in the [REST API Reference](../rest-api.md).
+
+## Open a session from Wiki or Apps
+
+You do not always start from the composer. Standing on a wiki project's landing card or an app's detail screen, an "Open a session" control jumps you into the conversation about that specific thing.
+
+Both actions are get-or-create: the server mints a session the first time and hands the same one back on every later click, so the control always reads "Open," never "New" — you always land back in the same conversation instead of starting a fresh one each time. The wiki card mints or reuses the project's maintainer session through `POST /v1/wiki/projects/<slug>/session`; the app detail header does the same for the app's maintainer session through [POST /api/apps/{app_id}/session](endpoint:POST /api/apps/{app_id}/session). Both share one hook, [`useOpenTargetSession`](repo:apps/mewbo_console/src/hooks/useOpenTargetSession.ts), so a failed mint surfaces the same way in either place: a toast naming what went wrong, since nothing has navigated yet for an inline banner to catch.
 
 ## Resume and recover a session
 

@@ -51,7 +51,7 @@ Mewbo loads config from the first directory that contains it, checked in this or
 
 To point the app at one specific file and skip discovery, pass `--config`. To scaffold the config files from scratch, run `/init` from inside the app. It creates both the app config and an MCP example config.
 
-The two files you edit most are the app config, [`configs/app.example.json`](repo:configs/app.example.json), which holds runtime settings and LLM keys, and the MCP config, [`configs/mcp.json`](repo:configs/mcp.json), which defines your MCP servers. For every key in the app config, see the site's [Configuration Reference](../configuration.md).
+The two files you edit most are the app config, [`configs/app.example.json`](repo:configs/app.example.json), which holds runtime settings and LLM keys, and the MCP config, `configs/mcp.json`, which defines your MCP servers. For every key in the app config, see the site's [Configuration Reference](../configuration.md).
 
 ## Session recovery
 

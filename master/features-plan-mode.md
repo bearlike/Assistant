@@ -12,7 +12,7 @@ By default Mewbo runs in **act mode**: the model calls tools as soon as it decid
 /mode plan
 ```
 
-Then send your request. Mewbo drafts the plan and waits for you to type `/approve` (or click the Approve button in the console) before it starts executing.
+Then send your request. Mewbo drafts the plan and waits for your approval before it starts executing: accept it in the CLI's approval prompt, type `/continue`, or click the Approve button in the console.
 
 ---
 

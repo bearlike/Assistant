@@ -25,7 +25,7 @@ The console is a frontend. It talks to a running Mewbo API. Stand up the API fir
 | Requirement | Notes |
 |-------------|-------|
 | A running Mewbo API | The console is a client over the REST API. See [Get Started](../getting-started.md#api-setup). |
-| Node.js 18+ | Only for the development server. The Docker image ships a pre-built console. |
+| Node.js 20.19+ (or 22.12+) | Only for the development server; the range the pinned Vite requires. The Docker image ships a pre-built console. |
 | An API key | Must match `api.master_token` on the API. See [Sign in](#sign-in) below. |
 
 ## Launch the console
@@ -34,7 +34,7 @@ There are two ways to run the console. Use Docker for a production stack. Use th
 
 ### Docker Compose
 
-The published Docker stack builds and serves the console for you. It also starts the API, so this is the fastest path to a working console. Follow the [Docker quick-start](../getting-started.md#docker-quickstart), then open the console at the host port you configured (`CONSOLE_PORT`, default `3001`). No separate frontend build is needed. The full reference lives in [Docker Compose](../deployment-docker.md).
+The published Docker stack builds and serves the console for you. It also starts the API, so this is the fastest path to a working console. Follow the [Docker quick-start](../getting-started.md#docker-quickstart), then open the console at `http://localhost:3001` — the console runs on host networking with a fixed port, so there's nothing to configure. No separate frontend build is needed. The full reference lives in [Docker Compose](../deployment-docker.md).
 
 ### Development server
 
@@ -58,7 +58,7 @@ The dev server proxies `/api/` requests to the API at `127.0.0.1:5124` by defaul
 
 ## Sign in {#sign-in}
 
-The console authenticates every request with an API key. In a Docker deployment the key is baked in from `VITE_API_KEY`, which must equal `MASTER_API_TOKEN` on the API. In development the key comes from `VITE_API_KEY` in your environment.
+The console authenticates every request with an API key. In a Docker deployment the key is baked in from `MEWBO_VITE_API_KEY`, which must equal `MEWBO_MASTER_API_TOKEN` on the API. In development the key comes from `VITE_API_KEY` in your environment.
 
 You mint and revoke keys from the console itself. Open the **Settings** screen and go to **Security & Access**, which holds the API key panel. Each issued key authenticates both the REST API and the [MCP server](../clients-mcp.md).
 

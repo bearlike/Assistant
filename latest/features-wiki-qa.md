@@ -2,6 +2,11 @@
 
 Every wiki page carries an inline Q&A box: **Ask MewboWiki**. Ask a question about the repository, pick a model, and a coordinating agent answers from the same graph that backs the pages. The answer is fast, authoritative, and grounded in the code itself.
 
+<video controls preload="metadata" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 2rem auto 0;">
+  <source src="../assets/videos/mewbo-wiki-qna-demo.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
 <div style="display: flex; justify-content: center;">
   <img src="../assets/img/mewbo-wiki-08-qna.jpg" alt="An Ask MewboWiki answer to 'What is this project for?' generated with claude-sonnet-4-6: a left rail with a Summary card, an expandable Cited Sources list (project overview, agentic search engine, source capability graph, channels & integrations, API server), and a Retrieval details panel listing the pages accessed and the model used; the answer on the right describes the project's core capabilities and repository structure with inline wiki citation chips, and a follow-up question box sits at the bottom" style="width: 100%; max-width: 960px; height: auto;" />
 </div>
@@ -43,4 +48,4 @@ The same Q&A is exposed to external agents over the [MCP server](clients-mcp.md)
 - **`read_wiki_structure`** / **`read_wiki_page`** / **`list_wiki_projects`**: browse the graph structure and pages directly.
 - **`submit_insight`**: teach the wiki a durable fact your agents discovered while working. → [The memory grows as the wiki is used](features-wiki-graph.md#the-memory-grows-as-the-wiki-is-used)
 
-The same operations are available on the REST API under the [`/v1/wiki/*`](endpoint:/v1/wiki) routes. See the [MCP server](clients-mcp.md) page for the full tool list and the [REST API reference](rest-api.md) for the HTTP surface.
+The same operations are available on the REST API under the `/v1/wiki/*` routes. See the [MCP server](clients-mcp.md) page for the full tool list and the [REST API reference](rest-api.md) for the HTTP surface.

@@ -3,35 +3,35 @@
 This page is generated from inline docstrings via mkdocstrings. The sections below are grouped by package or client.
 
 ## packages/mewbo_core (core runtime)
-::: mewbo_core.orchestrator
+::: mewbo_core.loop.orchestrator
 
-::: mewbo_core.task_master
+::: mewbo_core.loop.task_master
 
-::: mewbo_core.tool_use_loop
+::: mewbo_core.loop.tool_use_loop
 
-::: mewbo_core.agent_context
+::: mewbo_core.agents.agent_context
 
-::: mewbo_core.hypervisor
+::: mewbo_core.agents.hypervisor
 
-::: mewbo_core.spawn_agent
+::: mewbo_core.agents.spawn_agent
 
-::: mewbo_core.planning
+::: mewbo_core.loop.planning
 
-::: mewbo_core.session_runtime
+::: mewbo_core.loop.session_runtime
 
-::: mewbo_core.session_store
+::: mewbo_core.session.session_store
 
-::: mewbo_core.context
+::: mewbo_core.session.context
 
-::: mewbo_core.compaction
+::: mewbo_core.session.compaction
 
-::: mewbo_core.token_budget
+::: mewbo_core.session.token_budget
 
-::: mewbo_core.tool_registry
+::: mewbo_core.tooling.tool_registry
 
 ::: mewbo_core.classes
 
-::: mewbo_core.types
+::: mewbo_core.contracts.types
 
 ::: mewbo_core.config
 
@@ -43,17 +43,17 @@ This page is generated from inline docstrings via mkdocstrings. The sections bel
 
 ::: mewbo_core.common
 
-::: mewbo_core.errors
+::: mewbo_core.contracts.errors
 
-::: mewbo_core.notifications
+::: mewbo_core.session.notifications
 
-::: mewbo_core.share_store
+::: mewbo_core.session.share_store
 
-::: mewbo_core.llm
+::: mewbo_core.llm.llm
 
-::: mewbo_core.plugins
+::: mewbo_core.tooling.plugins
 
-::: mewbo_core.agent_registry
+::: mewbo_core.agents.agent_registry
 
 ## packages/mewbo_tools (tool integrations)
 ::: mewbo_tools.integration.mcp

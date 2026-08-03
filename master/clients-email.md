@@ -83,9 +83,9 @@ The HTML uses inline CSS for compatibility with Gmail, Outlook, and Apple Mail.
 
 ## Limitations
 
-- **Attachments**: Inbound email attachments are not yet processed (file metadata is ignored).
+- **Attachments**: Inbound email attachments are not processed (file metadata is ignored).
 - **Rate limiting**: There is no built-in rate limit on the poller. The `allowed_senders` list is the primary access control.
-- **Polling latency**: The poller checks the mailbox on the interval you configure. Latency is bounded by `poll_interval_seconds`. IMAP IDLE push is not yet supported.
+- **Polling latency**: The poller checks the mailbox on the interval you configure. Latency is bounded by `poll_interval_seconds`. IMAP IDLE push is not supported.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

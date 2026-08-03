@@ -43,6 +43,10 @@ A **paused** trigger stops polling or matching, but keeps its state; resuming it
 
 The console's trigger dashboard is this same surface for a human operator: it lists every trigger, filters by kind, status, and session, and offers pause, resume, and cancel from the same endpoints.
 
+<div style="display: flex; justify-content: center;">
+  <img src="../../assets/img/mewbo-triggers-01-plugins.png" alt="Two Settings panes side by side in the Mewbo console. The left pane is Plugins, listing installed plugins and the skills, agents, commands, hooks, and MCP servers each one contributes. The right pane is Automation, listing reverse-invocation triggers with kind and status filters, cron expressions, fire counts, and next fire time." style="width: 100%; max-width: 960px; height: auto;" />
+</div>
+
 The MCP server exposes the read side to external agents too: `list_triggers` and `cancel_trigger`. There is deliberately no MCP tool to *create* a trigger. Arming stays an in-session capability, something an agent does to itself, never a general mutation another agent reaches in and does to a session it doesn't own. See [MCP Server](../clients-mcp.md).
 
 ## The webhook capability URL

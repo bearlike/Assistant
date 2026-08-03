@@ -13,11 +13,12 @@
 
 <p class="ms-hero__lede">
 Real work outgrows a single context, a single tool, a single attempt. Mewbo's hypervisor
-splits a goal into parallel agents you watch as a live tree and steer mid-run. Three products
+splits a goal into parallel agents you watch as a live tree and steer mid-run. Four products
 stand on that one foundation. Automation that does the multi-step work and isolates every
 change. A wiki that turns your codebase into a graph you can question. Search that reaches
-across every tool you connect and returns one ranked list. Every layer runs on any model.
-All of it is open source.
+across every tool you connect and returns one ranked list. Apps a sub-agent writes for you,
+which then run live in your deployment on a schedule of their own. Every layer runs on any
+model. All of it is open source.
 </p>
 
 <div class="ms-cta-row">
@@ -58,6 +59,8 @@ All of it is open source.
 <div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with workspaces scoped to connected sources" /><figcaption>Agentic Search: workspaces over your connected tools</figcaption></figure></div>
 <div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-search-02-results.jpg" alt="Agentic Search results: one ranked list across connected sources with a synthesised overview" /><figcaption>One ranked list across every tool, topped by a synthesis</figcaption></figure></div>
 <div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-console-05-plugins.png" alt="The Mewbo plugins page with installed plugins and marketplace listings" /><figcaption>Plugins and a marketplace to extend any session</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-apps-01-detail.png" alt="A live Mewbo App called LLM Model Compare, with a filter rail, a bar chart ranked by coding score, and a right rail showing health, recent runs, daily pipelines and versions" /><figcaption>Agentic Apps: a sub-agent writes it, then it runs on a schedule</figcaption></figure></div>
+<div class="swiper-slide"><figure><img loading="lazy" src="assets/img/mewbo-triggers-01-plugins.png" alt="Two Mewbo settings panes side by side, one listing installed plugins and what each contributes, the other listing reverse invocation triggers with their cron expressions, fire counts and next fire time" /><figcaption>Reverse invocation: a trigger starts a session with nobody watching</figcaption></figure></div>
 </div>
 <div class="swiper-pagination"></div>
 <div class="swiper-button-prev"></div>
@@ -100,13 +103,11 @@ One engine, many front doors. Pick the surface that matches where your team alre
 
 
 <a class="ms-card" href="clients-nextcloud-talk/">
-  <span class="ms-card__icon ms-card__icon--multi">
-    <iconify-icon icon="simple-icons:slack" width="16" height="16" aria-label="Slack"></iconify-icon>
-    <iconify-icon icon="simple-icons:microsoftteams" width="16" height="16" aria-label="Microsoft Teams"></iconify-icon>
-    <iconify-icon icon="simple-icons:nextcloud" width="16" height="16" aria-label="Nextcloud Talk"></iconify-icon>
+  <span class="ms-card__icon">
+    <iconify-icon icon="simple-icons:nextcloud" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
-  <span class="ms-card__title">Chat platforms</span>
-  <span class="ms-card__body">For the channels where your team already talks. Native safe adapters for Slack, Microsoft Teams, and Nextcloud Talk.</span>
+  <span class="ms-card__title">Nextcloud Talk</span>
+  <span class="ms-card__body">For the channels where your team already talks. Mention Mewbo in a room and the reply lands back in the thread, session and audit trail intact.</span>
 </a>
 
 
@@ -140,7 +141,7 @@ Ask for it in plain English on whichever surface is closest. In plan mode, the r
 
 ### Mewbo delegates in parallel
 
-The root agent spawns sub-agents for every piece of work that can run at once. A test run, a search, a refactor, and an MCP call against an external service all execute in parallel. A live hypervisor sits over the run like a control tower. It watches every child for stalls, nudges drifting agents back on course with plain-language corrections between tool steps, and holds each one to its token budget without killing work already in flight. The tree grows in real time, and you can steer or cancel any branch.
+The root agent spawns sub-agents for every piece of work that can run at once. A test run, a search, a refactor, and an MCP call against an external service all execute in parallel. A live hypervisor sits over the run. It detects a stalled child, injects a plain-language correction between tool steps when a child drifts off its brief, and holds each one to its token budget. A step or token budget that runs out buys a wrap-up turn rather than a bare halt. Only a declared wall-clock deadline ends in a cancel, and a warning always precedes it. The tree grows in real time, and you can steer or cancel any branch.
 
 ### You get a synthesised answer, not a pile of logs
 
@@ -152,7 +153,7 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 
 ---
 
-## What's new { .ms-h2-icon data-icon="star" }
+## Highlights { .ms-h2-icon data-icon="star" }
 
 <div class="ms-grid ms-grid--2">
 
@@ -164,6 +165,11 @@ Each sub-agent returns a structured result: status, summary, warnings, files tou
 <a class="ms-card" href="features-search/">
 <span class="ms-card__title">Agentic Search</span>
 <span class="ms-card__body">Your team's knowledge hides in repos, trackers, chat, and docs. One question fans a sub-agent out to each connected source in parallel. Their hits merge and re-rank into a single list that spans every source, topped by a synthesised overview cited to its origins, with a trace of every source it queried. One question. Every tool. One ranked answer.</span>
+</a>
+
+<a class="ms-card" href="apps/">
+<span class="ms-card__title">Agentic Apps</span>
+<span class="ms-card__body">Describe the tool you wish existed and a sub-agent builds it, then it keeps running in your deployment without you. Data pipelines refresh it on a cron schedule and a failed run starts a repair run rather than a page. Every version stays addressable, so you can see what changed between one and the next. A health rail reports the last refresh, the next one, and whether the maintainer is still active.</span>
 </a>
 
 <a class="ms-card" href="web/widgets/">

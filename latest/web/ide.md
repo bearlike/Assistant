@@ -35,10 +35,10 @@ The console button calls the same endpoints you can drive directly.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | [/api/sessions/{session_id}/ide](endpoint:POST /api/sessions/{session_id}/ide) | Create or reconnect to the IDE container |
-| `GET` | [/api/sessions/{session_id}/ide](endpoint:GET /api/sessions/{session_id}/ide) | Poll current container status |
-| `DELETE` | [/api/sessions/{session_id}/ide](endpoint:DELETE /api/sessions/{session_id}/ide) | Stop and remove the container |
-| `POST` | [/api/sessions/{session_id}/ide/extend](endpoint:POST /api/sessions/{session_id}/ide/extend) | Extend the session lifetime |
+| `POST` | `/api/sessions/{session_id}/ide` | Create or reconnect to the IDE container |
+| `GET` | `/api/sessions/{session_id}/ide` | Poll current container status |
+| `DELETE` | `/api/sessions/{session_id}/ide` | Stop and remove the container |
+| `POST` | `/api/sessions/{session_id}/ide/extend` | Extend the session lifetime |
 
 The `POST` response includes a one-time `password` field. The `GET` response omits it. The IDE is reachable at `/ide/{session_id}/` behind the built-in nginx proxy.
 
@@ -95,7 +95,8 @@ All keys nest under `agent.web_ide` in `configs/app.json`.
 | `cpus` | `1.0` | CPU quota per container (0.1 to 16.0). |
 | `memory` | `1g` | Memory limit, for example `512m` or `2g`. |
 | `pids_limit` | `512` | PID limit per container (64 to 4096). |
-| `network` | `mewbo-ide` | Docker network the containers join. |
+| `network` | `mewbo-ide` | Docker network the containers join. Must be the network `ide-proxy` is attached to, or the proxy cannot reach the container. |
+| `proxy_url` | `http://127.0.0.1:5126` | Base URL the API uses to reach `ide-proxy` for its readiness probe. |
 | `state_dir` | `/tmp/mewbo-ide` | Host directory for bookkeeping files. |
 
 Restrict resources and pin the image:

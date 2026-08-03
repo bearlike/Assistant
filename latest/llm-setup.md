@@ -57,7 +57,7 @@ Fallback is off by default and requires an explicit opt-in. Config (in [`configs
 }
 ```
 
-The legacy `llm.fallback_models` array is still honored for backward compatibility. A non-empty value there is treated as fallback enabled. Prefer the typed `fallback` block for new configs.
+The flat `llm.fallback_models` array is also honoured: it supplies the ladder when `fallback.models` is empty, and a non-empty value there is treated as fallback enabled. Prefer the typed `fallback` block.
 
 Each fallback gets one attempt. Error classification:
 
@@ -80,7 +80,7 @@ cp configs/app.example.json configs/app.json
 ## MCP setup
 MCP servers are optional. When enabled, they add external tools to the registry.
 
-1. Create [`configs/mcp.json`](repo:configs/mcp.json) (or run `/mcp init` in the CLI).
+1. Create `configs/mcp.json` (or run `/mcp init` in the CLI).
 2. Add MCP server URLs and headers.
 3. Start a client once to auto-discover tools and cache the manifest under `~/.mewbo/`.
 

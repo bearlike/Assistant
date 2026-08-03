@@ -4,11 +4,11 @@ Running Mewbo in production means hardening the default Docker Compose setup wit
 
 ## Security Checklist
 
-1. **Rotate `MASTER_API_TOKEN`**. The example value is public. Generate a strong random token:
+1. **Rotate `MEWBO_MASTER_API_TOKEN`**. The example value is public. Generate a strong random token:
    ```bash
    openssl rand -hex 32
    ```
-   Set it in `docker.env` as both `MASTER_API_TOKEN` and `VITE_API_KEY` (they must match).
+   Set it in `.env` as both `MEWBO_MASTER_API_TOKEN` and `MEWBO_VITE_API_KEY` (they must match).
 
 2. **Restrict `CORS_ORIGIN`**. The default `*` allows any origin. In production, set it to your actual domain:
    ```dotenv
@@ -17,11 +17,15 @@ Running Mewbo in production means hardening the default Docker Compose setup wit
 
 3. **Use TLS**. Terminate TLS at a reverse proxy such as nginx, Caddy, or Traefik. Never expose the API or console ports directly on a public interface.
 
-4. **Set `GITHUB_TOKEN` in `docker.env`**. If you mount git repositories, the [`10-git-setup.sh`](repo:docker/init.d/10-git-setup.sh) init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
+4. **Set `GITHUB_TOKEN` in `.env`**. If you mount git repositories, the [`10-git-setup.sh`](repo:docker/init.d/10-git-setup.sh) init script uses this token to configure `gh CLI` authentication. That lets `git fetch/push/pull` work without prompts.
 
-5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `docker.env` from their defaults. Then update `MEWBO_MONGODB_URI` to match.
+5. **Change MongoDB credentials**. Update `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` in `.env` from their defaults. Then update `MEWBO_MONGODB_URI` to match.
 
 6. **Consider per-user accounts**. A shared master token cannot tell one caller from another. If you need per-user identity, roles, or an audit trail, see [Authentication & Access](authentication.md). It is opt-in, and leaving it off keeps the shared-token behavior above.
+
+## Secrets management (optional)
+
+A production deployment doesn't have to keep secrets in a plaintext `.env` on disk. `MEWBO_ENV_FILE` lets a deployment point at a file rendered somewhere else — from a secrets manager into a private location at deploy time — instead of the repo-root `.env`. `[Makefile](repo:Makefile)` ships `ssm-bootstrap` and `redeploy` targets as one working example of this pattern: binding a checkout to a secrets project once, then having every subsequent `make redeploy` resolve secrets fresh at deploy time and rebuild the stack, with nothing sensitive ever committed or left sitting in the working tree. Swap in whatever secrets manager your own deployment already uses — the load-bearing piece is `MEWBO_ENV_FILE`, not the specific tool.
 
 ## TLS with nginx
 
@@ -153,7 +157,10 @@ Add Langfuse config to [`configs/app.json`](repo:configs/app.example.json):
 }
 ```
 
-For a self-hosted Langfuse instance, set `host` to your deployment URL. The [`configs/app.json`](repo:configs/app.example.json) file is mounted read-only into the API container; changes take effect on the next `docker compose up -d` (no rebuild needed).
+For a self-hosted Langfuse instance, set `host` to your deployment URL. By default [`configs/app.json`](repo:configs/app.example.json) is mounted **read-write** into the API container: editing the file on the host and running `docker compose up -d` picks up the change (no rebuild needed), and the same writable mount is what lets the console's Settings page and [PATCH /api/config](endpoint:PATCH /api/config) save configuration changes back to disk. Mounting the directory read-only is a valid choice for an operator who wants configuration to be host-controlled only, but it means every Settings save and every `PATCH /api/config` call fails with a 500 rather than persisting. Decide that tradeoff deliberately rather than discovering it as an error.
+
+> [!IMPORTANT] Mount the directory, not a single file
+> Bind-mount the whole `configs/` directory, not `configs/app.json` as a standalone file. A configuration save replaces `app.json` with an atomic rename, and renaming over a path that is itself a bind-mount point fails with `EBUSY`. Mounting the parent directory keeps that rename inside a single filesystem, so saves stay atomic. This is the shape [`docker-compose.yml`](repo:docker-compose.yml) uses by default; don't narrow it to a single-file bind when writing your own override.
 
 ### Filtering traces by provenance
 
@@ -165,7 +172,7 @@ Facets appear as `key:value` trace tags. The available keys:
 |-------|----------------|
 | `origin` | `user`, `wiki`, `search`, `channel`, `structured`, `draft`, `mobile`, `apps` |
 | `product` | `agent`, `wiki`, `search`, `channel`, `structured`, `draft`, `mobile`, `apps`, `vcs` |
-| `session_type` | `chat`, `wiki_index`, `wiki_qa`, `search_run`, `scg_map`, `channel_msg`, `structured_run`, `structured_fast`, `draft_stream`, `mobile_<platform>`, `app_agent`, `vcs_pickup` |
+| `session_type` | `chat`, `wiki_index`, `wiki_qa`, `wiki_act`, `wiki_maintain`, `search_run`, `scg_map`, `channel_msg`, `structured_run`, `structured_fast`, `draft_stream`, `mobile_<platform>`, `app_agent`, `vcs_pickup` |
 | `surface` | `api`, plus whatever clients stamp (CLI, console, channel platforms) |
 | `project` | The named project the session ran against. |
 | `repo` | Repository, e.g. `owner/repo`. |
@@ -198,19 +205,21 @@ For external monitoring (uptime checks, alerting), probe [`GET /api/tools`](endp
 
 ## API Token Rotation
 
-To rotate `MASTER_API_TOKEN`:
+To rotate `MEWBO_MASTER_API_TOKEN`:
 
-1. Update `docker.env`:
+1. Update `.env`:
    ```dotenv
-   MASTER_API_TOKEN=new-strong-random-token
-   VITE_API_KEY=new-strong-random-token
+   MEWBO_MASTER_API_TOKEN=new-strong-random-token
+   MEWBO_VITE_API_KEY=new-strong-random-token
    ```
 2. Apply without rebuilding:
    ```bash
    docker compose up -d
    ```
 
-The console reads `VITE_API_KEY` from the injected `runtime-config.js` at startup. No image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.
+The console reads `MEWBO_VITE_API_KEY` from the injected `runtime-config.js` at startup. No image rebuild is needed. Existing browser sessions will get a 401 and prompt for the new key on the next request.
+
+If secrets are managed outside the tree (see "Secrets management" below), rotate the value at the source instead and redeploy — editing a local `.env` does nothing once a deployment stops reading it.
 
 ## Resource Limits
 
@@ -224,7 +233,7 @@ Every service in [`docker-compose.yml`](repo:docker-compose.yml) ships with memo
 | `console` | `256M` | `0.5` |
 | `ide-proxy` | `128M` | `0.5` |
 
-The API gets the largest envelope because it does the heavy lifting: LLM orchestration, wiki indexing, sub-agent fan-out, and Web IDE management. Raise its memory limit if you index very large repositories. Adjust any limit in [`docker-compose.override.yml`](repo:docker-compose.override.yml):
+The API gets the largest envelope because it does the heavy lifting: LLM orchestration, wiki indexing, sub-agent fan-out, and Web IDE management. Raise its memory limit if you index very large repositories. Adjust any limit in `docker-compose.override.yml`:
 
 ```yaml
 services:

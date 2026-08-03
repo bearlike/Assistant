@@ -58,7 +58,9 @@ For the search engine itself, the tier model, and the source-capability graph th
   <img src="../../assets/img/mewbo-wiki-01-landing.jpg" alt="The MewboWiki landing page showing a gallery of indexed repositories" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-The Wiki turns a repository into an auto-generated documentation site. It indexes the code, writes pages, builds a knowledge graph, and answers questions grounded in the source. The Wiki lives at `/wiki`, resolved by [`WikiApp`](repo:apps/mewbo_console/src/components/wiki/WikiApp.tsx). To onboard a new repository, browse the wiki gallery and follow the configure wizard. See [Wiki indexing](../features-wiki-indexing.md) for that flow.
+The Wiki turns a repository into an auto-generated documentation site. It indexes the code, writes pages, builds a knowledge graph, and answers questions grounded in the source. The Wiki lives at `/wiki`, resolved by [`WikiApp`](repo:apps/mewbo_console/src/components/wiki/WikiApp.tsx). To index a repository, browse the wiki gallery and follow the configure wizard. See [Wiki indexing](../features-wiki-indexing.md) for that flow.
+
+Indexing is a separate act from Mewbo knowing about a repository at all. A repository is a product-level record, registered once and used by whichever surfaces you point at it; a wiki project is an index of one, and only exists because someone asked for it. Registering costs nothing and starts nothing. Generating the wiki is the deliberate step, and this is where you take it.
 
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-wiki-04-index-source.jpg" alt="The configure-indexing wizard's first step, choosing a Git platform and repository URL to index" style="width: 100%; max-width: 880px; height: auto;" />

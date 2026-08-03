@@ -8,7 +8,7 @@ Ask Mewbo to visualize a result and an interactive widget appears inline in the 
 
 ## When to reach for a widget
 
-A widget earns its place when a visual result says more than a text reply could.
+A widget earns its place when a visual result says more than a text reply could, and when that result wants a chart or a control the reader can move. If the answer is already in hand and only needs laying out, a [panel](panels.md) shows it in a single step with nothing to build.
 
 - **Private data systems.** Internal APIs, databases, and pipelines that have no reporting interface can surface results as scannable cards or charts on demand.
 - **Research and analysis.** Repository metrics, search results, financial positions, or any multi-field dataset formatted as cards the whole team can read at a glance.
@@ -40,6 +40,7 @@ The console advertises its rendering capabilities through a request header, and 
 
 ## Next steps
 
+- [Panels](panels.md): the lighter-weight way to show structure inline, with no build step.
 - [Sessions](sessions.md): the session that hosts a widget in its timeline.
 - [Plugins and Marketplace](../features-plugins.md): the capability model that gates widgets per surface.
 - [Get Started](index.md): launch the console and run your first session.

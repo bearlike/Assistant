@@ -34,18 +34,18 @@ The MongoDB driver stores all session data in collections within the configured 
 
 ### Adding MongoDB to the Docker Compose Stack
 
-MongoDB is already defined as a service in [`docker-compose.yml`](repo:docker-compose.yml). To activate it, add the following to your [`docker-compose.override.yml`](repo:docker-compose.override.yml) (or [`docker.env`](repo:docker.env)):
+MongoDB is already defined as a service in [`docker-compose.yml`](repo:docker-compose.yml). To activate it, add the following to your `docker-compose.override.yml` (or `.env`):
 
 ```dotenv
-# docker.env
+# .env
 MEWBO_STORAGE_DRIVER=mongodb
 MEWBO_MONGODB_URI=mongodb://mewbo:mewbo@127.0.0.1:27018/mewbo?authSource=admin
 MEWBO_MONGODB_DATABASE=mewbo
 ```
 
-The MongoDB service uses host networking (`ports: ["${MONGO_PORT:-27018}:27017"]`), so `127.0.0.1:27018` is reachable from the API container (also on host network).
+The MongoDB service publishes its port on the host (`ports: ["${MEWBO_MONGO_PORT:-27018}:27017"]`), and the API container runs with `network_mode: host`, so `127.0.0.1:27018` reaches MongoDB from inside it.
 
-**Example [`docker-compose.override.yml`](repo:docker-compose.override.yml) snippet for a self-hosted MongoDB:**
+**Example `docker-compose.override.yml` snippet for a self-hosted MongoDB:**
 
 ```yaml
 services:
@@ -69,7 +69,7 @@ MEWBO_MONGODB_DATABASE=mewbo
 There is **no automatic migration** between storage drivers. If you switch from JSON to MongoDB (or vice versa), existing sessions in the old store are not accessible from the new driver.
 
 To preserve history before switching:
-1. Export sessions you want to keep via [`GET /api/sessions/{id}/export`](endpoint:GET /api/sessions/{id}/export).
+1. Export sessions you want to keep via [`GET /api/sessions/{session_id}/export`](endpoint:GET /api/sessions/{session_id}/export).
 2. Change `MEWBO_STORAGE_DRIVER` and restart.
 
 ## Configuration Reference

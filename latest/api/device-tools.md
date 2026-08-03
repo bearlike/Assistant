@@ -167,7 +167,7 @@ Because the result route is a normal protected endpoint, the caller also needs a
 
 The wire contract and its guarantees are defined in source:
 
-- The client-facing spec and the core dispatch seam are in [`client_tools.py`](repo:packages/mewbo_core/src/mewbo_core/client_tools.py).
+- The client-facing spec and the core dispatch seam are in [`client_tools.py`](repo:packages/mewbo_core/src/mewbo_core/tooling/client_tools.py).
 - The pending-call registry, the timeout constant, and the dispatcher are in [`device_tools.py`](repo:apps/mewbo_api/src/mewbo_api/device_tools.py).
 - The result route and the request and response models are in [`backend.py`](repo:apps/mewbo_api/src/mewbo_api/backend.py).
 

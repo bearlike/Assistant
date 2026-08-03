@@ -89,7 +89,7 @@ Default to code pipelines and read-through. Reach for the model only where the w
 
 ## On Android
 
-The Android client renders the same served app against the same collections. Reads, filters, and freshness behave identically. Form write-back is best done from the web console today.
+The Android client renders the same served app against the same collections. Reads, filters, and freshness behave identically. Form write-back is best done from the web console.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Mewbo can run with no authentication at all, with a single shared API token, or as a full single-sign-on deployment with per-user accounts, roles, and an audit trail.
 
-The through-line of this page: **authentication is off by default and the server behaves exactly as it always has while it is off. When you turn it on, your existing identity provider stays the source of truth for who people are and which groups they are in, and Mewbo maps groups to roles and roles to permissions.** Everything else here is detail hanging off that spine.
+The through-line of this page: **authentication is off by default, and while it is off the server applies no identity checks at all. When you turn it on, your existing identity provider stays the source of truth for who people are and which groups they are in, and Mewbo maps groups to roles and roles to permissions.** Everything else here is detail hanging off that spine.
 
 When you already know which provider you are connecting, jump to [Identity Providers](authentication-providers.md) for the guide.
 
@@ -171,7 +171,7 @@ Authorization is a closed catalog of `<domain>.<verb>` permission ids. Roles are
 |---|---|
 | `admin` | Everything, including identity governance. Bypasses every access check. |
 | `operator` | Runs every workload, but cannot manage users, teams, roles or configuration, and cannot read the audit log. |
-| `member` | Creates and uses their own sessions, wiki, search, apps and triggers. Manages their own API keys and git credentials. No administration, no cross-tenant reads. |
+| `member` | Creates and uses their own sessions, wiki, search, apps and triggers. Manages their own API keys, git credentials and registered repositories. No administration, no cross-tenant reads. |
 | `viewer` | Read-only across the surfaces they can see. |
 | `service` | A service-account template holding no permissions of its own. |
 
@@ -237,11 +237,11 @@ Single sign-on does not retire key authentication, and the two are meant to run 
 - Rotation mints a replacement carrying the original's owner, roles, scopes, team and expiry, revokes the original, and returns the new value exactly once.
 - Users holding `keys.mint_own` can mint keys for themselves. A self-minted key is always stamped with the caller's own subject as owner; it cannot be minted on someone else's behalf.
 
-> [!WARNING] Grant `keys.mint_own` conservatively for now
-> The self-service mint tier is still being hardened, and its containment against a caller minting a key more powerful than themselves is not yet something to rely on. Until that work lands, treat `keys.mint_own` as a privileged grant rather than a routine one, and prefer master-token minting for anything that matters. The built-in `member` role does carry it.
+> [!WARNING] Grant `keys.mint_own` conservatively
+> Self-service minting does not reliably contain a caller from minting a key more powerful than themselves, so treat `keys.mint_own` as a privileged grant rather than a routine one and prefer master-token minting for anything that matters. The built-in `member` role does carry it.
 
 > [!IMPORTANT] Scopes do not gate endpoints
-> A key's `scopes` are carried faithfully end to end and are visible on the principal, but the **only** place they currently gate anything is self-mint containment: a key cannot mint a key more powerful than itself. Endpoint authorization is decided entirely by roles and their permissions. Do not treat a narrowly-scoped key as restricted in which endpoints it may call, because today it is not.
+> A key's `scopes` are carried faithfully end to end and are visible on the principal, but the **only** place they gate anything is self-mint containment: a key cannot mint a key more powerful than itself. Endpoint authorization is decided entirely by roles and their permissions, so a narrowly-scoped key is not restricted in which endpoints it may call.
 
 ---
 
@@ -277,7 +277,7 @@ Be precise about what it captures, because the gap matters if you are enabling i
 | User status changed | Team changed |
 | SCIM provisioned and deprovisioned | |
 
-The four on the right are defined in the event model but have no emitting call site, so nothing produces them. Login success is the consequential one: **the trail today cannot answer "who signed in, and when"**, so do not treat it as a complete access log.
+The four on the right are defined in the event model but have no emitting call site, so nothing produces them. Login success is the consequential one: **the trail cannot answer "who signed in, and when"**, so do not treat it as a complete access log.
 
 Audit writes are best-effort. A failed write logs a warning and never breaks the request that triggered it.
 
@@ -287,14 +287,14 @@ Audit writes are best-effort. A failed write logs a warning and never breaks the
 
 Stated plainly so nobody plans around a capability that is not there.
 
-- **Ownership and sharing grants are declared, not enforced.** The decision model, ownership stamps and grant stores all exist and are complete, but no route consults them, no resource is stamped with an owner, and there is no grants endpoint. Ownership-based access control is not a shipped capability today, and isolation between users rests on roles and permissions.
+- **Ownership and sharing grants are declared, not enforced.** The decision model, ownership stamps and grant stores all exist and are complete, but no route consults them, no resource is stamped with an owner, and there is no grants endpoint. Ownership-based access control is not a shipped capability, and isolation between users rests on roles and permissions.
 - **Scopes do not gate endpoints**, as above.
 - **Four audit event kinds are never emitted**, as above.
 - **Deprovisioning does not terminate live sessions**, as above.
 - **Disabling an account does not by itself neutralise keys that account already holds.** A key resolves from its own stored record, which carries its roles, without consulting the owner's current status. Deprovisioning revokes the keys it can find by owner, so the usual path is covered, but an account disabled by some other route leaves its keys live. Revoke keys explicitly when disabling someone.
 - **SAML replay protection is per process.** Consumed assertion ids are held in a bounded in-memory set, which a multi-worker deployment does not share, so a replay routed to a different worker inside the assertion's validity window is not caught. Service-provider request signing and encrypted assertions are deliberately not implemented.
-- **Route permission coverage is not checked at boot.** Mewbo can partition its own route map into permission-bound, deliberately public and undeclared routes, and has a strict mode that would refuse to boot on an undeclared one. Neither runs today: the report has no call site outside the test suite. Undeclared would not mean unguarded in any case, since most such routes are guarded inline.
-- **Password login is not rate-limited.** There is no lockout or throttle plane, so your directory's own lockout policy is the only brake on password guessing. A per-attempt delay was considered and rejected because it blocks a worker thread, turning the login route into a cheap denial-of-service lever.
+- **Route permission coverage is not checked at boot.** Mewbo can partition its own route map into permission-bound, deliberately public and undeclared routes, and has a strict mode that would refuse to boot on an undeclared one. Neither runs: the report has no call site outside the test suite. Undeclared would not mean unguarded in any case, since most such routes are guarded inline.
+- **Password login is not rate-limited.** There is no lockout or throttle plane, so your directory's own lockout policy is the only brake on password guessing. A per-attempt delay is not an option here: it blocks a worker thread, turning the login route into a cheap denial-of-service lever.
 - **The authentication, identity administration and SCIM routes are not in the [REST reference](rest-api.md).** They are served as Flask blueprints rather than through the framework the OpenAPI specification is generated from, so the generator cannot see them and regenerating it does not help. Those surfaces are documented in prose here and in the [provider guides](authentication-providers.md) instead. Every other API route is in the reference as usual.
 
 ---

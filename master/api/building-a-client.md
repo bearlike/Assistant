@@ -99,7 +99,15 @@ The response carries the events plus the authoritative run state, so you do not 
 curl -N "$MEWBO_API_URL/api/sessions/9e2d47c1a0b34f12/stream?api_key=$MEWBO_API_KEY"
 ```
 
-The stream replays the stored backlog once, then pushes each new event the instant it is appended. It is push-based, not a poll loop. A terminal `stream_end` event marks the run finished. Drain the stream through that event, because the final `completion` event arrives just before it.
+The stream replays the stored backlog once, then pushes each new event the instant it is appended. It is push-based, not a poll loop. Pass `after` with the timestamp of the last event you already hold to reconnect without re-downloading the transcript:
+
+```bash
+curl -N "$MEWBO_API_URL/api/sessions/9e2d47c1a0b34f12/stream?api_key=$MEWBO_API_KEY&after=1720000000.0"
+```
+
+The bound is inclusive, so a reconnect may replay one event you already have; de-duplicate by comparing the event itself rather than skipping whatever shares the cursor's timestamp.
+
+Alongside transcript events, the stream pushes a `session_state` frame carrying the same authoritative run state as the polling response (`running`, `status`, `done_reason`, `title`, `recoverable`, `terminated`, `terminated_at`) — once right after the replay finishes, and again immediately before the connection closes, so a client that only reads this one frame per connection still knows where the run stands. A terminal `stream_end` event marks the run finished. Drain the stream through that event, because the final `completion` event arrives just before it.
 
 ### Event kinds
 
@@ -183,6 +191,10 @@ Clients advertise the UI primitives they can render with the `X-Mewbo-Capabiliti
 
 A client that omits the header will not see capability-gated surfaces. The bundled widget builder is the reference case: without `X-Mewbo-Capabilities: stlite`, a session does not expose the widget-building agent type, skill, or tool.
 
+`generative_ui` is the one most clients will want. It lets the model lay an answer out as a structured [panel](../web/panels.md) built from a fixed set of eleven components, emitted as a `generative_ui` transcript event. The event carries both the component tree and a plain-text rendering of it computed server-side, so a client does not have to draw the tree to advertise the capability. Printing the text is enough, and that is how the terminal and the MCP server present a panel.
+
+What you must not do is advertise it and then drop the event. The capability is what binds the tool at all, so claiming it without surfacing the result either way makes the model spend a step on output nobody sees.
+
 Send the header on every request that creates or drives a session, not just on create. The orchestrator reads capabilities from the most recent context event, so re-sending the header on each drive keeps the grant current. On the server side, session recovery re-injects the capability context automatically, so a recovered session keeps its grant without any special handling from the client.
 
 ## Session utilities
@@ -207,9 +219,9 @@ Initialize the core services, resolve a session, and run:
 ```python
 from mewbo_core.common import get_logger
 from mewbo_core.permissions import approval_callback_from_config, load_permission_policy
-from mewbo_core.session_runtime import SessionRuntime, parse_core_command
-from mewbo_core.session_store import SessionStore
-from mewbo_core.tool_registry import load_registry
+from mewbo_core.loop.session_runtime import SessionRuntime, parse_core_command
+from mewbo_core.session.session_store import SessionStore
+from mewbo_core.tooling.tool_registry import load_registry
 
 logger = get_logger("client")
 
@@ -235,8 +247,8 @@ else:
 
 The building blocks:
 
-- `SessionStore` and `SessionRuntime` ([`session_store.py`](repo:packages/mewbo_core/src/mewbo_core/session_store.py), [`session_runtime.py`](repo:packages/mewbo_core/src/mewbo_core/session_runtime.py)) hold transcripts and run the shared runtime.
-- `load_registry()` ([`tool_registry.py`](repo:packages/mewbo_core/src/mewbo_core/tool_registry.py)) registers the built-in tools.
+- `SessionStore` and `SessionRuntime` ([`session_store.py`](repo:packages/mewbo_core/src/mewbo_core/session/session_store.py), [`session_runtime.py`](repo:packages/mewbo_core/src/mewbo_core/loop/session_runtime.py)) hold transcripts and run the shared runtime.
+- `load_registry()` ([`tool_registry.py`](repo:packages/mewbo_core/src/mewbo_core/tooling/tool_registry.py)) registers the built-in tools.
 - `load_permission_policy()` and `approval_callback_from_config()` ([`permissions.py`](repo:packages/mewbo_core/src/mewbo_core/permissions.py)) wire up approvals.
 - `parse_core_command()` handles the core slash commands `/compact`, `/status`, and `/terminate`.
 - `run_sync()` runs a turn synchronously. `start_async()` plus `load_events(after=...)` gives you the polling flow instead.

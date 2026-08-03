@@ -21,18 +21,19 @@ Generating a wiki is a normal Mewbo session, not a separate service: an agent ow
 
 ## The indexing pipeline
 
-A run is a fixed six-phase pipeline:
+A run is a fixed seven-phase pipeline:
 
 ```
-clone → scan → graph → plan → pages → finalize
+clone → scan → graph → enrich → plan → pages → finalize
 ```
 
 1. **Clone** the repository (private repos accept an access token in the wizard).
 2. **Scan** every source file.
-3. **Graph** the code into a property graph: parse each file's AST with tree-sitter, then lift files, classes, functions, methods, and interfaces into nodes linked by their call, import, and definition relationships. After the structural pass, an enrichment step extracts the abstract entity layer. → [The Knowledge Graph](features-wiki-graph.md)
-4. **Plan** the set of pages to write.
-5. **Pages:** sub-agents write each page in parallel, grounded in the scanned source. → [Sub-agents](features-agents.md)
-6. **Finalize:** dedupe, attach the repository description, and publish.
+3. **Graph** the code into a property graph: parse each file's AST with tree-sitter, then lift files, classes, functions, methods, and interfaces into nodes linked by their call, import, and definition relationships.
+4. **Enrich:** extract the abstract entity layer over that structure. → [The Knowledge Graph](features-wiki-graph.md)
+5. **Plan** the set of pages to write.
+6. **Pages:** sub-agents write each page in parallel, grounded in the scanned source. → [Sub-agents](features-agents.md)
+7. **Finalize:** dedupe, attach the repository description, and publish.
 
 The landing-page card and the indexing screen read the same progress signal, so they never disagree about which phase a run is in.
 

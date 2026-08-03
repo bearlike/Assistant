@@ -48,7 +48,8 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 |---|---|
 | **`create_session`** | Start a Mewbo session from a prompt. By default it provisions a fresh git worktree and branch off the target repo's base, so the work is isolated; pass an explicit `branch`/`worktree` to target an existing one. Optionally enable specific integrations (tools) and set a title or tags. |
 | **`send_followup`** | Send a follow-up or steering message into a running or finished session. |
-| **`interrupt_session`** | Interrupt the session's current step. |
+| **`interrupt_session`** | Interrupt the session's current step so the session can be steered or resumed afterwards. |
+| **`terminate_session`** | Permanently terminate a session. Irreversible: run, steer, recover, and fork are blocked from then on, and every trigger armed on the session is cancelled. The transcript stays readable, and repeat calls are idempotent. |
 
 ### Sessions: read at the detail you need
 
@@ -64,7 +65,9 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 |---|---|
 | **`list_wiki_projects`** | List the repositories indexed in the [Agentic Wiki](features-wiki.md). |
 | **`read_wiki_structure`** | Get a project's knowledge-graph structure. |
+| **`list_wiki_pages`** | List a project's generated pages as `{id, title}` rows, optionally narrowed by a title substring. This is the index `read_wiki_page` consumes; `read_wiki_structure` returns the code graph instead. |
 | **`read_wiki_page`** | Fetch a single wiki page. |
+| **`graph_neighbors`** | Walk a project's code graph outward from one node, reading stored edges with no model call. Answers "what calls X", "what does X contain", and "what imports X" in one call. Find a `node_id` with `read_wiki_structure(detail="nodes")`. |
 | **`ask_wiki`** | Ask a natural-language question about an indexed project and get a cited answer. See [Question Answering](features-wiki-qa.md). |
 | **`get_wiki_answer`** | Resume or replay a wiki Q&A answer by its `answer_id`. Use this when `ask_wiki` returns `status: "running"`. Pass back the `answer_id` to fetch the completed answer once it settles. |
 | **`submit_insight`** | Teach the wiki a durable fact about the codebase. The server condenses it into one or more atomic notes, anchors each to the code it's about, de-duplicates against what's already stored, and safely merges. The [code memory graph](features-wiki-graph.md#grounded-by-a-code-memory-graph) compounds as your agents work. |
@@ -83,6 +86,15 @@ The same key authenticates both the REST API and the MCP server. It is one ident
 |---|---|
 | **`structured_query`** | Run a schema-constrained synthesis: describe what you want in plain English, pass a JSON Schema, and get back a validated object matching that schema. Optionally ground the session in a search workspace or enable specific tool integrations. When the workspace has a mapped Source Capability Graph, the run inherits graph-first grounding: it routes through the graph, probes each pathway, and the result carries provenance. Returns `{run_id, status, output}`. If the run takes longer than the bounded wait, resume with `get_structured_run`. See [Structured Outputs](api/structured-outputs.md) for the full feature. |
 | **`get_structured_run`** | Fetch a structured query run by `run_id`. Use it to resume a running query or replay a past result. |
+
+### Triggers: read and cancel
+
+| Tool | Description |
+|---|---|
+| **`list_triggers`** | List [reverse-invocation triggers](api/triggers.md) as compact rows, optionally scoped by session, kind, or status. |
+| **`cancel_trigger`** | Cancel a trigger by id. Idempotent: a repeat call just reports its status. |
+
+There is deliberately no tool to arm a trigger. Arming stays an in-session capability an agent exercises on itself, never a mutation another agent reaches in and performs.
 
 ### Discovery
 

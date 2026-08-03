@@ -68,8 +68,8 @@ X-Api-Key: <your-token>
 
 Returns the full usage breakdown as JSON. All token fields are integers; zero for sessions or events that predate cache tracking.
 
-> [!IMPORTANT] Per-session token counts currently read zero here
-> The per-session token rollup in this endpoint is not live yet. Every token count it returns is currently `0` for every session, regardless of real usage. The response shape below is stable and documents the field contract, so the values in the example are illustrative, not what a live call returns today. Until the rollup is wired up, the tracing backend (Langfuse) is the live source for per-session token counts.
+> [!NOTE] Counts are only as good as what the provider reports
+> The rollup is derived from the `llm_call_end` events in the session transcript, so a field the provider never reported reads `0`. Cache and reasoning counts in particular are absent on models that do not report them, and the values in the example below are illustrative rather than measured. Where you need a second source, the tracing backend (Langfuse) carries the same per-call figures.
 
 ```json
 {

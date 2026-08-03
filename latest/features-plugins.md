@@ -166,7 +166,7 @@ A plugin can declare that its agents, skills, and session tools only make sense 
 
 Capabilities flow top-down:
 
-1. The **client** announces its capabilities on every request. The web console sends `X-Mewbo-Capabilities: stlite` by default. Other clients (CLI, webhook adapters) send nothing unless configured to.
+1. The **client** announces its capabilities on every request. The web console sends `X-Mewbo-Capabilities: stlite,apps,ask_user,generative_ui` by default, one id per surface it can render. Other clients (CLI, webhook adapters) send nothing unless configured to.
 2. The **API** writes the advertised list onto the session's context event.
 3. The **orchestrator** resolves `session_capabilities` once per session and passes the tuple to `ToolUseLoop`.
 4. The **registries** apply `filter_by_capabilities` before rendering the agent and skill catalogs. An entry whose `requires-capabilities` is not a subset of the session's set is invisible: no tool schema, no catalog line, no accidental invocation.
@@ -252,7 +252,7 @@ The built-in path is resolved via `importlib.resources`, so it survives editable
 
 ## Writing a local plugin
 
-To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and point `plugins.registry_paths` at a custom `installed_plugins.json` that references it. Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
+To develop a plugin locally before publishing it to a marketplace, place the plugin directory anywhere on disk and add an entry for it to an `installed_plugins.json` on a scanned registry path. Two paths are scanned: `~/.claude/plugins/installed_plugins.json` and `installed_plugins.json` inside the plugin cache directory (`plugins.install_path`, defaulting to `$MEWBO_HOME/plugins/`). Alternatively, use the CLI install flow with a `./relative-path` source in a local `marketplace.json`.
 
 The minimum viable plugin is a directory containing only `.claude-plugin/plugin.json`. Everything else (`skills/`, `agents/`, `hooks/`, `.mcp.json`, `session_tools`) is optional and discovered automatically. The bundled [widget-builder](web/widgets.md) is a complete working example. See [packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder/](repo:packages/mewbo_core/src/mewbo_core/builtin_plugins/widget_builder).
 

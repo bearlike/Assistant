@@ -9,7 +9,7 @@ The Nextcloud Talk integration allows users to interact with Mewbo directly from
 ## How it works
 
 1. A Nextcloud Talk bot is registered on the server pointing to the Mewbo API webhook endpoint.
-2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to [`POST /api/webhooks/nextcloud-talk`](endpoint:POST /api/webhooks/nextcloud-talk).
+2. When a user @mentions the bot, Nextcloud POSTs an ActivityStreams 2.0 webhook to `POST /api/webhooks/nextcloud-talk`.
 3. The adapter verifies the HMAC-SHA256 signature, parses the message, and creates or continues a session.
 4. Non-mentioned messages are silently ignored. The bot only responds when triggered.
 5. When the session completes, the final answer is sent back via the Nextcloud OCS Bot API with `replyTo` (creating a visual quote link).
@@ -128,8 +128,8 @@ The bot responds with the orchestration result. Subsequent @mentions in the same
 ## Limitations
 
 - **File attachments**: the bot receives file metadata but cannot download file content (requires Nextcloud user auth, not bot auth). File sending is not supported by the NC Talk Bot API.
-- **DM auto-respond**: the bot requires @mention in all rooms (no automatic DM detection yet).
-- **Emoji reactions for status**: not yet implemented.
+- **DM auto-respond**: the bot requires an @mention in all rooms; there is no automatic DM detection.
+- **Emoji reactions for status**: not supported.
 
 > [!NOTE] How it works internally
 > See [Architecture Overview → Channel adapters](core-orchestration.md#channel-adapters).

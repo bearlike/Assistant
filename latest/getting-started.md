@@ -14,19 +14,19 @@ Pre-built images are published to GHCR. This is the fastest path to a production
 
 ```bash
 # 1. Create your environment file and edit the three required vars
-cp docker.example.env docker.env
+cp .env.example .env
 
 # 2. Pull and start
 docker compose pull && docker compose up -d
 ```
 
-Required variables in [`docker.env`](repo:docker.env):
+Required variables in `.env`:
 
 | Variable | Purpose |
 |----------|---------|
-| `MASTER_API_TOKEN` | API authentication token |
-| `VITE_API_KEY` | Frontend key (must match `MASTER_API_TOKEN`) |
-| `HOST_UID` / `HOST_GID` | Host user and group IDs (run `id` to find yours) |
+| `MEWBO_MASTER_API_TOKEN` | API authentication token |
+| `MEWBO_VITE_API_KEY` | Frontend key (must match `MEWBO_MASTER_API_TOKEN`) |
+| `MEWBO_HOST_UID` / `MEWBO_HOST_GID` | Host user and group IDs (run `id` to find yours) |
 
 The full reference covers volume mounts, project directories, the reverse proxy, and runtime config. See [Docker Compose](deployment-docker.md).
 
@@ -108,5 +108,3 @@ Mewbo also meets your team where it already talks.
 Mewbo discovers `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*.md` files automatically. The discovery is compatible with the Claude Code and AGENTS.md conventions. Place a `CLAUDE.md` at your project root and it loads at session start. Nested packages are indexed on demand. Sub-directory instruction files are listed in the system prompt as paths, and their content is fetched only when work reaches those directories.
 
 See [Project Configuration](project-configuration.md) for the full loading strategy.
-</content>
-</invoke>

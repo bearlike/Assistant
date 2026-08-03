@@ -32,6 +32,9 @@ The **Projects** page offers the same management surface: each project card carr
 > [!TIP] Branch anchor vs. worktree anchor
 > Picking a branch labels the session. Picking a worktree changes where it runs. For a session that should edit files on its own branch without touching the main checkout, use a worktree.
 
+> [!NOTE] Worktrees show up in auto mode too
+> If a session runs in [auto workspace mode](project-configuration.md#choosing-a-workspace), `list_projects` includes managed worktrees alongside their parent project, and `switch_project` can move the session into one exactly like a configured project. See [Built-in Tools](features-builtin-tools.md#switch_project).
+
 ---
 
 ## Creating a worktree
