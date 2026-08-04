@@ -1588,6 +1588,143 @@
       },
       "type": "object"
     },
+    "IdeExtendRequest": {
+      "properties": {
+        "expires_at": {
+          "description": "Set an absolute new deadline (ISO 8601). Mutually exclusive with hours.",
+          "example": "2026-06-15T18:00:00+00:00",
+          "type": "string"
+        },
+        "hours": {
+          "description": "Extend the deadline by this many hours (1\u2013168). Mutually exclusive with expires_at.",
+          "example": 4,
+          "maximum": 168,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "IdeInstance": {
+      "properties": {
+        "created_at": {
+          "example": "2026-06-15T10:00:00+00:00",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "When the instance is reaped unless extended.",
+          "example": "2026-06-15T14:00:00+00:00",
+          "type": "string"
+        },
+        "extensions": {
+          "description": "How many times the deadline has been pushed.",
+          "example": 0,
+          "type": "integer"
+        },
+        "max_deadline": {
+          "description": "Hard ceiling past which extension is refused.",
+          "example": "2026-06-22T10:00:00+00:00",
+          "type": "string"
+        },
+        "password": {
+          "description": "code-server access password \u2014 returned on POST only.",
+          "example": "hunter2-9e2d47",
+          "type": "string"
+        },
+        "project_name": {
+          "example": "my-project",
+          "type": "string"
+        },
+        "project_path": {
+          "example": "/srv/projects/my-project",
+          "type": "string"
+        },
+        "remaining_seconds": {
+          "example": 14400,
+          "type": "integer"
+        },
+        "session_id": {
+          "example": "9e2d47c1f0",
+          "type": "string"
+        },
+        "status": {
+          "description": "Container lifecycle state.",
+          "example": "running",
+          "type": "string"
+        },
+        "url": {
+          "description": "Browser entry point for the code-server instance.",
+          "example": "https://ide.example.com/s/9e2d47c1f0/",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMaxLifetimeError": {
+      "properties": {
+        "error": {
+          "description": "Stable error code for the lifetime ceiling.",
+          "example": "max_lifetime_reached",
+          "type": "string"
+        },
+        "max_deadline": {
+          "description": "The ceiling the requested deadline exceeded.",
+          "example": "2026-06-22T10:00:00+00:00",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMessageError400": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "query is required",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMessageError401": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "API token is not provided.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMessageError404": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "session 9e2d47c1 not found",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMessageError409": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "a structured run is already active for this session",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "IdeMessageError503": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "structured responses are not configured on this server",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "KeyMintRequest": {
       "properties": {
         "label": {
@@ -7172,7 +7309,7 @@
         ]
       },
       "patch": {
-        "description": "Deep-merge the request body into the stored configuration, validate the result, and persist it. Attempts to modify protected fields are rejected with 403. A merge that fails validation returns 422 with the validation errors and changes nothing. If the merged configuration is valid but cannot be written to disk (e.g. a read-only mount), returns 500 with a machine-readable `code` and an actionable `message`; nothing changes. Mirrors the shape served by GET /api/config/schema.\nDeep-merges the request body into the stored configuration, validates\nthe result, and persists it. Attempts to modify protected fields are\nrejected with 403. A merge that fails validation returns 422 with the\nvalidation errors and changes nothing. If the write itself fails (e.g.\nthe configuration store is on a read-only mount), returns 500 with a\nmachine-readable `code` and an actionable `message`; nothing changes.",
+        "description": "Deep-merge the request body into the stored configuration, validate the result, and persist it. Attempts to modify protected fields are rejected with 403. A write-only (`writeOnly`) secret sent as an empty string leaves the stored value unchanged, since its value is never read back and a client cannot echo what it was not given; send `null` to clear one. A merge that fails validation returns 422 with the validation errors and changes nothing. If the merged configuration is valid but cannot be written to disk (e.g. a read-only mount), returns 500 with a machine-readable `code` and an actionable `message`; nothing changes. Mirrors the shape served by GET /api/config/schema.\nDeep-merges the request body into the stored configuration, validates\nthe result, and persists it. Attempts to modify protected fields are\nrejected with 403. A write-only secret sent as an empty string leaves\nthe stored value unchanged; send `null` to clear one. A merge that\nfails validation returns 422 with the validation errors and changes\nnothing. If the write itself fails (e.g.\nthe configuration store is on a read-only mount), returns 500 with a\nmachine-readable `code` and an actionable `message`; nothing changes.",
         "operationId": "patch_config_resource",
         "parameters": [
           {
@@ -8567,6 +8704,193 @@
           }
         ],
         "summary": "Get the session diff",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/ide": {
+      "delete": {
+        "description": "Stop and remove the session's code-server container, deleting its Mongo record and deadline file. Returns `204` (no body) on success; `404` if the session had no IDE instance to remove.",
+        "operationId": "delete_ide_resource",
+        "responses": {
+          "204": {
+            "description": "IDE container stopped and removed (no body)"
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError404"
+            }
+          },
+          "503": {
+            "description": "The feature is not configured or is temporarily unavailable.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError503"
+            }
+          }
+        },
+        "summary": "Stop and remove the container, deleting Mongo + deadline file",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "get": {
+        "description": "Return the current state of the session's IDE instance. The `password` is omitted here (it is only returned by `POST`), so this is the cheap poll the session page hits every ~30s. `404` when no instance exists for the session.",
+        "operationId": "get_ide_resource",
+        "responses": {
+          "200": {
+            "description": "Current IDE instance state",
+            "schema": {
+              "$ref": "#/definitions/IdeInstance"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError404"
+            }
+          },
+          "503": {
+            "description": "The feature is not configured or is temporarily unavailable.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError503"
+            }
+          }
+        },
+        "summary": "Return current instance state or 404 if none exists",
+        "tags": [
+          "Sessions"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "session_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "Create the session's code-server container, or reconnect to an existing one. Returns `201` on first create and `200` on reconnect; the response body is the IDE instance and \u2014 uniquely on this verb \u2014 includes the `password` so any browser tab can open the IDE. The session must exist and resolve to a directory, else `404`/`409`. It resolves when the session's context names a project the catalog knows (configured, managed, worktree, or a checked-out repository), when the session maintains a wiki project whose checkout still exists, or when it maintains a Mewbo App, whose staging directory is materialized on demand. Idempotent: call it again from another tab to reconnect.",
+        "operationId": "post_ide_resource",
+        "responses": {
+          "200": {
+            "description": "Reconnected to the existing IDE container",
+            "schema": {
+              "$ref": "#/definitions/IdeInstance"
+            }
+          },
+          "201": {
+            "description": "IDE container created",
+            "schema": {
+              "$ref": "#/definitions/IdeInstance"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError404"
+            }
+          },
+          "409": {
+            "description": "The resource is in a conflicting state for this operation.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError409"
+            }
+          },
+          "503": {
+            "description": "The feature is not configured or is temporarily unavailable.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError503"
+            }
+          }
+        },
+        "summary": "Create or reconnect to the session's code-server container",
+        "tags": [
+          "Sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/ide/extend": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "session_id",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "post": {
+        "description": "Push the IDE instance's `expires_at` forward. Supply **exactly one** of `hours` (1\u2013168, relative) or `expires_at` (absolute ISO 8601). The new deadline is clamped to the instance's `max_deadline`; exceeding it returns `409` with a `max_lifetime_reached` body carrying that ceiling.",
+        "operationId": "post_ide_extend_resource",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/IdeExtendRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deadline extended; updated IDE instance state",
+            "schema": {
+              "$ref": "#/definitions/IdeInstance"
+            }
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError401"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError404"
+            }
+          },
+          "409": {
+            "description": "Requested deadline exceeds the lifetime ceiling",
+            "schema": {
+              "$ref": "#/definitions/IdeMaxLifetimeError"
+            }
+          },
+          "503": {
+            "description": "The feature is not configured or is temporarily unavailable.",
+            "schema": {
+              "$ref": "#/definitions/IdeMessageError503"
+            }
+          }
+        },
+        "summary": "Push `expires_at` forward, rejecting requests past `max_deadline`",
         "tags": [
           "Sessions"
         ]

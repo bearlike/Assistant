@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://docs.mewbo.com/master"; /* for search plugin notably */
+        
+        const base_url = (new URL("../..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../../js/dark.js"></script>
 
@@ -11,6 +12,8 @@
     <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
+    
+    
     
 
 
@@ -43,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Mewbo">
+
 
 <!-- Twitter Card -->
 
@@ -57,11 +62,13 @@
 
 
 
+    
     <link href="../../logos/favicon.ico" rel="icon"/>
 
     <link href="../../css/base.css" rel="stylesheet"/>
 <link href="../../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../../css/mewbo.css" rel="stylesheet"/>
 <link href="../../css/code-refs.css" rel="stylesheet"/>
 
@@ -70,7 +77,7 @@
         
         window.MEWBO_AI_CONFIG = {
             deepwiki_repo: "bearlike/Assistant",
-            question_prefix: "I\u0027m a new user; give product-first, well-grounded answers.\n"
+            question_prefix: "Answer for a working engineer. Be concrete and cite the source.\n"
         };
         
         
@@ -139,7 +146,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://docs.mewbo.com/master">
                 <span class="mewbo-brand__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
                 
@@ -152,7 +161,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -185,6 +194,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -252,7 +268,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -327,15 +343,17 @@
                     <div class="mewbo-examples__label">EXAMPLE QUESTIONS</div>
                     <div class="mewbo-examples">
                         
-                        <button class="mewbo-example-pill" data-question="How do I install and configure Mewbo?" type="button">How do I install and configure Mewbo?</button>
+                        <button class="mewbo-example-pill" data-question="Can a sub-agent spawn its own sub-agents?" type="button">Can a sub-agent spawn its own sub-agents?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How does the agent hypervisor work?" type="button">How does the agent hypervisor work?</button>
+                        <button class="mewbo-example-pill" data-question="What stops a shell command reading another project?" type="button">What stops a shell command reading another project?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I add MCP tools?" type="button">How do I add MCP tools?</button>
+                        <button class="mewbo-example-pill" data-question="How do I cap what one session can spend?" type="button">How do I cap what one session can spend?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I install the Android app?" type="button">How do I install the Android app?</button>
+                        <button class="mewbo-example-pill" data-question="Can a trigger open a pull request?" type="button">Can a trigger open a pull request?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I connect Home Assistant?" type="button">How do I connect Home Assistant?</button>
+                        <button class="mewbo-example-pill" data-question="How do I get JSON I can pipe into something else?" type="button">How do I get JSON I can pipe into something else?</button>
+                        
+                        <button class="mewbo-example-pill" data-question="What happens when a model call fails halfway?" type="button">What happens when a model call fails halfway?</button>
                         
                     </div>
                 </div>
@@ -407,7 +425,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -588,11 +606,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -602,8 +623,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://docs.mewbo.com/web/search-and-wiki.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`../..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -614,6 +636,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -652,64 +675,41 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>The console hosts two products built on Mewbo's engine. Agentic Search runs a question across many sources and returns a cited answer. The Wiki turns a repository into browsable pages, a question-and-answer surface, and an interactive 3D code graph. This page is a product walkthrough. It shows what each surface does and how to drive it. The deeper capability docs are linked throughout.</p>
-<h2 id="agentic-search">Agentic Search</h2>
+    <h2 id="get-cited-answers-about-a-repo">Get cited answers about a repo<a class="headerlink" href="#get-cited-answers-about-a-repo" title="Permanent link">&para;</a></h2>
+<p>The console hosts two products built on Mewbo's engine. Agentic Search runs a question across many sources and returns a cited answer. The Wiki turns a repository into browsable pages, a question and answer surface, and a 3D code graph. This page is the console surface for both.</p>
+<h2 id="agentic-search">Agentic Search<a class="headerlink" href="#agentic-search" title="Permanent link">&para;</a></h2>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-search-01-landing.jpg" alt="The Agentic Search landing page with the search composer and saved workspaces" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>Agentic Search answers a question by fanning out across the sources in a workspace. A workspace is a saved set of sources, such as code hosts, documentation providers, and web search. You ask a question, the agent probes each source, and it returns a synthesized answer with its supporting results. The whole product lives at the <code>/search</code> route, driven by <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/agentic_search/AgenticSearchView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>AgenticSearchView</span></a>.</p>
-<h3 id="run-a-search">Run a search</h3>
-<p>Type a question into the search composer and submit. The landing page is inert until you do. Opening it never starts a run on its own.</p>
-<p>The composer toolbar carries exactly two controls. One names the active workspace. The other is the scope control, <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/agentic_search/SearchScopeControl.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SearchScopeControl</span></a>, which hosts the tier, the model, and the source configuration behind a single menu. The scope pill names its resolved setting at rest, so you can read the current tier and model without opening anything.</p>
-<h3 id="tiers">Tiers</h3>
-<p>The tier is one budget knob. It sets how deep the agent decomposes the question and how wide it fans out its probes. It also presets the model that drives the run.</p>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Tier</th>
-<th>Budget</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Fast</td>
-<td>Shallow decomposition, few probes</td>
-</tr>
-<tr>
-<td>Auto</td>
-<td>Balanced, the default</td>
-</tr>
-<tr>
-<td>Deep</td>
-<td>Maximum depth, wide fan-out</td>
-</tr>
-</tbody>
-</table></div>
-<p>Pick a tier from the scope menu. Picking a tier clears any model override, so a stale model from a previous tier never silently wins. You can still override the model for a single run from the same menu, without editing your config.</p>
-<h3 id="the-results-and-cited-answer-view">The results and cited answer view</h3>
+<p>Search lives at the <code>/search</code> route, driven by <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/agentic_search/AgenticSearchView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>AgenticSearchView</span></a>. A question fans out across the sources saved in a workspace and comes back as a synthesized answer with its supporting results.</p>
+<h3 id="run-a-search">Run a search<a class="headerlink" href="#run-a-search" title="Permanent link">&para;</a></h3>
+<p>Type a question into the search composer and submit. The landing page is inert until you do, and opening it never starts a run on its own.</p>
+<p>The composer toolbar carries exactly two controls. One names the active workspace. The other is <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/agentic_search/SearchScopeControl.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SearchScopeControl</span></a>, holding the tier, the model and the source configuration behind one menu. Its pill names the resolved setting at rest, so the current tier and model read without opening anything.</p>
+<h3 id="tiers">Tiers<a class="headerlink" href="#tiers" title="Permanent link">&para;</a></h3>
+<p>The tier is the run's one budget knob. <a href="../../features-search/#search-tiers">Agentic Search</a> gives the three settings and what each spends. Picking one from the scope menu clears any model override, so a stale model from a previous tier never silently wins. You can still override the model for a single run from the same menu, without editing your config.</p>
+<h3 id="the-results-and-cited-answer-view">The results and cited answer view<a class="headerlink" href="#the-results-and-cited-answer-view" title="Permanent link">&para;</a></h3>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-search-02-results.jpg" alt="The Agentic Search results view with a synthesized answer, result cards, and the trace rail" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>The results view is a centered content column with a trace rail on the right. Everything you see derives from events the run actually emitted, never from a synthetic timer.</p>
-<p><strong>The answer.</strong> The synthesized answer renders at the top as markdown, streaming in as the agent produces it. Its confidence and source count are shown only when the run earned them. An unknown value is left blank, never faked as zero.</p>
-<p><strong>Result cards.</strong> Each supporting result is a card with its source, rank, relevance, title, snippet, and a footer of structured metadata. The title links out to the source when a URL exists. A card is a reading surface. It expands to more detail only when there is more to show. A per-card follow-up button prefills the composer with a question about that result.</p>
-<p><strong>The instrument rail.</strong> The right rail reads per-lane and run-level instruments. Each lane is one probe, leading with its kind, a prominent result-count pip, and a strip of its model, step count, duration, and token usage. Every field renders only when it is present. Nothing is fabricated. Below 1100 pixels the rail hides and the trace stays reachable from a button in the run meta row.</p>
+<p>Everything in the results view derives from events the run actually emitted, never from a synthetic timer.</p>
+<p><strong>The answer.</strong> The synthesized answer streams in at the top as markdown. Its confidence and source count show only when the run earned them. An unknown value is left blank, never faked as zero.</p>
+<p><strong>Result cards.</strong> Each card is a reading surface for one supporting result, expanding only when there is more to show. The title links out when a <abbr title="Uniform Resource Locator">URL</abbr> exists, and a button prefills the composer with another question about that result.</p>
+<p><strong>The instrument rail.</strong> The right rail reads instruments for each lane and for the run as a whole, leading with its kind and a pip counting its results. A field renders only when present. Below 1100 pixels the rail hides and the trace stays reachable from the run meta row.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-search-04-agent-trace.jpg" alt="The Agentic Search agent trace drawer showing per-lane instrument detail" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p><strong>The agent trace.</strong> Open the trace for the full per-agent detail. It shows each lane's kind, model, steps, and its terminal evidence. From the run meta row you can also open the underlying agent session, cancel a running search, or go one tier deeper.</p>
-<p>A finished run is addressable. A <code>/search?run=&lt;id&gt;</code> URL replays the durable snapshot with no re-execution, so a search is shareable across browsers.</p>
-<p>For the search engine itself, the tier model, and the source-capability graph that backs it, see <a href="../../features-search/">Agentic Search</a> and <a href="../../features-search-scg/">Source Capability Graph</a>.</p>
-<h2 id="wiki">Wiki</h2>
+<p><strong>The agent trace.</strong> Open the trace for each lane's kind, model, steps and terminal evidence. From the run meta row you can also open the underlying agent session, cancel a running search, or go one tier deeper. A finished run is <a href="../../features-search/#share-a-run-with-a-link">shareable as a link</a>.</p>
+<p>For the engine itself and the graph of source capabilities behind it, see <a href="../../features-search/">Agentic Search</a> and <a href="../../features-search-scg/">Source Capability Graph</a>.</p>
+<h2 id="wiki">Wiki<a class="headerlink" href="#wiki" title="Permanent link">&para;</a></h2>
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-wiki-01-landing.jpg" alt="The MewboWiki landing page showing a gallery of indexed repositories" style="width: 100%; max-width: 880px; height: auto;" />
+  <img src="../../assets/img/mewbo-wiki-01-landing.jpg" alt="The Agentic Wiki landing page showing a gallery of indexed repositories" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>The Wiki turns a repository into an auto-generated documentation site. It indexes the code, writes pages, builds a knowledge graph, and answers questions grounded in the source. The Wiki lives at <code>/wiki</code>, resolved by <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/wiki/WikiApp.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WikiApp</span></a>. To index a repository, browse the wiki gallery and follow the configure wizard. See <a href="../../features-wiki-indexing/">Wiki indexing</a> for that flow.</p>
-<p>Indexing is a separate act from Mewbo knowing about a repository at all. A repository is a product-level record, registered once and used by whichever surfaces you point at it; a wiki project is an index of one, and only exists because someone asked for it. Registering costs nothing and starts nothing. Generating the wiki is the deliberate step, and this is where you take it.</p>
+<p>The Wiki lives at <code>/wiki</code>, resolved by <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/wiki/WikiApp.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WikiApp</span></a>. To index a repository, browse the gallery and follow the configure wizard. See <a href="../../features-wiki-indexing/">Wiki indexing</a> for that flow.</p>
+<p>Registering a repository costs nothing and starts nothing. Generating the wiki is the deliberate step.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-wiki-04-index-source.jpg" alt="The configure-indexing wizard's first step, choosing a Git platform and repository URL to index" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
@@ -718,42 +718,54 @@
   <img src="../../assets/img/mewbo-wiki-09-indexing-progress.png" alt="A live indexing progress card showing the clone, scan, graph, enrich, plan, pages, and finalize stages" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<h3 id="browse-the-pages">Browse the pages</h3>
+<h3 id="browse-the-pages">Browse the pages<a class="headerlink" href="#browse-the-pages" title="Permanent link">&para;</a></h3>
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-wiki-02-overview.jpg" alt="A MewboWiki page with the navigation sidebar, article content, and table of contents" style="width: 100%; max-width: 880px; height: auto;" />
+  <img src="../../assets/img/mewbo-wiki-02-overview.jpg" alt="An Agentic Wiki page with the navigation sidebar, article content, and table of contents" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>A wiki page is a three-column layout. A sidebar navigates between pages. The article renders in the middle as markdown with syntax highlighting and diagrams. A table of contents tracks your position on the right. Every page a maintainer can copy a badge for, linking straight back into the wiki.</p>
+<p>The article renders as markdown with syntax highlighting and diagrams, between a page navigator and a table of contents that tracks your position. A maintainer can copy a badge for any page, linking a README straight back into the wiki.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-wiki-07-badge.jpg" alt="The Add the wiki badge dialog, with a markdown snippet for embedding an Ask Mewbo Wiki badge in a README" style="width: 100%; max-width: 640px; height: auto;" />
 </div>
 
-<h3 id="ask-a-question-with-citations">Ask a question with citations</h3>
+<h3 id="ask-a-question-with-citations">Ask a question with citations<a class="headerlink" href="#ask-a-question-with-citations" title="Permanent link">&para;</a></h3>
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-wiki-08-qna.jpg" alt="The MewboWiki question-and-answer view with an answer, inline citation chips, and source cards" style="width: 100%; max-width: 880px; height: auto;" />
+  <img src="../../assets/img/mewbo-wiki-08-qna.jpg" alt="The Agentic Wiki question-and-answer view with an answer, inline citation chips, and source cards" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>The question-and-answer surface, <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/wiki/QAScreen.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>QAScreen</span></a>, answers a question against the indexed repository. Ask from the floating composer. The answer streams into the left column. Citations render inline as chips inside the prose.</p>
-<p>Click a citation chip and it navigates to the cited source. When the source is a file with a known repository, the chip opens it at the exact line range in a new tab. Otherwise it scrolls to a source card on the right. Each source card shows the cited evidence in place. A file card shows the line-numbered excerpt. A page card shows the body of the page the answer grounded on. A completed answer is addressable through a <code>?answer=&lt;id&gt;</code> URL, so a refresh or a shared link replays it with no new model call.</p>
+<p>Ask from the floating composer and the answer streams into the left column of <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/wiki/QAScreen.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>QAScreen</span></a>, with <a href="../../features-wiki-qa/#grounded-cited-answers">citation chips</a> inline in the prose. Click a chip and a file with a known repository opens at the exact line range in a new tab. Otherwise the chip scrolls to a source card holding the cited evidence.</p>
+<p>A completed answer is addressable through a <code>?answer=&lt;id&gt;</code> <abbr title="Uniform Resource Locator">URL</abbr>, so a refresh or a shared link replays it with no new model call.</p>
 <p>For the retrieval and citation model behind the Wiki, see <a href="../../features-wiki/">Wiki</a> and <a href="../../features-wiki-qa/">Wiki question and answer</a>.</p>
-<h3 id="the-3d-code-graph">The 3D code graph</h3>
-<p>The Wiki includes an interactive 3D graph of the repository. It is a WebGL Code Galaxy, not a flat diagram. It renders through the shared engine <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/wiki/Graph3DView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>Graph3DView</span></a>, used by both the wiki knowledge graph, <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/wiki/KnowledgeGraph3DScreen.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>KnowledgeGraph3DScreen</span></a>, and the Agentic Search workspace graph.</p>
-<p>The graph is a three-layer multiplex. The code layer holds the parsed structure of files, classes, functions, and methods. An entity layer holds abstract concepts. A memory layer holds notes anchored to the code. Directory hierarchy drives the level of detail. Folders start collapsed and expand on demand, so even a large repository stays responsive rather than choking on tens of thousands of nodes at once. The toolbar filters nodes by name, toggles kinds and layers, and fits or resets the view. Click a node to inspect it in a side panel.</p>
-<p>The same engine powers the Agentic Search workspace graph, where the nodes are a workspace's mapped source capabilities and their anchored memory notes.</p>
+<h3 id="the-3d-code-graph">The 3D code graph<a class="headerlink" href="#the-3d-code-graph" title="Permanent link">&para;</a></h3>
+<p>The Wiki includes an interactive 3D graph of the repository. It is a WebGL Code Galaxy, not a flat diagram, rendered through the shared engine <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/wiki/Graph3DView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>Graph3DView</span></a> that also drives <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/wiki/KnowledgeGraph3DScreen.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>KnowledgeGraph3DScreen</span></a>.</p>
+<p>It draws all <a href="../../features-wiki-graph/#three-layers-one-graph">three layers of the knowledge graph</a>. Folders start collapsed and expand on demand, keeping a large repository responsive. The toolbar filters nodes by name, toggles kinds and layers, and fits or resets the view. Click a node to inspect it in a side panel. The same engine powers the Agentic Search workspace graph, where the nodes are mapped source capabilities and their anchored memory notes.</p>
 <p>For the graph substrate and its schema, see <a href="../../features-wiki-graph/">Wiki code graph</a>.</p>
-<h2 id="next-steps">Next steps</h2>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../sessions/">Sessions</a>: the session list, the composer, and live streaming.</li>
-<li><a href="../../features-search/">Agentic Search</a>: the search engine, tiers, and multi-source retrieval.</li>
-<li><a href="../../features-search-scg/">Source Capability Graph</a>: the graph that backs search over saved sources.</li>
-<li><a href="../../features-wiki/">Wiki</a>: indexing, page generation, and grounded answers.</li>
-<li><a href="../../features-wiki-graph/">Wiki code graph</a>: the multiplex graph substrate.</li>
+<li><a href="../sessions/">Sessions</a>. The session list, the composer and live streaming.</li>
+<li><a href="../../features-search/">Agentic Search</a>. The engine, its tiers and retrieval across sources.</li>
+<li><a href="../../features-search-scg/">Source Capability Graph</a>. The graph that backs search over saved sources.</li>
+<li><a href="../../features-wiki/">Wiki</a>. Indexing, page generation and grounded answers.</li>
+<li><a href="../../features-wiki-graph/">Wiki code graph</a>. The multiplex graph substrate.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -787,7 +799,11 @@
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -972,19 +988,27 @@
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#agentic-search"
@@ -1058,18 +1082,19 @@
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -1085,10 +1110,6 @@
 
   
     
-  
-
-  
-    
     
     
       
@@ -1112,14 +1133,14 @@
   
 
   
-  
-
-  
     
     
     
       
     
+  
+
+  
   
 
   
@@ -1164,7 +1185,9 @@
       <a class="mewbo-footer__logo" href="https://docs.mewbo.com/master" aria-label="Mewbo home">
         <span class="mewbo-footer__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
         <span class="mewbo-footer__name">Mewbo</span>
@@ -1199,8 +1222,6 @@
     <nav class="mewbo-footer__col" aria-label="Documentation links">
       <h4 class="mewbo-footer__col-heading">Documentation</h4>
       <ul class="mewbo-footer__col-links">
-        
-        <li><a href="/master/getting-started/">Get Started</a></li>
         
         <li><a href="/master/terminal/">Terminal</a></li>
         
@@ -1250,11 +1271,20 @@
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../../js/version-switcher.js"></script>
@@ -1299,4 +1329,5 @@
 }
 </script>
 </body>
+
 </html>

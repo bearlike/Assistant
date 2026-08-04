@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://docs.mewbo.com/master"; /* for search plugin notably */
+        
+        const base_url = (new URL("../..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../../js/dark.js"></script>
 
@@ -11,6 +12,8 @@
     <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
+    
+    
     
 
 
@@ -43,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Mewbo">
+
 
 <!-- Twitter Card -->
 
@@ -57,11 +62,13 @@
 
 
 
+    
     <link href="../../logos/favicon.ico" rel="icon"/>
 
     <link href="../../css/base.css" rel="stylesheet"/>
 <link href="../../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../../css/mewbo.css" rel="stylesheet"/>
 <link href="../../css/code-refs.css" rel="stylesheet"/>
 
@@ -70,7 +77,7 @@
         
         window.MEWBO_AI_CONFIG = {
             deepwiki_repo: "bearlike/Assistant",
-            question_prefix: "I\u0027m a new user; give product-first, well-grounded answers.\n"
+            question_prefix: "Answer for a working engineer. Be concrete and cite the source.\n"
         };
         
         
@@ -139,7 +146,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://docs.mewbo.com/master">
                 <span class="mewbo-brand__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
                 
@@ -152,7 +161,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -185,6 +194,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -252,7 +268,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -327,15 +343,17 @@
                     <div class="mewbo-examples__label">EXAMPLE QUESTIONS</div>
                     <div class="mewbo-examples">
                         
-                        <button class="mewbo-example-pill" data-question="How do I install and configure Mewbo?" type="button">How do I install and configure Mewbo?</button>
+                        <button class="mewbo-example-pill" data-question="Can a sub-agent spawn its own sub-agents?" type="button">Can a sub-agent spawn its own sub-agents?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How does the agent hypervisor work?" type="button">How does the agent hypervisor work?</button>
+                        <button class="mewbo-example-pill" data-question="What stops a shell command reading another project?" type="button">What stops a shell command reading another project?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I add MCP tools?" type="button">How do I add MCP tools?</button>
+                        <button class="mewbo-example-pill" data-question="How do I cap what one session can spend?" type="button">How do I cap what one session can spend?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I install the Android app?" type="button">How do I install the Android app?</button>
+                        <button class="mewbo-example-pill" data-question="Can a trigger open a pull request?" type="button">Can a trigger open a pull request?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I connect Home Assistant?" type="button">How do I connect Home Assistant?</button>
+                        <button class="mewbo-example-pill" data-question="How do I get JSON I can pipe into something else?" type="button">How do I get JSON I can pipe into something else?</button>
+                        
+                        <button class="mewbo-example-pill" data-question="What happens when a model call fails halfway?" type="button">What happens when a model call fails halfway?</button>
                         
                     </div>
                 </div>
@@ -407,7 +425,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -613,11 +631,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -627,8 +648,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://docs.mewbo.com/api/structured-outputs.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`../..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -639,6 +661,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -677,7 +700,8 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <pre class="mermaid"><code>flowchart LR
+    <h2 id="get-json-that-fits-a-schema">Get <abbr title="JavaScript Object Notation">JSON</abbr> that fits a schema<a class="headerlink" href="#get-json-that-fits-a-schema" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart LR
     A([Client]) --&gt;|"query + schema"| B["POST /v1/structured"]
     B --&gt; C(["Agentic session"])
     C -.-&gt;|"wiki grounding"| W[("Wiki index")]
@@ -688,8 +712,8 @@
     D --&gt;|"valid"| E["completed · output"]
     D --&gt;|"mismatch, retry"| C
     D --&gt;|"policy fires"| P["structured exception"]</code></pre>
-<p>Structured Outputs lets you run an agentic Mewbo session constrained to a JSON Schema you provide. Instead of a free-form answer, the session must emit a validated object matching your schema. This makes it the right choice for automated pipelines, agent-to-agent communication, and anywhere you need machine-readable output rather than prose.</p>
-<p>Two endpoints plus a mode cover the latency spectrum. Pick by how much work the answer needs:</p>
+<p>Structured Outputs runs an agentic Mewbo session constrained to a <abbr title="JavaScript Object Notation">JSON</abbr> Schema you provide. The session emits a validated object matching that schema instead of free text. Reach for it when a pipeline, another agent, or any consumer downstream needs machine readable output rather than prose.</p>
+<p>Two endpoints plus a mode cover the latency spectrum. Pick by how much work the answer needs.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -711,15 +735,15 @@
 </tr>
 <tr>
 <td><a href="../../rest-api/#tag/draft-streaming" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/draft/stream</span></a></td>
-<td>A free-text draft answer streamed token by token over SSE. No schema.</td>
+<td>A free-text draft answer streamed token by token over <abbr title="Server-Sent Events">SSE</abbr>. No schema.</td>
 <td>Lowest latency. Tool-light by design.</td>
 </tr>
 </tbody>
 </table></div>
 <p>All three are session-backed. Every run leaves an auditable transcript and a Langfuse trace, keyed by a <code>session_id</code> you get back on the wire.</p>
-<h2 id="how-it-works">How it works</h2>
-<p>POST a query and a JSON Schema to <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a>. Mewbo starts an agentic session internally. The session can call grounding tools, search connected sources, and use its knowledge to assemble the answer. When it is ready, the session calls an <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/packages/mewbo_core/src/mewbo_core/loop/structured_response.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>EmitStructuredResponse</span></a> tool that validates the payload against your schema. If the object does not match, the model is asked to fix it through the normal tool-result loop. No special control mechanism is needed.</p>
-<p>The POST returns a run handle right away. Runs that finish within a few seconds come back inline with <code>status: "completed"</code> and the output attached. For everything else, poll <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a>, or attach to the live event stream (see below).</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<p>POST a query and a <abbr title="JavaScript Object Notation">JSON</abbr> Schema to <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a>. The session assembles the answer, then calls <a href="https://github.com/bearlike/Assistant/blob/3227d66f/packages/mewbo_core/src/mewbo_core/loop/structured_response.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>EmitStructuredResponse</span></a> to validate it against your schema. A mismatch returns as an ordinary tool result and the model is asked to fix it, so no separate control mechanism sits underneath.</p>
+<p>The POST returns a run handle right away. A run that finishes within a few seconds comes back inline with <code>status: "completed"</code> and the output attached. Everything else is polled from <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> or watched over the live event stream.</p>
 <p><strong>Request fields</strong></p>
 <div class="table-wrapper"><table>
 <thead>
@@ -738,7 +762,7 @@
 <tr>
 <td><code>schema</code></td>
 <td>yes</td>
-<td>JSON Schema the output object must validate against.</td>
+<td><abbr title="JavaScript Object Notation">JSON</abbr> Schema the output object must validate against.</td>
 </tr>
 <tr>
 <td><code>workspace</code></td>
@@ -757,8 +781,8 @@
 </tr>
 </tbody>
 </table></div>
-<p><strong>Extract all public API endpoints from a codebase</strong></p>
-<p>Send a <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a>:</p>
+<p><strong>Extract all public <abbr title="Application Programming Interface">API</abbr> endpoints from a codebase</strong></p>
+<p>Send a <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a>.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;List every public REST endpoint this project exposes, with its HTTP method and request body schema.&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -782,56 +806,55 @@
 <span class="w">  </span><span class="nt">&quot;workspace&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-codebase&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The response comes back immediately with a run handle:</p>
+<p>The run handle comes back immediately.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1f3a9c0db64e:r1&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;running&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;workspace&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-codebase&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>Poll <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> until <code>status</code> is <code>completed</code>, then read <code>output</code>:</p>
+<p>Poll <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> until <code>status</code> is <code>completed</code>, then read <code>output</code>.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1f3a9c0db64e:r1&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;output&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;endpoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<span class="w">      </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/v1/users&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;GET&quot;</span><span class="w"> </span><span class="p">},</span>
 <span class="w">      </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/v1/users&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;POST&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;body_schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
 <span class="w">    </span><span class="p">]</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>Failures always come back as a structured envelope, <code>{"error": {"code": ..., "reason": ...}}</code>, never a raw exception. An unknown run id is a clean 404 with the same envelope.</p>
-<h3 id="watching-a-run-live">Watching a run live</h3>
-<p>You do not have to poll. The run handle is <code>&lt;session_id&gt;:r&lt;seq&gt;</code>, so everything before the first colon is the id of the backing session. Attach to <a href="../../rest-api/#tag/sessions" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/api/sessions/{session_id}/stream</span></a> and the session's events arrive over SSE as they happen: tool calls, sub-agent probe fan-out, and the final output. The stream is push-based, not a poll loop, so events land the moment they are appended. Polling <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> stays available for callers that prefer it.</p>
-<h2 id="workspace-grounding">Workspace grounding</h2>
-<p>Pass <code>workspace</code> and the session is grounded in your data, not the model's general knowledge. You get the same provenance guarantees as <a href="../../features-search/">Agentic Search</a>, packaged into a typed, schema-validated result. The value you pass picks the grounding mode.</p>
+<h3 id="watching-a-run-live">Watching a run live<a class="headerlink" href="#watching-a-run-live" title="Permanent link">&para;</a></h3>
+<p>The run handle is <code>&lt;session_id&gt;:r&lt;seq&gt;</code>, so everything before the first colon is the backing session's id. Attach to <a href="../../rest-api/#tag/sessions" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/api/sessions/{session_id}/stream</span></a> instead of polling and the events arrive over Server-Sent Events as they happen, from tool calls and sub-agent probe fan-out through to the final output.</p>
+<h2 id="workspace-grounding">Workspace grounding<a class="headerlink" href="#workspace-grounding" title="Permanent link">&para;</a></h2>
+<p>Pass <code>workspace</code> and the session is grounded in your data rather than the model's general knowledge. You get the same provenance guarantees as <a href="../../features-search/">Agentic Search</a>, in a typed result validated against your schema. The value you pass picks the grounding mode.</p>
 <p><strong>Wiki grounding.</strong> A wiki slug grounds the run in that project's indexed sources through the default retrieval path. This is the baseline grounded run.</p>
-<p><strong>Graph-first grounding.</strong> An <a href="../../features-search/">Agentic Search</a> workspace whose sources are mapped into the Source Capability Graph routes the run graph-first. It is still one ordinary agentic session, but it is granted the workspace-scoped graph: routing tools plus the workspace's connector tools. The session consults the graph before anything else. <code>scg_route</code> proposes qualified pathways, scoped to the workspace's own sources only. The session then fans out one <code>scg-path-probe</code> sub-agent per promising pathway, aggregates what the probes bring back, and emits the schema-validated object.</p>
-<p>Graph-first runs record their audit trail. <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> carries an additive <code>provenance</code> block alongside the output:</p>
+<p><strong>Graph-first grounding.</strong> Map an <a href="../../features-search/">Agentic Search</a> workspace's sources into the Source Capability Graph and the run routes graph first, granted that workspace's slice of the graph and its connector tools. <code>scg_route</code> proposes pathways over those sources only. One <code>scg-path-probe</code> sub-agent fans out per pathway, and the probe results are aggregated into the emitted object.</p>
+<p>Graph-first runs record their audit trail. <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> carries an additive <code>provenance</code> block alongside the output.</p>
 <div class="codehilite"><pre><span></span><code><span class="nt">&quot;provenance&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;recipes_routed&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;probes_run&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;probe_status&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;a1b2c3&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;d4e5f6&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;g7h8i9&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="w"> </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>It tells the story: graph consulted, probes executed, object emitted. Runs that fan out no probes simply omit the block, so the wire shape only carries provenance when there is something to carry.</p>
-<p>Eligibility is automatic. Graph-first requires the SCG feature on (<code>scg.enabled</code>) and at least one of the workspace's sources mapped. Anything else, a wiki slug, an unmapped workspace, SCG off, or any resolution failure, falls back silently to the default grounded path. The wire shape is identical either way.</p>
+<p>A run that fans out no probes omits the block, so provenance rides the wire only when there is something to carry.</p>
+<p>Eligibility is automatic. Graph-first needs <code>scg.enabled</code> on and at least one of the workspace's sources mapped. A wiki slug, an unmapped workspace, <abbr title="Semantic Code Graph">SCG</abbr> off, or any resolution failure falls back silently to the default grounded path. The wire shape is identical either way.</p>
 <div class="admonition tip">
 <p class="admonition-title">What makes an answer grounded</p>
-<p>Workspace grounding means the agent traverses your indexed sources before writing a single token of the output object. Graph-first runs go further: the pathway and probe provenance in the result shows exactly which routes through your sources produced the answer.</p>
+<p>Your indexed sources are traversed before a single token of the output object is written.</p>
 </div>
-<h2 id="fast-synthesis-mode">Fast synthesis mode</h2>
-<p>When you want a schema-validated object in one round trip, add <code>"mode": "synthesis"</code> to the request body. The synthesis path skips the agent loop entirely. No tools are bound. The server fetches grounding citations for your query, issues a single model call with the emit tool, and validates the result against your schema. One validation failure triggers one reask. A second failure returns a <code>422</code> with the structured error envelope. The response is returned inline, so no polling is required.</p>
-<p>Request body: <code>query</code> (required), <code>schema</code> (required), <code>mode: "synthesis"</code> (required to select this path), <code>workspace</code> (an optional wiki slug for grounding), and <code>model</code> (an optional LiteLLM model id override).</p>
+<h2 id="fast-synthesis-mode">Fast synthesis mode<a class="headerlink" href="#fast-synthesis-mode" title="Permanent link">&para;</a></h2>
+<p>Add <code>"mode": "synthesis"</code> to the request body. The server fetches grounding citations, issues one model call with the emit tool, and validates the result. One validation failure triggers one reask. A second returns a <code>422</code> with the structured error envelope.</p>
+<p><code>mode</code> joins the same <code>query</code> and <code>schema</code> the agentic path takes. <code>workspace</code> grounds it on a wiki slug.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;List every public REST endpoint this project exposes.&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;endpoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;array&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;endpoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;array&quot;</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;workspace&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-codebase&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;synthesis&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The response arrives inline, without polling:</p>
+<p>The response arrives inline, with no polling.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;run_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;9e2d47c1c0a94d3b8f6a5e1b2c3d4e5f:r1&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;completed&quot;</span><span class="p">,</span>
@@ -842,12 +865,12 @@
 <span class="w">  </span><span class="nt">&quot;workspace&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-codebase&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><code>output</code> validates the schema you provided. <code>citations</code> lists the grounding sources used. The <code>run_id</code> handle (<code>&lt;session_id&gt;:r1</code>) still resolves via <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> if you need to re-fetch it.</p>
-<p>Each synthesis run mints a real session. The <code>run_id</code> prefix keys the run's transcript and its Langfuse trace, so a synthesis run is just as auditable as a full agentic one. Persistence is write-behind: the transcript is stored after the response is sent, so session backing adds nothing to the latency path.</p>
-<h2 id="draft-streaming">Draft streaming</h2>
-<p>Sometimes you do not need a schema. You need a readable draft on screen as fast as possible. <a href="../../rest-api/#tag/draft-streaming" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/draft/stream</span></a> streams a free-text answer token by token over Server-Sent Events. It is tool-light by design: one streaming model call, no tool use, no agent loop. Pass a <code>workspace</code> wiki slug and the server retrieves grounding context once, before streaming begins.</p>
-<p>Request body: <code>query</code> (required), <code>workspace</code> (an optional wiki slug for grounding), and <code>model</code> (an optional LiteLLM model id override).</p>
-<p>The response is <code>text/event-stream</code>. Each token arrives as its own frame, and a terminal frame closes the stream:</p>
+<p><code>output</code> validates against the schema you provided and <code>citations</code> lists the grounding sources used. The <code>run_id</code> handle still resolves via <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> if you need to re-fetch it.</p>
+<p>Each synthesis run mints a real session, and the <code>run_id</code> prefix keys its transcript and Langfuse trace. The transcript is written behind the response, so session backing costs nothing on the latency path.</p>
+<h2 id="draft-streaming">Draft streaming<a class="headerlink" href="#draft-streaming" title="Permanent link">&para;</a></h2>
+<p><a href="../../rest-api/#tag/draft-streaming" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/draft/stream</span></a> streams a free-text answer token by token over Server-Sent Events, for when you want a readable draft on screen and no schema. It makes one streaming model call, with no tool use and no agent loop. Pass a <code>workspace</code> wiki slug and the server retrieves grounding context once, before streaming begins.</p>
+<p>The body takes a required <code>query</code>, an optional <code>workspace</code> wiki slug for grounding, and an optional <code>model</code> override.</p>
+<p>The response is <code>text/event-stream</code>. Each token arrives as its own frame and a terminal frame closes the stream.</p>
 <div class="codehilite"><pre><span></span><code>data: {&quot;token&quot;: &quot;The&quot;}
 
 data: {&quot;token&quot;: &quot; project&quot;}
@@ -856,24 +879,24 @@ data: {&quot;token&quot;: &quot; exposes&quot;}
 
 data: {&quot;done&quot;: true, &quot;session_id&quot;: &quot;9e2d47c1c0a94d3b8f6a5e1b2c3d4e5f&quot;}
 </code></pre></div>
-<p>If the stream fails mid-flight you get an honest error frame instead of the done frame:</p>
+<p>A stream that fails mid flight sends an error frame instead of the done frame.</p>
 <div class="codehilite"><pre><span></span><code>data: {&quot;error&quot;: &quot;&lt;reason&gt;&quot;}
 </code></pre></div>
-<p>Drafts are session-backed too. The <code>session_id</code> rides the terminal <code>done</code> frame, and it is also sent up front in the <code>X-Mewbo-Session</code> response header before the first token. The header is exposed for cross-origin reads, so browser clients can grab it immediately. Pure SSE consumers can wait for the done frame instead. The full transcript persists write-behind after the last token, and a stream that died mid-flight is recorded as <code>failed</code>, never as a false <code>completed</code>.</p>
-<h2 id="policy-integration">Policy integration</h2>
-<p>Named <a href="../../features-policies/">Policies</a> can be activated per-request via the <code>policies</code> field:</p>
+<p>The <code>session_id</code> also arrives up front in the <code>X-Mewbo-Session</code> response header, exposed for cross-origin reads so a browser client has it before the first token. The transcript persists after the last token, and a stream that died mid flight is recorded as <code>failed</code> rather than a false <code>completed</code>.</p>
+<h2 id="policy-integration">Policy integration<a class="headerlink" href="#policy-integration" title="Permanent link">&para;</a></h2>
+<p>Activate named <a href="../../features-policies/">Policies</a> per request with the <code>policies</code> field.</p>
 <div class="codehilite"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;query&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">&quot;schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">},</span>
 <span class="w">  </span><span class="nt">&quot;policies&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;no-external-data-exfil&quot;</span><span class="p">]</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>If a policy fires, the endpoint returns the structured exception in the response body instead of the schema output. The caller always receives a typed, parseable result regardless of which path was taken. This is a clean contract for quality-gated workflows.</p>
+<p>When a policy fires, the endpoint returns the structured exception in the response body instead of the schema output. Either path gives the caller a typed result it can parse, which is what makes this usable as a quality gate.</p>
 <div class="admonition note">
 <p class="admonition-title">Terminal policies and structured outputs</p>
-<p>A policy with <code>isTerminal: true</code> will end the session immediately on a violation and surface the structured exception as the run's final output. See <a href="../../features-policies/#terminal-violations">Policies</a> for details.</p>
+<p>A policy with <code>isTerminal: true</code> ends the session immediately on a violation and surfaces the structured exception as the run's final output. See <a href="../../features-policies/#terminal-violations">Policies</a> for details.</p>
 </div>
-<h2 id="run-lifecycle">Run lifecycle</h2>
+<h2 id="run-lifecycle">Run lifecycle<a class="headerlink" href="#run-lifecycle" title="Permanent link">&para;</a></h2>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -900,17 +923,11 @@ data: {&quot;done&quot;: true, &quot;session_id&quot;: &quot;9e2d47c1c0a94d3b8f6
 </tr>
 </tbody>
 </table></div>
-<p>A run that reaches a terminal state without a valid object answers <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> with a <code>422</code> and the structured error envelope. Output present always reports <code>completed</code>. The emit tool only fires on success, so a payload is proof of completion.</p>
-<h2 id="rest-reference">REST reference</h2>
-<div class="codehilite"><pre><span></span><code>POST   /v1/structured                    Run a schema-constrained agentic query (async, returns run_id)
-POST   /v1/structured  {mode:synthesis}  Retrieval-only synthesis, one round trip (inline response)
-GET    /v1/structured/{run_id}           Fetch run status, output, and graph-first provenance
-POST   /v1/draft/stream                  Token-streaming draft answer over SSE
-GET    /api/sessions/{session_id}/stream Live SSE feed of a run&#39;s backing session
-</code></pre></div>
-<p>Full parameters, response shapes, and ready-to-run request samples for every endpoint live in the <a href="../../rest-api/">REST API Reference</a>.</p>
-<h2 id="mcp-tools">MCP tools</h2>
-<p>Two tools on the <a href="../../clients-mcp/">MCP Server</a> expose this endpoint to agents on your fleet:</p>
+<p>A run that reaches a terminal state without a valid object answers <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--get"><span class="md-coderef__method">GET</span><span class="md-coderef__label">/v1/structured/{run_id}</span></a> with a <code>422</code> and the structured error envelope. The emit tool fires only on success, so an output present is proof the run completed.</p>
+<h2 id="rest-reference"><abbr title="Representational State Transfer">REST</abbr> reference<a class="headerlink" href="#rest-reference" title="Permanent link">&para;</a></h2>
+<p>Every field, response shape and error model for these four endpoints is in the <a href="../../rest-api/"><abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr> Reference</a>, generated from the live server.</p>
+<h2 id="mcp-tools"><abbr title="Model Context Protocol">MCP</abbr> tools<a class="headerlink" href="#mcp-tools" title="Permanent link">&para;</a></h2>
+<p>Two tools on the <a href="../../clients-mcp/"><abbr title="Model Context Protocol">MCP</abbr> Server</a> expose this endpoint to agents on your fleet.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -929,29 +946,41 @@ GET    /api/sessions/{session_id}/stream Live SSE feed of a run&#39;s backing se
 </tr>
 </tbody>
 </table></div>
-<p><code>structured_query</code> posts to the same <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a> endpoint, so workspace grounding and graph-first routing apply to MCP callers unchanged.</p>
-<p>See <a href="../../clients-mcp/">MCP Server</a> for authentication and setup.</p>
-<h2 id="enabling-it">Enabling it</h2>
-<p>Structured Outputs is part of <code>mewbo-api</code>. Full workspace grounding requires the wiki extras:</p>
+<p><code>structured_query</code> posts to the same <a href="../../rest-api/#tag/structured-outputs" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/v1/structured</span></a> endpoint, so workspace grounding and graph-first routing reach <abbr title="Model Context Protocol">MCP</abbr> callers unchanged. See <a href="../../clients-mcp/"><abbr title="Model Context Protocol">MCP</abbr> Server</a> for authentication and setup.</p>
+<h2 id="enabling-it">Enabling it<a class="headerlink" href="#enabling-it" title="Permanent link">&para;</a></h2>
+<p>Structured Outputs ships in <code>mewbo-api</code>. Full workspace grounding needs the wiki extras.</p>
 <div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--extra<span class="w"> </span>wiki
 uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 </code></pre></div>
-<p>Without the extras the endpoint still works for schema-constrained sessions. Workspace grounding is silently skipped when the extra is absent. Graph-first grounding additionally needs the Source Capability Graph: enable <code>scg.enabled</code> and map at least one of the workspace's sources. See <a href="../../features-search/">Agentic Search</a>.</p>
+<p>Without the extras the endpoint still serves schema-constrained sessions, and workspace grounding is silently skipped. Graph-first grounding additionally needs the Source Capability Graph. Enable <code>scg.enabled</code> and map at least one of the workspace's sources. See <a href="../../features-search/">Agentic Search</a>.</p>
 <div class="admonition note">
 <p class="admonition-title">Going deeper</p>
-<p>Structured runs are ordinary agentic sessions under the hood. They use the same <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/packages/mewbo_core/src/mewbo_core/loop/tool_use_loop.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>ToolUseLoop</span></a> and <a href="../../features-agents/">Sub-agent</a> model. The schema constraint and <code>EmitStructuredResponse</code> tool are layered on top, not a separate execution path. The graph-first discipline is the same story: a capability grant plus a playbook on the same loop, not a second engine.</p>
+<p>A structured run is an ordinary agentic session on the same <a href="https://github.com/bearlike/Assistant/blob/3227d66f/packages/mewbo_core/src/mewbo_core/loop/tool_use_loop.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>ToolUseLoop</span></a> and <a href="../../features-agents/">Sub-agent</a> model. The schema constraint, <code>EmitStructuredResponse</code> and graph-first routing are layered on that one loop, not a second engine.</p>
 </div>
-<h2 id="next-steps">Next steps</h2>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../building-a-client/">Building a Client</a>: the full session lifecycle over HTTP.</li>
-<li><a href="../automation/">Automation</a>: drive issue pickup and PR workflows through the API.</li>
-<li><a href="../../rest-api/">Full API reference</a>: every route, parameter, and response shape.</li>
+<li><a href="../building-a-client/">Building a Client</a> walks the full session lifecycle over <abbr title="Hypertext Transfer Protocol">HTTP</abbr>.</li>
+<li><a href="../automation/">Automation</a> drives issue pickup and <abbr title="Pull Request">PR</abbr> workflows through the <abbr title="Application Programming Interface">API</abbr>.</li>
+<li>The <a href="../../rest-api/">full <abbr title="Application Programming Interface">API</abbr> reference</a> carries every route, parameter, and response shape.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -985,7 +1014,11 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -1195,19 +1228,27 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#how-it-works"
@@ -1300,18 +1341,19 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -1327,10 +1369,6 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 
   
     
-  
-
-  
-    
     
     
       
@@ -1354,14 +1392,14 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
   
 
   
-  
-
-  
     
     
     
       
     
+  
+
+  
   
 
   
@@ -1406,7 +1444,9 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
       <a class="mewbo-footer__logo" href="https://docs.mewbo.com/master" aria-label="Mewbo home">
         <span class="mewbo-footer__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
         <span class="mewbo-footer__name">Mewbo</span>
@@ -1441,8 +1481,6 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
     <nav class="mewbo-footer__col" aria-label="Documentation links">
       <h4 class="mewbo-footer__col-heading">Documentation</h4>
       <ul class="mewbo-footer__col-links">
-        
-        <li><a href="/master/getting-started/">Get Started</a></li>
         
         <li><a href="/master/terminal/">Terminal</a></li>
         
@@ -1492,11 +1530,20 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../../js/version-switcher.js"></script>
@@ -1541,4 +1588,5 @@ uv<span class="w"> </span>run<span class="w"> </span>mewbo-api
 }
 </script>
 </body>
+
 </html>

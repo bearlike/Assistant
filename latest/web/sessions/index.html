@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://docs.mewbo.com/master"; /* for search plugin notably */
+        
+        const base_url = (new URL("../..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../../js/dark.js"></script>
 
@@ -11,6 +12,8 @@
     <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
+    
+    
     
 
 
@@ -43,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Mewbo">
+
 
 <!-- Twitter Card -->
 
@@ -57,11 +62,13 @@
 
 
 
+    
     <link href="../../logos/favicon.ico" rel="icon"/>
 
     <link href="../../css/base.css" rel="stylesheet"/>
 <link href="../../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../../css/mewbo.css" rel="stylesheet"/>
 <link href="../../css/code-refs.css" rel="stylesheet"/>
 
@@ -70,7 +77,7 @@
         
         window.MEWBO_AI_CONFIG = {
             deepwiki_repo: "bearlike/Assistant",
-            question_prefix: "I\u0027m a new user; give product-first, well-grounded answers.\n"
+            question_prefix: "Answer for a working engineer. Be concrete and cite the source.\n"
         };
         
         
@@ -139,7 +146,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://docs.mewbo.com/master">
                 <span class="mewbo-brand__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
                 
@@ -152,7 +161,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -185,6 +194,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -252,7 +268,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -327,15 +343,17 @@
                     <div class="mewbo-examples__label">EXAMPLE QUESTIONS</div>
                     <div class="mewbo-examples">
                         
-                        <button class="mewbo-example-pill" data-question="How do I install and configure Mewbo?" type="button">How do I install and configure Mewbo?</button>
+                        <button class="mewbo-example-pill" data-question="Can a sub-agent spawn its own sub-agents?" type="button">Can a sub-agent spawn its own sub-agents?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How does the agent hypervisor work?" type="button">How does the agent hypervisor work?</button>
+                        <button class="mewbo-example-pill" data-question="What stops a shell command reading another project?" type="button">What stops a shell command reading another project?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I add MCP tools?" type="button">How do I add MCP tools?</button>
+                        <button class="mewbo-example-pill" data-question="How do I cap what one session can spend?" type="button">How do I cap what one session can spend?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I install the Android app?" type="button">How do I install the Android app?</button>
+                        <button class="mewbo-example-pill" data-question="Can a trigger open a pull request?" type="button">Can a trigger open a pull request?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I connect Home Assistant?" type="button">How do I connect Home Assistant?</button>
+                        <button class="mewbo-example-pill" data-question="How do I get JSON I can pipe into something else?" type="button">How do I get JSON I can pipe into something else?</button>
+                        
+                        <button class="mewbo-example-pill" data-question="What happens when a model call fails halfway?" type="button">What happens when a model call fails halfway?</button>
                         
                     </div>
                 </div>
@@ -407,7 +425,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -588,11 +606,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -602,8 +623,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://docs.mewbo.com/web/sessions.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`../..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -614,6 +636,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -652,75 +675,87 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>A session is one conversation with the agent. The console is built around watching sessions run. This page covers the session list, the composer that starts a session, what you see while a run is live, and how to resume a session that stopped.</p>
-<video controls preload="metadata" style="width: 100%; max-width: 960px; height: auto; display: block; margin: 2rem auto 0;">
+    <h2 id="run-and-steer-a-task">Run and steer a task<a class="headerlink" href="#run-and-steer-a-task" title="Permanent link">&para;</a></h2>
+<p>A session is one conversation with the agent. The console is built around watching one run.</p>
+<video controls preload="metadata" width="1200" height="676">
   <source src="../../assets/videos/mewbo-tasks-demo.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
-<h2 id="the-session-list-and-landing-page">The session list and landing page</h2>
+<h2 id="the-session-list-and-landing-page">The session list and landing page<a class="headerlink" href="#the-session-list-and-landing-page" title="Permanent link">&para;</a></h2>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-console-01-front.png" alt="The Mewbo console landing page with the composer and a list of recent sessions" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p>The console home is both the composer and the full task list. Recent sessions show newest first, each row carrying its title, timestamp, and project.</p>
-<p>Not every session is yours to read. The console spawns sessions internally for wiki indexing, for search runs, for realtime answers, and for Mewbo Apps builder and maintainer work. Those would bury your own tasks. So the landing page classifies each session by where it came from and hides the internal kinds by default. The origin is computed on the server, not guessed by the browser, and every row wears an origin chip beside its timestamp through <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/SessionOriginBadge.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SessionOriginBadge</span></a>.</p>
-<p>By default you see sessions you started and sessions from chat channels. The origin filter, a dropdown on the list, lets you reveal the rest. Wiki, search, realtime, Mewbo Apps, and mobile sessions sit behind it. App sessions are the ones that build and maintain a Mewbo App, so they belong to the Apps product rather than to your task list. Mobile sessions belong to the Aura Android client and scope themselves to its own rail. The filter and the badge live in <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/HomeView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>HomeView</span></a>.</p>
-<p>On a session detail page, the Tasks section of the persistent left rail, <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/nav-rail/sections.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sections.tsx</span></a>, lists your recent tasks so you can switch between them without leaving the run. It honors the same default origin filter as the landing page. On a phone the rail becomes an off-canvas drawer.</p>
-<h2 id="start-a-session-with-the-composer">Start a session with the composer</h2>
-<p>The composer is where a session begins. It looks simple by default. Every option below it is optional, and the defaults are enough for a first run. The controls, all wired through <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/InputBar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>InputBar</span></a>, let you scope the run before you submit.</p>
-<p><strong>Project scope.</strong> Pick which project the session runs in. Each project has its own working directory, its own MCP server config, and its own skills. A session can also anchor to a branch of a project, or run inside an isolated git worktree so parallel sessions never collide. See <a href="../../features-worktrees/">Branches and Worktrees</a>.</p>
+<p>The console home is both the composer and the full task list, newest session first.</p>
+<p>Not every session is yours to read. Mewbo spawns sessions internally for wiki indexing, search, realtime answers and Mewbo Apps work, and those would bury your own tasks. The landing page classifies each session by origin on the server and hides the internal kinds, leaving what you started plus your chat channels. An origin filter reveals the rest. Apps sessions also appear in the Apps product and mobile sessions in Aura's own rail. The filter and the chip live in <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/HomeView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>HomeView</span></a> and <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/SessionOriginBadge.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SessionOriginBadge</span></a>.</p>
+<p>Inside a session, the Tasks section of the left rail, <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/nav-rail/sections.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sections.tsx</span></a>, lists your recent tasks so you can switch between them without leaving the run. It honors the same default origin filter. On a phone the rail becomes a drawer.</p>
+<h2 id="start-a-session-with-the-composer">Start a session with the composer<a class="headerlink" href="#start-a-session-with-the-composer" title="Permanent link">&para;</a></h2>
+<p>The defaults are enough for a first run. The controls below the composer, all wired through <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/InputBar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>InputBar</span></a>, scope the run before you submit.</p>
+<p><strong>Project scope.</strong> Pick which project the session runs in. Each project carries its own working directory, <abbr title="Model Context Protocol">MCP</abbr> server config and skills. A session can anchor to a branch of a project, or run inside an isolated git worktree so parallel sessions never collide. See <a href="../../features-worktrees/">Branches and Worktrees</a>.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-console-06-projects.png" alt="The Projects page listing virtual workspaces, each with its description and working directory" style="width: 100%; max-width: 880px; height: auto;" />
 </div>
 
-<p><strong>Model.</strong> Choose the model for the session. You can also set a per-message model that applies to a single turn without changing the session default. A fallback tab lets you build an ordered ladder of models. When the primary model keeps failing, the run escalates down the ladder in order.</p>
-<p><strong>Tool scope.</strong> Pick which MCP tools the agent can use for this session. The composer lists the tools available on the selected project, and you toggle the ones you want in scope. Narrowing the tool set keeps the agent focused and its context lean.</p>
-<p><strong>Skills and references.</strong> Type <code>/</code> to browse skills and slash commands as you type. Type <code>@</code> to reference a file, a directory, a git diff, or a URL. The reference expands into a bounded context block at submit time, before the model runs. You can also attach files from the composer to inject their content into the session.</p>
-<p>Submit, and the console creates the session through the API and opens its detail view.</p>
-<h2 id="watch-a-run-live">Watch a run live</h2>
-<p>Once a run starts, the detail view becomes an instrument panel. The left side is the conversation. The right side is the workspace, where tool output renders.</p>
-<p><strong>Streaming responses.</strong> The assistant reply grows token by token as the model produces it. The console renders each delta as it arrives, so you read the answer forming rather than waiting for the whole turn.</p>
-<p><strong>The progress card.</strong> When the agent lays out a plan, a live checklist tracks it. Each item shows its status and updates in place as the agent works through the plan. The card is driven by <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/TodoCard.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>TodoCard</span></a> from the authoritative progress events the agent emits, not from parsed text.</p>
-<p><strong>Live throughput.</strong> A run readout shows the elapsed time, the live tokens-per-second rate, and the current phase. It appears only while a run is active. The same <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/RunTelemetry.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>RunTelemetry</span></a> data renders compact in the composer strip and full in the workspace spinner, so status lives in one place, never two competing readouts.</p>
-<p><strong>Tool output.</strong> Shell commands, file edits, file reads, permission prompts, and completions render as cards in the workspace panel. Plan approvals and file diffs get their own rich cards.</p>
+<p><strong>Model.</strong> Choose the model for the session, or for a single message without changing the session default. A fallback tab builds an ordered ladder. When the primary model keeps failing, the run escalates down the ladder in order.</p>
+<p><strong>Tool scope.</strong> Toggle which <abbr title="Model Context Protocol">MCP</abbr> tools the agent can use, drawn from the tools available on the selected project. A narrower set keeps the context lean.</p>
+<p><strong>Skills and references.</strong> Type <code>/</code> to browse skills and slash commands. Type <code>@</code> to reference a file, a directory, a git diff or a <abbr title="Uniform Resource Locator">URL</abbr>, which expands into a bounded context block at submit time. Attaching a file injects its content.</p>
+<p>Submit, and the console creates the session and opens its detail view.</p>
+<h2 id="watch-a-run-live">Watch a run live<a class="headerlink" href="#watch-a-run-live" title="Permanent link">&para;</a></h2>
+<p>The detail view is an instrument panel. The conversation runs down the left, and tool output renders in the workspace on the right.</p>
+<p><strong>Streaming responses.</strong> The reply grows token by token, so you read the answer forming rather than waiting for the whole turn.</p>
+<p><strong>The progress card.</strong> When the agent lays out a plan, a live checklist tracks it and each item updates in place. <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/TodoCard.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>TodoCard</span></a> is driven by the progress events the agent emits, never by parsed text.</p>
+<p><strong>Live throughput.</strong> While a run is active, a readout shows elapsed time, live token rate and phase. The same <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/RunTelemetry.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>RunTelemetry</span></a> data renders compact in the composer strip and full in the workspace spinner, so status never splits into two competing readouts.</p>
+<p><strong>Tool output.</strong> Shell commands, file edits, file reads, permission prompts and completions render as cards. Plan approvals and file diffs get their own rich cards.</p>
 <div style="display: flex; justify-content: center;">
   <img src="../../assets/img/mewbo-console-03-plan-approval.jpg" alt="A plan approval card in the Mewbo console workspace panel" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-console-04-file-edit.jpg" alt="A file diff card showing additions and deletions to a CLAUDE.md file" style="width: 100%; max-width: 720px; height: auto;" />
+  <img src="../../assets/img/mewbo-console-04-file-edit.jpg" alt="A file diff card showing 17 additions to auth.ts with no deletions" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<h2 id="follow-sub-agent-activity">Follow sub-agent activity</h2>
-<p>Mewbo runs sub-agents for parallel or specialized work. The console surfaces them so you can see the whole tree, not just the root turn. As sub-agents start and stop, an activity indicator in the conversation tracks the active agents with their task descriptions. Sub-agent logs show lifecycle status and step count. Each sub-agent's result is parsed and rendered as a structured card when it completes.</p>
-<h2 id="steer-interrupt-and-share">Steer, interrupt, and share</h2>
-<p>You do not have to wait for a run to finish. The composer stays alive during a run.</p>
-<p><strong>Queue a message.</strong> While the run is active, send a message and it is queued for the agent. The composer shifts into a steering mode, its Send button becoming Queue.</p>
-<p><strong>Stop the run.</strong> A Stop control appears in the composer. Stopping is a destructive action, so it always asks for a two-step confirmation before it cancels.</p>
-<p><strong>Fork from a message.</strong> Hover any message and choose to fork from that point. The console creates a new session with history up to that message, so you can explore a different path without losing the original.</p>
-<p><strong>Share and export.</strong> Share a session to get a read-only link that works without authentication. Export a session to download its full payload.</p>
-<p>The exact request shapes for steering, forking, sharing, and export live in the <a href="../../rest-api/">REST API Reference</a>.</p>
-<h2 id="open-a-session-from-wiki-or-apps">Open a session from Wiki or Apps</h2>
-<p>You do not always start from the composer. Standing on a wiki project's landing card or an app's detail screen, an "Open a session" control jumps you into the conversation about that specific thing.</p>
-<p>Both actions are get-or-create: the server mints a session the first time and hands the same one back on every later click, so the control always reads "Open," never "New" — you always land back in the same conversation instead of starting a fresh one each time. The wiki card mints or reuses the project's maintainer session through <code>POST /v1/wiki/projects/&lt;slug&gt;/session</code>; the app detail header does the same for the app's maintainer session through <a href="../../rest-api/#tag/apps" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/api/apps/{app_id}/session</span></a>. Both share one hook, <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/hooks/useOpenTargetSession.ts" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>useOpenTargetSession</span></a>, so a failed mint surfaces the same way in either place: a toast naming what went wrong, since nothing has navigated yet for an inline banner to catch.</p>
-<h2 id="resume-and-recover-a-session">Resume and recover a session</h2>
-<p>A session can stop before it finishes. The model may fail repeatedly, or the run may be interrupted. Those sessions are recoverable, not lost.</p>
-<p>When a session is recoverable, the console offers two choices on the session, both wired through the shared recovery hook in <a href="https://github.com/bearlike/Assistant/blob/3c7328e0/apps/mewbo_console/src/components/SessionDetailView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SessionDetailView</span></a>. <strong>Continue</strong> resumes the session from where it stopped. <strong>Retry</strong> restarts the last turn. The last recoverable failure also surfaces inline in the conversation, so the reason is visible next to the recovery controls rather than hidden away.</p>
+<h2 id="follow-sub-agent-activity">Follow sub-agent activity<a class="headerlink" href="#follow-sub-agent-activity" title="Permanent link">&para;</a></h2>
+<p>Mewbo runs sub-agents for parallel or specialized work, and the console surfaces the whole tree rather than the root turn alone. An indicator tracks agents as they start and stop, each sub-agent's logs carry its lifecycle status and step count, and a finished result renders as a structured card.</p>
+<h2 id="steer-interrupt-and-share">Steer, interrupt, and share<a class="headerlink" href="#steer-interrupt-and-share" title="Permanent link">&para;</a></h2>
+<p>The composer stays alive during a run.</p>
+<p><strong>Queue a message.</strong> Send while the run is active and the message is queued for the agent. The Send button becomes Queue.</p>
+<p><strong>Stop the run.</strong> A Stop control appears in the composer. Stopping is destructive, so it asks you to confirm twice before it cancels.</p>
+<p><strong>Fork from a message.</strong> Hover any message and fork from that point. The console creates a new session with history up to that message, so a different path costs you nothing.</p>
+<p><strong>Share and export.</strong> Share a session for a read only link anyone can open without signing in. Export downloads its full payload.</p>
+<p>The request shapes behind all four live in the <a href="../../rest-api/"><abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr> Reference</a>.</p>
+<h2 id="open-a-session-from-wiki-or-apps">Open a session from Wiki or Apps<a class="headerlink" href="#open-a-session-from-wiki-or-apps" title="Permanent link">&para;</a></h2>
+<p>An <code>Open a session</code> control on a wiki project's landing card or an app's detail screen jumps straight into the conversation about that one thing. Both reuse an existing session or create one, so the control always reads <code>Open</code>, never <code>New</code>. The wiki card uses <code>POST /v1/wiki/projects/&lt;slug&gt;/session</code> and the app header uses <a href="../../rest-api/#tag/apps" class="md-coderef md-coderef--endpoint md-coderef--post"><span class="md-coderef__method">POST</span><span class="md-coderef__label">/api/apps/{app_id}/session</span></a>, over one shared hook, <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/hooks/useOpenTargetSession.ts" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>useOpenTargetSession</span></a>, so a failed mint shows one toast in either place.</p>
+<h2 id="resume-and-recover-a-session">Resume and recover a session<a class="headerlink" href="#resume-and-recover-a-session" title="Permanent link">&para;</a></h2>
+<p>A session that stops before it finishes is recoverable, not lost. The model may fail repeatedly, or the run may be interrupted.</p>
+<p>The console then offers two choices, both wired through the shared recovery hook in <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_console/src/components/SessionDetailView.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>SessionDetailView</span></a>. <strong>Continue</strong> resumes from where it stopped. <strong>Retry</strong> restarts the last turn. The last recoverable failure surfaces inline in the conversation, next to the controls.</p>
 <p>Recovery is generic across the console. A stopped <a href="../../features-wiki-indexing/">wiki indexing</a> session routes back into its own indexing screen when you resume it.</p>
-<h2 id="next-steps">Next steps</h2>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../search-and-wiki/">Search and Wiki</a>: the Agentic Search product and the Wiki, including the 3D code graph.</li>
-<li><a href="../ide/">Web IDE</a>: open a full browser IDE tied to a session.</li>
-<li><a href="../widgets/">Widgets</a>: interactive panels rendered inline in a session.</li>
-<li><a href="../../features-worktrees/">Branches and Worktrees</a>: anchor a session to a branch or an isolated worktree.</li>
-<li><a href="../../rest-api/">REST API Reference</a>: the session endpoints the console calls.</li>
+<li><a href="../search-and-wiki/">Search and Wiki</a>. Both product UIs, including the 3D code graph.</li>
+<li><a href="../ide/">Web <abbr title="Integrated Development Environment">IDE</abbr></a>. A full browser <abbr title="Integrated Development Environment">IDE</abbr> tied to a session.</li>
+<li><a href="../widgets/">Widgets</a>. Interactive panels rendered inline in a session.</li>
+<li><a href="../../features-worktrees/">Branches and Worktrees</a>. Anchor a session to a branch or an isolated worktree.</li>
+<li><a href="../../rest-api/"><abbr title="Representational State Transfer">REST</abbr> <abbr title="Application Programming Interface">API</abbr> Reference</a>. The session endpoints the console calls.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -754,7 +789,11 @@
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -939,19 +978,27 @@
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#the-session-list-and-landing-page"
@@ -1019,18 +1066,19 @@
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -1046,10 +1094,6 @@
 
   
     
-  
-
-  
-    
     
     
       
@@ -1073,14 +1117,14 @@
   
 
   
-  
-
-  
     
     
     
       
     
+  
+
+  
   
 
   
@@ -1125,7 +1169,9 @@
       <a class="mewbo-footer__logo" href="https://docs.mewbo.com/master" aria-label="Mewbo home">
         <span class="mewbo-footer__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
         <span class="mewbo-footer__name">Mewbo</span>
@@ -1160,8 +1206,6 @@
     <nav class="mewbo-footer__col" aria-label="Documentation links">
       <h4 class="mewbo-footer__col-heading">Documentation</h4>
       <ul class="mewbo-footer__col-links">
-        
-        <li><a href="/master/getting-started/">Get Started</a></li>
         
         <li><a href="/master/terminal/">Terminal</a></li>
         
@@ -1211,11 +1255,20 @@
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../../js/version-switcher.js"></script>
@@ -1260,4 +1313,5 @@
 }
 </script>
 </body>
+
 </html>

@@ -3,7 +3,8 @@
 <html lang="en">
 <head>
 <script>
-        const base_url = "https://docs.mewbo.com/master"; /* for search plugin notably */
+        
+        const base_url = (new URL("../..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../../js/dark.js"></script>
 
@@ -11,6 +12,8 @@
     <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 
+    
+    
     
 
 
@@ -43,6 +46,8 @@
 
 
 
+<meta property="og:site_name" content="Mewbo">
+
 
 <!-- Twitter Card -->
 
@@ -57,11 +62,13 @@
 
 
 
+    
     <link href="../../logos/favicon.ico" rel="icon"/>
 
     <link href="../../css/base.css" rel="stylesheet"/>
 <link href="../../css/geist.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/css/glightbox.min.css" rel="stylesheet"/>
 <link href="../../css/mewbo.css" rel="stylesheet"/>
 <link href="../../css/code-refs.css" rel="stylesheet"/>
 
@@ -70,7 +77,7 @@
         
         window.MEWBO_AI_CONFIG = {
             deepwiki_repo: "bearlike/Assistant",
-            question_prefix: "I\u0027m a new user; give product-first, well-grounded answers.\n"
+            question_prefix: "Answer for a working engineer. Be concrete and cite the source.\n"
         };
         
         
@@ -139,7 +146,9 @@
             <a class="mewbo-brand hidden lg:inline-flex" href="https://docs.mewbo.com/master">
                 <span class="mewbo-brand__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
                 
@@ -152,7 +161,7 @@
             <div class="mewbo-nav-center hidden lg:flex items-center gap-2 flex-1 justify-center px-4">
                 <button id="mewbo-search-trigger" class="mewbo-nav-search-pill" type="button" aria-label="Search documentation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21l-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></svg>
-                    <span>Search for anything…</span>
+                    <span>Search…</span>
                     <kbd class="mewbo-kbd" aria-hidden="true"><span id="mewbo-kbd-modifier">⌘</span>K</kbd>
                 </button>
                 
@@ -185,6 +194,13 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
+                <select id="version-selector" onchange="selectVersion(event.target.value)"></select>
+<script integrity="sha384-YU6TPf0CfFfbisdIHfkqTtPxu1sZc0K/F0h3GhS/UPVULZs1DqhjPpInpkcpR9rk" src="../../js/version-select.js"></script>
+                <div data-orientation="vertical" role="none" data-slot="separator"
+                    class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
+                </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -252,7 +268,7 @@
                     cmdk-input
                     id="mewbo-search-input"
                     type="text"
-                    placeholder="Search for anything…"
+                    placeholder="Search…"
                     autocomplete="off"
                     autocorrect="off"
                     spellcheck="false"
@@ -327,15 +343,17 @@
                     <div class="mewbo-examples__label">EXAMPLE QUESTIONS</div>
                     <div class="mewbo-examples">
                         
-                        <button class="mewbo-example-pill" data-question="How do I install and configure Mewbo?" type="button">How do I install and configure Mewbo?</button>
+                        <button class="mewbo-example-pill" data-question="Can a sub-agent spawn its own sub-agents?" type="button">Can a sub-agent spawn its own sub-agents?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How does the agent hypervisor work?" type="button">How does the agent hypervisor work?</button>
+                        <button class="mewbo-example-pill" data-question="What stops a shell command reading another project?" type="button">What stops a shell command reading another project?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I add MCP tools?" type="button">How do I add MCP tools?</button>
+                        <button class="mewbo-example-pill" data-question="How do I cap what one session can spend?" type="button">How do I cap what one session can spend?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I install the Android app?" type="button">How do I install the Android app?</button>
+                        <button class="mewbo-example-pill" data-question="Can a trigger open a pull request?" type="button">Can a trigger open a pull request?</button>
                         
-                        <button class="mewbo-example-pill" data-question="How do I connect Home Assistant?" type="button">How do I connect Home Assistant?</button>
+                        <button class="mewbo-example-pill" data-question="How do I get JSON I can pipe into something else?" type="button">How do I get JSON I can pipe into something else?</button>
+                        
+                        <button class="mewbo-example-pill" data-question="What happens when a model call fails halfway?" type="button">What happens when a model call fails halfway?</button>
                         
                     </div>
                 </div>
@@ -407,7 +425,7 @@
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
 </div>
-<div class="absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
+<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -563,11 +581,14 @@
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -577,8 +598,9 @@
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
+          
           <button
-    onclick="fetch(`https://docs.mewbo.com/android/chat.md`).then((r) => r.blob()).then((blob) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]))"
+    onclick="fetch(`../..`).then((r) => r.text()).then((text) => navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]))"
     data-slot="button" class="secondary cursor-pointer">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tabler-icon tabler-icon-copy ">
@@ -589,6 +611,7 @@
     </svg>
     <span class="max-md:hidden">Copy Page</span>
 </button>
+          
           
           <a data-slot="button" id="previous-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
@@ -627,67 +650,79 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Chat is the heart of Aura. You type in the composer at the bottom, and the reply streams in above it. Along the way you can see what the assistant is doing, attach files, pick a model, and scope the work to a project. Every conversation is saved as a session you can return to.</p>
+    <h2 id="chat-and-revisit-past-work">Chat and revisit past work<a class="headerlink" href="#chat-and-revisit-past-work" title="Permanent link">&para;</a></h2>
+<p>You type in the composer at the bottom and the reply streams in above it. Every conversation is saved as a session on your server, so you can return to it from Aura or from any other client.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-aura-01-chat.png" alt="Aura chat screen showing a user's request for a git command cheat sheet and the assistant's completed reply rendered as markdown, with a heading, bullet list, fenced code block, and the action row underneath" style="width: 100%; max-width: 360px; height: auto;" />
+  <img src="../../assets/img/mewbo-aura-01-chat.png" alt="Aura chat screen showing a user's request for a git command cheat sheet and the assistant's completed reply rendered as markdown, with a heading, bullet list, fenced code block, and the action row underneath" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<h2 id="streaming">Streaming chat</h2>
-<p>Send a message and the reply arrives as it is generated. Aura renders it as formatted markdown live, so headings, lists, code, and emphasis appear as they stream, not as raw text that reformats at the end. Your own messages sit in bubbles on the right. The assistant's replies run full width below them.</p>
-<video controls preload="metadata" style="max-width: 100%; max-height: min(70vh, 640px); width: auto; height: auto; display: block; margin: 1.5rem auto;">
+<h2 id="streaming">Streaming chat<a class="headerlink" href="#streaming" title="Permanent link">&para;</a></h2>
+<p>Aura renders markdown live, so headings, lists, code, and emphasis appear as the reply streams rather than as raw text that reformats at the end.</p>
+<video controls preload="metadata" width="1800" height="1350" style="width: 100%; max-width: 720px; height: auto; display: block; margin: 1.5rem auto;">
   <source src="../../assets/videos/Mewbo-Aura-1-Chat.mp4" type="video/mp4" />
   Your browser does not support the video tag.
 </video>
 
-<p>Under each finished reply is a row of actions: a thumbs up and down, a copy button, an option to select text, and the read-aloud speaker button covered in <a href="../voice/">Voice</a>. A single reminder that the assistant can make mistakes sits at the very bottom of the transcript, once per conversation.</p>
-<h2 id="activity">Tool and agent activity</h2>
-<p>The assistant often does work before it answers: it calls tools, follows a plan, or delegates to a sub-agent. Aura shows that activity in the transcript, always above the reply it belongs to, so you can read the answer last.</p>
+<p>The action row under each finished reply carries a thumbs up and down, copy, select text, and the speaker button covered in <a href="../voice/">Voice</a>.</p>
+<h2 id="activity">Tool and agent activity<a class="headerlink" href="#activity" title="Permanent link">&para;</a></h2>
+<p>Aura shows the work behind an answer above the reply it belongs to, so you read the answer last. Everything stays collapsed by default and you open only what you want to inspect.</p>
 <ul>
-<li><strong>Tool calls</strong> fold into a single row per turn. It reads "Using N tools" while the work runs, then "Used N tools" when it settles. Tap it to expand the individual calls, and tap a call to see its input and result.</li>
+<li><strong>Tool calls</strong> fold into a single row per turn, reading <code>Using N tools</code> while the work runs and <code>Used N tools</code> when it settles. Tap it to expand the calls, and tap a call to see its input and result.</li>
 <li><strong>Plans</strong> show as a checklist that fills in as steps complete.</li>
-<li><strong>Sub-agents</strong> show as a small row naming the sub-agent and its status.</li>
+<li><strong>Sub-agents</strong> show as a small row naming the sub-agent and its status. See <a href="../../features-agents/">Sub-agents</a> for how delegation works.</li>
 </ul>
-<p>Everything stays collapsed by default, so a busy turn stays readable. You open only the parts you want to inspect.</p>
-<h2 id="rail">The session rail</h2>
-<p>Open the navigation drawer to see your recent conversations. It slides in from the side and lists your sessions, grouped into Today, Previous 7 days, and Older. A running conversation shows a small dot. Tap any row to reopen that session and pick up where it left off.</p>
+<h2 id="rail">The session rail<a class="headerlink" href="#rail" title="Permanent link">&para;</a></h2>
+<p>Open the navigation drawer to see your recent conversations, grouped into Today, Previous 7 days, and Older. A running conversation shows a small dot. Tap any row to reopen it where it left off.</p>
 <div style="display: flex; justify-content: center;">
-  <img src="../../assets/img/mewbo-aura-02-sessions.png" alt="Aura's navigation drawer open, showing New chat and Search chats shortcuts above a Recents list of several sessions grouped under Today" style="width: 100%; max-width: 360px; height: auto;" />
+  <img src="../../assets/img/mewbo-aura-02-sessions.png" alt="Aura's navigation drawer open, showing New chat and Search chats shortcuts above a Recents list of several sessions grouped under Today" style="width: 100%; max-width: 720px; height: auto;" />
 </div>
 
-<p>At the top of the drawer are shortcuts to start a <strong>New chat</strong> or <strong>Search chats</strong>. The Recents header has a filter that switches between chats you started on this phone (the default) and all of your sessions from every client.</p>
-<h3 id="rename-archive">Rename or archive a session</h3>
-<p>Long-press a session in the rail to manage it. A sheet slides up with two actions:</p>
+<p>The Recents filter switches between chats you started on this phone, the default view, and all of your sessions from every client.</p>
+<h3 id="rename-archive">Rename or archive a session<a class="headerlink" href="#rename-archive" title="Permanent link">&para;</a></h3>
+<p>Press and hold a session in the rail. A sheet slides up with two actions.</p>
 <ul>
-<li><strong>Rename</strong> opens a field with the current title selected, so you can type a new one and confirm.</li>
-<li><strong>Archive</strong> removes the session from your recent list. Archived sessions are hidden from the rail but not destroyed.</li>
+<li><strong>Rename</strong> opens a field with the current title selected. Type a new one and confirm.</li>
+<li><strong>Archive</strong> removes the session from your recent list without destroying it.</li>
 </ul>
 <div class="admonition note">
 <p class="admonition-title">There is no delete</p>
-<p>Aura does not delete sessions. Archive hides a session from your recents, and that is the strongest action offered. Your history stays on the server.</p>
+<p>Archive is the strongest action Aura offers. Your history stays on the server.</p>
 </div>
-<h2 id="attachments">Attachments</h2>
-<p>You can send files and images with a message. Tap the plus button in the composer to open the attachment options, then choose <strong>Photos</strong> to pick an image or <strong>Files</strong> to pick a document (PDF, common office formats, and text formats like CSV, Markdown, and JSON).</p>
-<p>Before you send, each attachment appears as a chip in the composer with its name and a way to remove it. After you send, the attachments appear as cards above your message in the transcript.</p>
-<p>Images need a model that can see them. If the model you have selected does not support vision, the Photos option is disabled and tells you to pick a vision model. Documents work with any model. The assistant reads a document's contents as part of your message, and sees an image directly when the model supports it.</p>
-<h2 id="model-picker">Pick a model</h2>
-<p>The title bar at the top shows the current model with a chevron. Tap it to open the model picker. Popular models are listed first with friendly names over their full identifiers, and a "More models" row reveals the rest. A checkmark shows your current choice. The list comes from your server, so you see exactly the models your deployment offers. You can switch model at any time, even mid-conversation.</p>
-<h2 id="scope">Scope a session to a project and tools</h2>
-<p>By default a new chat runs in a temporary workspace with every tool available. You can change both from the composer's plus menu, in its Session section.</p>
+<h2 id="attachments">Attachments<a class="headerlink" href="#attachments" title="Permanent link">&para;</a></h2>
+<p>Tap the plus button in the composer to attach a file. Choose <strong>Photos</strong> for an image, or <strong>Files</strong> for a PDF, a common office format, or a text format such as CSV, Markdown, and <abbr title="JavaScript Object Notation">JSON</abbr>. Each attachment appears as a removable chip, then as a card above your message once sent.</p>
+<p>Images need a model that can see them. If your selected model does not support vision, the Photos option is disabled and tells you to pick a vision model. Documents work with any model, because the assistant reads their contents as part of your message.</p>
+<h2 id="model-picker">Pick a model<a class="headerlink" href="#model-picker" title="Permanent link">&para;</a></h2>
+<p>Tap the model name in the title bar to open the picker. Popular models are listed first with friendly names over their full identifiers, and a <code>More models</code> row reveals the rest. The list comes from your server, so you see exactly the models your deployment offers. You can switch at any time, even while a conversation is running.</p>
+<h2 id="scope">Scope a session to a project and tools<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>By default a new chat runs in a temporary workspace with every tool available. Change both from the composer's plus menu, in its Session section.</p>
 <ul>
-<li><strong>Project</strong> lets you attach the conversation to one of your registered projects, so the assistant works in that project's directory instead of a temporary one. The default is "Temporary," meaning no project.</li>
-<li><strong>Tools</strong> lets you choose which tools and integrations the assistant may use. Tool groups (such as connected servers and product features) each have a switch, and you can expand a group to toggle individual tools. Leaving everything on gives the assistant its full toolset. Narrowing the selection restricts it to what you allow.</li>
+<li><strong>Project</strong> attaches the conversation to one of your registered projects, so the assistant works in that project's directory instead of a temporary one. The default is <code>Temporary</code>, meaning no project.</li>
+<li><strong>Tools</strong> narrows what the assistant may use. Tool groups such as connected servers and product features each have a switch, and expanding a group reveals individual tools.</li>
 </ul>
-<p>Before a conversation has any messages, a small indicator above the composer summarizes the current scope, for example the project name and the number of tools enabled. Tap it to open the same options. You set the scope for a chat when you start it. Once a turn is in flight the scope is fixed for that chat, and shown but not editable. Your default project comes from Settings, and a per-chat choice overrides it until your next new chat.</p>
-<h2 id="next-steps">Next steps</h2>
+<p><strong>Scope is fixed once a turn is in flight.</strong> You set it when you start a chat, and after that it is shown but not editable. Until then an indicator above the composer summarizes the scope and opens the same options. Your default project comes from Settings, and a choice made for one chat overrides it until the next new one.</p>
+<h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../voice/">Voice</a>: dictate turns, hear replies read aloud, and go hands-free with the overlay.</li>
-<li><a href="../device-tools/">Device Tools</a>: let the assistant act on the phone itself.</li>
+<li><a href="../voice/">Voice</a>. Dictate turns, hear replies read aloud, and raise the overlay without touching the phone.</li>
+<li><a href="../device-tools/">Device Tools</a>. Let the assistant act on the phone itself.</li>
 </ul>
   </div>
   
   <script>
-    document.querySelectorAll('article h2, article h3').forEach((header) => {
-      toc.observer.observe(header);
+    // toc.html omits the heading that names the page itself — the masthead
+    // subtitle, or the hero's own heading. Observing a heading the rail has no
+    // link for would still make it the "topmost visible heading", and
+    // setActiveTocLink would find nothing to match and blank the rail. Reading
+    // the skip off the rail keeps this in step with whatever toc.html drops.
+    // Deferred because main.html emits the rail after this article, so #toc
+    // does not exist yet while this script is parsed.
+    document.addEventListener('DOMContentLoaded', () => {
+      const tocTargets = new Set(
+        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
+      );
+      document.querySelectorAll('article h2, article h3').forEach((header) => {
+        if (!tocTargets.has('#' + header.id)) return;
+        toc.observer.observe(header);
+      });
     });
   </script>
 </article>
@@ -721,7 +756,11 @@
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="ms-mobile-nav">
     <div class="ms-mobile-nav__panel">
         <button type="button" class="ms-mobile-nav__close" aria-label="Close menu"
             onclick="event.stopPropagation(); document.getElementById('bottom-sidebar').close(); document.getElementById('menu-button').dataset.state='closed';">
@@ -881,19 +920,27 @@
 </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
                                 
+                                
+                                
+
+
+
+
+
+
+
+
+
 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="mewbo-toc">
         <p class="mewbo-toc__heading">
             <span class="mewbo-toc__heading-glyph"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/></svg></span>
             On This Page
         </p>
-        
-        
-        
         <div class="mewbo-toc__list">
             
             <a href="#streaming"
@@ -962,18 +1009,19 @@
             
             
         </div>
-        
-        
-        
     </div>
     <div class="h-12"></div>
 </div>
+
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         
 
 
@@ -989,10 +1037,6 @@
 
   
     
-  
-
-  
-    
     
     
       
@@ -1016,14 +1060,14 @@
   
 
   
-  
-
-  
     
     
     
       
     
+  
+
+  
   
 
   
@@ -1068,7 +1112,9 @@
       <a class="mewbo-footer__logo" href="https://docs.mewbo.com/master" aria-label="Mewbo home">
         <span class="mewbo-footer__glyph">
 
-<img class="size-5" src="../../logos/logo-transparent.svg" alt="icon">
+
+﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 480 480'><path d='M480 240c0-29.1-20.7-55.8-55.2-76.5 9.7-39.1 5.5-72.6-15-93.2-20.7-20.6-54.2-24.8-93.3-15.1C295.8 20.7 269.1 0 240 0s-55.8 20.7-76.5 55.2c-39.1-9.7-72.6-5.5-93.2 15s-24.8 54.2-15.1 93.2C20.7 184.3 0 211 0 240s20.7 55.8 55.2 76.5c-9.7 39.1-5.5 72.6 15 93.2 20.7 20.6 54.2 24.8 93.2 15.1C184.2 459.3 211 480 240 480s55.8-20.7 76.5-55.2c39.1 9.7 72.6 5.5 93.2-15s24.8-54.2 15-93.2C459.4 295.8 480 269 480 240Zm-240 60a60 60 0 1 1 0-120 60 60 0 0 1 0 120Z' fill='#C15F3C'></path></svg>
+
 
 </span>
         <span class="mewbo-footer__name">Mewbo</span>
@@ -1103,8 +1149,6 @@
     <nav class="mewbo-footer__col" aria-label="Documentation links">
       <h4 class="mewbo-footer__col-heading">Documentation</h4>
       <ul class="mewbo-footer__col-links">
-        
-        <li><a href="/master/getting-started/">Get Started</a></li>
         
         <li><a href="/master/terminal/">Terminal</a></li>
         
@@ -1154,11 +1198,20 @@
 <script integrity="sha384-9wTiXjNp90MbOJ4H6FbR7nJZBOwZLf6QB+LHRCsmLPM8tF3kQLpB7BoM1WO40p2X" src="../../js/deepwiki-backend.js"></script>
 <script integrity="sha384-W0Al3wnLjhcWtFXOlc7pn5mJHfctk3LrEm4/lK4x96CXyEMGzmqiqXe1PwM9ct5I" src="../../js/ask-ai.js"></script>
     
-    <script src="https://unpkg.com/mermaid@10.9.0/dist/mermaid.min.js"></script>
-<script integrity="sha384-6GuwRLPG8aLMfdxAiFvBfZLMI5eAykX1IS8Pgr/2c4qnQxgw4XzV3IMdjCaS+lZh" src="../../js/mermaid-init-v2.js"></script>
+    <script src="https://unpkg.com/mermaid@11.16.0/dist/mermaid.min.js"></script>
+<script integrity="sha384-lQCX46D+MO7fN3Swa1P+eXLGbnGbvL4izmN5Jpf+oLN3xHQGAbuXxTHOrN6QkdxU" src="../../js/mermaid-init-v2.js"></script>
+    
+    <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
+<script integrity="sha384-7ZjYsz2Ob3jfwev3AYGCT+uZqWDBiMBmyNqRxZN3B5qq+T93+cRSAfgLCs5lzrS+" src="../../js/sortable-tables.js"></script>
+    
+<script integrity="sha384-Jtie1PQTGN8nRA60xLW4umsbcPMtW120BXo88MSZO7VMvva+LPQXjlBHX/A25clz" src="../../js/video-autoplay.js"></script>
     
     <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
 <script integrity="sha384-UF8bTJNuMpApPFPRYJMvsOYUkjMJ02+v0wzxdYWJ2kuakxvY7VzK8X0WKnTXvAJW" src="../../js/carousel.js"></script>
+    
+    
+    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.3.1/dist/js/glightbox.min.js"></script>
+<script integrity="sha384-ODh7V36uwvHNZGN6kNxVUnf5w1n3dg73uLNvm7PLFCWBTVXpE69x0j2m3YF526kC" src="../../js/lightbox.js"></script>
     
     
     <script integrity="sha384-1hsmgovd+8XvQC7c0UqXIF6e6O81K9j9a/gDatEwP5cWwsXGpBFgJf5mni7MpXAU" src="../../js/version-switcher.js"></script>
@@ -1203,4 +1256,5 @@
 }
 </script>
 </body>
+
 </html>

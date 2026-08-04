@@ -53,11 +53,27 @@
   --primary: hsl(14.8 63.1% 59.6%);
   --primary-foreground: hsl(0 0% 100%);
 
+  /* The clay accent as TEXT, not as a fill.
+     `--primary` is identical in both themes, and it was tuned against the
+     dark carbon surface. Inherited unchanged by light it lands at 2.6-3.0:1
+     on the cream page, so every link, active ToC entry, active sidebar row,
+     focus ring and tab underline failed contrast in light while passing in
+     dark. One token cannot serve both roles: a fill, and legible text on
+     that fill, pull lightness in opposite directions.
+     Measured at 42%: 5.24:1 on the page and 4.60:1 on the active sidebar
+     chip, which is a 12% clay tint and therefore the lightest surface this
+     token ever sits on. That chip is what sets the value: 44% cleared the
+     page but measured 4.30:1 there. */
+  --primary-text: hsl(14.8 63.1% 42%);
+
   --secondary: hsl(48 25% 92.2%);
   --secondary-foreground: hsl(60 3% 21%);
 
   --muted: hsl(48 25% 92.2%);
-  --muted-foreground: hsl(45 3% 52%);
+  /* 52% measured 3.45:1 on the cream page, under the 4.5:1 body bar — and
+     this token carries inactive ToC entries and footer text, which are read
+     rather than glanced at. 44% measures 4.56:1. */
+  --muted-foreground: hsl(45 3% 44%);
 
   --accent: hsl(48 25% 92.2%);
   --accent-foreground: hsl(60 3% 21%);
@@ -70,7 +86,11 @@
      Devin keeps light-mode borders near-invisible (#eff1f5). */
   --border: hsl(48 16% 89%);
   --input: hsl(48 25% 92.2%);
-  --ring: hsl(14.8 63.1% 59.6%);
+  /* The focus indicator is a non-text UI component: WCAG 1.4.11 wants 3:1
+     against what surrounds it, and the shared clay measured 2.97:1 on the
+     cream page — under the bar by a hair, and a focus ring nobody can see is
+     the one indicator that has to be seen. Matches --primary-text. */
+  --ring: hsl(14.8 63.1% 42%);
 
   /* Clean white panel behind transparent-PNG media: brighter than the cream
      page, so framed images read as a raised surface. */
@@ -93,6 +113,11 @@
      separating, so contrast against the near-white foreground stays high. */
   --background: hsl(40 6% 8%);
   --foreground: hsl(60 14% 97%);
+
+  /* Dark's surfaces are what `--primary` was tuned against, so text and fill
+     are the same value here. The alias exists in both themes so a call site
+     never branches on which is active. */
+  --primary-text: var(--primary);
 
   /* Cards & code blocks lift a hair above the page so framed content reads
      as slightly raised — the only place we keep a shade step. */
@@ -182,7 +207,11 @@ article td code {
   word-break: break-word;
 }
 
-/* Mermaid containers: keep the diagram within the column width. */
+/* Mermaid diagrams get the framed treatment images get, plus an expanded
+   viewer — see "Mermaid diagrams" near the end of this file. An unrendered
+   fence (mermaid failed to load, or superfences was never configured) still
+   needs the width guard so a wide source block cannot widen the column. */
+pre.mermaid,
 .mermaid,
 div.mermaid {
   max-width: 100%;
@@ -219,9 +248,15 @@ article .ms-devices img,
   border: 0;
 }
 
-/* Sticky top nav: subtle bottom border so it's clear where the header ends and
-   the content column begins, matching the Mewbo console top-bar treatment. */
-header.sticky {
+/* Sticky top nav: one hairline marks where the header ends and the page
+   begins, matching the Mewbo console top-bar treatment.
+
+   Scoped away when a tab rail exists, because the rail then IS the bottom of
+   the nav block and draws that edge itself. Unscoped, this rule and the rail's
+   own border land on the same y and paint 2px where the design says 1. Two
+   other rules in this file also target that edge, which is why the doubling
+   survived a search for the obvious one. */
+body:not(.ms-has-header-tabs) header.sticky {
   border-bottom: 1px solid var(--border, rgba(120, 120, 120, 0.2));
 }
 
@@ -577,6 +612,103 @@ dialog#search-dialog > div {
   color: var(--muted-foreground, currentColor);
 }
 
+/* ── Prose vertical rhythm ────────────────────────────────────────────────
+   One scale, four steps, named for the job each one does. Change the rhythm
+   here; do not reach for a Tailwind spacing utility in a page or a partial.
+
+       flow          one block to the next inside a passage
+       topic gap     before an H4
+       subsection    before an H3
+       section       before an H2
+
+   The ladder must stay strictly increasing: section > subsection > topic >
+   flow. That is what tells a reader how deep a break is without reading it.
+
+   The old scale broke in two places. An H2 carried `mt-12 lg:mt-20`, so on a
+   wide screen a section opened 80px down — over three times the paragraph
+   step, which is what reads as "a massive gap". And an H4 carried exactly the
+   paragraph step, so the shallowest heading announced itself no more than an
+   ordinary line break.
+
+   ONE OWNER PER GAP: the top margin of the block that follows. Bottom margins
+   on top-level blocks are zeroed below. Margins collapse inside .typography,
+   so a gap is max(prev.margin-bottom, next.margin-top) — not a sum — but two
+   authors setting the two halves is how a list ends up 24px from the next
+   paragraph while an admonition ends up 20px from it. Zeroing one half makes
+   the surviving half the whole answer.
+
+   The one seam where margins genuinely ADD is above .typography: `article` is
+   a flex column with `gap: 2rem`, and a flex gap does not collapse with a
+   margin. So a first block carrying its own top margin sits 2rem + its margin
+   below the masthead. `> *:first-child` zeroes it, leaving the flex gap as the
+   single source there too.
+
+   Every selector matches the reach of the rule it replaces. The prose rules in
+   base.css are unlayered and reach (0,1,2) — `article .typography h2`,
+   `article p:not(:first-child)` — and mewbo.css is linked after base.css, so an
+   equal-specificity selector wins on source order and a shorter one loses in
+   silence. See the masthead note below, which says the same thing at length.
+
+   This block sits BEFORE the masthead and hero sections on purpose. Several of
+   their rules — `article .ms-hero > :is(h1, …, h6) { margin: 0 }` in
+   particular — reach the same (0,1,2) as the rules here, so they need to come
+   after to win. A page-level composition owns its own spacing; the ladder is
+   the default it opts out of.
+   ────────────────────────────────────────────────────────────────────────── */
+article {
+  --prose-flow: 1.5rem;
+  --prose-topic-gap: 2rem;
+  --prose-subsection-gap: 2.5rem;
+  --prose-section-gap: 3rem;
+  /* After a heading, before what it introduces. Deliberately much tighter than
+     the space above the heading: a heading has to read as belonging to the
+     content under it, not floating between two passages. */
+  --prose-heading-lead: 1rem;
+}
+
+/* Descendant, not child, to match base.css's `article .typography h2` exactly —
+   a heading nested in a tabbed block or an admonition is on the same ladder.
+   The masthead title is `article .typography > h2:first-child` at (0,2,2) and
+   is therefore untouched by these. */
+article .typography h2 { margin-top: var(--prose-section-gap); }
+article .typography h3 { margin-top: var(--prose-subsection-gap); }
+article .typography h4,
+article .typography h5,
+article .typography h6 { margin-top: var(--prose-topic-gap); }
+
+/* Every other top-level block sits on the flow step. `hr` is excluded on
+   purpose: it owns a symmetric 2.5rem separator of its own, above. */
+article .typography > :is(p, ul, ol, dl, pre, blockquote, figure, table, details, section, div, video):not(:first-child) {
+  margin-top: var(--prose-flow);
+}
+
+/* Top margins own the rhythm, so bottom margins contribute nothing. */
+article .typography > :is(p, ul, ol, dl, pre, blockquote, figure, table, details, section, div, h2, h3, h4, h5, h6) {
+  margin-bottom: 0;
+}
+
+/* The article's flex gap already separates the masthead from the prose, and it
+   does not collapse — a top margin here would add to it. */
+article .typography > :first-child {
+  margin-top: 0;
+}
+
+/* `!important` fights base.css's `article .typography h2+p{margin-top:…
+   !important}`, the built form of `[&+p]:!mt-4` in tailwind/article.css. Two
+   important declarations are settled by specificity, and that one reaches
+   (0,1,3), so the shape of this selector is what makes it win. It generalises
+   the idea the Tailwind rule was groping at for H2 and paragraphs alone: every
+   heading, and whatever it introduces.
+
+   Being important, this rule cannot be beaten by source order, so the two
+   compositions with a hand-tuned internal rhythm are excluded by name. The hero
+   spaces its own children with a flex gap, and mkdocstrings holds a symbol's
+   docstring deliberately tight under its signature. */
+article .typography :is(h2, h3, h4, h5, h6):not(.ms-hero *, .doc *)
+  + :is(p, ul, ol, dl, pre, blockquote, figure, table, details, section, div, video, h2, h3, h4, h5, h6) {
+  margin-top: var(--prose-heading-lead) !important;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Landing page — hero, card grids, lifecycle strip, compatibility chips.
    Kept scoped via .ms-* class names so they only affect the home page
@@ -585,34 +717,113 @@ dialog#search-dialog > div {
    themes inherit automatically.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* Hero */
-.ms-hero {
+/* ── Page masthead ─────────────────────────────────────────────────────────
+   Every page opens as a pair. The H1 is a small accent label naming where you
+   are, and the first H2 is the large visual title saying what the page claims.
+   They are set tight against each other so the pair reads as one block.
+
+   Every selector in this section is prefixed with `article` on purpose. The
+   prose rules in tailwind/article.css are unlayered and reach (0,1,2), as in
+   `article p:not(:first-child)` and `article .typography h3`. A bare
+   `.ms-hero__lede { margin: 0 }` reaches only (0,1,0), so it loses and the
+   block silently inherits body copy rhythm and body copy heading sizes. That
+   is a defect with no symptom in the markup, the build or the tests. Matching
+   the prose rules' reach is the whole reason these rules apply at all.
+   ────────────────────────────────────────────────────────────────────────── */
+article #page-header h1 {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--primary-text, var(--primary, #c46b48));
+  word-break: normal;
+}
+
+/* The copy and pager buttons share the label's row and are 38px tall against a
+   19px label, so they set the masthead's height. Bottom-aligning the two puts
+   the label directly above the title and stops the cluster hanging past it.
+
+   An earlier revision lifted the cluster out of flow instead. That did close
+   the gap, but it left the cluster overlapping whatever came next, so both the
+   label and the title had to reserve 7rem of right padding to clear it. On a
+   short title that padding wrapped the line early and read as a stray indent
+   on a heading with nothing beside it. Aligning costs nothing and reserves
+   nothing. */
+article #page-header {
+  align-items: flex-end;
+}
+
+/* The masthead is one unit, so the article's 2rem inter-block gap must not
+   land inside it. Cancelled only when a subtitle H2 actually opens the page,
+   which leaves every other page's spacing untouched. */
+article .typography:has(> h2:first-child) {
+  margin-top: -2.25rem;
+}
+article .typography > h2:first-child {
+  margin-top: 0;
+  font-size: clamp(1.9rem, 3.2vw, 2.4rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  /* The title gets the full column, so a short one never wraps. If a consumer
+     writes one long enough to wrap anyway, balance splits it evenly instead of
+     leaving a single orphan word on the last line. */
+  text-wrap: balance;
+}
+
+/* Hero. The elaborate variant of the same masthead, opted into by the class. */
+article .ms-hero {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1.5rem 0 0.5rem;
+  padding: 0 0 0.5rem;
 }
+
+/* A hero states the page's own title, so the generated one duplicates it. The
+   button cluster beside it stays. */
+article:has(.ms-hero) #page-header h1 {
+  display: none;
+}
+
+/* One owner for the hero's vertical rhythm, and it is the flex gap above. */
+article .ms-hero > :is(p, div, section, ul, ol, h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+}
+
 .ms-hero__eyebrow {
-  /* Primary-tinted breadcrumb-style label — matches the active-state treatment
+  /* Primary-tinted breadcrumb-style label, matching the active-state treatment
      used by the left sidebar and right TOC, tying the three rails together. */
-  font-size: 0.82rem;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  color: var(--primary, #c46b48);
-  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--primary-text, var(--primary, #c46b48));
 }
-.ms-hero__title {
-  font-size: clamp(1.8rem, 3.4vw, 2.4rem);
+
+/* Markdown cannot put a class on a heading, so any heading inside the hero is
+   the hero title. `.ms-hero__title` stays valid for heroes written as HTML. */
+article .ms-hero :is(h1, h2, h3, h4, h5, h6),
+article .ms-hero .ms-hero__title {
+  font-size: clamp(1.9rem, 3.2vw, 2.4rem);
   line-height: 1.15;
+  letter-spacing: -0.02em;
   font-weight: 700;
-  margin: 0;
 }
-.ms-hero__lede {
+
+article .ms-hero__lede {
   font-size: 1.05rem;
   color: var(--muted-foreground, currentColor);
   max-width: 60ch;
-  margin: 0;
 }
+
+/* Section heading weight. Geist is a variable face across 100 to 900, so the
+   intermediate steps below render as asked rather than snapping to 700. The
+   base scale set H2 lighter than H3, which left a section heading reading as
+   less structural than the subsection under it. Each level now sits one short
+   step above body copy and above the level below it. */
+article .typography h2 { font-weight: 600; }
+article .typography h3 { font-weight: 650; }
+article .typography h4 { font-weight: 650; }
+
 .ms-cta-row {
   display: flex;
   flex-wrap: wrap;
@@ -797,6 +1008,17 @@ a.ms-card:hover {
 article a,
 .md-content a {
   text-decoration: underline dotted;
+  /* Accent the rule itself, softened against the link's own colour. At full
+     strength a paragraph carrying several links reads as a block of colour
+     rather than as text, and the underline competes with the word it marks. */
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+/* Hover is where the underline should assert itself, so it goes to full accent. */
+article a:hover,
+.md-content a:hover {
+  text-decoration-color: currentColor;
 }
 
 /* Lifecycle strip — numbered horizontal journey */
@@ -807,8 +1029,16 @@ article a,
   counter-reset: ms-step;
   margin: 1rem 0 1.5rem;
 }
+/* The number and the step's name are one heading, so they share a row and the
+   links sit under both. Stacking the counter above the title cost a line of
+   height and read as a lone digit floating over a word. */
 .ms-step {
   position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.35rem;
   padding: 1rem 1rem 0.9rem;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
   border-radius: 0.7rem;
@@ -827,13 +1057,14 @@ article a,
   color: var(--primary-foreground, #fff);
   font-size: 0.78rem;
   font-weight: 700;
-  margin-bottom: 0.4rem;
 }
 .ms-step__title {
   font-weight: 600;
-  margin: 0 0 0.25rem;
+  margin: 0;
 }
+/* Spans both columns so the links start under the number, not beside it. */
 .ms-step__links {
+  grid-column: 1 / -1;
   list-style: none;
   padding: 0;
   margin: 0;
@@ -960,6 +1191,211 @@ article a,
   color: var(--muted-foreground, currentColor);
 }
 
+/* ── One canvas, separated by hairlines ────────────────────────────────────
+   Every large surface is `--background`. The top bar, the tab rail, both side
+   rails, the article and the footer are one continuous sheet, and what marks
+   the joins is a 1px `--border` hairline. Nothing is tinted and nothing is
+   elevated.
+
+   This replaced a four-level fill scale that gave each region its own colour.
+   The scale was measurably off the palette in both modes rather than merely
+   strong: light painted the top bar `#ffffff`, the only cold neutral on a warm
+   cream page, and dark painted it `#2a2925`, LIGHTER than `--card` and so
+   above the top of the theme's own range. The palette already answers this —
+   `--sidebar` is declared identical to `--background` in both modes, which is
+   the theme stating that the rails are the canvas.
+
+   Two artefacts came from the fills rather than from any rule, which is why
+   neither is visible in the source:
+
+   The rails ran the full page height while the article stopped where its text
+   stopped, so the rail colour filled the ~130px between the last paragraph and
+   the footer as a stripe across the full width. A region can only terminate
+   mid-page if it is painted; unpainted, there is nothing to terminate.
+
+   Each rail met the article on a bare colour change with no line on it, which
+   reads as a smudge rather than an edge. A hairline is an edge or there is
+   nothing; a soft step between two large fills is neither.
+
+   The footer already worked this way and was the only chrome nobody
+   complained about: `background: var(--background)` and one `--border` rule.
+   The rest of the chrome now matches it.
+
+   Hierarchy is carried by the hairlines, by the content column's measure and
+   by the type scale. If a recessed rail is ever wanted back, it is one token
+   consumed in one place, not a scale of four. */
+
+/* The template already puts `bg-background` on the header, the shell and the
+   sidebar. There is deliberately no rule here painting them: overriding that
+   class is what put the chrome off-palette, and the correct value is the one
+   the template already asks for. */
+
+/* The rail divider spans the reading area, not the sidebar's own box.
+
+   It is absolutely positioned inside the sticky sidebar, which is
+   `100svh - 10rem` tall, so `bottom: 0` ended the line 160px above the fold at
+   EVERY scroll position — a hairline stopping in open space, which is the one
+   way to make a boundary read as a smudge rather than an edge. Measured at
+   x=287: `--border` from the header down to y=534, then nothing.
+
+   Height is taken from the viewport instead, less the header and the sidebar's
+   own 0.6rem offset, so the line reaches the bottom of the screen. It is
+   `bottom: auto` because a top and a bottom together resolve against the
+   parent again, which is the box being escaped. */
+.ms-rail-divider {
+  bottom: auto;
+  height: calc(100svh - var(--header-height) - 0.6rem);
+}
+
+
+/* The scrollbar gutter is reserved permanently.
+
+   Any overlay that locks scrolling sets `overflow: hidden` on the root, and on
+   a browser with CLASSIC scrollbars that removes ~15px of width and reflows
+   every element on the page, then reflows it back on close. It reads as the
+   page zooming and rebuilding itself around the viewer. It does NOT reproduce
+   in a headless browser, which uses overlay scrollbars and therefore has no
+   gutter to lose, so a measurement of the overlay's own styles will report the
+   fix working while a real desktop still jumps. Reserve the gutter and hiding
+   overflow costs no layout at all. */
+:root {
+  scrollbar-gutter: stable;
+}
+
+/* Full-screen image viewer (GLightbox, theme `lightbox: true`).
+
+   The library does the viewing. These rules do three things it does not: put a
+   VISIBLE affordance on the page, keep the opened image off the viewport edges,
+   and bring the chrome onto theme tokens. Its stock close button is a thin
+   glyph on a transparent field, which reads as an artefact rather than a
+   control, and its stock sizing runs the image to the full viewport. */
+
+/* The affordance. A cursor change says nothing until you are already hovering
+   and nothing about what will happen, so an explicit button sits on the image.
+   js/lightbox.js positions ONE of these over whichever image is hovered. */
+.ms-zoomable {
+  cursor: zoom-in;
+}
+.ms-zoom-hint {
+  position: fixed;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border, #d4d4d8) 70%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--background, #fff) 94%, transparent);
+  color: var(--foreground, #0a0a0a);
+  cursor: pointer;
+  box-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.2), 0 4px 12px -4px rgb(0 0 0 / 0.25);
+  transition: background-color 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
+}
+.ms-zoom-hint[hidden] { display: none; }
+.ms-zoom-hint svg { width: 16px; height: 16px; }
+.ms-zoom-hint:hover {
+  background: var(--background, #fff);
+  transform: translateY(-1px);
+}
+.ms-zoom-hint:focus-visible {
+  outline: 2px solid var(--primary, #c15f3c);
+  outline-offset: 2px;
+}
+
+/* The opened image keeps clear of every edge. Full screen was the ask; edge to
+   edge was not, and an image bleeding into the viewport corners has nowhere
+   for the chrome to sit either. 70% leaves 15% on each side. */
+.glightbox-container .gslide-image img {
+  max-width: 70vw;
+  max-height: 70vh;
+  border-radius: 0.6rem;
+  box-shadow: 0 24px 64px -24px rgb(0 0 0 / 0.6);
+}
+.glightbox-container .gslide-media {
+  box-shadow: none;
+}
+/* NO backdrop-filter here. A blur on a full viewport overlay makes the browser
+   snapshot and re-rasterize the whole page behind it, and the library fades
+   this element in over 500ms with `transition: all`, so the page visibly tore
+   itself apart for the length of the animation and again on close. A solid
+   wash costs one paint and looks the same once it has settled. */
+.glightbox-container .goverlay {
+  background: color-mix(in srgb, var(--background, #0b0b0b) 14%, #000);
+}
+/* The library sets `transition: all` on its overlay, which animates every
+   property it is given, including ones it never meant to. */
+.glightbox-container .goverlay,
+.glightbox-container .gslide-media {
+  transition: opacity 0.2s ease;
+}
+.glightbox-container .gslide-description {
+  background: transparent;
+}
+.glightbox-container .gslide-desc {
+  color: var(--muted-foreground, #d4d4d8);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+/* Close and navigation. The stock controls are thin glyphs on a transparent
+   field; these are real buttons with a surface, so they read as controls and
+   stay visible over a light image as well as a dark one. */
+.glightbox-container .gclose,
+.glightbox-container .gprev,
+.glightbox-container .gnext {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  opacity: 1;
+  border: 1px solid color-mix(in srgb, #fff 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+.glightbox-container .gclose:hover,
+.glightbox-container .gprev:hover,
+.glightbox-container .gnext:hover {
+  background: color-mix(in srgb, #000 70%, transparent);
+  transform: scale(1.05);
+}
+.glightbox-container .gclose svg,
+.glightbox-container .gprev svg,
+.glightbox-container .gnext svg {
+  width: 18px;
+  height: 18px;
+  fill: #fff;
+}
+.glightbox-container .gclose {
+  top: 1.25rem;
+  right: 1.25rem;
+}
+.glightbox-container .gclose:focus-visible,
+.glightbox-container .gprev:focus-visible,
+.glightbox-container .gnext:focus-visible {
+  outline: 2px solid var(--primary, #c15f3c);
+  outline-offset: 2px;
+}
+
+/* Video. A player is as heavy as a carousel and had no rule in the theme at
+   all, so every consumer centred it and spaced it with an inline style. Those
+   all read `margin: 2rem auto 0`, which is 2rem above and nothing below, and
+   an inline style cannot be corrected from here. The theme owns the box now,
+   so a consumer writes `<video controls>` and deletes its inline margins. */
+article .typography video,
+.md-content video {
+  display: block;
+  width: 100%;
+  max-width: 960px;
+  height: auto;
+  margin-block: 1.5rem;
+  margin-inline: auto;
+  border-radius: 0.6rem;
+}
+
 /* Image carousel (Swiper). Enabled with theme `carousel: true`, which makes the
    theme emit the Swiper CDN + init (js/carousel.js); consumers only write the
    `.swiper.ms-shots` markup. Swiper is themed to shadcn tokens so light/dark
@@ -969,9 +1405,25 @@ article a,
   width: 100%;
   max-width: 100%;
   margin: 0.75rem 0 0.25rem;
+  /* The carousel is a heavy block and sat hard against whatever preceded it.
+     PADDING rather than margin: inside a `.ms-hero` every child's margin is
+     zeroed so the flex gap can own the rhythm, so a margin here is dropped
+     without trace. Padding survives both contexts. */
+  padding-top: 1rem;
   overflow: hidden;
   --swiper-theme-color: var(--primary, #c15f3c);
   --swiper-navigation-size: 20px;
+  /* Swiper hardcodes its inactive bullet to black at 0.2 alpha. That measures
+     19.95:1 on the light page and 1.15:1 on the dark one, so the indicator
+     simply vanished in dark mode. Both bullet colours now come from theme
+     tokens and track the mode.
+
+     The active bullet takes `--primary-text`, not `--primary`. It is a
+     non-text indicator, so it answers to the 3:1 floor, and the fill value
+     measures 2.97:1 on the light page. See the accent note above. */
+  --swiper-pagination-color: var(--primary-text, var(--primary, #c15f3c));
+  --swiper-pagination-bullet-inactive-color: var(--foreground, #0a0a0a);
+  --swiper-pagination-bullet-inactive-opacity: 0.5;
 }
 .ms-shots .swiper-slide {
   display: flex;
@@ -982,21 +1434,30 @@ article a,
 .ms-shots img {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  /* 16:9. Product screenshots and screen recordings are landscape — a 4:3 box
+     letterboxed every one of them into roughly a quarter of dead `--muted`
+     space above and below, a visible frame inside a frame. Consumers were
+     overriding this rule in their own extra_css; matching the box to the
+     content is the theme's job. `object-fit: contain` still protects a
+     genuinely non-16:9 image from being cropped. */
+  aspect-ratio: 16 / 9;
   object-fit: contain;
   background: var(--muted, hsl(48 25% 92.2%));
   border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
   border-radius: 0.6rem;
 }
+/* The caption and the dots below it are one footer under the image, so they
+   sit on equal gaps. 0.55rem and 0.6rem read as a mistake rather than as a
+   rhythm, because the caption's line box makes the smaller gap look larger. */
 .ms-shots figcaption {
-  margin-top: 0.55rem;
+  margin-top: 0.75rem;
   text-align: center;
   font-size: 0.875rem;
   color: var(--muted-foreground, currentColor);
 }
 .ms-shots .swiper-pagination {
   position: static;
-  margin-top: 0.6rem;
+  margin-top: 0.75rem;
 }
 .ms-shots .swiper-button-prev,
 .ms-shots .swiper-button-next {
@@ -1068,7 +1529,11 @@ article a,
   margin-bottom: 0.2rem;
   padding-top: 0.2rem;
   padding-bottom: 0.2rem;
-  font-size: 0.7rem;
+  /* A group label names the entries under it, so it cannot be smaller than
+     they are. At 0.7rem it rendered 11.2px against a 12.8px menu entry, which
+     read as a caption on the rail rather than as the heading of a section.
+     It now sits one step above the entries and carries the weight. */
+  font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: -0.005em;
   color: var(--foreground);
@@ -1093,10 +1558,14 @@ article a,
 [data-sidebar="menu-button"][data-active="true"] {
   background-color: color-mix(in srgb, var(--primary) 12%, transparent) !important;
   border-color: transparent !important;
-  color: var(--primary) !important;
+  /* Text and glyph on the tint use --primary-text: on light's cream the fill
+     value measured 2.62:1 against this very chip. The BACKGROUND above stays
+     --primary, because a fill and legible text on it want opposite
+     lightness. */
+  color: var(--primary-text) !important;
 }
 [data-sidebar="menu-button"][data-active="true"] svg {
-  color: var(--primary);
+  color: var(--primary-text);
 }
 /* Idle leaf: muted icon glyphs (Devin pattern — icons recede until hovered).
    Opacity dials them ~25% softer than the muted text color, so the eye
@@ -1181,9 +1650,9 @@ article a,
 }
 .mewbo-toc__link:hover { color: var(--foreground); }
 .mewbo-toc__link[data-active="true"] {
-  color: var(--primary);
+  color: var(--primary-text);
   font-weight: 500;
-  box-shadow: inset 2px 0 0 var(--primary);
+  box-shadow: inset 2px 0 0 var(--primary-text);
 }
 /* H3s nest visually below their H2 parent: text indents further while the
    rail stays flush, so the parent/child relationship reads structurally. */
@@ -1201,8 +1670,20 @@ article a,
    alone. The old drop shadow (esp. the heavy 0.20 dark variant) feathered
    down over the left sidebar's top, reading as a smudge; it's gone. */
 .mewbo-header {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  /* One height for the two labelled header controls (search pill, Ask AI).
+     Declared here rather than at :root because it describes the header's own
+     control scale, and both controls are descendants. */
+  --mewbo-nav-control-h: 2rem;
   box-shadow: none;
+}
+
+/* Only the LAST element of the nav block draws the line that ends it. With a
+   tab rail the header's own bottom border sits at the same y as the rail's,
+   which paints 2px of hairline where the design calls for 1 — measurable as
+   two identical border rows rather than one. `ms-has-header-tabs` is on
+   `body` whenever tabs are configured, so each case names its own edge. */
+body:not(.ms-has-header-tabs) .mewbo-header {
+  border-bottom: 1px solid var(--border);
 }
 
 /* Brand cluster: glyph + wordmark optically aligned.
@@ -1213,11 +1694,15 @@ article a,
 .mewbo-brand {
   align-items: center; gap: 0.5rem;
   height: 2.25rem; padding: 0 0.25rem;
-  color: var(--foreground); text-decoration: none;
+  /* The wordmark sits back at --muted-foreground so the glyph carries the
+     brand and the header chrome stays quiet; full --foreground read as pure
+     white in dark mode. The glyph's SVG paints its own fills, not
+     currentColor, so it is unaffected. Warms to --foreground on hover. */
+  color: var(--muted-foreground); text-decoration: none;
   border-radius: 0.5rem;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
-.mewbo-brand:hover { background: var(--accent); }
+.mewbo-brand:hover { background: var(--accent); color: var(--foreground); }
 .mewbo-brand__glyph {
   display: inline-flex; align-items: center; justify-content: center;
   width: 1.25rem; height: 1.25rem; flex-shrink: 0;
@@ -1277,11 +1762,13 @@ article a,
 .dark .mewbo-theme-toggle__sun  { transform: rotate(90deg) scale(0); opacity: 0; }
 .dark .mewbo-theme-toggle__moon { transform: rotate(0)      scale(1); opacity: 1; }
 
-/* Search pill (centered, lg+). Same h-9 token as every neighbor. */
+/* Search pill (centered, lg+). Shares --mewbo-nav-control-h with the Ask AI
+   button so the two read as one pair of controls; a touch shorter than the
+   h-9 icon buttons beside them, which are square and carry no label. */
 .mewbo-nav-search-pill {
   display: inline-flex; align-items: center; gap: 0.5rem;
   width: 100%; max-width: 22rem;
-  height: 2.25rem; padding: 0 0.75rem;
+  height: var(--mewbo-nav-control-h); padding: 0 0.75rem;
   border: 1px solid var(--border); border-radius: 0.5rem;
   background: var(--background); color: var(--muted-foreground);
   font-size: 0.875rem; cursor: pointer;
@@ -1313,7 +1800,7 @@ article a,
    foreground on hover. */
 .mewbo-nav-ask-ai-btn {
   display: inline-flex; align-items: center; gap: 0.4rem;
-  height: 2.25rem; padding: 0 0.85rem;
+  height: var(--mewbo-nav-control-h); padding: 0 0.85rem;
   border: 1px solid var(--border); border-radius: 0.5rem;
   background: var(--background); color: var(--muted-foreground);
   font-size: 0.875rem; font-weight: 500; white-space: nowrap; cursor: pointer;
@@ -1358,7 +1845,7 @@ article a,
   flex-shrink: 0;
 }
 .ms-header-tabs__icon svg { width: 0.9375rem; height: 0.9375rem; }
-.ms-header-tabs__item[aria-current="page"] { color: var(--primary); }
+.ms-header-tabs__item[aria-current="page"] { color: var(--primary-text); }
 /* The underline hugs the rail's bottom edge (items stretch full height),
    inset to the item's padding box so it underlines icon + label only. */
 .ms-header-tabs__item[aria-current="page"]::after {
@@ -1374,6 +1861,81 @@ article a,
    (it sizes itself with h-(--header-height), which now names the TOTAL). */
 body.ms-has-header-tabs { --header-height: calc(var(--spacing) * 14 + 2.5rem); }
 body.ms-has-header-tabs .mewbo-header__row { height: calc(var(--spacing) * 14); }
+
+/* ─── One left rail: brand · tab bar · sidebar nav ─────────────────────────
+   Three navigation surfaces stack down the left of the page and each drew its
+   gutter from a different owner, so their labels began at three different x
+   positions (28px / 34.4px / 64px at 1440w — the sidebar visibly outdented):
+
+     · the header row and the tab rail share a `.container-wrapper` padded
+       `px-6` (24px), then each widget adds its OWN inner padding — 0.25rem on
+       the brand, 0.65rem on a tab item;
+     · the page body sits in a SECOND `.container-wrapper` padded `px-2` (8px),
+       so the sidebar column starts 16px left of the header's content edge;
+     · the sidebar's content column is `mx-auto` around a fixed
+       `--sidebar-menu-width`, centring the rail inside a wider column and
+       adding ~32px that nothing else shares. That centring is what dominates
+       the misalignment, and it is the only offset here that is decorative.
+
+   Each widget cancels its OWN declared padding against the line, so the LABEL
+   lands on it and only the hover/active background bleeds outward — the shadcn
+   idiom. Every offset below is the negation of a padding declared elsewhere in
+   this file or in the template, not a measured constant. */
+.mewbo-brand { margin-inline-start: -0.25rem; }          /* .mewbo-brand padding */
+.ms-header-tabs__rail { margin-inline-start: -0.65rem; } /* .ms-header-tabs__item padding */
+/* Below lg the brand is hidden and the menu trigger is what the rail lines up
+   against, so it takes the same treatment. */
+.mewbo-menu-btn { margin-inline-start: -0.5rem; }        /* .mewbo-menu-btn padding */
+
+/* WHERE THE LINE COMES FROM. It is not chosen. The sidebar rail is a fixed
+   `--sidebar-menu-width` sitting in a wider `--sidebar-width` column, and
+   centring it in that column is the only placement that does not leave the
+   rail hugging one edge with all the slack on the other. That centring sets
+   the number, and the header follows it:
+
+       8px   the body container's own `px-2`, where the column starts
+     + 32px  half the slack between the column and the rail
+     + 16px  the group's `p-2` plus the menu button's `p-2`
+     ------
+       56px
+
+   An earlier revision solved the same misalignment by DROPPING the centring
+   and pulling everything onto the header's 24px gutter. That aligned the three
+   surfaces, but it pushed all 64px of column slack to the right of the rail
+   and left every navigation surface hard against the viewport edge.
+
+   Below lg there is no rail beside the header to agree with, since the sidebar
+   becomes a dialog, so the gutter has no partner and stays on the container's
+   own 24px. At 390px a 56px inset is a seventh of the viewport. */
+:root {
+  --mewbo-nav-gutter: 1.5rem;
+}
+@media (min-width: 1024px) {
+  :root {
+    --mewbo-nav-gutter: 3.5rem;
+  }
+}
+
+/* The header row and the tab rail share a `.container-wrapper` whose `px-6`
+   was the old line. Only the inline-start moves: the right edge carries the
+   theme toggle and the repo link, which already sit on the header's own
+   24px and have no rail below them to line up with. */
+.mewbo-header > .container-wrapper,
+.ms-header-tabs > .container-wrapper {
+  padding-inline-start: var(--mewbo-nav-gutter);
+}
+
+/* Desktop only: the mobile navigation dialog includes this same markup, owns
+   its own gutter, and has no header rail beside it to agree with. */
+@media (min-width: 1024px) {
+  [data-sidebar="content"] {
+    margin-inline: auto;
+    padding-inline: 0 0.5rem;
+  }
+  /* The menu button draws a 1px border (transparent until active) that neither
+     the brand nor a tab has; without this its label sits one pixel right. */
+  [data-sidebar="menu-button"] { margin-inline-start: -1px; }
+}
 
 /* ─── Full-bleed app slot (app.html) ───────────────────────────────────────
    `template: app.html` pages render their content into this single <main>:
@@ -2154,4 +2716,650 @@ body.theme-default { --footer-height: 320px; }
     align-items: flex-start;
   }
   body.theme-default { --footer-height: 540px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Prose colour: put body text on the token system
+
+   The upstream `article` rule paints prose with `text-neutral-800` /
+   `dark:text-neutral-300` — a COOL grey scale, while this brand's surfaces
+   are warm (cream in light, carbon in dark). The effect is subtle and
+   persistent: every paragraph sits a few degrees off the chrome around it.
+
+   The upstream INTENT is worth keeping — body text one step recessed from
+   headings gives the page a reading hierarchy. So rather than flattening
+   prose onto `--foreground`, mix the two tokens: the recession survives and
+   the hue now tracks the palette. Headings, in turn, are stated at full
+   strength so the contrast between them is deliberate rather than incidental.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --prose-body: color-mix(in oklab, var(--foreground) 82%, var(--muted-foreground));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Diagram tokens
+
+   Diagrams are DATA, not chrome, and the two want opposite things from a
+   colour. Chrome tokens are tuned to recede: `--card` is the page's own
+   surface and `--border` is a whisper-subtle hairline sized for large
+   panels. Pointed at a diagram they produced a node filled with exactly the
+   colour of the card behind it (measured 1.00:1 in light mode — white on
+   white) outlined by a border at 1.25:1. WCAG 1.4.11 asks for 3:1 on the
+   boundary of a meaningful graphical object; a hairline for a 700px panel is
+   not the same instrument as the outline of a 90px box.
+
+   So diagrams get their own small family, with the contrast stated as the
+   reason each value exists. Measured against these values:
+
+     node fill vs surface     light 1.14   dark 1.22   (a visible step)
+     node border vs fill      light 3.53   dark 3.23   (>= 3, the real fix)
+     node border vs surface   light 3.10   dark 3.94
+     edge line vs surface     light 4.60   dark 5.46
+     label vs fill            light 19.8   dark 14.6   (>= 4.5)
+
+   `--diagram-surface` backs BOTH the inline figure and the expanded viewer's
+   stage. That is deliberate and load-bearing: a diagram that is legible in
+   the page cannot then be illegible when expanded, because it is being read
+   against the same colour in both places. Giving the two states separate
+   backdrops is what let expanded drift out of contrast unnoticed.
+
+   Hues are warm to sit in the brand's cream/carbon palette — a neutral grey
+   diagram reads as foreign on this page even when its contrast is correct.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --diagram-surface: #f2f0ea;
+  --diagram-node-bg: #ffffff;
+  --diagram-node-border: #8c8880;
+  --diagram-line: #6f6c64;
+  --diagram-label: #0a0a0a;
+  --diagram-cluster: #e7e4db;
+}
+
+.dark {
+  --diagram-surface: #121110;
+  --diagram-node-bg: #26241f;
+  --diagram-node-border: #767269;
+  --diagram-line: #8d8a80;
+  --diagram-label: #f8f8f6;
+  --diagram-cluster: #1c1b18;
+}
+
+article,
+.md-content {
+  color: var(--prose-body);
+}
+
+article h1,
+article h2,
+article h3,
+article h4,
+article h5,
+article h6,
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4,
+.md-content h5,
+.md-content h6 {
+  color: var(--foreground);
+  text-wrap: balance;
+}
+
+/* Paragraphs and list items read better with the browser's newer wrapping
+   heuristic: it avoids short widow lines without changing any measurement. */
+article p,
+article li,
+.md-content p,
+.md-content li {
+  text-wrap: pretty;
+}
+
+/* Strong text inside recessed prose needs to come back to full strength, or
+   emphasis reads as merely "less grey". */
+article strong,
+.md-content strong {
+  color: var(--foreground);
+}
+
+/* Blockquotes ship as a bare left rule + italics, which disappears against a
+   busy page. A quiet surface tint plus the accent rule makes the aside read
+   as a distinct block without shouting; the text stays recessed. */
+article blockquote,
+.md-content blockquote {
+  color: var(--muted-foreground);
+  border-left-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 0.75rem 1rem 0.75rem 1.25rem;
+  font-style: normal;
+}
+
+article blockquote > :first-child,
+.md-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Mermaid diagrams
+
+   A diagram is a figure on the page, not a loose SVG: it gets the same matte
+   frame content images get a few hundred lines above, so media of every kind
+   reads as one family. The card is the click target for the expanded viewer.
+   ───────────────────────────────────────────────────────────────────────── */
+
+figure.ms-mermaid {
+  position: relative;
+  margin: 1.75rem 0;
+  padding: 1rem;
+  box-sizing: border-box;
+  /* NOT --card: that is the colour mermaid fills nodes with, so a card
+     background made every node invisible against its own container. */
+  background: var(--diagram-surface);
+  border: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+  border-radius: 0.5rem;
+  overflow: hidden;
+  cursor: zoom-in;
+  transition: border-color 0.15s ease;
+}
+
+figure.ms-mermaid:hover {
+  border-color: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
+}
+
+.ms-mermaid__stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* A very tall diagram would otherwise push the surrounding prose apart.
+     Bound the inline card and let the expanded viewer carry the full size —
+     the card is a preview, the viewer is where a large diagram is read. */
+  max-height: 32rem;
+  overflow: hidden;
+}
+
+.ms-mermaid__stage svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Too wide to shrink and stay readable: show it at a legible size and let
+   the card scroll sideways. `justify-content` has to relax too, or a centred
+   flex child cannot be scrolled back to its own left edge. */
+figure.ms-mermaid[data-wide] .ms-mermaid__stage {
+  overflow-x: auto;
+  justify-content: flex-start;
+}
+
+figure.ms-mermaid[data-wide] .ms-mermaid__stage svg {
+  max-width: none;
+  /* Mermaid also sets width="100%" as an ATTRIBUTE, so lifting max-width on
+     its own still leaves the diagram filling the column. `width: auto` hands
+     sizing back to the viewBox, which is the natural size we want here. */
+  width: auto;
+  flex: none;
+}
+
+/* Too tall to show whole: fade the cut edge instead of ending abruptly, so
+   the crop reads as "there is more" rather than as a rendering fault. Mirrors
+   the scroll fade the left sidebar uses. */
+figure.ms-mermaid[data-tall] .ms-mermaid__stage {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent 100%);
+}
+
+/* When content is clipped the way to see the rest must be visible without
+   hovering — on touch there is no hover at all. */
+figure.ms-mermaid[data-wide] .ms-mermaid__expand,
+figure.ms-mermaid[data-tall] .ms-mermaid__expand {
+  opacity: 1;
+}
+
+/* The expand affordance stays quiet until the diagram is hovered or the
+   button itself is focused, so it never competes with the diagram. It is a
+   real button, so keyboard users reach the viewer without the card click. */
+.ms-mermaid__expand {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--background) 85%, transparent);
+  border: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+  border-radius: calc(var(--radius) - 4px);
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+figure.ms-mermaid:hover .ms-mermaid__expand,
+.ms-mermaid__expand:focus-visible {
+  opacity: 1;
+}
+
+.ms-mermaid__expand:hover {
+  color: var(--foreground);
+}
+
+.ms-mermaid__pending,
+.ms-mermaid__error {
+  margin: 0;
+  padding: 1.5rem 0;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+
+.ms-mermaid__error {
+  color: var(--destructive);
+}
+
+/* A diagram that failed to render still shows its source — a reader can then
+   see what was meant, and an author can see what to fix. */
+figure.ms-mermaid--error {
+  cursor: default;
+}
+
+.ms-mermaid__source {
+  margin: 0;
+  padding: 0.75rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+/* Node outlines at 1px read thin even once the colour clears 3:1, because a
+   90px box's boundary is carrying more meaning than a panel hairline does.
+   A quarter-pixel is enough to make the shape read as drawn rather than
+   implied, without turning the diagram into a wireframe. Edge paths are left
+   at mermaid's own width — they are already the most visible thing on the
+   canvas and thickening them muddies arrowheads. */
+figure.ms-mermaid .node rect,
+figure.ms-mermaid .node polygon,
+figure.ms-mermaid .node circle,
+figure.ms-mermaid .node ellipse,
+figure.ms-mermaid .node path,
+.ms-diagram-viewer .node rect,
+.ms-diagram-viewer .node polygon,
+.ms-diagram-viewer .node circle,
+.ms-diagram-viewer .node ellipse,
+.ms-diagram-viewer .node path {
+  /* !important because mermaid writes stroke-width as an INLINE style
+     attribute on each shape, which a stylesheet rule cannot outrank. This is
+     the same narrow exception the theme reserves for beating inline and
+     `!`-utilities, not a general licence. */
+  stroke-width: 1.25px !important;
+}
+
+/* ── Diagram label text ─────────────────────────────────────────────────
+   Mermaid is configured with `htmlLabels: true`, so node labels are real
+   HTML inside a foreignObject and can be styled. Without these rules a
+   label that wraps onto several lines is set at the browser's default
+   leading, which is far too loose inside a node box and makes multi-line
+   nodes look broken next to single-line ones. */
+
+figure.ms-mermaid .nodeLabel,
+figure.ms-mermaid .edgeLabel,
+figure.ms-mermaid .label,
+.ms-diagram-viewer .nodeLabel,
+.ms-diagram-viewer .edgeLabel,
+.ms-diagram-viewer .label {
+  /* Leading only. Mermaid measures each label and writes its own
+     `white-space` inline, so overriding that here lets text re-wrap at a
+     width the node box was never sized for, and it spills out. Line height
+     is safe to restyle because it does not change the measured width. */
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+figure.ms-mermaid .nodeLabel p,
+.ms-diagram-viewer .nodeLabel p {
+  margin: 0;
+  line-height: inherit;
+}
+
+/* foreignObject labels inherit the page's prose colour rules otherwise. */
+figure.ms-mermaid foreignObject div,
+.ms-diagram-viewer foreignObject div {
+  text-align: center;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Expanded diagram viewer
+
+   A native <dialog>, same mechanism as the search modal, so Escape, focus
+   containment and the backdrop are the platform's job rather than ours.
+   ───────────────────────────────────────────────────────────────────────── */
+
+dialog.ms-diagram-viewer {
+  width: min(95vw, 1100px);
+  height: min(85vh, 820px);
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  margin: auto;
+  display: none;
+  grid-template-rows: auto 1fr auto;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+  border-radius: calc(var(--radius) + 2px);
+  overflow: hidden;
+}
+
+dialog.ms-diagram-viewer[open] {
+  display: grid;
+}
+
+dialog.ms-diagram-viewer::backdrop {
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.ms-diagram-viewer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 2.75rem;
+  padding: 0 0.5rem 0 0.9rem;
+  border-bottom: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+}
+
+.ms-diagram-viewer__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.ms-diagram-viewer__label > span {
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-diagram-viewer__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex: none;
+}
+
+.ms-diagram-viewer__actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: none;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+
+.ms-diagram-viewer__actions button:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.ms-diagram-viewer__stage {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  /* The SAME surface the inline figure uses, so a diagram is read against
+     one colour whether it is on the page or expanded. */
+  background-color: var(--diagram-surface);
+  /* A dot grid says the area is manipulable before anyone tries to drag it,
+     but it is orientation, not content: at 35% it competed with the diagram
+     in front of it. Kept faint enough to register only in empty space. */
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--diagram-line) 22%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+}
+
+.ms-diagram-viewer__stage[data-dragging] {
+  cursor: grabbing;
+}
+
+.ms-diagram-viewer__inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  /* Suppressed inline while a drag is in flight so panning tracks the
+     pointer exactly; restored for button and wheel steps so those ease. */
+  transition: transform 80ms ease-out;
+}
+
+.ms-diagram-viewer__inner svg {
+  max-width: none;
+  height: auto;
+  display: block;
+}
+
+.ms-diagram-viewer__hint {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border, rgba(120, 120, 120, 0.2));
+}
+
+@media (max-width: 640px) {
+  dialog.ms-diagram-viewer {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    border: 0;
+  }
+  /* Pointer-drag panning is the whole interaction on a phone, and the hint
+     costs a row of a small screen to say so. */
+  .ms-diagram-viewer__hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ms-diagram-viewer__inner {
+    transition: none;
+  }
+}
+/* ─────────────────────────────────────────────────────────────────────────
+   "On This Page" rail: stop over-reserving for the footer, and say that it
+   scrolls
+
+   The rail showed only a few entries and looked terminally cut. Two causes,
+   and the interesting part is which one it is NOT: `#toc` already carries
+   `overflow-y: auto`, and a flex item whose overflow is not `visible` has an
+   automatic minimum size of zero, so it was always free to shrink and scroll.
+   Adding `min-height: 0` changes nothing here — measured, not assumed.
+
+   1. The height budget. The rail is sized `100svh - header - footer`, and
+      this brand's footer token is 320px against upstream's ~96px, so nearly
+      a third of the viewport is reserved for a footer that is not on screen
+      while you are reading. On a 768px-tall window that left 248px of rail.
+      Reserving a fixed, comfortable gap instead — the same shape as the left
+      sidebar's own `100svh-10rem` — returns ~200px at every viewport size.
+
+   2. Nothing said it could scroll. `#toc` also carries `no-scrollbar`, so
+      the one affordance that would have shown more content below was hidden,
+      and the clipped last entry read as the end of the list. A fade at the
+      cut edge restores that cue, matching the left sidebar's scroll fade.
+   ───────────────────────────────────────────────────────────────────────── */
+
+div:has(> #toc) {
+  height: calc(100svh - var(--header-height) - 10rem);
+}
+
+#toc {
+  /* The rail's own trailing spacer means this sits over empty space when
+     the list is short, so a fully-visible list is not dimmed for no reason. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent 100%);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Header chrome: give the controls a surface, and the tab rail its own plane
+
+   The search pill and the Ask AI button both sat on `--background` behind a
+   single hairline — the same colour as the header they are in, so they read
+   as outlines rather than as controls. Filling them one step off the header
+   is what makes them look pressable, and it is also what tells a reader the
+   search pill is a FIELD rather than a label.
+
+   The tab rail sits between the header and the page and previously shared a
+   surface with both, so the three planes read as one. It now takes a deeper
+   fill of its own plus a short shadow beneath it. The shadow is bottom-only
+   and the rail is not a stacking context above the page content, so it
+   cannot bleed sideways or over the sidebar the way the old header shadow
+   did (removed in v1.5.0 for exactly that reason).
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Search pill ─────────────────────────────────────────────────────── */
+
+/* `--input` is the palette's own fill for a field and it moves the right way
+   without being told which mode it is in: in light it sits below the page and
+   the field reads as a well, in dark it sits above and the field reads as a
+   lift. The previous pair of hand-picked hexes went darker in BOTH modes,
+   which is why dark rendered a near-black hole punched into the bar.
+
+   The border is `--border` at full strength and no more. It defines the field
+   without outlining it. Stated plainly: at rest that boundary does not reach
+   the 3:1 of WCAG 1.4.11 in light, because a border that does is a drawn box
+   on a seamless bar. The fill carries the boundary at rest and `:focus-within`
+   below raises a full `--ring`, which is the state where the contrast has to
+   be unambiguous. */
+.mewbo-nav-search-pill {
+  background: var(--input);
+  border-color: var(--border);
+  /* Prompt text, not content: it sits back at --muted-foreground and warms to
+     --foreground on hover (the rule below), the same as an unfocused field's
+     placeholder anywhere else. Full --foreground here read as pure white in
+     dark mode and pulled the eye away from the page. */
+  color: var(--muted-foreground);
+  transition: background 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.mewbo-nav-search-pill:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 30%, transparent);
+}
+
+.mewbo-nav-search-pill:hover {
+  background: color-mix(in srgb, var(--muted) 100%, transparent);
+  border-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
+}
+
+.mewbo-nav-search-pill svg {
+  opacity: 0.8;
+}
+
+/* The shortcut hint is machine text on a filled field: lift it off the fill
+   so it stays legible now that the field itself is no longer transparent. */
+/* The shortcut hint is machine text on a filled field: lift it off the fill
+   so it stays legible now that the field itself is no longer transparent. */
+.mewbo-nav-search-pill .mewbo-kbd,
+.mewbo-nav-search-pill kbd {
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  color: var(--muted-foreground);
+}
+
+/* ── Ask AI button ───────────────────────────────────────────────────── */
+
+.mewbo-nav-ask-ai-btn {
+  /* The primary action in the header, so it carries a tint of the accent
+     rather than another neutral outline. Kept low enough that it reads as
+     emphasis, not as a call to action competing with the page. */
+  background: color-mix(in srgb, var(--primary) 10%, var(--background));
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  /* The tinted fill and the primary-coloured sparkle already carry the
+     emphasis, so the label rides quiet with the brand and the search
+     placeholder, and warms to --foreground on hover. It is nudged a step
+     darker than they are because it alone sits on the accent tint above
+     rather than on the header, and --muted-foreground measures 4.14:1 there
+     in light mode. The blend reads as the same grey beside the other two. */
+  color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
+  box-shadow:
+    inset 0 1px 0 0 color-mix(in srgb, var(--background) 55%, transparent),
+    0 1px 2px -1px rgb(0 0 0 / 0.08);
+}
+
+.mewbo-nav-ask-ai-btn:hover {
+  background: color-mix(in srgb, var(--primary) 18%, var(--background));
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  color: var(--foreground);
+}
+
+.mewbo-nav-ask-ai-btn svg {
+  opacity: 1;
+  color: var(--primary);
+}
+
+/* ── Tab rail: its own plane between header and page ─────────────────── */
+
+/* Same canvas as the header above it and the page below it. Two hairlines
+   place it: one where the header ends, one where the page begins. Both are
+   plain `--border`, so the pair reads as one weight rather than as the
+   two different greys a 70%/90% mix produced. */
+.ms-header-tabs {
+  background: var(--background);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 1;
+}
+
+/* The active tab deliberately stays on `--primary` — the clay accent IS the
+   active marker here, and `test_header_tabs_rail_renders` pins it. Raising it
+   to full foreground on the new deeper plane looked reasonable and was wrong:
+   it removes the only colour cue distinguishing the active tab from its
+   neighbours, leaving just the underline. */
+
+/* The nav block casts no shadow.
+
+   A two-layer shadow used to hang under it, which contradicted the rule
+   further up this file declaring the header flat with a hairline and no
+   elevation — both were live and the later one won. A shadow under a bar that
+   is the same colour as the page reads as a grey band, not as depth, and
+   measuring it found a 4px gradient running the full width beneath the tabs.
+   Where the chrome ends is stated once, by `.ms-header-tabs`'s bottom
+   hairline, or by the header's own when no tab rail exists. */
+
+.dark .mewbo-nav-search-pill:hover {
+  background: color-mix(in srgb, var(--muted) 55%, var(--background));
+}
+
+/* Prose links take the text-tuned clay. `article a` resolves to `text-primary`
+   in tailwind/article.css, which is the FILL value; on light's cream page that
+   measured 2.69:1, well under the 4.5:1 a link has to clear. Dark is
+   unchanged, where --primary-text aliases --primary. */
+article a,
+.md-content a {
+  color: var(--primary-text);
 }
