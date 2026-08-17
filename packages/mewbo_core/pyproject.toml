@@ -24,7 +24,7 @@ dependencies = [
   # on any client-only install. Took down every tool-bearing call on the
   # deployed API. Lift once upstream stops importing proxy
   # modules from the client path.
-  "litellm>=1.81.0,<1.92",
+  "litellm>=1.81.0,<1.97",
   "loguru>=0.7.2,<1.0.0",
   "markitdown[pdf,docx,xlsx,pptx,outlook]>=0.1.3,<1.0.0",
   "pydantic>=2.7.0,<3.0.0",
