@@ -288,10 +288,14 @@ export type ApiClient = {
 
 export type PluginSummary = {
   name: string;
+  // Always set: the server resolves `manifest.display_name or manifest.name`,
+  // so a manifest with no display_name still returns a non-null string here.
+  display_name: string;
   description: string;
   version: string;
   marketplace: string;
   scope: string;
+  enabled: boolean;
   skills: number;
   agents: number;
   commands: number;

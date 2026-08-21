@@ -73,6 +73,7 @@ __all__ = [
     "check_forbidden_patterns",
     "check_imports",
     "check_pipeline_error_swallow",
+    "derive_collection_writes",
     "format_findings",
     "lint_app",
 ]
@@ -407,6 +408,66 @@ def check_pipeline_error_swallow(tree: ast.AST, _src: str) -> Iterable[LintFindi
     for node in ast.walk(tree):
         if isinstance(node, ast.Try):
             yield from _GuardedTry(node).findings()
+
+
+class _CollectionWriteDerivation:
+    """Literal collection output names visible in one code pipeline's source.
+
+    This is derivation, NOT a lint rule. A new pipeline lint rule runs against
+    every live pipeline at execution time and can strand an existing version;
+    source that cannot be proven statically must therefore yield no declaration,
+    not a rejection. Explicit ``PipelineSpec.writes`` is the author escape hatch
+    for that dynamic shape.
+    """
+
+    MUTATORS: ClassVar[frozenset[str]] = frozenset({"upsert", "delete"})
+
+    def __init__(self, tree: ast.AST) -> None:
+        self._tree = tree
+
+    @staticmethod
+    def _literal_collection(call: ast.Call) -> str | None:
+        """Return ``ctx.collection("name")``'s literal name, else ``None``."""
+        if (
+            not isinstance(call.func, ast.Attribute)
+            or call.func.attr != "collection"
+            or len(call.args) != 1
+            or call.keywords
+            or not isinstance(call.args[0], ast.Constant)
+            or not isinstance(call.args[0].value, str)
+        ):
+            return None
+        return call.args[0].value
+
+    def names(self) -> set[str]:
+        """Find direct literal ``ctx.collection(...).upsert/delete`` call chains."""
+        names: set[str] = set()
+        for node in ast.walk(self._tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in self.MUTATORS:
+                continue
+            collection_call = node.func.value
+            if not isinstance(collection_call, ast.Call):
+                continue
+            name = self._literal_collection(collection_call)
+            if name is not None:
+                names.add(name)
+        return names
+
+
+def derive_collection_writes(source: str) -> set[str]:
+    """Conservatively derive literal collection writes from pipeline *source*.
+
+    An unparsable or dynamic source is left to normal lint/runtime handling and
+    yields no output declaration here. This function never emits a finding or
+    refuses a submit; it simply provides the reliable part of a source contract.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return _CollectionWriteDerivation(tree).names()
 
 
 # ------------------------------------------------------------------

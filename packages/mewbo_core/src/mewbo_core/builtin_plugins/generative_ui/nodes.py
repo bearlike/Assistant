@@ -5,9 +5,13 @@ There are TWO shapes here and the difference is the whole design.
 
 *Model-facing* is what the LLM fills in and what the tool's JSON Schema
 describes: a discriminated union on ``component`` whose members carry their own
-*typed, flat* fields. A precise per-variant schema is far easier for a model to
-fill correctly than a generic ``props`` bag, and it is what lets every variant
-own its own validators.
+*typed, flat* fields. What this buys, certainly, is post-generation validation
+and renderer safety — an invalid combination is unrepresentable and every variant
+owns its own validators. Whether it also makes a model more likely to FILL the
+call correctly than a generic ``props`` bag is unmeasured; this docstring used to
+assert it did, and no public benchmark isolates the question. Treat it as a
+validation decision, not a prompting one, and settle the other half against a
+real endpoint if it ever matters.
 
 *Renderer-facing* is what crosses the wire: the generic node shape
 ``{component, props, children, key}`` that the vendored assistant-ui renderer
@@ -31,17 +35,20 @@ drifts out of sync the moment a variant gains a field. Models import no I/O.
 from __future__ import annotations
 
 import json
-from typing import Annotated, ClassVar, Literal
+import types as _pytypes
+from typing import Annotated, Any, ClassVar, Literal, Union, get_args, get_origin
 from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import GenerateJsonSchema
 
 # ---------------------------------------------------------------------------
 # Caps
@@ -101,8 +108,43 @@ Label = Annotated[
 Prose = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=PROSE_MAX_CHARS)
 ]
+
+
+def _number_as_value(value: object) -> object:
+    """Admit a bare number where a cell/value string is declared.
+
+    An OBSERVED near-miss, not a courtesy: rejected calls supplied numeric
+    table cells and numeric KeyValue values where the schema declares a
+    string. The number IS the datum, so stringifying it preserves exactly
+    what the model meant. ``bool`` is excluded (it is an ``int`` subclass and
+    ``"True"`` in a cell would be an invented rendering, not a recovery).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
 # A blank table cell / definition value is legitimate data, so no minimum here.
-Value = Annotated[str, StringConstraints(strip_whitespace=True, max_length=VALUE_MAX_CHARS)]
+Value = Annotated[
+    str,
+    BeforeValidator(_number_as_value),
+    StringConstraints(strip_whitespace=True, max_length=VALUE_MAX_CHARS),
+]
+
+# A model-authored name for a container node, so a later call can address it
+# (append into it, or replace it in place). Readable on purpose — the id is
+# something the model quotes back, so `summary-card` beats fabricated hex.
+ContainerId = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]*$",
+    ),
+]
 # Code is never stripped — leading indentation is the content.
 Code = Annotated[str, StringConstraints(min_length=1, max_length=CODE_MAX_CHARS)]
 Href = Annotated[
@@ -142,7 +184,23 @@ class GenerativeUINode(BaseModel):
     # frozenset because that is what pydantic's ``exclude`` accepts.
     _STRUCTURAL_FIELDS: ClassVar[set[str]] = {"component", "children"}
 
+    # Per-field semantic notes for :meth:`GenerativeUISpec.component_guide`.
+    # A note lives ON the variant that owns the rule it states (the row-length
+    # law belongs to ``TableNode``), so renaming or deleting the field takes
+    # its note with it instead of stranding a stale line in the guide.
+    _GUIDE_NOTES: ClassVar[dict[str, str]] = {}
+
     component: str
+
+    @classmethod
+    def component_tag(cls) -> str:
+        """Return the one ``component`` value this variant accepts.
+
+        The discriminator value is the variant's IDENTITY to a model, so it is
+        read off the field's declared default rather than restated anywhere: a
+        variant cannot be renamed in one place and stay stale in another.
+        """
+        return str(cls.model_fields["component"].default)
 
     def child_nodes(self) -> tuple[GenerativeUINode, ...]:
         """Return the direct children of this node.
@@ -208,10 +266,27 @@ class _ContainerNode(GenerativeUINode):
     forget on the twelfth variant.
     """
 
+    _GUIDE_NOTES: ClassVar[dict[str, str]] = {
+        "children": "every child carries its own `component`"
+    }
+
+    # ``id`` is STRUCTURAL: it addresses the node for `append`/`update` on the
+    # server side and is deliberately kept OFF the wire props, so the frozen
+    # renderer-facing shape stays byte-identical whether or not a tree uses
+    # addressing. Put it on the wire only when a renderer gains a consumer.
+    _STRUCTURAL_FIELDS: ClassVar[set[str]] = {"component", "children", "id"}
+
     children: list[GenerativeUINodeUnion] = Field(
         default_factory=list,
         max_length=MAX_TREE_NODES,
         description="Nodes rendered inside this container.",
+    )
+    id: ContainerId | None = Field(
+        default=None,
+        description=(
+            "Optional name for this container (e.g. 'status-card') so a later "
+            "present_ui call can append into it or update it in place."
+        ),
     )
 
     def child_nodes(self) -> tuple[GenerativeUINode, ...]:
@@ -228,6 +303,20 @@ class TextNode(GenerativeUINode):
         default="default",
         description="'muted' de-emphasises the paragraph as secondary detail.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_text_key(cls, data: object) -> object:
+        """Admit ``text`` for ``value`` — an OBSERVED near-miss, verbatim.
+
+        Rejected calls sent ``{"component": "Text", "text": ...}``. The alias
+        fires only when the canonical key is absent, so a call carrying both
+        still fails ``extra="forbid"`` rather than having one silently win.
+        """
+        if isinstance(data, dict) and "text" in data and "value" not in data:
+            data = dict(data)
+            data["value"] = data.pop("text")
+        return data
 
     def to_text(self) -> str:
         """Return the paragraph verbatim."""
@@ -306,6 +395,20 @@ class KeyValueItem(BaseModel):
     label: Label = Field(description="The field name.")
     value: Value = Field(description="The field value.")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _pair_as_item(cls, data: object) -> object:
+        """Admit a 2-element list where ``{label, value}`` is declared.
+
+        An OBSERVED near-miss: ``items`` arrived as ``[["Server Load",
+        "34%"]]``. The order is unambiguous (label first, value second, the
+        display order), so the pair carries exactly the declared content. Any
+        other length stays a genuine mistake and is refused as itself.
+        """
+        if isinstance(data, (list, tuple)) and len(data) == 2:
+            return {"label": data[0], "value": data[1]}
+        return data
+
 
 class KeyValueNode(GenerativeUINode):
     """A definition list of short label/value pairs."""
@@ -323,6 +426,10 @@ class KeyValueNode(GenerativeUINode):
 class TableNode(GenerativeUINode):
     """A small tabular dataset."""
 
+    _GUIDE_NOTES: ClassVar[dict[str, str]] = {
+        "rows": "each row exactly as long as `columns`"
+    }
+
     component: Literal["Table"] = "Table"
     columns: list[Label] = Field(
         min_length=1, max_length=8, description="Column headers, left to right."
@@ -332,6 +439,25 @@ class TableNode(GenerativeUINode):
         max_length=50,
         description="Row cells, each row exactly as long as `columns`.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _alias_singular_keys(cls, data: object) -> object:
+        """Admit ``row``/``column`` for ``rows``/``columns`` — OBSERVED near-misses.
+
+        Each alias fires only when its canonical key is absent, so a call
+        carrying both spellings still fails ``extra="forbid"`` instead of one
+        silently winning.
+        """
+        if not isinstance(data, dict):
+            return data
+        aliased = data
+        for singular, plural in (("row", "rows"), ("column", "columns")):
+            if singular in aliased and plural not in aliased:
+                if aliased is data:
+                    aliased = dict(data)
+                aliased[plural] = aliased.pop(singular)
+        return aliased
 
     @model_validator(mode="after")
     def _rows_match_columns(self) -> TableNode:
@@ -493,6 +619,215 @@ class GenerativeUISpec(BaseModel):
         """Return the plain-text degradation of the whole tree."""
         return "\n".join(node.to_text() for node in self.root)
 
+    @classmethod
+    def component_guide(cls) -> str:
+        """Return the whole component vocabulary as flat, dereference-free prose.
+
+        The JSON Schema states every fact in this string already — but it states
+        them through ``$ref`` into ``$defs``, and small models measurably do not
+        follow that hop. Two unrelated ones, handed the FULL untruncated schema,
+        searched for ``GenerativeUISpec`` and ``AlertNode`` as if they were tools,
+        then used those ``$defs`` KEYS as object keys. This is the same
+        information with no indirection to resolve, and it costs a fraction of
+        the schema's tokens.
+
+        Each field carries its SHAPE where the shape is structured — the three
+        dominant tree-level rejections were all a model getting a field's shape
+        slightly wrong (a missing child ``component``, a list-of-lists where
+        list-of-objects is declared, an invented key), and the shapes lived only
+        behind the ``$ref`` hop this guide exists to remove.
+
+        DERIVED from the union, never hand-written: a twelfth variant appears
+        here the moment it joins :data:`GenerativeUINodeUnion`, and cannot be
+        forgotten. Callers put it wherever a model reads flat text — the tool
+        description and the rejection message are both such places.
+        """
+        lines = [
+            "Components (required fields first; every field sits DIRECTLY on the "
+            "node beside `component`, never nested under a type name):"
+        ]
+        for member in cls._variants():
+            required = [
+                cls._field_brief(member, name, field.annotation)
+                for name, field in member.model_fields.items()
+                if name != "component" and field.is_required()
+            ]
+            optional = [
+                cls._field_brief(member, name, field.annotation)
+                for name, field in member.model_fields.items()
+                if name != "component" and not field.is_required()
+            ]
+            tail = f" (optional: {'; '.join(optional)})" if optional else ""
+            lines.append(
+                f"- {member.component_tag()}: {'; '.join(required) or '—'}{tail}"
+            )
+        return "\n".join(lines)
+
+    @classmethod
+    def _field_brief(
+        cls, member: type[GenerativeUINode], name: str, annotation: Any
+    ) -> str:
+        """One guide entry: the field name, its shape, and the variant's note."""
+        shape = cls._shape_of(annotation)
+        note = member._GUIDE_NOTES.get(name)
+        brief = f"{name}: {shape}" if shape else name
+        if note:
+            brief += f", {note}"
+        return brief
+
+    @classmethod
+    def _shape_of(cls, annotation: Any) -> str | None:
+        """Render a structured annotation as literal example shape, else ``None``.
+
+        Derived from the type so it cannot drift: ``list[KeyValueItem]`` reads
+        its keys off the submodel, ``list[list[Value]]`` becomes ``[[str]]``,
+        and a list of union node members becomes ``[node, ...]``. A scalar field
+        gets no shape — the name alone already says everything the model needs.
+        """
+        ann = cls._unwrap_annotation(annotation)
+        if get_origin(ann) is not list:
+            return None
+        inner = cls._unwrap_annotation(get_args(ann)[0])
+        if get_origin(inner) is list:
+            return "[[str]]"
+        if get_origin(inner) in (Union, _pytypes.UnionType):
+            members = get_args(inner)
+            if members and all(
+                isinstance(m, type) and issubclass(m, GenerativeUINode)
+                for m in members
+            ):
+                return "[node, ...]"
+            return None
+        if isinstance(inner, type) and issubclass(inner, BaseModel):
+            keys = ", ".join(inner.model_fields)
+            return f"[{{{keys}}}]"
+        return "[str]"
+
+    @staticmethod
+    def _unwrap_annotation(annotation: Any) -> Any:
+        """Peel ``Annotated[...]`` and ``X | None`` down to the shape-bearing type."""
+        ann = annotation
+        while get_origin(ann) is Annotated:
+            ann = get_args(ann)[0]
+        if get_origin(ann) in (Union, _pytypes.UnionType):
+            members = [m for m in get_args(ann) if m is not type(None)]
+            if len(members) == 1:
+                return GenerativeUISpec._unwrap_annotation(members[0])
+        return ann
+
+    @classmethod
+    def _variants(cls) -> tuple[type[GenerativeUINode], ...]:
+        """Return the union's concrete members, in declaration order."""
+        return get_args(get_args(GenerativeUINodeUnion)[0])
+
+    # ------------------------------------------------------------------
+    # Addressable containers — the composition surface `present_ui` drives
+    # ------------------------------------------------------------------
+
+    def iter_nodes(self) -> tuple[GenerativeUINode, ...]:
+        """Every node of the tree, depth-first, roots first."""
+        collected: list[GenerativeUINode] = []
+
+        def _walk(node: GenerativeUINode) -> None:
+            collected.append(node)
+            for child in node.child_nodes():
+                _walk(child)
+
+        for root_node in self.root:
+            _walk(root_node)
+        return tuple(collected)
+
+    def container_ids(self) -> tuple[str, ...]:
+        """The model-authored container ids addressable in this tree, in order."""
+        return tuple(
+            node.id
+            for node in self.iter_nodes()
+            if isinstance(node, _ContainerNode) and node.id
+        )
+
+    def with_appended(
+        self, nodes: list[GenerativeUINodeUnion], *, into: str | None = None
+    ) -> GenerativeUISpec:
+        """Return a NEW validated spec with *nodes* appended.
+
+        With ``into=None`` they land after the current roots; otherwise inside
+        the container named by *into*. Raises :class:`LookupError` when *into*
+        names no container here, and a pydantic ``ValidationError`` when the
+        merged tree breaks a limit — this spec is never mutated either way, so
+        a refused merge costs nothing.
+        """
+        root = [node.model_dump(mode="python") for node in self.root]
+        fresh = [node.model_dump(mode="python") for node in nodes]
+        if into is None:
+            root.extend(fresh)
+        elif not self._append_into(root, into, fresh):
+            raise LookupError(into)
+        return GenerativeUISpec.model_validate({"root": root})
+
+    def with_replaced(
+        self, container_id: str, node: GenerativeUINodeUnion
+    ) -> GenerativeUISpec:
+        """Return a NEW validated spec with the addressed container replaced.
+
+        Same contract as :meth:`with_appended`: :class:`LookupError` for an
+        unknown id, ``ValidationError`` for a merged tree over a limit, and no
+        mutation of this spec on either failure.
+        """
+        root = [existing.model_dump(mode="python") for existing in self.root]
+        if not self._replace_in(root, container_id, node.model_dump(mode="python")):
+            raise LookupError(container_id)
+        return GenerativeUISpec.model_validate({"root": root})
+
+    @staticmethod
+    def _append_into(
+        nodes: list[dict[str, Any]], container_id: str, fresh: list[dict[str, Any]]
+    ) -> bool:
+        """Extend the children of the dict node carrying *container_id*."""
+        for node in nodes:
+            if node.get("id") == container_id:
+                node.setdefault("children", []).extend(fresh)
+                return True
+            children = node.get("children")
+            if isinstance(children, list) and GenerativeUISpec._append_into(
+                children, container_id, fresh
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _replace_in(
+        nodes: list[dict[str, Any]], container_id: str, replacement: dict[str, Any]
+    ) -> bool:
+        """Swap the dict node carrying *container_id* for *replacement*."""
+        for index, node in enumerate(nodes):
+            if node.get("id") == container_id:
+                nodes[index] = replacement
+                return True
+            children = node.get("children")
+            if isinstance(children, list) and GenerativeUISpec._replace_in(
+                children, container_id, replacement
+            ):
+                return True
+        return False
+
+    @model_validator(mode="after")
+    def _container_ids_unique(self) -> GenerativeUISpec:
+        """Reject a duplicated container id — addressing must be unambiguous.
+
+        An `append`/`update` addressed at a duplicated id would silently land
+        on whichever copy the walk meets first, which is exactly the
+        replaced-the-wrong-panel failure the readable ids exist to remove.
+        """
+        seen: set[str] = set()
+        for cid in self.container_ids():
+            if cid in seen:
+                raise ValueError(
+                    f"container id {cid!r} is used more than once; ids must be "
+                    "unique within the panel so append/update can address them"
+                )
+            seen.add(cid)
+        return self
+
     @model_validator(mode="after")
     def _within_tree_limits(self) -> GenerativeUISpec:
         """Enforce the depth, node-count and serialized-size ceilings.
@@ -516,6 +851,33 @@ class GenerativeUISpec(BaseModel):
         return self
 
 
+class ComponentTagSchema(GenerateJsonSchema):
+    """Names each variant's ``$defs`` entry after its component tag.
+
+    Pydantic keys a definition by CLASS, so the model-facing schema offered
+    ``#/$defs/AlertNode`` for a variant whose only legal ``component`` value is
+    ``"Alert"``. That difference is not cosmetic: a model that copies the def
+    name writes a tag that can never validate, and one traced model did exactly
+    that — twice — after failing to dereference the ``$ref`` the name belonged
+    to. With the two agreed, copying the wrong thing yields the right answer.
+
+    Overriding ``normalize_name`` is pydantic's OWN seam for this, so pydantic
+    repoints the ``$ref`` pointers and the discriminator mapping itself. A
+    hand-rolled pass over the emitted schema has to find both, and one that
+    finds only the keys leaves the schema self-inconsistent — worse than not
+    renaming at all. ``ConfigDict(title=...)`` does NOT do this: it sets
+    ``title`` and leaves the key alone (verified).
+    """
+
+    def normalize_name(self, name: str) -> str:
+        """Return the component tag for a variant, else pydantic's own name."""
+        tags = {
+            member.__name__: member.component_tag()
+            for member in GenerativeUISpec._variants()
+        }
+        return tags.get(name) or super().normalize_name(name)
+
+
 __all__ = [
     "ALLOWED_LINK_SCHEMES",
     "CODE_MAX_CHARS",
@@ -531,6 +893,8 @@ __all__ = [
     "BadgeNode",
     "CardNode",
     "CodeBlockNode",
+    "ComponentTagSchema",
+    "ContainerId",
     "DividerNode",
     "GenerativeUINode",
     "GenerativeUINodeUnion",

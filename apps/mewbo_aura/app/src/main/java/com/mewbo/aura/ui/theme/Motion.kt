@@ -105,6 +105,58 @@ object AuraMotion {
     const val actionRowFadeMs: Int = 250
     val actionRowRise: Dp = 4.dp
 
+    /**
+     * How long a transient, self-dismissing line stays before it goes away on its own — the
+     * one-line notice and the device-control overlay's narration. Both had their own 4s literal,
+     * each with a comment saying this file was the proper home; two copies of "how long a
+     * transient thing lingers" is one drift away from the app disagreeing with itself about its
+     * own tempo.
+     *
+     * **`const` is load-bearing, not a micro-optimisation.** It inlines at the call site, so
+     * `DeviceControlNarration` — a pure fold with a plain-JVM test and no Compose on its
+     * classpath — carries no runtime reference to this object. Demote it to a plain `val` and that
+     * test starts class-loading `AuraMotion`, whose `spring(...)` initialisers are Compose. Any
+     * token a pure model reads has the same requirement.
+     */
+    const val transientDismissMs: Long = 4_000L
+
+    /**
+     * How long the device-control surface takes to arrive, and how long its decoration takes to
+     * leave (user directive: "let it take about two to three seconds to appear smoothly", both
+     * ways). ONE window read by the glow, the narration stack and the Stop pill's entrance, so no
+     * component of that surface can drift away from the others.
+     *
+     * **The lower half of the 2-3s band on purpose.** The same token drives the EXIT, and the exit
+     * is the half that carries risk: a surface still on screen long after Stop reads as "it did not
+     * stop". So this is the shortest value that still reads as an ease rather than a dismissal.
+     * Strictly below [edgeRestFadeMs] too — ending a GRANT must never take longer to leave than
+     * ending a mere run — and a whole frame count at both 60Hz (144) and 120Hz (288).
+     *
+     * Every consumer ramps it LINEARLY: an abrupt on→off luminance change is a photosensitivity
+     * trigger, and so is a fade whose final segment is fast.
+     */
+    const val deviceControlEaseMs: Int = 2_400
+
+    /**
+     * How much faster the device-control aura's drift runs than the ambient pace every other
+     * surface uses — passed as `AuroraEdgeGlow(speedScale = ...)`, so it scales the RATE and never
+     * the accumulated phase. A surface whose whole job is to say "an agent is driving your phone
+     * right now" has to look like it is moving; at the ambient pace it reads as barely breathing.
+     *
+     * **Derived, not chosen.** The fastest drift term in the shader is the reach wave's fine
+     * octave, whose noise argument advances at `WAVE_DRIFT_HZ x 1.9` ≈ 0.067 value-changes per
+     * second at a fixed pixel. The fastest periodic term this family already ships — and the one
+     * the design language already calls calm — is the [listeningBreathePeriodMs] breathe at
+     * ≈ 0.154 Hz. This is their ratio, so at this scale the fastest drift term lands exactly ON
+     * the breathe cadence and NOTHING on the surface runs faster than a rate already accepted.
+     *
+     * That keeps it roughly twenty times under the 3 Hz photosensitivity flash threshold, and what
+     * it modulates is a smooth gradient's geometry (±22% of the decay length, the shader's own
+     * `WAVE_AMPLITUDE`), never a full-area luminance step. Reduced motion is unaffected — the
+     * base wave speed is already 0 there, and a multiple of 0 is 0.
+     */
+    const val deviceControlFlowScale: Float = 2.3f
+
     // ---- Transcript item transitions (streaming reflow smoothing) ----
     /** Placement spring for the transcript's `LazyColumn` items (`Modifier.animateItem`): smooths
      * the abrupt pop-in / shuffle / pop-out of live-turn content — in-flight text growth, tool

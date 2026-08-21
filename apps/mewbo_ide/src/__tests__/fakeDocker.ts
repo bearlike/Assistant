@@ -56,6 +56,27 @@ export class FakeDockerClient implements DockerClientLike {
   /** Set to make the next `createContainer` throw. */
   createFailure: Error | null = null;
 
+  /** Whether `imageExists` reports the configured image already present. */
+  imagePresent = true;
+
+  /** Set to make the next `pullImage` throw instead of succeeding. */
+  pullFailure: Error | null = null;
+
+  /** Every image name `pullImage` was asked to fetch, in call order. */
+  readonly pulled: string[] = [];
+
+  async imageExists(): Promise<boolean> {
+    return this.imagePresent;
+  }
+
+  async pullImage(image: string): Promise<void> {
+    this.pulled.push(image);
+    if (this.pullFailure !== null) {
+      throw this.pullFailure;
+    }
+    this.imagePresent = true;
+  }
+
   async listContainers(options: DockerListOptions): Promise<DockerListItem[]> {
     this.listCalls.push(options);
     const labels = options.filters?.label ?? [];

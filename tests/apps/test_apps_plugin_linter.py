@@ -11,6 +11,7 @@ from __future__ import annotations
 from mewbo_api.apps.plugin.linter import (
     ALLOWED_MODULES,
     check_pipeline_error_swallow,
+    derive_collection_writes,
     lint_app,
 )
 from mewbo_core.builtin_plugins.widget_builder.linter import (
@@ -25,6 +26,31 @@ def _rules(source: str) -> set[str]:
 
 def _pipeline_swallow_rules(source: str) -> set[str]:
     return {f.rule for f in lint(source, rules=(check_pipeline_error_swallow,))}
+
+
+# ---------------------------------------------------------------------------
+# Source-derived pipeline output contracts — a derivation, never a lint gate.
+# ---------------------------------------------------------------------------
+
+
+def test_derive_collection_writes_finds_direct_literal_mutations():
+    source = (
+        "def run(params, ctx):\n"
+        "    ctx.collection('records').upsert('r1', {'value': 1})\n"
+        "    ctx.collection(\"scratch\").delete('old')\n"
+    )
+    assert derive_collection_writes(source) == {"records", "scratch"}
+
+
+def test_derive_collection_writes_ignores_dynamic_or_indirect_names():
+    source = (
+        "def run(params, ctx):\n"
+        "    name = params['collection']\n"
+        "    ctx.collection(name).upsert('r1', {})\n"
+        "    collection = ctx.collection('indirect')\n"
+        "    collection.upsert('r2', {})\n"
+    )
+    assert derive_collection_writes(source) == set()
 
 
 # ---------------------------------------------------------------------------

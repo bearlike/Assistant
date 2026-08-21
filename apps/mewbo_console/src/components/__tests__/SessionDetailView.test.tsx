@@ -42,6 +42,7 @@ vi.mock("../../api/client", () => ({
   recoverSession: vi.fn(),
   forkSession: vi.fn(),
   getConfig: vi.fn().mockResolvedValue({ config: {}, secrets: {} }),
+  listProjects: vi.fn().mockResolvedValue([]),
 }));
 // `streamSession` is the only export replaced — `isSessionStateFrame` /
 // `isStreamEndFrame` stay real so `useSessionEvents`'s own frame-folding logic
@@ -85,6 +86,9 @@ vi.mock("../InputBar", () => ({
   InputBar: (props: any) => (
     <div data-testid="input-bar">
       <span data-testid="run-status-agents">{props.runStatus?.agents ?? "none"}</span>
+      <button onClick={() => props.onSubmit("follow up", { model: "fresh-model" })}>
+        Submit follow-up
+      </button>
     </div>
   ),
 }));
@@ -92,6 +96,7 @@ vi.mock("../InputBar", () => ({
 const streamSession = vi.mocked(sessionStreamApi.streamSession);
 const approvePlan = vi.mocked(client.approvePlan);
 const answerQuestion = vi.mocked(client.answerQuestion);
+const postQuery = vi.mocked(client.postQuery);
 
 /**
  * Scripts the SSE transport for one `streamSession` call: replays `frames`
@@ -160,6 +165,35 @@ beforeEach(() => {
   streamSession.mockImplementation(() =>
     frameStream([sessionStateFrame({ running: true, status: "running" })], true),
   );
+});
+
+describe("SessionDetailView — follow-up context", () => {
+  it("does not replay an app-bound project's persisted context", async () => {
+    const user = userEvent.setup();
+    streamSession.mockImplementation(() =>
+      frameStream([sessionStateFrame({ running: false, status: "completed" })]),
+    );
+    renderDetail({
+      ...baseSession,
+      status: "completed",
+      running: false,
+      context: {
+        app_id: "llm-model-compare-upgraded",
+        project: "app-89f9c9479143",
+        model: "stored-model",
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Submit follow-up" }));
+
+    expect(postQuery).toHaveBeenCalledWith(
+      "s1",
+      "follow up",
+      { model: "fresh-model" },
+      undefined,
+      undefined,
+    );
+  });
 });
 
 describe("SessionDetailView — resume() dead-ends", () => {

@@ -81,3 +81,60 @@ describe('useThroughput — outstanding tool calls override the stall read', () 
     expect(result.current.phase).toBe('Running tool');
   });
 });
+
+describe('useThroughput — stepStartTs (the active row chip clock)', () => {
+  it('is the root llm_call_start ts while that call is open (Reasoning)', () => {
+    const events: EventRecord[] = [
+      evt(T0, 'user', {}),
+      evt(T0, 'llm_call_start', { agent_id: 'root', depth: 0, step: 1 }),
+    ];
+    const { result } = renderHook(() => useThroughput(events, true));
+    expect(result.current.stepStartTs).toBe(T0);
+  });
+
+  it('is NOT cleared by the matching llm_call_end — it spans the tool phase too', () => {
+    const endTs = new Date(Date.parse(T0) + 1_000).toISOString();
+    const events: EventRecord[] = [
+      evt(T0, 'user', {}),
+      evt(T0, 'llm_call_start', { agent_id: 'root', depth: 0, step: 1 }),
+      evt(endTs, 'llm_call_end', { agent_id: 'root', depth: 0, step: 1, success: true }),
+      evt(endTs, 'tool_call', { tool_call_id: 'call_a', tool_id: 'shell' }),
+    ];
+    const { result } = renderHook(() => useThroughput(events, true));
+    expect(result.current.phase).toBe('Running tool');
+    // Elapsed still measures from the ORIGINAL call start, not the tool
+    // dispatch — the step clock resets only at the next root call.
+    expect(result.current.stepStartTs).toBe(T0);
+  });
+
+  it('resets to the NEXT root llm_call_start once the step advances', () => {
+    const t1 = new Date(Date.parse(T0) + 1_000).toISOString();
+    const t2 = new Date(Date.parse(T0) + 2_000).toISOString();
+    const events: EventRecord[] = [
+      evt(T0, 'user', {}),
+      evt(T0, 'llm_call_start', { agent_id: 'root', depth: 0, step: 1 }),
+      evt(t1, 'llm_call_end', { agent_id: 'root', depth: 0, step: 1, success: true }),
+      evt(t2, 'llm_call_start', { agent_id: 'root', depth: 0, step: 2 }),
+    ];
+    const { result } = renderHook(() => useThroughput(events, true));
+    expect(result.current.stepStartTs).toBe(t2);
+  });
+
+  it('a sub-agent (depth > 0) llm_call_start never sets the root step clock', () => {
+    const events: EventRecord[] = [
+      evt(T0, 'user', {}),
+      evt(T0, 'llm_call_start', { agent_id: 'sub-1', depth: 1, step: 1 }),
+    ];
+    const { result } = renderHook(() => useThroughput(events, true));
+    expect(result.current.stepStartTs).toBeUndefined();
+  });
+
+  it('is undefined once the run is not `running`', () => {
+    const events: EventRecord[] = [
+      evt(T0, 'user', {}),
+      evt(T0, 'llm_call_start', { agent_id: 'root', depth: 0, step: 1 }),
+    ];
+    const { result } = renderHook(() => useThroughput(events, false));
+    expect(result.current.stepStartTs).toBeUndefined();
+  });
+});

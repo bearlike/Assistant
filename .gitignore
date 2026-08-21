@@ -1,8 +1,11 @@
 # Ignore Repo to Prompt
 repo-to-prompt.codemod.js
 
-# MCP config (contains auth tokens)
+# MCP config (names deployment-specific server URLs and token env vars).
+# `.codex/config.toml` is the same file for a different harness and mirrors
+# `.mcp.json` server for server, so the two must be ignored together.
 .mcp.json
+.codex/
 
 # Node / JavaScript
 node_modules/
@@ -161,6 +164,13 @@ apps/mewbo_cli/data/
 **/*config.json
 !apps/mewbo_console/tsconfig.json
 !apps/mewbo_console/tsconfig.node.json
+# A TypeScript base config is source, not local configuration — the pattern
+# above catches it by accident. Missing it is invisible on a developer machine,
+# where the untracked file is present, and fails only in a clean checkout: the
+# build config extends a base that is not there, TypeScript falls back to its
+# defaults, and the compile dies of a dozen unrelated-looking option errors
+# rather than of the one missing file.
+!apps/mewbo_ide/tsconfig.json
 configs/*.toml
 configs/*.yaml
 configs/*.yml

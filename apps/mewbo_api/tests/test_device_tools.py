@@ -162,7 +162,7 @@ def runtime(tmp_path):
 class TestApiDeviceToolDispatcher:
     def test_dispatch_appends_device_tool_call_event(self, runtime):
         session_id = runtime.resolve_session()
-        get_session_event_bus().subscribe(session_id)  # a client is "attached"
+        get_session_event_bus().subscribe(session_id, executor=True)  # the DEVICE client
         pending = DevicePendingCalls()
         dispatcher = ApiDeviceToolDispatcher(runtime=runtime, pending=pending)
 
@@ -195,7 +195,7 @@ class TestApiDeviceToolDispatcher:
 
         monkeypatch.setattr(device_tools_mod, "DEVICE_TOOL_TIMEOUT_S", 0.2)
         session_id = runtime.resolve_session()
-        get_session_event_bus().subscribe(session_id)  # a client is "attached"
+        get_session_event_bus().subscribe(session_id, executor=True)  # the DEVICE client
         pending = DevicePendingCalls()
         dispatcher = ApiDeviceToolDispatcher(runtime=runtime, pending=pending)
 
@@ -223,16 +223,15 @@ class TestApiDeviceToolDispatcher:
         result = asyncio.run(dispatcher.dispatch(session_id, "device_x", {}))
         elapsed = time.monotonic() - start
 
-        assert result == {
-            "status": "error",
-            "error": {
-                "code": "device_unavailable",
-                "message": (
-                    f"No client is attached to session {session_id}'s event "
-                    "stream; device tool 'device_x' cannot be delivered."
-                ),
-            },
-        }
+        assert result["status"] == "error"
+        assert result["error"]["code"] == "device_unavailable"
+        # The message must name the CAUSE and the cure — it is relayed to a
+        # person holding the phone, and "no client attached to the event
+        # stream" describes our transport rather than their situation.
+        message = result["error"]["message"]
+        assert "device_x" in message
+        assert "reopen" in message.lower()
+        assert "aura" in message.lower()
         # Well under the default 30s timeout — proves no poll loop ran.
         assert elapsed < 1.0
         # No pending call was ever registered and no event was appended.
@@ -242,7 +241,7 @@ class TestApiDeviceToolDispatcher:
         """Positive control: a subscriber present → normal dispatch, not the
         F10 short-circuit."""
         session_id = runtime.resolve_session()
-        get_session_event_bus().subscribe(session_id)
+        get_session_event_bus().subscribe(session_id, executor=True)
         pending = DevicePendingCalls()
         dispatcher = ApiDeviceToolDispatcher(runtime=runtime, pending=pending)
 

@@ -29,6 +29,22 @@ sealed class DeviceToolError(val code: String, message: String) : Exception(mess
  * `handler_error` (`device_dismiss_alarm`'s per-search-mode required args). */
 class DeviceToolArgsException(message: String) : DeviceToolError("invalid_args", message)
 
+/** Thrown when device control is not usable — Shizuku is not installed, not
+ * running (the normal state after every reboot on a non-rooted device), or
+ * access was not granted. A distinct code so the model reads "the capability
+ * is gone" rather than "this action failed". */
+class DeviceControlUnavailableException :
+    DeviceToolError(
+        "device_control_unavailable",
+        "Device control is unavailable — the Shizuku service is not running.",
+    )
+
+/** Thrown when the screen could not be captured. Separate from a failed
+ * ACTION because the recovery differs: a capture failure is retryable as-is,
+ * and it must surface as TEXT — the API rejects a tool_result carrying a
+ * non-text block while flagged as an error. */
+class DeviceCaptureException(message: String) : DeviceToolError("capture_failed", message)
+
 /**
  * Single-method seam over the ONE question every activity-launching handler must answer first:
  * **may this app start an activity for the user right now?** - checked via [requireForeground]
@@ -88,6 +104,35 @@ fun interface AppForegroundChecker {
 internal fun canStartActivityNow(processImportance: Int?, assistOverlayVisible: Boolean): Boolean =
     assistOverlayVisible ||
         (processImportance != null && processImportance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+
+/**
+ * Hides whatever this app is drawing over other apps for the duration of a screen capture.
+ *
+ * **The overlay that tells the user their phone is being driven composites into `screencap`.**
+ * Confirmed by looking at the PNG: a plain `TYPE_APPLICATION_OVERLAY` window renders as a bright
+ * band across the capture, so the model would read our own chrome as part of the user's screen and
+ * reason about it.
+ *
+ * **`FLAG_SECURE` is NOT the mechanism, and reaching for it is destructive.** Measured A/B/A at
+ * shell UID: one `FLAG_SECURE` window on screen makes the ENTIRE capture fail — `exit=1`, a
+ * zero-byte file, and `SurfaceFlinger: FB is protected: PERMISSION_DENIED` — because SurfaceFlinger
+ * refuses the whole framebuffer to a caller without `CAPTURE_SECURE_LAYERS` (`signature|privileged`;
+ * uid 2000 does not hold it). It cannot hide one layer; it can only blind us. So suppression is
+ * TEMPORAL: take the window down, capture, put it back.
+ *
+ * Declared here and implemented in `ui/` — the same declared-DOWN shape as [AppForegroundChecker]
+ * and `RunNotifications`, because `data/` must never import a Compose surface. The default binding
+ * is a no-op, which is what makes an ungranted overlay permission cost the capture path nothing.
+ *
+ * A plain `interface`, NOT a `fun interface`, unlike its neighbours here: SAM conversion requires
+ * the single abstract method to have no type parameters, and [hiddenDuring] is generic in its
+ * result. Implementations use `object :` rather than a lambda.
+ */
+interface ScreenCaptureVeil {
+    /** Runs [block] with the overlay hidden, restoring it however [block] ends —
+     * including on a throw, which is the path a protected screen takes. */
+    suspend fun <T> hiddenDuring(block: suspend () -> T): T
+}
 
 /** Thrown by [requireForeground] - a launch attempted while the app has no user-visible window
  * (review finding F4). */

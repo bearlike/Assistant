@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING
 
 from mewbo_core.common import MockSpeaker, get_logger, get_mock_speaker
 from mewbo_core.contracts.types import Event, TodoItemPayload, TodosPayload
+from mewbo_core.tooling.container_args import JsonContainerArguments
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -242,7 +243,18 @@ class UpdateTodosTool:
     async def handle(self, action_step: ActionStep) -> MockSpeaker:
         """Publish the FULL statused list as ONE ``todos`` event (source=agent)."""
         args = action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
-        items = normalize_todos(args.get("todos"))
+        raw_todos = args.get("todos")
+        if isinstance(raw_todos, str):
+            # The list emitted as a JSON string — the same failure the shared
+            # decoder repairs for every container-argued tool. This tool has no
+            # Pydantic args model (normalize_todos never raises), so the
+            # value-level entry point is used directly.
+            parsed, _ = JsonContainerArguments.decode_value(
+                raw_todos, (list,), field_name="todos"
+            )
+            if parsed is not None:
+                raw_todos = parsed
+        items = normalize_todos(raw_todos)
         self._emit(
             build_todos_event(items, source=TODO_SOURCE_AGENT, agent_id=self._agent_id)
         )

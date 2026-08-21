@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import litellm
 import pytest
-from mewbo_graph.wiki.embedder import Embedder
+from mewbo_graph.wiki.embedder import Embedder, make_embedder_for
 from mewbo_graph.wiki.types import Embedding
 
 
@@ -32,6 +33,43 @@ def _patch_litellm_embedding():
 
 def _build(model: str = "openai/test", batch_size: int = 8) -> Embedder:
     return Embedder(model=model, batch_size=batch_size)
+
+
+class _SettingsStore:
+    """One slug-keyed settings read, enough to witness model selection."""
+
+    def __init__(self, model: str | None) -> None:
+        self.model = model
+        self.slugs: list[str] = []
+
+    def get_project_settings(self, slug: str) -> SimpleNamespace:
+        self.slugs.append(slug)
+        return SimpleNamespace(embedding_model=self.model)
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [
+        ("openai/text-embedding-3-large", "openai/text-embedding-3-large"),
+        (None, "openai/text-embedding-3-small"),
+    ],
+)
+def test_make_embedder_for_uses_project_override_or_default(
+    monkeypatch, selected, expected
+) -> None:
+    """Both index writes and query reads resolve one identical effective model."""
+    store = _SettingsStore(selected)
+    monkeypatch.setattr(
+        "mewbo_graph.wiki.embedder.get_config_value",
+        lambda *keys, default=None: "text-embedding-3-small"
+        if keys == ("wiki", "embedding", "model")
+        else default,
+    )
+
+    embedder = make_embedder_for(store, "github.com/acme/beacon")
+
+    assert embedder.model == expected
+    assert store.slugs == ["github.com/acme/beacon"]
 
 
 # ── embed_nodes ────────────────────────────────────────────────────────

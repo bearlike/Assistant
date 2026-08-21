@@ -40,6 +40,11 @@ from mewbo_core.tooling.tool_registry import ToolRegistry, ToolSpec
 
 _TRACE_ID = "a" * 32
 
+# What a spawned child's own agent span is called. Named for the AgentDef, so
+# every sibling shares it — see the cross-link test for why that forces identity
+# checks onto span ids rather than names.
+_CHILD_AGENT_SPAN = "invoke_agent subagent"
+
 # The fake tracer's ambient span, held exactly the way OpenTelemetry holds its
 # own: in a ContextVar, so ``asyncio.create_task``'s context copy carries it
 # into a child task and a sibling task cannot see it. Modelling this with
@@ -189,12 +194,31 @@ def tracer(tmp_path):
     reset_config()
 
 
+def _ancestor_ids(tracer: object, record: object) -> list[str]:
+    """Span ids from *record*'s parent upward, stopping at the trace root.
+
+    The name-based ``ancestry`` helper answers "what shape is this chain"; this
+    answers "whose subtree is this in", which is a question about identity and
+    so cannot be asked of names that siblings share.
+    """
+    ids: list[str] = []
+    by_id = tracer.by_id  # type: ignore[attr-defined]
+    current = record
+    while True:
+        parent = getattr(current, "parent_span_id", None)
+        if parent is None or parent not in by_id:
+            return ids
+        ids.append(parent)
+        current = by_id[parent]
+
+
 async def _spawn_concurrent_children(count: int) -> None:
     """Fan *count* children out of one parent turn, exactly as the loop does.
 
-    The spawn runs inside an ``agent:root`` → ``step:0`` span pair because that
-    is where ``spawn_agent`` executes in production: the parent's per-turn span
-    is the observation a child has to be able to name once its own task starts.
+    The spawn runs inside an ``invoke_agent root`` → ``agent_step`` span pair
+    because that is where ``spawn_agent`` executes in production: the parent's
+    per-turn span is the observation a child has to be able to name once its
+    own task starts.
     """
     hypervisor = AgentHypervisor(max_concurrent=100)
     root_q: queue.Queue[str] = queue.Queue()
@@ -233,8 +257,8 @@ async def _spawn_concurrent_children(count: int) -> None:
     with patch("mewbo_core.loop.tool_use_loop.build_chat_model") as build_model:
         build_model.return_value = MagicMock()
         build_model.return_value.bind_tools.return_value = bound
-        with langfuse_trace_span("agent:root"):
-            with langfuse_trace_span("step:0"):
+        with langfuse_trace_span("invoke_agent root", as_type="agent"):
+            with langfuse_trace_span("agent_step"):
                 for index in range(count):
                     await tool.run_async(
                         ActionStep(
@@ -265,7 +289,7 @@ class TestConcurrentSubAgentSpanTree:
             for record in tracer.records
             if record.parent_span_id is not None and record.parent_span_id not in known
         ]
-        assert [record.name for record in orphans] == ["agent:root"], (
+        assert [record.name for record in orphans] == ["invoke_agent root"], (
             "spans whose parent is absent from the trace: "
             f"{[tracer.ancestry(record) for record in orphans]}"
         )
@@ -274,13 +298,17 @@ class TestConcurrentSubAgentSpanTree:
         """A child's own span names the parent turn that spawned it."""
         asyncio.run(_spawn_concurrent_children(2))
 
-        child_spans = tracer.named("agent:child-")
+        child_spans = tracer.named(_CHILD_AGENT_SPAN)
         assert len(child_spans) == 2, [record.name for record in tracer.records]
         for record in child_spans:
             # Sliced at the root: the chain continues one hop into the trace
             # root's own phantom parent, which is the structural exception the
             # resolvability test pins separately.
-            assert tracer.ancestry(record)[:3] == [record.name, "step:0", "agent:root"]
+            assert tracer.ancestry(record)[:3] == [
+                record.name,
+                "agent_step",
+                "invoke_agent root",
+            ]
 
     def test_concurrent_children_do_not_cross_link(self, tracer):
         """Each child's turns sit under ITS OWN agent span, never a sibling's.
@@ -291,14 +319,20 @@ class TestConcurrentSubAgentSpanTree:
         """
         asyncio.run(_spawn_concurrent_children(3))
 
-        child_spans = tracer.named("agent:child-")
+        child_spans = tracer.named(_CHILD_AGENT_SPAN)
         assert len(child_spans) == 3
 
+        # Matched by span ID, never by span NAME. Every child agent span is now
+        # named for its AgentDef, so all three siblings share one name — a
+        # name-keyed check would report every turn as belonging to every child
+        # and pass no matter how badly the tree was cross-linked. The rename is
+        # deliberate (a per-child id in a span name is unbounded cardinality),
+        # so identity has to come from the id the tree is actually built on.
         subtrees = {
             record.span_id: [
                 turn
-                for turn in tracer.named("step:")
-                if record.name in tracer.ancestry(turn)[1:]
+                for turn in tracer.named("agent_step")
+                if record.span_id in _ancestor_ids(tracer, turn)
             ]
             for record in child_spans
         }

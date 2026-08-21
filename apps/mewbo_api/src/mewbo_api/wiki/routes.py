@@ -14,6 +14,7 @@ from typing import Any, Literal, cast
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from mewbo_core.common import get_logger
+from mewbo_core.contracts.progress import ProgressLedger
 from mewbo_graph.wiki.resume import ResumeCountError
 from mewbo_graph.wiki.store import WikiStoreBase
 from mewbo_graph.wiki.types import (
@@ -908,14 +909,17 @@ def _build_blueprint() -> Blueprint:
     def get_wiki_defaults():
         """Return wiki-specific defaults the picker should pre-select.
 
+        Cost: ``O(1)`` — bounded config reads, with no store or proxy call.
+
         Each key is independent: set ``wiki.default_model`` (indexing),
         ``wiki.default_qa_model`` (Q&A — typically a smaller/faster
         model than indexing), ``wiki.default_depth``, or
-        ``wiki.default_language`` in app.json to pin that field. Unset
-        keys fall back to whatever the FE already does (e.g.
-        ``/api/models``'s global default). ``qaModel`` falls back to
-        ``wiki.default_model`` when not separately set so a single
-        ``default_model`` still works for both phases.
+        ``wiki.default_language`` in app.json to pin that field. ``embeddingModel``
+        is the deployment default for project vectors; it deliberately names no
+        vendor list because the proxy, not the server, determines which embedding
+        models it supports. ``qaModel`` falls back to ``wiki.default_model`` when
+        not separately set so a single ``default_model`` still works for both
+        phases.
         """
         from mewbo_core.config import get_config_value  # noqa: PLC0415
 
@@ -926,6 +930,9 @@ def _build_blueprint() -> Blueprint:
         qa_model = _resolve_qa_model()
         depth = get_config_value("wiki", "default_depth", default="")
         language = get_config_value("wiki", "default_language", default="")
+        embedding_model = get_config_value(
+            "wiki", "embedding", "model", default="openai/text-embedding-3-small"
+        )
         if model:
             out["model"] = model
         if qa_model:
@@ -934,6 +941,8 @@ def _build_blueprint() -> Blueprint:
             out["depth"] = depth
         if language:
             out["language"] = language
+        if embedding_model:
+            out["embeddingModel"] = str(embedding_model)
         return jsonify(out)
 
     @bp.route("/index/<string:job_id>", methods=["GET"])
@@ -945,6 +954,35 @@ def _build_blueprint() -> Blueprint:
                 WikiError(code="not_found", message=f"job {job_id} not found")
             )
         return jsonify(_job_wire(job))
+
+    @bp.route("/index/<string:job_id>/progress", methods=["GET"])
+    @guard.requires("wiki.read")
+    def get_job_progress(job_id: str):
+        """Return the whole declared-and-observed progress context for one job.
+
+        The response combines the job identity (``jobId``, ``slug``, ``phase``,
+        ``status``, ``isActive``) with :meth:`ProgressLedger.export`, so a
+        poller can learn the operation's declared outline, current position and
+        remaining work from one object. A pre-ledger job returns the same valid
+        empty ledger shape rather than a distinct absence case.
+
+        Cost: ``O(one record)`` — reads one job and projects a ledger bounded by
+        declared steps (tens), never by repository units.
+        """
+        job = _store().get_job(job_id)
+        if job is None:
+            return wiki_error_response(
+                WikiError(code="not_found", message=f"job {job_id} not found")
+            )
+        ledger = job.progress or ProgressLedger()
+        return jsonify({
+            "jobId": job.job_id,
+            "slug": job.slug,
+            "phase": job.phase,
+            "status": job.status,
+            "isActive": job.is_active,
+            **ledger.export(datetime.now(timezone.utc)),
+        })
 
     @bp.route("/jobs/active", methods=["GET"])
     @guard.requires("wiki.read")
@@ -1595,7 +1633,9 @@ def _build_blueprint() -> Blueprint:
         llm = _make_insight_llm()
         want_condense = bool(condense or raw)
         condenser = InsightCondenser(llm) if (llm is not None and want_condense) else None
-        ingestor = InsightIngestor.from_store(_store(), llm=llm, condenser=condenser)
+        ingestor = InsightIngestor.from_store(
+            _store(), slug=slug, llm=llm, condenser=condenser
+        )
         try:
             result = ingestor.ingest(
                 slug,

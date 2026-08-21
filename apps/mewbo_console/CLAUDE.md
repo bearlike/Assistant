@@ -159,7 +159,7 @@ reject.
 |---|---|
 | Composer band glow | `InputBar.tsx` + `.composer-band-glow` |
 | Composer shell (running tint, focus halo) | `composerCard({expanded})` in `InputBar.tsx` layers elevation/padding over `.composer-surface`; running/command tints ride `data-running`/`data-command` |
-| Top-level model + fallback-chain picker | `ModelSelector.tsx` (footer pill). The fallback sub-control is `ModelFallbackChain.tsx` — one control reused by every run-starting surface (Tasks composer, wiki configure wizard, wiki project settings, agentic-search scope menu). The ladder is a flat `string[]`; there is NO separate "enabled" wire field — the Switch maps to null/empty-vs-list |
+| Top-level model + fallback-chain picker | `ModelSelector.tsx` (footer pill) renders the shared `ModelPickerTabs.tsx` — a Model \| Fallback tab strip over ONE `Command` (one filter + refresh row serves both tabs), with a red/green state dot on the Fallback tab. `ModelPickerTabs` is the ONE popover body reused by every run-starting surface: the Tasks composer (`ModelSelector`), the wiki configure wizard + project settings (`wiki/ModelPicker.tsx`, opts in via its `fallbackModels`/`onFallbackModelsChange` props), and the agentic-search scope menu (`SearchScopeControl.tsx`, mounted inside a `DropdownMenuSub`). `FallbackChainRow` (`ModelFallbackChain.tsx`) is the shared ordinal+icon+name+remove row both the non-tabbed `ModelFallbackChain` (kept for a fallback-only surface with no paired model picker) and `ModelPickerTabs` render. The ladder is a flat `string[]`; there is NO separate "enabled" wire field — the Switch maps to null/empty-vs-list. Stacking the model list and the fallback editor in one scrolling pane (the pre-tab shape) stranded the filter input's border short of the panel edge and turned an armed chain into a linear mess — tabs fixed both. |
 | Session-config drill-in (project/branch/worktree/skills/integrations) | `ConfigMenu.tsx` (root list → panels; model/fallback deliberately absent) |
 | Session header (back, editable title, status, IDE capsule, overflow, app/wiki jump) | `SessionHeader.tsx` — in-pane sticky z-20; module-scope subcomponents preserve Radix state. Its desktop subtitle is a `·`-separated segment chain (timestamp · model · `ContextWindowBar` · `RepoLink` · `DiffStats`), each `shrink-0` |
 | ThreadList rail | `nav-rail/` Tasks section + `assistant-ui/thread-list.tsx` (`RailThreadList`, rows off `threadIds`) |
@@ -1045,6 +1045,33 @@ load-bearing**:
    named explicitly (20/17/15px): even at a 12.5px basis Streamlit's `2.75rem` default is still
    34px, and an embedded app's title must not outrank a console pane title.
 
+⚠️ **Two rem values that multiply are the trap the basis shrink creates, and the sidebar is where it
+bites.** facade zeroes every margin and padding it can reach and re-expresses ALL separation as one
+flex `gap` — `0.125rem` on `[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]`. That is
+2px against the 16px root it was authored for; at our 12.5px basis it computes to **1.56px**, and
+because facade removed the margins there is nothing else holding the panel apart. Measured on a real
+app's filter sidebar: a section label renders as a 5px-tall box 1.56px above the 55px control it
+names, so the label reads as colliding with its widget and the whole sidebar reads as broken rather
+than dense. `APP_SIDEBAR_GAP_PX` (8px, Streamlit's own 8.8px rhythm on the console's 4px grid)
+restores it in absolute px, which is the only spelling that survives a basis change — raising the
+basis instead would give the space back by undoing the density win. **When a vendor's rem spacing
+must survive the basis shrink, pin it in px**, the same rule "layer 2" already applies to reading
+text.
+
+⚠️ **The wrapper's CSS reaches the ENTRYPOINT PAGE ONLY, so a `pages/` multipage app is themed on
+exactly one of its pages.** Streamlit's classic MPA runs `pages/<name>.py` on navigation and does
+NOT re-run the entrypoint, so facade's stylesheet, `COMPACT_DENSITY_CSS` and `SIDEBAR_NAV_CSS` all
+vanish the moment the user leaves the root page. Measured live on the same app: root reports
+`html` font-size 12.5px and a sidebar gap of 1.56px, a subpage reports 16px and 8.8px, with zero
+injected styles present. This is why a spacing defect caused by the injected theme presents as "the
+root page looks wrong and every other page looks fine" — the pages that look right are the ones the
+theme never reached. **Read a per-page difference as an injection-SCOPE question first**, and never
+conclude from "it self-heals on navigation" that the first paint lost a race. Making the theme
+consistent across pages is unsolved: wrapping each page file the way the entrypoint is wrapped would
+also expose the relocated sibling to Streamlit's page scanner, whose `PAGE_FILENAME_REGEX`
+(`([0-9]*)[_ -]*(.*)\.py`) STRIPS a leading underscore rather than skipping the file, so every page
+would appear twice in the nav.
+
 ⚠️ **A per-element override list is NOT a substitute for the basis change.** An `h1`-`h6` +
 container-padding list measures a 41.8% smaller `h1` and still reads as *completely unchanged* on a
 running deployment, because every control, gap and metric it does not name stays full-size. **When a
@@ -1082,6 +1109,18 @@ resolve relative to the file's directory.
   DESCENDANT selectors, which genuinely beat Streamlit's stylesheet — left at its `system-ui`
   default it WOULD flip the fonts. Never pass `font_link` (external Google Fonts fetch = offline
   break).
+- **`[data-testid="stSidebarNav"]` (the auto-generated multipage page-link list) is the one sidebar
+  element facade's own CSS never targets, and it doesn't get its color from an injected `<style>`
+  at all — it paints from Streamlit's OWN theme state at first mount, ahead of `.streamlit/
+  config.toml` being honored on a cold kernel boot.** Verified live: landing on an app's root page
+  shows the page-link list in Streamlit's stock light theme (white box, black text) above a
+  correctly dark-themed filter panel; navigating to any other page force-remounts the chrome
+  against the by-then-correct theme and the mismatch silently self-heals, masking the defect on
+  every page except the first one a session ever lands on. `SIDEBAR_NAV_CSS` in `stliteBoot.ts`
+  sidesteps the race the same way `COMPACT_DENSITY_CSS` does — a plain `st.markdown
+  (unsafe_allow_html=True)` rule edits the DOM directly instead of waiting on Streamlit's theme
+  engine, reusing facade's own `--chrome-*` custom properties and its `rgba(255,255,255,0.08/0.12)`
+  hover/active idiom so the nav list reads as one system with the rest of the sidebar.
 - **Styles born inside a widget stay inside the widget.** stlite mounts Streamlit into the host
   document — no iframe — so a `<style>` from `st.markdown(unsafe_allow_html=True)` applies
   DOCUMENT-WIDE. facade's CSS uses `body { … !important }` / `:root` globals that repainted the

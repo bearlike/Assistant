@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ChevronDown, Cpu, Gauge, Layers, SlidersHorizontal } from "lucide-react"
+import { ChevronDown, Cpu, Gauge, SlidersHorizontal } from "lucide-react"
 
 import {
   DropdownMenu,
@@ -16,9 +16,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { ModelBrandIcon } from "../ModelBrandIcon"
-import { ModelFallbackChain } from "../ModelFallbackChain"
+import { ModelPickerTabs } from "../ModelPickerTabs"
 import { useModels } from "../../hooks/useModels"
-import { ModelMenu } from "../wiki/ModelPicker"
 import { formatModelName } from "../../utils/model"
 import type {
   SearchTier,
@@ -169,11 +168,14 @@ export function SearchScopeControl({
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        {/* Per-run model override. Session-instance-only by design (the view
-            never persists it and a tier pick clears it) — trial a custom
-            model without a config edit or server restart. */}
+        {/* Per-run model override + its fallback ladder, as ONE tabbed
+            sub-flyout (`ModelPickerTabs` — the same mechanism the Tasks
+            composer and the wiki surfaces use). Both are session-instance-
+            only by design: the view never persists them and a tier pick
+            clears the override — trial a custom model/chain without a
+            config edit or server restart. */}
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="gap-2" title="Model for this run — overrides the tier's preset">
+          <DropdownMenuSubTrigger className="gap-2" title="Model & fallback for this run — overrides the tier's preset">
             {model ? (
               <ModelBrandIcon modelId={model} size={12} />
             ) : (
@@ -183,60 +185,40 @@ export function SearchScopeControl({
             <span className="text-2xs text-[hsl(var(--muted-foreground))] truncate max-w-[120px]">
               {model ? formatModelName(model) : "tier preset"}
             </span>
+            {fallbackOn && fallbackModels.length > 0 && (
+              <span className="shrink-0 min-w-[16px] h-4 px-1 inline-flex items-center justify-center rounded-full bg-[hsl(var(--primary))]/15 text-2xs font-medium text-[hsl(var(--primary-text))]">
+                +{fallbackModels.length}
+              </span>
+            )}
           </DropdownMenuSubTrigger>
           {/* A nested side-flyout can't sit beside the parent menu on a phone-
               width viewport, so bind its width to Radix's measured available
               width (the space on the side it flips to, collision-padding
               already subtracted) — it shrinks to stay fully on-screen instead
-              of overflowing the edge, and the ModelMenu rows truncate. Desktop
-              keeps the full 340px. `min-w-0` is required: the primitive's
-              `min-w-[8rem]` would otherwise floor the width and re-overflow. */}
+              of overflowing the edge. Desktop keeps the full 340px. `min-w-0`
+              is required: the primitive's `min-w-[8rem]` would otherwise
+              floor the width and re-overflow. */}
           <DropdownMenuSubContent
             collisionPadding={16}
-            className="w-[min(340px,var(--radix-dropdown-menu-content-available-width))] min-w-0 p-0 overflow-hidden"
+            className="w-[min(340px,var(--radix-dropdown-menu-content-available-width))] min-w-0 h-[380px] p-0 overflow-hidden flex flex-col"
           >
-            <ModelMenu
-              value={model}
+            <ModelPickerTabs
+              models={allModels}
+              value={model || null}
               onSelect={(id) => {
-                onModelChange(id)
+                onModelChange(id ?? "")
                 setOpen(false)
               }}
               defaultLabel={`${current.name} preset${
                 models?.[tier] ? ` · ${formatModelName(models[tier])}` : ""
               }`}
-            />
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        {/* Cross-model fallback for this run. Same width clamp + `min-w-0` as
-            the model flyout — the primitive's own `min-w-[8rem]` would
-            otherwise floor the width and re-overflow on a phone. */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger
-            className="gap-2"
-            title="Models to try if the one driving this run keeps failing"
-          >
-            <Layers className="h-3 w-3 text-[hsl(var(--muted-foreground))]" />
-            <span className="flex-1 text-sm">Fallback</span>
-            <span className="text-2xs text-[hsl(var(--muted-foreground))] truncate max-w-[120px]">
-              {fallbackOn && fallbackModels.length > 0
-                ? `${fallbackModels.length} model${fallbackModels.length > 1 ? "s" : ""}`
-                : "off"}
-            </span>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent
-            collisionPadding={16}
-            className="w-[min(340px,var(--radix-dropdown-menu-content-available-width))] min-w-0 p-0 overflow-hidden"
-          >
-            <ModelFallbackChain
-              models={allModels}
-              value={fallbackModels}
-              onChange={onFallbackModelsChange}
-              enabled={fallbackOn}
-              onEnabledChange={(on) => {
+              fallbackEnabled={fallbackOn}
+              fallbackModels={fallbackModels}
+              onFallbackEnabledChange={(on) => {
                 setFallbackOn(on)
                 if (!on) onFallbackModelsChange([])
               }}
-              className=""
+              onFallbackModelsChange={onFallbackModelsChange}
             />
           </DropdownMenuSubContent>
         </DropdownMenuSub>

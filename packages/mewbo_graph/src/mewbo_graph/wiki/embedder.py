@@ -78,15 +78,70 @@ def make_embedder() -> Embedder:
     return Embedder()
 
 
-def make_embedder_or_none() -> Embedder | None:
+def project_embedding_model(store: Any, slug: str) -> str | None:
+    """The embedding model *slug* is indexed and searched with, or ``None``.
+
+    ``None`` means "inherit ``wiki.embedding.model``" — the answer for every
+    project indexed before the override existed, and for every project whose
+    operator never set one.
+
+    Best-effort by construction: a store that cannot be read answers ``None``
+    rather than raising. Falling back to the deployment default is what the
+    caller would have done anyway, so a store hiccup degrades to today's
+    behaviour instead of failing an index or a search.
+
+    Cost class: ``O(one record)`` — a single slug-keyed settings read.
+    """
+    if not slug:
+        return None
+    try:
+        settings = store.get_project_settings(slug)
+    except Exception:  # noqa: BLE001 - see the best-effort contract above
+        return None
+    return getattr(settings, "embedding_model", None) if settings else None
+
+
+def make_embedder_for(store: Any, slug: str) -> Embedder:
+    """Build the Embedder bound to *slug*'s own embedding model.
+
+    THE reason this exists rather than each caller reading config: the write
+    side and the read side have to agree. Two embedding models rarely share a
+    vector width, and ``vector_search`` scores cosine over whatever is stored —
+    so a query embedded with a different model than the vectors it is scored
+    against returns wrong neighbours rather than an error. Resolving both sides
+    through one function is what makes that agreement structural instead of a
+    convention every new retrieval site has to remember.
+    """
+    return Embedder(model=project_embedding_model(store, slug))
+
+
+def make_embedder_for_or_none(store: Any, slug: str) -> Embedder | None:
+    """Build *slug*'s Embedder, or ``None`` when the caller may fall back to BM25.
+
+    The graceful twin of :func:`make_embedder_for`, for the write paths where a
+    missing embedding backend must degrade retrieval rather than fail an index.
+    It resolves the project's model and then goes through
+    :func:`make_embedder_or_none` rather than constructing directly, so there
+    stays exactly ONE graceful construction path however the model was chosen.
+    """
+    return make_embedder_or_none(project_embedding_model(store, slug))
+
+
+def make_embedder_or_none(model: str | None = None) -> Embedder | None:
     """Build an Embedder, or None if it can't be constructed (BM25-only).
 
     The single construction path for callers that must degrade gracefully
     when no embedding backend is configured — used by insight ingestion so a
     missing proxy never fails a write.
+
+    *model* is the project's own embedding model, or ``None`` to inherit the
+    deployment default. It is a defaulted parameter rather than a second
+    function because every caller degrades identically; splitting them would
+    give the graceful path two implementations, and a test patching one of them
+    would let the other build a live Embedder and reach the network.
     """
     try:
-        return Embedder()
+        return Embedder(model=model)
     except Exception:
         return None
 

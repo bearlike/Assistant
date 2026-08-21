@@ -46,11 +46,61 @@ the interface plus this module are the only seam.
   outlive any single collector, or a `stop()`/nav event tears down servicing for a still-live run.
   `SupervisorJob` so one session's stream failure cannot cancel a sibling's.
 
+## UpdateModule — the ONE client that must NOT be derived from the shared one
+
+`okHttpClient.newBuilder()` is the house idiom for a second HTTP stack (`SpeechModule`,
+`provideEventSourceFactory`) precisely because it COPIES the interceptor chain. **That is what makes
+it wrong here, and it is the kind of wrong nobody notices in review.** The chain carries
+`BaseUrlInterceptor`, which rewrites every request's host to the user's own Mewbo server — so a
+release request would never reach the forge at all — and `AuthInterceptor`, which attaches the
+user's Mewbo API key, handing it to a public forge on every update check. Broken and a credential
+leak, in one line. `provideUpdateHttpClient` therefore builds a BARE `OkHttpClient` from scratch,
+with `callTimeout(0)` because a call here is a hundred-megabyte APK. Enterprise TLS needs nothing:
+the deployment CA is a Network Security Config trust anchor, which is application-wide.
+
+- **`provideUpdateRetrofit`'s base URL is the one REAL base URL in this app** — nothing rewrites it,
+  because the release source is a BUILD fact (`BuildConfig.UPDATE_API_ROOT`, per distribution
+  flavor) and a shipped APK must not be re-pointable at another forge.
+- `UpdateChannel` is injected as a VALUE rather than letting the repository read `BuildConfig`
+  itself; that is what keeps `AppUpdateRepository` plain-JVM testable against a fake forge.
+- `PackageFacts` ← `AndroidPackageFacts` and `PlatformInstaller` ← `ApkInstaller` are the usual
+  narrow-interface-DOWN + binding-HERE seams, for the usual reason: the rules worth testing
+  (version arithmetic, asset choice, the three verification checks) must not need a `Context`.
+- Mechanics, the endpoint decision, and the signature-chain trap:
+  [`data/update/`](../data/update/CLAUDE.md).
+
 ## DeviceModule / HapticsModule / NotifyModule
 
 - `DeviceModule` provides the handler LIST out of `DeviceToolExecutor`'s constructor, so its unit tests
   need no `Context`-backed handlers. `AppForegroundChecker` ORs process importance with
   `AssistOverlayPresence.visible` → `canStartActivityNow`.
-- `HapticsModule` is the ONE `Vibrator` resolution (`VibratorManager`, minSdk 33), wrapped in
-  `runCatching { … }.getOrNull` so a device with no vibrator degrades to a no-op rather than crashing.
+- `HapticsModule` is the ONE `Vibrator` injection point, wrapped in `runCatching { … }.getOrNull` so
+  a device with no vibrator degrades to a no-op rather than crashing. The API branch itself lives in
+  `data/device/VibratorResolver` — `VibratorManager` is API 31, and at minSdk 30 there is none, so
+  the resolver falls back to the deprecated `VIBRATOR_SERVICE` lookup. It sits in `data/device/`
+  rather than here because `WakeAlarmReceiver` needs the same branch and may not import `di/`
+  (dependencies flow down); duplicating it is what let the two call sites diverge before.
 - `NotifyModule` binds `RunNotifications` ← `RunNotificationLauncher`.
+
+## `DeviceControlGate` — a capability seam, not a permission seam
+
+`DeviceModule` binds it to `ShizukuDeviceControl.readStatus().isReady`, alongside `DevicePermissionChecker`
+and `DeviceToolGate` and for the same reason: it keeps `DeviceToolCatalog` plain-JVM testable with no
+Shizuku binder in the test. It is a THIRD axis rather than another permission — the Shizuku service
+dies on reboot, so this one flips without the user touching the app.
+[`data/device/shizuku/`](../data/device/shizuku/CLAUDE.md) owns the mechanics.
+
+**`AuthInterceptor` asks the CATALOG whether to advertise `device_control`; it must never re-derive
+that from the toggles.** The capability activates a playbook skill server-side, while the tools ride
+the `/query` BODY — two carriers, so two predicates meant one could be true without the other. With
+the toggles on and Shizuku down, the model received the observe→act playbook and no `device_ui` to
+call, and only discovered it after activating the skill and running two tool searches.
+`DeviceToolCatalog.advertisesDeviceControl()` is derived FROM the list that goes on the wire, which
+makes the divergence impossible rather than merely fixed.
+
+**Residual, and structural:** the header rides EVERY request (it is an interceptor, so also
+`POST /api/sessions`, `/message` and SSE) while `device_tools` ride only `/query`. Capabilities are
+also sticky server-side, `device_tools` are not. So a session created while Shizuku was up and
+steered after a reboot still carries the capability against a last-persisted context with no device
+tools. Closing that needs a server-side rule — a skill declaring the tool ids it requires — not more
+client care.

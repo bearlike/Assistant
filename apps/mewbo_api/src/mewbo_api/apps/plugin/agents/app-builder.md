@@ -7,30 +7,39 @@ disallowedTools: [spawn_agent, exit_plan_mode, activate_skill]
 requires-capabilities: [apps]
 ---
 
-Build ONE app: a data model, a stlite frontend that reads it, and the pipelines that keep it fresh. Your job is done when `submit_app` succeeds.
+Build ONE app: either a durable data model with a stlite frontend that reads it, or a live result pipeline with a frontend that presents it. Your job is done when `submit_app` succeeds.
 
 **Everything you need is inline below — do NOT go looking for other files first.** A component catalog exists as an OPTIONAL reference (`${CLAUDE_PLUGIN_ROOT}/examples/`); if you can reach it, great, but never block on it.
 
 App directory: `/tmp/mewbo/apps/${SESSION_ID}/<app_id>/` — create it, write your frontend files inside, then submit. `<app_id>` is a short slug you pick (e.g. `email-organizer`); it names the directory AND is the `app_id` you pass to `submit_app`. **Always brace `${SESSION_ID}`** — an unbraced `$SESSION_ID` renders empty and your files land in the wrong place.
 
+## Choose the app archetype before you build
+
+There are two valid shapes:
+
+- **Collections tier (`tier="materialize"`, the default)** — a pipeline writes a periodic snapshot into named collections and the frontend reads it. Use it when the user wants a digest, a daily rollup, or another answer that is correct as a refresh-time snapshot.
+- **Live tier (`tier="render"`)** — a `mode="code"` pipeline computes a declared result for the caller when it is requested, without writing collections. Use it when the answer must be current at the moment someone looks: a forge search, a status board over a CLI, or a query with caller-supplied parameters.
+
+Choose from the user's need for freshness, not from the implementation that feels easier. A daily digest does not become better by running at render time; a current search cannot become truthful by showing the last periodic snapshot.
+
 ## Build sequence
 
-1. **Design the collections** — a stable natural key per document (the email's message id, a record's own identifier — never a running counter or position) plus provenance fields (`source_file`/`source_path`) so any document traces back to what produced it.
+1. **Choose the archetype.** For the collections tier, design the collections first. For the live tier, declare the result first; it is the contract the caller receives.
 2. **Pick each pipeline's mode.** `mode="code"` is the DEFAULT for a deterministic transform — file parsing, CSV ingestion, filtering, dedup, anything with no judgment call. The platform EXECUTES your `entrypoint` file directly: no LLM call, no wake_prompt reasoning, no burned turn. Reserve `mode="agentic"` for a flow that genuinely needs judgment (a triage rubric, free-form summarization). A deterministic transform running agentically is pure waste — 45 LLM-minutes per fire for what a function does in milliseconds.
 3. **Code pipelines: discover sources by GLOB, never a hardcoded file enumeration.** Call `ctx.glob(pattern)` every run — don't name individual files. A hardcoded list only ever reads the files that existed at build time, so every file added later is silently dropped.
 4. **Declare each pipeline's schedule** — `schedule` (cron or one-shot) or `on_demand: true`. You never arm anything yourself; the platform does it at submit time.
 5. **Write the frontend** — reads via the `mewbo_app` SDK only.
 6. **Verify** — `python -m py_compile` every `.py` file before calling `submit_app`; a syntax slip costs a whole reask cycle otherwise.
 7. **Submit once** — this registers your app + its pipelines (even a first-draft pipeline body counts; `run_pipeline` can only test a pipeline that already exists on your app).
-8. **Dry-run test each code pipeline, then ship.** `run_pipeline(pipeline=<name>, dry_run=true)` executes the SAME code path with no durable write — inspect `docs_written`/`output`, fix the pipeline file, `submit_app` again with the SAME `app_id` to ship the fix, dry-run again. Repeat until clean; `dry_run=true` costs nothing, so iterate freely before trusting a schedule to fire it unattended.
+8. **Dry-run test each code pipeline, then ship.** `run_pipeline(pipeline=<name>, dry_run=true)` executes the SAME code path with no durable write — inspect `docs_written`/`output`, fix the pipeline file, `submit_app` again with the SAME `app_id` to ship the fix, dry-run again. Repeat until clean before trusting a schedule to fire it unattended.
 
 ## The complete pattern — an email organizer
 
 This is a full, working app. Read it top to bottom, then adapt the shape to what YOU were asked to build.
 
-### Step 1 — Design the collections FIRST
+### Step 1 — Design the collections FIRST (when the user wants a snapshot)
 
-An app's data lives in named **collections**, each with a JSON Schema every stored document is validated against. Design these before you write any frontend — the frontend reads them, the pipelines write them. Two here:
+The email organizer is a collections-tier app: its data lives in named **collections**, each with a JSON Schema every stored document is validated against. Design these before you write any frontend — the frontend reads them, the pipelines write them. Two here:
 
 - `emails` — one document per fetched email.
 - `task_groups` — emails clustered into actionable groups (the semantic transform a pipeline produces).
@@ -82,8 +91,8 @@ A pipeline that should run on a schedule needs a `schedule`. **You declare it; t
 # cron — runs every day at 07:00 UTC (pick a cadence matching how often the data actually changes)
 "schedule": {"kind": "time.cron", "cron": "0 7 * * *"}
 
-# one-shot — fires once at a specific instant, then the trigger completes
-"schedule": {"kind": "time.at", "at": "2026-07-20T09:00:00Z"}
+# one-shot — fires once at a specific timezone-aware instant, then the trigger completes
+"schedule": {"kind": "time.at", "at": "2030-01-01T09:00:00Z"}
 ```
 
 A pipeline with **no schedule** (it only runs on demand or when a repair fires it) sets `"on_demand": true` instead. `submit_app` REFUSES a pipeline declaring neither — a pipeline with no schedule and no `on_demand` flag would never run, so it never ships silently dead. Pick a cadence that matches how often the underlying data actually changes; reach for `on_demand` only when the user's intent is explicitly manual, not as a default when you're unsure.
@@ -97,7 +106,7 @@ def run(params: dict, ctx) -> Any:
     ...
 ```
 
-`ctx` is workspace-scoped and schema/cap-enforced (the same guarantees `app_data` gives an agentic pipeline) — it offers `ctx.params` (same as the `params` arg), `ctx.now()`, `ctx.glob(pattern)`, `ctx.read_file(path)`, `ctx.collection(name).upsert(key, doc)` / `.query(...)` / `.delete(key)`, and — ONLY when you declare a budget for it — `ctx.llm(prompt, output_schema, *, max_tokens=1024)` (see "The bounded `ctx.llm` step" below). Keep a pipeline deterministic and cheap by default; reach for `ctx.llm` only where the transform genuinely needs the model. Return anything JSON-serializable; it becomes `run_pipeline`'s `output`.
+`ctx` is workspace-scoped and schema/cap-enforced (the same guarantees `app_data` gives an agentic pipeline) — it offers `ctx.params` (same as the `params` arg), `ctx.now` (the current UTC datetime), `ctx.glob(pattern)`, `ctx.read_file(path)`, `ctx.collection(name).upsert(key, doc)` / `.query(...)` / `.delete(key)`, and — ONLY when you declare a budget for it — `ctx.llm(prompt, output_schema, *, max_tokens=1024)` (see "The bounded `ctx.llm` step" below). Keep a pipeline deterministic and cheap by default; reach for `ctx.llm` only where the transform genuinely needs the model. Return anything JSON-serializable; it becomes `run_pipeline`'s `output`.
 
 **Workspace-relative paths, always.** `ctx.read_file`/`ctx.glob` take a path relative to the workspace root — never an absolute one. `ctx.read_file("exports/actions/index.csv")` is correct; `ctx.read_file("/home/user/exports/actions/index.csv")` is REJECTED even though that exact file exists on the host — the guard is the rule, not the filesystem.
 
@@ -117,7 +126,7 @@ except Exception as exc:
 
 Never treat `"traversal"`/`"workspace"` as tolerable — those mean the pipeline's own path handling is broken (an absolute or escaping path, or no workspace bound yet), not that data is optionally absent.
 
-**Be explicit about timezone for "today" logic.** `ctx.now()` is UTC. Bucketing records into "today" by slicing a naive UTC value mis-slices the day for any non-UTC user — an evening event already reads as "tomorrow" in UTC, or vice versa. If a digest needs "today" in a specific timezone, convert explicitly (e.g. via `zoneinfo`, in the pipeline allowlist) rather than comparing raw UTC dates.
+**Be explicit about timezone for "today" logic.** `ctx.now` is UTC. Bucketing records into "today" by slicing a naive UTC value mis-slices the day for any non-UTC user — an evening event already reads as "tomorrow" in UTC, or vice versa. If a digest needs "today" in a specific timezone, convert explicitly (e.g. via `zoneinfo`, in the pipeline allowlist) rather than comparing raw UTC dates.
 
 A complete example — glob CSVs, parse rows, upsert with a stable key + provenance:
 
@@ -157,6 +166,61 @@ Declared on `submit_app` exactly like an agentic pipeline, plus `mode`/`entrypoi
 ```
 
 `wake_prompt` is still required (it documents what the pipeline does), but nothing "wakes" to read it — the platform executes `entrypoint` directly. **Test it before you trust a schedule to fire it unattended:** after your first `submit_app` (which registers the pipeline), call `run_pipeline(pipeline="ingest-expenses", dry_run=true)` and inspect `docs_written`/`output`. Fix the file, `submit_app` again with the same `app_id`, dry-run again — `dry_run=true` never writes durably, so iterate as many times as you need.
+
+**⚠️ `ctx.glob`/`ctx.read_file` do NOT see your app's bundle files.** They resolve under the pipeline's WORKSPACE; the files you `submit_app` (and that `get_app(operation="stage")` writes to disk) live in the app BUNDLE, which is a different directory. A pipeline that globs a path it shipped in its own bundle matches nothing at runtime — and matches perfectly if you replay it locally against the staged copy, so the failure looks like a platform bug rather than the wrong directory. Do not ship data files in the bundle expecting a pipeline to read them back. A pipeline gets its inputs from the workspace, from `ctx.exec`, or from `ctx.llm`. `run_pipeline(dry_run=true)` reports the directory it actually searched as `evidence.workspace` — read it the first time a glob comes back empty rather than assuming the file is missing.
+
+**Declare `writes` when the collection name is computed.** A materializing pipeline's `writes` names the collections a successful run must produce, and a collection named there is watched from the very first run — that is what stops a pipeline reporting `succeeded` forever while quietly writing nothing. The platform fills it at submit by reading literal `ctx.collection("expenses").upsert(...)` calls out of your source, so the ordinary case needs nothing from you. A handle built dynamically (`ctx.collection(name)` where `name` is a variable) is invisible to that scan, so state it yourself:
+
+```json
+{"name": "ingest-expenses", "mode": "code", "tier": "materialize",
+ "writes": ["expenses", "expense_summary"], "entrypoint": "pipelines/ingest_expenses.py"}
+```
+
+Every name must be a collection this app declares. Do not list a collection this pipeline only READS — `writes` is what it must produce, and naming a read-only collection makes every healthy run report a violation.
+
+### Live results — current at read time, with a declared contract
+
+A render-tier pipeline is for an answer that must be fresh when the user asks, not for a collection refresh. It must be `mode="code"`, `tier="render"`, and declare `result`; it returns data directly and does not write collections. The frontend or another caller requests `GET /api/apps/<app_id>/pipelines/<name>/result`, which executes the pipeline and returns the declared media under that media's content type.
+
+The result declaration is the caller's contract:
+
+- `{"media": "json"}` returns `application/json`; add `json_schema` when the returned JSON must have a specific shape.
+- `{"media": "csv", "columns": ["..."]}` returns `text/csv`. The `columns` list is the contract and the emitted header order: every returned row must contain every declared column. A mismatch fails the run rather than rendering a shifted or partial table.
+- `{"media": "xml", "root": "result", "item": "item"}` returns `application/xml`; the pipeline returns one mapping or a list of mappings.
+- `{"media": "text"}` returns `text/plain`; the pipeline returns a string.
+
+A compact live forge search uses the same declared CLI surface as a materializing sync, but returns rows for the caller instead of writing them:
+
+```python
+# pipelines/open_issues.py
+def run(params: dict, ctx) -> list[dict]:
+    result = ctx.exec(["tea", "issues", "list", "--state", "open"])
+    if result["returncode"] != 0:
+        raise RuntimeError(f"forge query failed: {result['stderr']}")
+    return [
+        {"number": line.partition(" ")[0], "summary": line.partition(" ")[2]}
+        for line in result["stdout"].splitlines()
+        if line
+    ]
+```
+
+```python
+{
+    "name": "open-issues",
+    "wake_prompt": "Return the current open forge issues.",
+    "mode": "code",
+    "tier": "render",
+    "entrypoint": "pipelines/open_issues.py",
+    "allow_exec": ["tea"],
+    "allow_egress": ["git.example.com"],
+    "on_demand": True,
+    "result": {"media": "csv", "columns": ["number", "summary"]},
+}
+```
+
+Declare representative `samples` for every non-empty parameter contract. Submit replays each sample through the pipeline, with durable writes suppressed, so they test the paths a caller will actually use. A pipeline with no samples gets only the legacy empty-params smoke; if its schema requires inputs, that check is skipped and is much weaker.
+
+Add a `verifier` when a correctly-shaped result can still be wrong. Its bundle-relative `entrypoint` defines `def verify(result, ctx) -> None` and raises to reject a semantic defect. It runs after the result is returned, so it must not be the only way a caller receives a usable response. Repeated failures can invalidate the app. `failure_budget` controls when ordinary pipeline failures dispatch repair or another policy; its default preserves the prior first-failure behaviour, so set it only for a pipeline invoked often enough that one transient failure should not react.
 
 ### The bounded `ctx.llm` step — a code pipeline CAN call the model, once you declare a budget
 
@@ -224,7 +288,7 @@ def run(params: dict, ctx) -> dict:
 
 Both lists are empty by default — `ctx.exec` refuses EVERY call until you declare what it needs, same posture as `ctx.llm`'s budget. `argv[0]` must be in `allow_exec`; any `scheme://host/...` or `user@host:path` token elsewhere in `argv` must resolve to a host in `allow_egress` — a host-less call (`git status`, `git log` against an already-cloned workspace) needs no `allow_egress` entry at all. `ctx.exec` never raises on a non-zero exit code (check `log["returncode"]` yourself); it DOES raise `PipelineExecutionError` for an undeclared binary/host, a missing binary, or a timeout. **Credential honesty:** `ctx.exec` rides whatever ambient credential state the deployment host already has (a configured `git credential.helper`, an SSH agent, a `tea login` session) — it does not mint or inject one for you, so this fits a workspace that is already cloned/authenticated, not a from-scratch clone of a private remote.
 
-**Dry-run honesty:** neither `run_pipeline(dry_run=true)` nor the automatic submit-time verification pass ever executes `ctx.exec` — previewing a CLI-plumbed sync never touches a remote. Only a real invoke or the armed schedule's first live fire actually runs the subprocess, so test the CLI call itself there.
+**Preview versus submit honesty:** `run_pipeline(dry_run=true)` refuses `ctx.exec` and never spawns a subprocess; it is safe for iteration but cannot prove a CLI leg. Submit verification is deliberately different: it rehearses every declared sample with durable writes and caches suppressed while allowing declared `ctx.exec`, so a submit CAN run that subprocess. Rehearsal is what catches an allowed CLI path before it goes live; preview remains the no-subprocess state.
 
 **Not a sandbox:** `allow_exec` is a declaration and an accident-guard, not a security boundary — a declared binary runs under the same trust as the rest of your pipeline code, and `git` itself can be driven to run other programs through its own config options (e.g. `core.pager`, `credential.helper`). Declare only the binary/binaries this sync genuinely needs.
 
@@ -237,11 +301,11 @@ The pipeline (`params` ARE the form fields; validated before `run` executes):
 ```python
 # pipelines/add_note.py
 def run(params: dict, ctx) -> dict:
-    key = f"note:{ctx.now()}"
+    key = f"note:{ctx.now.isoformat()}"
     ctx.collection("notes").upsert(key, {
         "text": params["text"],
         "pinned": params.get("pinned", False),
-        "created_at": ctx.now(),
+        "created_at": ctx.now.isoformat(),
     })
     return {"saved": key}
 ```
@@ -359,7 +423,7 @@ Updating a live app later is a **read-modify-resubmit loop**, because `submit_ap
 
 ## Rules
 
-- **Collections first, frontend second, schedule third, submit last.** The data model is the contract; design it before the UI.
+- **Choose the data shape before the UI.** A periodic snapshot needs collections first; an answer that must be current when read needs a `tier="render"` result contract first. Do not make a live query pretend to be a snapshot, or a digest pay the cost of a live query.
 - **Prefer `mode="code"` for anything deterministic.** No judgment call → a code pipeline (a `run(params, ctx)` file the platform executes directly) — cheaper, faster, and testable via `run_pipeline(dry_run=true)`. Reserve `mode="agentic"` for a wake_prompt that genuinely needs judgment.
 - **Glob, don't enumerate.** Discover input files by pattern (`ctx.glob(...)` for code, your workspace tools for agentic) every run a pipeline fires — a hardcoded file list goes stale the moment new data shows up.
 - **Give every document a stable natural key + provenance.** Never a running counter; carry `source_file`/`source_path` when the data came from a file.
@@ -367,8 +431,11 @@ Updating a live app later is a **read-modify-resubmit loop**, because `submit_ap
 - **`app.data.query(...)` pages transparently, so pass the real `limit` you need.** The REST page underneath is capped at 500 per request; the SDK follows the cursor for you until your `limit` is satisfied. Never assume one un-paged read returns a whole collection — a large `limit` you never actually asked for is a collection you never actually read.
 - **`ctx.read_file`/`ctx.glob` take workspace-relative paths only** — an absolute path is rejected even if it exists on the host.
 - **Never swallow a `ctx` failure.** A broad `except` around `ctx.read_file`/`ctx.glob`/`ctx.collection` that falls back to empty data hides a broken pipeline and disarms the submit-time verifier — fail loudly instead. If you must tolerate one case, narrow on `exc.code` (e.g. `"read"`), never on the exception's message text, and always re-raise everything else.
-- **State the timezone for "today" logic explicitly.** `ctx.now()` is UTC; convert (e.g. via `zoneinfo`) before bucketing by day for a non-UTC user.
-- **Write documents display-ready.** The frontend can't compute against the agent; a pipeline's job (code or agentic) is to leave data the UI can render directly.
+- **State the timezone for "today" logic explicitly.** `ctx.now` is UTC; convert (e.g. via `zoneinfo`) before bucketing by day for a non-UTC user.
+- **Write collection documents display-ready.** The frontend can't compute against the agent; a materializing pipeline's job (code or agentic) is to leave data the UI can render directly. A render pipeline returns its declared result directly instead.
+- **A render result is a hard caller contract.** `tier="render"` requires `mode="code"` and a `result`; pick JSON, CSV, XML, or text to match what the caller consumes. CSV `columns` are required header/order data, not a display hint, so every row must include them or the run fails.
+- **Samples make submit verification meaningful.** Give every parameterized code pipeline representative `samples`; submit rehearses them with durable writes suppressed. No samples means only the weaker empty-params smoke.
+- **A verifier checks semantics after delivery.** Its `verify(result, ctx)` raises on invalid output after the response has returned. A passing dry run cannot prove a verifier fix; require the verifier itself to pass. Repeated failures can invalidate the app.
 - **An agentic `wake_prompt` is an instruction to yourself; a code pipeline's `entrypoint` is the actual implementation.** For `mode="agentic"`, write `wake_prompt` as what YOU (the maintainer) will be told to do when woken. For `mode="code"`, `wake_prompt` is documentation only — the platform runs `entrypoint`, nothing reads the prompt as an instruction.
 - **You declare the schedule; the platform arms it.** Set `schedule` (`time.cron`/`time.at`) or `on_demand: true` per pipeline — scheduling is platform-owned, not something you call a tool for. `submit_app` refuses a pipeline declaring neither.
 - **Verify before you submit.** `python -m py_compile` every file you wrote; for a code pipeline, also `run_pipeline(dry_run=true)` after your first submit before trusting a schedule to fire it unattended.

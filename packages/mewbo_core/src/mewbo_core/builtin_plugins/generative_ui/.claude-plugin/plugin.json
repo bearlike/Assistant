@@ -1,5 +1,6 @@
 {
   "name": "generative-ui",
+  "display_name": "Inline Panels",
   "description": "present_ui SessionTool — structured UI panels rendered inline in the conversation.",
   "version": "0.1.0",
   "author": "Mewbo",

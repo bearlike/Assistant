@@ -71,8 +71,10 @@ Don't widen `pages` past 95; the 5% headroom is what stops the bar looking stuck
 done yet".
 
 **Adding a phase is a lock-step edit.** A new phase lands in `IndexingPhase` (`api/types.ts`) AND
-all three `progress.ts` lookup tables (`PHASE_RANGE`/`PHASE_LABEL`/`PHASE_ORDER`) in the same
-change — each is a `Record<IndexingPhase, …>`, so `tsc` enforces exhaustiveness. `enrich` sits
+all four `progress.ts` lookup tables (`PHASE_RANGE`/`PHASE_LABEL`/`PHASE_SHORT_LABEL`/`PHASE_ORDER`)
+in the same change — each is a `Record<IndexingPhase, …>`, so `tsc` enforces exhaustiveness.
+`PHASE_SHORT_LABEL` is the one-word name the phase bar and the plan outline spend, where the
+sentence-length `PHASE_LABEL` would wrap seven times across a strip. `enrich` sits
 post-AST to honour the GraphRAG ordering law: the entity KG is built before pages are written.
 
 ## ETA is measured-rate-or-nothing, scoped to the current phase
@@ -98,16 +100,58 @@ inline, the empty string is safely no-op'd in JSX.
 wire shape but is NOT consumed by `progress.ts` — reserved for a future staleness indicator that
 needs a product-specified threshold this class doesn't own an opinion on.
 
-## Log timeline — full history, not a rolling window
+## Log timeline — full history in STATE, a bounded tail on SCREEN
 
-The indexing-page reducer keeps EVERY log event in state; the view renders all of them inside an
-`overflow-y-auto` container and auto-scrolls via `ref + useLayoutEffect` on log-count change.
+The indexing-page reducer keeps EVERY log event in state. The view renders a bounded tail of them
+and **says so** ("last 250 of 5,468 lines"). Those are two different rules and both are load-bearing.
 
 **Never trim the log in the hook** (`api/streamHooks.ts`, where `useIndexingStream` lives;
-`hooks.ts` stays the plain TanStack Query surface). A `slice(-20)` makes every refresh appear to show
-*different* logs, because the visible window shifts forward as the total grows — and replaying SSE
-from idx 0 is free, so the trim buys nothing and costs determinism. History (per-file scan rows,
-distinct from `logs`) IS trimmed to 9: a recent-activity blip, not an audit log.
+`hooks.ts` stays the plain TanStack Query surface). A `slice(-20)` there makes every refresh appear
+to show *different* logs, because the visible window shifts forward as the total grows — and
+replaying SSE from idx 0 is free, so the trim buys nothing and costs determinism.
+
+**Do bound what is RENDERED** (`indexing/activityModel.ts` `RENDER_LIMIT`). A scroll container costs
+one DOM node per line whether or not it is on screen. Once the backend gained per-step granularity a
+single mid-size repository emitted 5,468 lines while still in the graph phase — measured at 22,205
+DOM nodes on a *loading screen*, one spinning glyph per row. The rendered window is now capped and
+the count is PRINTED, which is what separates a bounded view from a silent trim: the numbers say the
+history is longer, so two visits can't look like two different runs. Same page after the rebuild:
+1,164 DOM nodes. History (per-file scan rows, distinct from `logs`) stays trimmed to 9 — a
+recent-activity blip, not an audit log.
+
+**Log lines carry `step`, and dropping it is a silent feature loss.** The backend stamps the open
+declared step onto every line it writes (`LogJobEvent.step`); `reduceIndexing` folds it and
+`ActivityFeed` groups consecutive lines under that step's declared label. Without it a reader gets
+thousands of undifferentiated rows — a producer whose field no consumer reads is dead on arrival.
+A line with NO step among attributed ones is work that escaped its declared scope, and the pane
+labels it as such rather than rendering an anonymous block: measured on a live index, 102 of 5,470
+lines were unattributed while the coverage gate was green, because that gate only ever replayed the
+graph phase. **Make the gap visible; an invisible gap is how it survives a green suite.**
+
+## The indexing screen is four fixed regions, and the root never scrolls
+
+`IndexingScreen.tsx` composes; `indexing/` holds the parts. The shape is the contract:
+
+| Region | Owner | Rule |
+|---|---|---|
+| Header | `IndexingScreen` + `indexing/PhaseBar` | headline = the OPEN STEP's label, not the phase; ONE positional readout |
+| Recovery / scope bands | `IndexingScreen` | `shrink-0`, and any error text is height-bounded |
+| Body | `indexing/PlanOutline` + `indexing/ActivityLog` | two panes, each owning its OWN `overflow-y-auto` |
+| Footer | `IndexingScreen` | always reachable — never pushed below a fold |
+
+The previous version appended every region beneath the last, so the panel grew as the backend
+declared more work and the PAGE scrolled with a second scrollbar nested inside it. A loading screen
+that grows a scrollbar as it works pushes its own Cancel control off-screen. So: the screen root is
+`overflow-hidden`, exactly two `data-scroll="pane"` containers exist, and
+`__tests__/wiki/indexingLayout.test.tsx` pins both — jsdom performs no layout, so it asserts on what
+is RENDERED and where the scroll containers are, which is what actually regressed.
+
+**Never render the declared plan flat.** `indexing/planModel.ts` (`IndexingPlan`, pure and
+React-free) folds the flat `StepRecord[]` into phases; the outline discloses the running phase and
+collapses the rest, following the run as it advances. Twenty-odd rows each shouting `DONE` in a
+caps-locked column is the wall this replaced — state is a glyph plus screen-reader text
+(`indexing/StepGlyph.tsx` + `stepState.ts`, split because a `.tsx` exporting both components and
+functions trips `react-refresh/only-export-components` under `--max-warnings=0`).
 
 ## SSE consumer uses `fetch`, not `EventSource`
 

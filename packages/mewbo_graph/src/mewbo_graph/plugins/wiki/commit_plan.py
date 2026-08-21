@@ -7,8 +7,12 @@ from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase
+from mewbo_graph.plugins.wiki._ctx import ProgressReporter, emit_log, emit_phase
 from mewbo_graph.plugins.wiki.clone import _resolve_runtime  # noqa: F401 — per-module test seam
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    PLAN_STEPS,
+    planned_steps_for_slug,
+)
 from mewbo_graph.wiki.types import PagePlan
 
 if TYPE_CHECKING:
@@ -91,6 +95,8 @@ class WikiCommitPlanTool(WikiSessionTool):
             return args
 
         emit_phase(ctx, "plan")
+        progress = ProgressReporter(ctx)
+        progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "plan"))
 
         # Checkpoint-aware resume: reuse the plan the interrupted
         # index already committed so the reused graph stays consistent with it.
@@ -98,6 +104,7 @@ class WikiCommitPlanTool(WikiSessionTool):
         # short-circuit.
         rp = ctx.resume_plan
         if rp is not None and rp.should_skip("plan"):
+            progress.skip_group("plan", note="reused on resume")
             emit_log(ctx, f"Plan already committed ({rp.total_pages} pages) — skipped on resume")
             return MockSpeaker(content=str({
                 "committed": rp.total_pages,
@@ -107,15 +114,22 @@ class WikiCommitPlanTool(WikiSessionTool):
         # 3. Persist the plan as a sidecar (not as a field on IndexingJob).
         # by_alias keeps the camelCase wire shape the LLM/page-writer use
         # (``relevantFiles``/``relatedPages``).
-        plan_dicts = [p.model_dump(by_alias=True) for p in args.pages]
-        ctx.store.save_job_plan(ctx.job_id, plan_dicts)
+        with progress.step("plan.compose"):
+            plan_dicts = [p.model_dump(by_alias=True) for p in args.pages]
+        total_pages = len(args.pages)
+        with progress.step("plan.validate", total=total_pages) as step:
+            step.advance(total_pages, total_pages)
+        with progress.step("plan.persist"):
+            ctx.store.save_job_plan(ctx.job_id, plan_dicts)
+        # ``pages.write`` is one aggregate declaration. Its count becomes known
+        # only after this plan commits; prime its denominator without claiming the
+        # pages phase began before a writer actually arrives.
+        progress.set_total("pages.write", total_pages)
 
         # 4. Read current job counts for the event payload.
         job = ctx.store.get_job(ctx.job_id)
         scanned_count = job.scanned_count if job is not None else 0
         total_count = job.total_count if job is not None else 0
-
-        total_pages = len(args.pages)
 
         # 5. Update job status to finalizing and emit progress events.
         # ``total_pages`` is also persisted on the snapshot so the landing

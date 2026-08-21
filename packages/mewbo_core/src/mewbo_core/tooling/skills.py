@@ -168,6 +168,25 @@ class SkillBinaryProbe:
 # Internal tool schema (injected into bind_tools like SPAWN_AGENT_SCHEMA)
 # ------------------------------------------------------------------
 
+# The model-facing cap on an activated skill body.
+#
+# ``activate_skill`` is bound DIRECTLY by ``_bind_model``, so it has neither a
+# ``ToolSpec`` nor a ``SessionTool`` instance to declare on — and the loop's
+# resolver therefore fell through to the 2000-char registry default, a number
+# sized for unbounded shell output. Measured on the deployed stack: the
+# ``generative-ui`` body reached the model as 2000 of its 4008 characters, cut
+# mid-table between the `Divider` and `Link` rows, and ``mewbo-harness`` lost
+# 2180 of 4180. Neither surfaced anywhere — the EVENT snapshot carries its own
+# far larger cap, so the store, the console and the session page all showed the
+# complete text while only the model read half of it.
+#
+# Sized like the session-tool population rather than the registry one, because a
+# skill body is the same KIND of payload: curated first-party content, authored
+# in-tree, whose whole purpose is to be followed. A truncated shell log costs a
+# re-read; a truncated skill leaves the model acting on half a contract it was
+# told to obey, with no marker in the half it kept saying the rest existed.
+ACTIVATE_SKILL_MAX_RESULT_CHARS = 200_000
+
 ACTIVATE_SKILL_SCHEMA: dict[str, object] = {
     "type": "function",
     "function": {

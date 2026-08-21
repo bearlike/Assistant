@@ -1,28 +1,51 @@
 #@doc
-# * This GitHub Actions workflow builds and pushes a Docker image to GitHub Container Registry.
-# * It is triggered when a branch is created with the name syntax "release/[version]-[channel]".
+# * Builds every Mewbo runtime image and publishes it to whichever forge is
+#   running the workflow. ONE body, two forges — the registry, the platform
+#   list and the trigger set are resolved at runtime rather than forked into
+#   two files.
 #
-# The workflow does the following:
-# 1. Checks out the code, sets up Docker buildx, Login to the registry.
-# 2. Extracts the branch name from the GITHUB_REF environment variable.
-# 3. Splits the branch name to get the version and channel.
-# 4. Builds and pushes the Docker image.
-
-# Examples:
-# If the branch name is 'release/1.0.0-latest', the image is tagged as '1.0.0' and 'latest'.
-# If the branch name is 'release/1.0.1-stable', the image is tagged as '1.0.1' and 'stable'.
-# If the branch name is 'release/1.0.2-dev', the image is tagged as '1.0.2-dev'.
+# Where the images go
+#   github.com          -> ghcr.io/<owner>/<image>
+#   any other forge     -> <that forge's own host>/<owner>/<image>
+# The second address is derived from `github.server_url` at runtime and is
+# never written down here, so nothing forge-specific ships in the tree.
 #
-# * The 'latest' and 'stable' tags allow us to easily switch between different versions.
-# * The 'dev' tag allows you to have a separate version for development.
+# When it runs
+#   push to release/<version>-<channel>   both forges — the versioned publish
+#   workflow_dispatch                     both forges — on demand
+#   schedule (nightly)                    the self-hosted forge ONLY
+#
+# The nightly leg is skipped on github.com on purpose: there, a release branch
+# is the publish trigger and always has been. On the self-hosted forge the
+# nightly is the standing build, and it declines to run when the registry
+# already holds an image built from this exact commit — so a day with no
+# commits costs one API call instead of five image builds. `force` overrides
+# that for a dispatch.
+#
+# Tagging, from the branch name
+#   release/1.0.0-latest  -> 1.0.0 + latest
+#   release/1.0.1-stable  -> 1.0.1 + stable
+#   release/1.0.2-dev     -> 1.0.2-dev + dev
+#   anything else         -> nightly
+# Every build also publishes sha-<short>, which is what the nightly guard reads
+# back. It is the only tag that identifies a build by its source rather than by
+# its intent, so it is what "has this commit been built" can be asked about.
 
 name: Docker Images
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if this commit was already published
+        type: boolean
+        default: false
   push:
     branches:
       - "release/*"
+  schedule:
+    # Once a day. Only the self-hosted forge acts on this; see the plan job.
+    - cron: "17 9 * * *"
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -33,109 +56,358 @@ permissions:
   packages: write
 
 jobs:
-  docker:
-    name: Build & push images
-    # GHCR-only publish: the login below authenticates with GITHUB_TOKEN, which
-    # a non-github.com forge issues as an instance-local compatibility token that
-    # ghcr.io will not accept. Guarded the same way the other forge-specific
-    # jobs in this repo are, so a release branch pushed to the other remote
-    # skips this job instead of failing at the registry login.
-    if: github.server_url == 'https://github.com'
+  plan:
+    name: Resolve target & decide
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      registry: ${{ steps.target.outputs.registry }}
+      registry_host: ${{ steps.target.outputs.registry_host }}
+      platforms: ${{ steps.target.outputs.platforms }}
+      is_github: ${{ steps.target.outputs.is_github }}
+      tag_suffixes: ${{ steps.target.outputs.tag_suffixes }}
+      version: ${{ steps.target.outputs.version }}
+      sha_tag: ${{ steps.target.outputs.sha_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve registry, platforms and tags
+        id: target
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          owner="${REPOSITORY%%/*}"
+
+          # ghcr.io is not derivable from github.com's server_url — it is a
+          # different host — so it is the one address named literally. Every
+          # other forge publishes to its own hostname, which is exactly what
+          # server_url already is.
+          if [ "$SERVER_URL" = "https://github.com" ]; then
+            registry_host="ghcr.io"
+            registry="$registry_host/$owner"
+            platforms="linux/amd64,linux/arm64"
+            is_github=true
+          else
+            host="${SERVER_URL#https://}"
+            host="${host#http://}"
+            registry_host="${host%/}"
+            registry="$registry_host/$owner"
+            # amd64 only. The self-hosted runner emulates arm64 through QEMU on
+            # a job container capped at a few cores, and five images built that
+            # way do not finish inside the runner's own job timeout.
+            platforms="linux/amd64"
+            is_github=false
+          fi
+
+          sha_tag="sha-$(echo "$SHA" | cut -c1-12)"
+
+          # A release branch carries the version and the channel in its name.
+          # Anything else is a nightly and is identified only by its commit.
+          case "$REF_NAME" in
+            release/*)
+              spec="${REF_NAME#release/}"
+              version="${spec%%-*}"
+              channel="${spec#*-}"
+              [ "$channel" = "$spec" ] && channel=""
+              ;;
+            *)
+              spec=""
+              version=""
+              channel=""
+              ;;
+          esac
+
+          if [ -n "$version" ]; then
+            case "$channel" in
+              dev) suffixes="$version-dev,dev" ;;
+              latest) suffixes="$version,latest" ;;
+              stable) suffixes="$version,stable" ;;
+              *) suffixes="$version" ;;
+            esac
+          else
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
+            test -n "$version" || { echo "could not read version from pyproject.toml" >&2; exit 1; }
+            suffixes="nightly"
+          fi
+          suffixes="$suffixes,$sha_tag"
+
+          {
+            echo "registry=$registry"
+            echo "registry_host=$registry_host"
+            echo "platforms=$platforms"
+            echo "is_github=$is_github"
+            echo "version=$version"
+            echo "sha_tag=$sha_tag"
+            echo "tag_suffixes=$suffixes"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "publishing $registry/* as [$suffixes] for $platforms"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.force }}
+          IS_GITHUB: ${{ steps.target.outputs.is_github }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          SHA_TAG: ${{ steps.target.outputs.sha_tag }}
+          # The SAME credential the push uses. A forge's per-run token is
+          # refused by its registry, so probing with it would 401 on every
+          # commit, read as "not published", and rebuild nightly forever —
+          # a guard that silently never guards.
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          # github.com never takes the nightly. Its publish trigger is a release
+          # branch and changing that is not what this workflow is for.
+          if [ "$EVENT" = "schedule" ] && [ "$IS_GITHUB" = "true" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "nightly is a self-hosted-forge leg; github.com publishes from release/* branches."
+            exit 0
+          fi
+
+          # Only the nightly is ever declined. A dispatch or a release-branch
+          # push is somebody asking for a build, and answering "no" to that is
+          # the kind of silent skip nobody goes looking for.
+          if [ "$EVENT" != "schedule" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$FORCE" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "forced."
+            exit 0
+          fi
+
+          # Nightly guard. Ask the registry whether an image built from THIS
+          # commit already exists. The registry is the artifact, so this
+          # measures what was published rather than what a run once reported —
+          # and a build that failed leaves no tag, so tomorrow retries by
+          # itself instead of latching "already done".
+          owner="${REPOSITORY%%/*}"
+          host="${SERVER_URL#https://}"; host="${host#http://}"; host="${host%/}"
+          cacert=()
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            cacert=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
+          code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            "${cacert[@]}" \
+            --user "$ACTOR:$REGISTRY_TOKEN" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+            "$SERVER_URL/v2/$owner/mewbo-base/manifests/$SHA_TAG" || echo 000)
+
+          if [ "$code" = "200" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "$SHA_TAG is already published — no commit since the last nightly. Skipping."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "$SHA_TAG absent (HTTP $code) — building."
+          fi
+
+  images:
+    name: Build & push images
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-22.04
+    # Headroom for the two-architecture github.com build. The self-hosted
+    # runner enforces its own, shorter job timeout regardless of this number,
+    # which is the other reason its leg is amd64 only.
+    timeout-minutes: 120
+    env:
+      REGISTRY: ${{ needs.plan.outputs.registry }}
+      PLATFORMS: ${{ needs.plan.outputs.platforms }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      # Attestation manifests are left on for github.com, where they are what
+      # ships today, and off elsewhere — a self-hosted registry need not
+      # understand the extra index entries, and a push that half-lands is
+      # harder to read than one that never carried them.
+      PROVENANCE: ${{ needs.plan.outputs.is_github == 'true' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Extract version and release type
-        id: extract_version
+      # Job containers on the self-hosted runner get no Docker socket
+      # (act_runner `container.docker_host: "-"`), so buildx has nothing to talk
+      # to until DOCKER_HOST is pointed at the DinD daemon on the bridge
+      # gateway. Same seam demo-screenshots.yml uses.
+      - name: Resolve Docker daemon
+        if: needs.plan.outputs.is_github != 'true'
+        shell: bash
         run: |
-          BRANCH_NAME=${{ github.ref_name }}
-          VERSION=$(echo $BRANCH_NAME | cut -d'/' -f 2 | cut -d'-' -f 1)
-          RELEASE_TYPE=$(echo $BRANCH_NAME | cut -d'/' -f 2 | cut -d'-' -f 2)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          gateway=$(python3 - <<'PY'
+          import socket
+          import struct
 
-      - name: Docker meta for mewbo-base
-        id: meta_base
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/bearlike/mewbo-base
-          tags: |
-            type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
-            type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
-            type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
-            type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
+          with open("/proc/net/route", encoding="utf-8") as routes:
+              next(routes)
+              for row in routes:
+                  fields = row.split()
+                  if fields[1] == "00000000":
+                      print(socket.inet_ntoa(struct.pack("<L", int(fields[2], 16))))
+                      break
+          PY
+          )
+          test -n "$gateway" || { echo "runner gateway could not be resolved" >&2; exit 1; }
+          echo "DOCKER_HOST=tcp://$gateway:2375" >> "$GITHUB_ENV"
 
-      - name: Docker meta for mewbo-console
-        id: meta_console
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/bearlike/mewbo-console
-          tags: |
-            type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
-            type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
-            type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
-            type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
-
-      - name: Docker meta for mewbo-api
-        id: meta_api
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/bearlike/mewbo-api
-          tags: |
-            type=raw,value=${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
-            type=raw,value=latest,enable=${{ steps.extract_version.outputs.release_type == 'latest' }}
-            type=raw,value=stable,enable=${{ steps.extract_version.outputs.release_type == 'stable' }}
-            type=raw,value=dev,enable=${{ steps.extract_version.outputs.release_type == 'dev' }}
-
+      # buildx and its BuildKit container exist ONLY for the multi-architecture
+      # github.com leg. On a self-hosted forge they are actively harmful: the
+      # BuildKit container is a THIRD namespace, inheriting neither the daemon's
+      # host mapping nor its registry CA, so `docker login` goes green, the build
+      # goes green, and the PUSH then dies resolving the registry against a public
+      # nameserver. That reads as a network fault and is not one. Plain
+      # build+push runs inside the daemon, which already has both.
       - name: Set up QEMU
+        if: needs.plan.outputs.is_github == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: needs.plan.outputs.is_github == 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
-        if: github.event_name != 'pull_request'
+      - name: Refuse a push with no registry credential
+        if: needs.plan.outputs.is_github != 'true' && secrets.REGISTRY_TOKEN == ''
+        run: |
+          echo "REGISTRY_TOKEN is not set for this repository or its owner." >&2
+          echo "A forge's own per-run token is not accepted by its container registry:" >&2
+          echo "  every authenticated form returns 401 from /v2/token while anonymous returns 200," >&2
+          echo "  which rules out scope and permissions rather than pointing at them." >&2
+          echo "Set REGISTRY_TOKEN to a token carrying package-write scope." >&2
+          exit 1
+
+      - name: Log in to the registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # The host half only — docker/login-action rejects a path.
+          registry: ${{ needs.plan.outputs.registry_host }}
+          username: ${{ github.actor }}
+          # ghcr.io accepts github.com's own per-run token, so the GHCR leg keeps
+          # working with no secret configured at all. Every other forge needs a
+          # real credential; see the refusal above for why this is not a
+          # permissions question.
+          password: ${{ secrets.REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Build and push mewbo-base
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.base
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_base.outputs.tags }}
-          labels: ${{ steps.meta_base.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.extract_version.outputs.version }}
+      - name: Reclaim space before starting
+        # The self-hosted daemon's whole storage is a fixed-size RAM disk, so
+        # "disk" and "memory" are one budget — and this workflow's own output is
+        # what fills it. Every image it has ever built is still sitting there
+        # under some tag, and one of them is several gigabytes, so a later run
+        # runs out of room mid-layer and reports a write error rather than
+        # anything resembling "the disk is full of your last build".
+        #
+        # Dropping OUR images is always safe: each one was pushed before it was
+        # dropped, so the registry is the copy that matters. Everything else is
+        # left alone — pruning images wholesale would evict the runner's own job
+        # images and force every job on the host to pull them again.
+        if: needs.plan.outputs.is_github != 'true'
+        run: |
+          set -euo pipefail
+          before=$(docker system df --format '{{.Size}}' 2>/dev/null | head -1 || echo '?')
+          docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E "^${REGISTRY//./\\.}/mewbo-" \
+            | xargs -r docker rmi -f >/dev/null 2>&1 || true
+          docker image prune -f >/dev/null 2>&1 || true
+          docker builder prune -f >/dev/null 2>&1 || true
+          echo "images before: $before"
+          docker system df
 
-      - name: Build and push mewbo-console
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.console
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_console.outputs.tags }}
-          labels: ${{ steps.meta_console.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.extract_version.outputs.version }}
+      - name: Build and push every image
+        env:
+          SUFFIXES: ${{ needs.plan.outputs.tag_suffixes }}
+          IS_GITHUB: ${{ needs.plan.outputs.is_github }}
+          REVISION: ${{ github.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra suffixes <<< "$SUFFIXES"
+          base_ref="$REGISTRY/mewbo-base:${suffixes[0]}"
 
-      - name: Build and push mewbo-api
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.api
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_api.outputs.tags }}
-          labels: ${{ steps.meta_api.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.extract_version.outputs.version }}
-            BASE_IMAGE=ghcr.io/bearlike/mewbo-base:${{ steps.extract_version.outputs.version }}${{ steps.extract_version.outputs.release_type == 'dev' && '-dev' || '' }}
+          publish() {
+            local image="$1" dockerfile="$2"; shift 2
+            local refs=() tag_args=()
+            for suffix in "${suffixes[@]}"; do
+              refs+=("$REGISTRY/$image:$suffix")
+              tag_args+=(-t "$REGISTRY/$image:$suffix")
+            done
+            local common=(
+              "${tag_args[@]}"
+              --label "org.opencontainers.image.title=$image"
+              --label "org.opencontainers.image.version=$VERSION"
+              --label "org.opencontainers.image.revision=$REVISION"
+              --label "org.opencontainers.image.source=$SOURCE"
+              --build-arg "VERSION=$VERSION"
+              "$@"
+              -f "$dockerfile" .
+            )
+            if [ "$IS_GITHUB" = "true" ]; then
+              # One invocation: a multi-architecture image only exists as an
+              # index the builder assembles, so it cannot be built and pushed
+              # as two steps.
+              docker buildx build --platform "$PLATFORMS" --provenance=true --push "${common[@]}"
+            else
+              # Two attempts, because a build here reaches public registries and
+              # CDNs for its base layers and toolchains, and those fetches fail
+              # transiently often enough to have cost two runs already — once on
+              # a browser CDN, once on a registry's token endpoint. A genuinely
+              # broken build fails both attempts identically and still reports.
+              if ! docker build "${common[@]}"; then
+                echo "build of $image failed — retrying once"
+                sleep 15
+                docker build "${common[@]}"
+              fi
+              # Retry the push, bounded. A self-hosted registry can sit at the far
+              # end of a tunnel, where a multi-gigabyte image's blob transfer is
+              # long enough to meet a reset that a short request never sees —
+              # observed as one tag landing and the next failing on a blob HEAD
+              # for the same image. Three attempts, then fail honestly rather
+              # than looping.
+              for ref in "${refs[@]}"; do
+                for attempt in 1 2 3; do
+                  if docker push "$ref"; then break; fi
+                  if [ "$attempt" = 3 ]; then
+                    echo "push of $ref failed three times" >&2
+                    exit 1
+                  fi
+                  echo "push of $ref failed (attempt $attempt) — retrying"
+                  sleep $((attempt * 10))
+                done
+              done
+              # Drop it again unless something later builds FROM it. The
+              # self-hosted daemon's image store is RAM, so images kept after
+              # their push make the job's peak the SUM of everything it built —
+              # which overran the daemon's ceiling, and the OOM killer taking a
+              # process mid-push surfaces at the client as a connection reset
+              # rather than as anything resembling memory pressure. Dropping as
+              # we go keeps the peak at roughly one image.
+              if [ "${KEEP_LOCAL:-0}" != "1" ]; then
+                docker rmi -f "${refs[@]}" >/dev/null 2>&1 || true
+              fi
+            fi
+            echo "published $image as ${refs[*]}"
+          }
+
+          # base FIRST, and kept until the two images built FROM it are done.
+          KEEP_LOCAL=1 publish mewbo-base docker/Dockerfile.base
+          publish mewbo-api     docker/Dockerfile.api --build-arg "BASE_IMAGE=$base_ref"
+          publish mewbo-mcp     docker/Dockerfile.mcp --build-arg "BASE_IMAGE=$base_ref"
+          if [ "$IS_GITHUB" != "true" ]; then
+            docker rmi -f "$REGISTRY/mewbo-base:${suffixes[0]}" >/dev/null 2>&1 || true
+          fi
+          publish mewbo-console docker/Dockerfile.console
+          publish mewbo-ide     docker/Dockerfile.ide
+
+      - name: Return the borrowed build cache
+        # Always, including after a failure: on a RAM-backed image store the
+        # cache this job leaves behind is memory taken from the next one.
+        if: always() && needs.plan.outputs.is_github != 'true'
+        run: docker builder prune -f >/dev/null 2>&1 || true

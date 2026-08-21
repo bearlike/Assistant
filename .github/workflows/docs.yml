@@ -2,7 +2,7 @@
 # from github.server_url:
 #   * github.com -> versioned GitHub Pages (mike)
 #   * otherwise  -> an internal docs host (static upload)
-# Internal host details come from repo variables (DOCS_HOST / DOCS_RESOLVE_IP),
+# Internal host details come from an owner-level variable (DOCS_HOST),
 # which are empty on github.com, so that path is skipped and nothing
 # environment-specific is committed.
 name: Docs
@@ -53,7 +53,6 @@ concurrency:
 
 env:
   DOCS_HOST: ${{ vars.DOCS_HOST }}
-  DOCS_RESOLVE_IP: ${{ vars.DOCS_RESOLVE_IP }}
 
 jobs:
   deploy:
@@ -124,15 +123,41 @@ jobs:
       - name: Publish to internal docs host
         if: github.server_url != 'https://github.com'
         run: |
-          slug="assistant"
-          [ "${{ github.event_name }}" = "pull_request" ] && slug="assistant-pr-${{ github.event.pull_request.number }}"
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')"
+          [ "${{ github.event_name }}" = "pull_request" ] && slug="${slug}-pr-${{ github.event.pull_request.number }}"
           sed -i "s|^site_url:.*|site_url: https://${DOCS_HOST}/${slug}/|" mkdocs.yml
+          # The BUILD is the gate, and it stays fatal for every event: a page
+          # that cannot render, or a link that does not resolve, is the change's
+          # own fault and must fail review.
           uv run python -m mkdocs build -d site
           tar -C site -cf site.tar .
-          curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 180 \
-            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
-            -X PUT -H 'Content-Type: application/x-tar' --data-binary @site.tar \
-            "https://${DOCS_HOST}/${slug}/"
+          # --max-time bounds ONE attempt, and the site is now ~86MB of images
+          # and demo video. A runner that reaches the docs host over a tunnel
+          # moves that at roughly 0.5MB/s, so the upload needs about three
+          # minutes and the old 180s cap cut it mid-stream at the same byte
+          # every run. The server then reports a TRUNCATED ARCHIVE
+          # ("tar: <some asset>: unexpected EOF"), which reads as a corrupt
+          # build rather than a timeout, and --retry re-sends the whole archive
+          # into the identical cap. Keep this comfortably above the real
+          # transfer time; it is a ceiling, not a delay.
+          publish() {
+            curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 900 \
+              -X PUT -H 'Content-Type: application/x-tar' --data-binary @site.tar \
+              "https://${DOCS_HOST}/${slug}/"
+          }
+          # The UPLOAD is a deploy to a host this repo does not own, so the two
+          # events are judged differently. A push is the real deploy and stays
+          # fatal. A pull request only publishes a throwaway preview, and an
+          # unreachable docs host says nothing about the change under review —
+          # failing the check there teaches everyone to ignore a red docs job,
+          # which is how the next REAL breakage goes unnoticed. It is announced
+          # rather than swallowed: the warning names the host, so a reader can
+          # tell "ops is down" from "nothing was published".
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            publish || echo "::warning::docs preview upload to ${DOCS_HOST} failed — the site itself built, so this is the docs host, not this change"
+          else
+            publish
+          fi
 
   cleanup:
     name: Remove internal-host PR preview
@@ -146,6 +171,6 @@ jobs:
     steps:
       - name: Remove PR preview
         run: |
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')-pr-${{ github.event.pull_request.number }}"
           curl -fsS -k --retry 3 --retry-all-errors --retry-delay 4 \
-            --resolve "${DOCS_HOST}:443:${DOCS_RESOLVE_IP}" \
-            -X DELETE "https://${DOCS_HOST}/assistant-pr-${{ github.event.pull_request.number }}/" || true
+            -X DELETE "https://${DOCS_HOST}/${slug}/" || true

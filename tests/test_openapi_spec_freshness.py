@@ -60,6 +60,19 @@ UNCONDITIONAL_NAMESPACES = frozenset(
         ("mewbo_api.structured.routes", "structured_ns"),
         ("mewbo_api.system_instructions.routes", "system_instructions_ns"),
         ("mewbo_api.apps.routes", "apps_ns"),
+        # Speech is guarded on an optional PACKAGE rather than on config, so it
+        # belongs here rather than in GATED_NAMESPACES for two reasons. It is
+        # unconditional wherever the spec is generated — `mewbo-speech[gateway]`
+        # is a dev-group workspace dependency, so every machine that can run this
+        # suite has it — and GATED_NAMESPACES structurally cannot hold it: that
+        # list is cross-checked against a literal `api.add_namespace(...)` call
+        # in backend.py, while this namespace is registered inside
+        # `init_speech_routes`, behind the import probe that keeps a genuine bug
+        # in routes.py from being misreported as a missing extra.
+        # If the package ever leaves the dev group, the `--check` gate below goes
+        # red rather than the reference quietly shrinking — the loud failure is
+        # the point.
+        ("mewbo_api.speech.routes", "speech_ns"),
     }
 )
 

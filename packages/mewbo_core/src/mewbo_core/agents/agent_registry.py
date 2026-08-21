@@ -52,6 +52,15 @@ CC_TOOL_MAP: dict[str, str] = {
     # NOT the plain shell tool: it can neither read a running command's output
     # nor stop one, so aliasing these onto it hands an AgentDef asking for them
     # a blocking shell and no error.
+    #
+    # This map translates NAMES only — the argument shapes differ (BashOutput
+    # speaks `bash_id` where shell_session_tool declares `shell_id`), and the
+    # arguments are deliberately NOT aliased: both source names collapse onto
+    # one tool whose verb travels in `operation`, so an argument-level alias
+    # could turn a KillShell-shaped call (which has no `operation`) into a
+    # silent default READ instead of a kill. The tool's refusal instead names
+    # the offending field and the whole expected field set, so a model speaking
+    # the other vocabulary re-derives the contract from one round trip.
     "BashOutput": "shell_session_tool",
     "KillShell": "shell_session_tool",
     "Edit": "aider_edit_block_tool",

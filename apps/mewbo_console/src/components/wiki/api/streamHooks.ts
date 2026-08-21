@@ -8,6 +8,8 @@
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
+import { SseCursor } from "@/api/sse";
+
 import { streamAnswer, subscribeToIndexing } from "./client";
 import type {
   Block,
@@ -15,6 +17,7 @@ import type {
   IndexingJob,
   IndexingLogEntry,
   IndexingPhase,
+  ProgressLedger,
   QaEvent,
   QaMode,
   WikiError,
@@ -28,6 +31,8 @@ import type {
 export interface IndexingStreamState {
   /** Current job snapshot, folded from incoming events. */
   job: IndexingJob | null;
+  /** True once this subscriber has folded a terminal stream event. */
+  terminal?: boolean;
   /** Rolling list of scan history rows for the UI. */
   history: Array<{ name: string; done: boolean }>;
   /** Current coarse phase from the BE state machine — null until the
@@ -51,6 +56,7 @@ const initialIndexingState: IndexingStreamState = {
   pagesSubmitted: 0,
   logs: [],
   error: null,
+  terminal: false,
 };
 
 /** Exported for direct unit testing (`SessionStreamState`-style testable pure
@@ -109,14 +115,15 @@ export function reduceIndexing(state: IndexingStreamState, event: IndexingEvent)
               currentFile: null,
               landingPageId: event.landingPageId,
             },
+            terminal: true,
           }
         : state;
     case "cancelled":
       return state.job
-        ? { ...state, job: { ...state.job, status: "cancelled", currentFile: null } }
-        : state;
+        ? { ...state, job: { ...state.job, status: "cancelled", currentFile: null }, terminal: true }
+        : { ...state, terminal: true };
     case "error":
-      return { ...state, error: event.error };
+      return { ...state, error: event.error, terminal: true };
     case "phase":
       return { ...state, phase: event.name };
     case "plan_committed":
@@ -127,6 +134,12 @@ export function reduceIndexing(state: IndexingStreamState, event: IndexingEvent)
         pagesSubmitted: event.index + 1,
         totalPages: event.totalPages || state.totalPages,
       };
+    case "progress": {
+      // The event carries derived numbers too, but the shared IndexingProgress
+      // class derives from the ledger so snapshot and stream use one path.
+      const progress: ProgressLedger = { version: event.version, steps: event.steps };
+      return state.job ? { ...state, job: { ...state.job, progress } } : state;
+    }
     case "scope_preview": {
       // Fold the SAME counts the snapshot's `scopePreview` field carries — the
       // event and the field are one write through the BE's shared `emit_*`
@@ -142,7 +155,11 @@ export function reduceIndexing(state: IndexingStreamState, event: IndexingEvent)
         ...state,
         logs: [
           ...state.logs,
-          { level: event.level, text: event.text, ts: Date.now() / 1000 },
+          // `step` is folded rather than dropped: the backend stamps the open
+          // declared step onto every line it writes, and it is what lets the
+          // activity pane group thousands of lines into readable runs. A
+          // producer whose field no consumer reads is dead on arrival.
+          { level: event.level, text: event.text, step: event.step ?? null, ts: Date.now() / 1000 },
         ],
       };
   }
@@ -165,20 +182,44 @@ export function useIndexingStream(jobId: string | null, resubscribeKey = 0) {
   useEffect(() => {
     if (!jobId) return;
     const ctrl = new AbortController();
+    const cursor = new SseCursor();
     controllerRef.current = ctrl;
     let cancelled = false;
+    let terminal = false;
+    const waitForRetry = (delay: number) => new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(resolve, delay);
+      ctrl.signal.addEventListener("abort", () => {
+        window.clearTimeout(timeout);
+        resolve();
+      }, { once: true });
+    });
     (async () => {
-      try {
-        for await (const event of subscribeToIndexing(jobId, { signal: ctrl.signal })) {
-          if (cancelled) break;
-          dispatch(event);
-        }
-      } catch (err) {
-        if (!ctrl.signal.aborted) {
-          dispatch({
-            type: "error",
-            error: toWikiError(err),
-          });
+      let delay = 250;
+      while (!cancelled && !ctrl.signal.aborted && !terminal) {
+        try {
+          for await (const event of subscribeToIndexing(jobId, { signal: ctrl.signal, cursor })) {
+            if (cancelled) break;
+            dispatch(event);
+            if (event.type === "complete" || event.type === "cancelled" || event.type === "error") {
+              terminal = true;
+              break;
+            }
+          }
+          if (!terminal && !cancelled && !ctrl.signal.aborted) {
+            await waitForRetry(delay);
+            delay = Math.min(delay * 2, 2_000);
+          }
+        } catch (err) {
+          if (ctrl.signal.aborted || cancelled) break;
+          // A closed transport is recoverable while the job itself is open.
+          // Keep the stream error-free and retry from the parser's last id.
+          await waitForRetry(delay);
+          delay = Math.min(delay * 2, 2_000);
+          if (!ctrl.signal.aborted && !cancelled && delay >= 2_000) {
+            // The retry remains live; only a terminal event makes this visible
+            // as a job error, because the generator self-closes while work runs.
+            void err;
+          }
         }
       }
     })();

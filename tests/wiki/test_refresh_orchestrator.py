@@ -159,7 +159,7 @@ def test_from_store_threads_its_embedder_into_the_graph_delta(store, tmp_path) -
         skipped=[],
     )
     orch = RefreshOrchestrator.from_store(
-        store,
+        store, slug="acme/repo",
         parser=FakeParser({"auth.py": reparse}),
         embedder=FakeEmbedder(),
         clock=lambda: "2026-06-05T12:00:00Z",
@@ -198,12 +198,14 @@ def test_from_store_resolves_an_embedder_when_the_caller_passes_none(
     whole feature inert while the suite stayed green.
     """
     fake = FakeEmbedder()
-    monkeypatch.setattr("mewbo_graph.wiki.embedder.make_embedder_or_none", lambda: fake)
+    monkeypatch.setattr(
+        "mewbo_graph.wiki.embedder.make_embedder_or_none", lambda model=None: fake
+    )
     _seed(store)
     root = _write(tmp_path, "auth.py", "def verify(): ...  # changed")
 
     orch = RefreshOrchestrator.from_store(
-        store,
+        store, slug="acme/repo",
         parser=FakeParser({"auth.py": _reparse_one()}),
         clock=lambda: "2026-06-05T12:00:00Z",
     )
@@ -233,7 +235,7 @@ def test_from_store_honours_the_operator_switch_and_resolves_nothing_when_off(
     root = _write(tmp_path, "auth.py", "def verify(): ...  # changed")
 
     orch = RefreshOrchestrator.from_store(
-        store,
+        store, slug="acme/repo",
         parser=FakeParser({"auth.py": _reparse_one()}),
         clock=lambda: "2026-06-05T12:00:00Z",
     )

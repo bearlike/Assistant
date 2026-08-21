@@ -596,6 +596,11 @@
         "schedule": {
           "description": "The declared schedule union (time.cron/time.at), or null for on-demand.",
           "type": "object"
+        },
+        "tier": {
+          "description": "'materialize' writes durable data; 'render' produces a declared response.",
+          "example": "materialize",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2064,6 +2069,16 @@
           "example": "Multi-agent code review.",
           "type": "string"
         },
+        "display_name": {
+          "description": "Human-readable label. Falls back to `name` for a plugin whose manifest sets no `display_name`.",
+          "example": "Code Review",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether the configured plugin selection makes this plugin available.",
+          "example": true,
+          "type": "boolean"
+        },
         "has_hooks": {
           "example": false,
           "type": "boolean"
@@ -3183,7 +3198,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate), `skill`, and `fallback_models`.",
           "type": "object"
         },
         "mode": {
@@ -3483,7 +3498,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate), `skill`, and `fallback_models`.",
           "type": "object"
         },
         "mode": {
@@ -4038,6 +4053,303 @@
       ],
       "type": "object"
     },
+    "SpeechCapabilities": {
+      "properties": {
+        "limits": {
+          "description": "Bounds shared by both directions.",
+          "example": {
+            "max_concurrent_calls": 4
+          },
+          "type": "object"
+        },
+        "synthesis": {
+          "$ref": "#/definitions/SpeechSynthesisCapability"
+        },
+        "transcription": {
+          "$ref": "#/definitions/SpeechTranscriptionCapability"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorBody400": {
+      "properties": {
+        "code": {
+          "example": 400,
+          "type": "integer"
+        },
+        "reason": {
+          "example": "query is required",
+          "type": "string"
+        },
+        "retryable": {
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorBody413": {
+      "properties": {
+        "code": {
+          "example": 413,
+          "type": "integer"
+        },
+        "reason": {
+          "example": "Audio upload exceeds the 10485760 byte limit (received 12000000 bytes).",
+          "type": "string"
+        },
+        "retryable": {
+          "example": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorBody502": {
+      "properties": {
+        "code": {
+          "example": 502,
+          "type": "integer"
+        },
+        "reason": {
+          "example": "pipeline execution failed: connection refused",
+          "type": "string"
+        },
+        "retryable": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorBody503": {
+      "properties": {
+        "code": {
+          "example": 503,
+          "type": "integer"
+        },
+        "reason": {
+          "example": "structured responses are not configured on this server",
+          "type": "string"
+        },
+        "retryable": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorEnvelope400": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SpeechErrorBody400"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorEnvelope413": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SpeechErrorBody413"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorEnvelope502": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SpeechErrorBody502"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechErrorEnvelope503": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/SpeechErrorBody503"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechMessageError401": {
+      "properties": {
+        "message": {
+          "description": "Human-readable failure reason.",
+          "example": "API token is not provided.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechModelInfo": {
+      "properties": {
+        "display_name": {
+          "description": "Human label; defaults to the id.",
+          "example": "supertonic-3",
+          "type": "string"
+        },
+        "id": {
+          "description": "Bare gateway model id.",
+          "example": "supertonic-3",
+          "type": "string"
+        },
+        "mode": {
+          "description": "`audio_speech` or `audio_transcription`, as the gateway reports it.",
+          "example": "audio_speech",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechSynthesisCapability": {
+      "properties": {
+        "available": {
+          "description": "Whether this deployment is configured to synthesize speech.",
+          "example": true,
+          "type": "boolean"
+        },
+        "defaults": {
+          "description": "What an omitted field resolves to, from server config.",
+          "example": {
+            "model": "supertonic-3",
+            "response_format": "wav",
+            "voice": "nova"
+          },
+          "type": "object"
+        },
+        "formats": {
+          "description": "Containers the gateway actually produces.",
+          "example": [
+            "wav",
+            "flac"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "description": "Bounds a client must respect to avoid a 400.",
+          "example": {
+            "max_text_chars": 2000
+          },
+          "type": "object"
+        },
+        "models": {
+          "description": "Synthesis models the gateway advertises; `[]` if it could not be reached.",
+          "items": {
+            "$ref": "#/definitions/SpeechModelInfo"
+          },
+          "type": "array"
+        },
+        "verbalizes_markdown": {
+          "description": "Whether this server reads `text` as markdown before speaking it. When true a client can send an assistant's reply unmodified and does not need a markdown stripper of its own.",
+          "example": true,
+          "type": "boolean"
+        },
+        "voices": {
+          "description": "Common voices; a self-hosted gateway may accept others.",
+          "example": [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "fable",
+            "nova",
+            "onyx",
+            "sage",
+            "shimmer",
+            "verse"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechSynthesizeRequest": {
+      "properties": {
+        "model": {
+          "description": "Defaults to `speech.tts.model`.",
+          "example": "supertonic-3",
+          "type": "string"
+        },
+        "response_format": {
+          "description": "`wav` or `flac`; defaults to `speech.tts.response_format`.",
+          "example": "wav",
+          "type": "string"
+        },
+        "text": {
+          "description": "Text to speak; up to 2000 characters.",
+          "example": "The build finished in four minutes.",
+          "type": "string"
+        },
+        "verbalize": {
+          "default": true,
+          "description": "Read `text` as markdown and speak what it means: headings and list items become their own spoken units, a code block is announced once instead of read out, a link becomes its text, and a table's header is announced once before its rows. Send `false` to speak the string exactly as written.",
+          "example": true,
+          "type": "boolean"
+        },
+        "voice": {
+          "description": "Defaults to `speech.tts.voice`.",
+          "example": "nova",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SpeechTranscribeResponse": {
+      "properties": {
+        "model": {
+          "description": "The model that produced it.",
+          "example": "nova-3",
+          "type": "string"
+        },
+        "text": {
+          "description": "The transcript.",
+          "example": "The build finished in four minutes.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SpeechTranscriptionCapability": {
+      "properties": {
+        "available": {
+          "description": "Whether this deployment is configured to transcribe audio.",
+          "example": true,
+          "type": "boolean"
+        },
+        "defaults": {
+          "description": "What an omitted model resolves to.",
+          "example": {
+            "model": "nova-3"
+          },
+          "type": "object"
+        },
+        "limits": {
+          "description": "Bounds a client must respect to avoid a 413.",
+          "example": {
+            "max_audio_bytes": 10485760
+          },
+          "type": "object"
+        },
+        "models": {
+          "description": "Transcription models the gateway advertises.",
+          "items": {
+            "$ref": "#/definitions/SpeechModelInfo"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "StructuredErrorBody404": {
       "properties": {
         "code": {
@@ -4336,7 +4648,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, and `mcp_tools` (tool allowlist).",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), and `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate).",
           "type": "object"
         },
         "fork_from": {
@@ -5423,7 +5735,7 @@
   "info": {
     "description": "Everything the Mewbo web console can do is available over plain HTTP. Create sessions and send queries. Stream events live. Run multi-source searches. Get schema-constrained answers for pipelines. Every endpoint below is generated from the running server, so this reference is always current with the code.\n\n## Base URL\n\nA self-hosted stack serves the API on port `5125` by default:\n\n```\nhttp://localhost:5125\n```\n\nReplace the host with wherever your stack runs. The request samples on this page use this base URL.\n\n## Authentication\n\nEvery endpoint expects an API key in the `X-API-KEY` header:\n\n```bash\ncurl -H \"X-API-KEY: $MEWBO_API_KEY\" http://localhost:5125/api/models\n```\n\nTwo kinds of keys work. The master token from `configs/app.json` (`api.master_token`) always works, and it is the only key allowed to mint others via `POST /api/keys`. Minted keys work everywhere else and can be revoked individually, so give each integration its own.\n\nBrowsers cannot set headers on `EventSource` connections. Server-sent event endpoints therefore also accept the key as a query parameter: `?api_key=<key>`.\n\n## Make your first request\n\nThree calls take you from nothing to a live agent run:\n\n```bash\n# 1. Create a session\ncurl -X POST http://localhost:5125/api/sessions \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" -d '{}'\n# -> {\"session_id\": \"9e2d47c1...\"}\n\n# 2. Send it a query\ncurl -X POST http://localhost:5125/api/sessions/9e2d47c1.../query \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" \\\n  -d '{\"query\": \"Summarize the open pull requests.\"}'\n\n# 3. Watch the run live\ncurl -N \"http://localhost:5125/api/sessions/9e2d47c1.../stream?api_key=$MEWBO_API_KEY\"\n```\n\nThe stream closes when the run finishes. The full transcript stays available through `GET /api/sessions/{session_id}/events`.\n\nThe session lifecycle is four steps, all keyed by the same `session_id`:\n\n1. **Create** \u2014 `POST /api/sessions` returns a `session_id`.\n2. **Query** \u2014 `POST /api/sessions/{session_id}/query` starts a run.\n3. **Watch** \u2014 `GET /api/sessions/{session_id}/stream` pushes events live    over SSE until the run reaches a terminal state.\n4. **Replay** \u2014 `GET /api/sessions/{session_id}/events` returns the full    transcript at any time afterwards.\n\n## Long-running work\n\nSearches, structured runs, and indexing jobs can outlive a single request. These endpoints return a run or job id right away, then settle into one terminal status \u2014 `completed`, `failed`, or `cancelled`. The pattern is the same for all of them:\n\n1. **Start** \u2014 call the create endpoint; it returns a run or job id    immediately. Structured run handles have the form `<session_id>:r<seq>`,    so the part before the first colon is always a session you can stream.\n2. **Follow** \u2014 either poll the matching `GET .../{run_id}` endpoint, or    subscribe to its `GET .../{run_id}/events` SSE stream.\n3. **Read** \u2014 once the status is terminal, the poll stops and the stream    closes; the run carries its result.\n\nFor Agentic Search specifically, pick a workspace with `GET /api/agentic_search/workspaces`, start a run with `POST /api/agentic_search/runs`, follow it with the steps above, and read the cited answer with its sources off the terminal run.\n\n## Streaming\n\nEndpoints ending in `/stream` or `/events` speak [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). Connect once and keep reading. Events are pushed the moment they happen; there is no polling interval to tune.\n\n## Errors\n\nFailures return a JSON body, never an HTML page. Expect `{\"message\": \"...\"}` on auth and validation errors, and `{\"error\": {\"code\", \"reason\", \"retryable\"}}` from the structured and search surfaces. Unknown routes return the same JSON envelope with a 404.\n\n## Related guides\n\nThe [Web Console + API](../clients-web-api/) guide covers concepts like capability negotiation and sharing. [Building a Client](../developer-guide/) walks through a minimal integration. The Agentic Wiki has its own HTTP surface under `/v1/wiki/*`, documented in the [Agentic Wiki](../features-wiki/) guide.\n",
     "title": "Mewbo API",
-    "version": "0.0.13"
+    "version": "0.0.14"
   },
   "paths": {
     "/api/agentic_search/runs": {
@@ -6571,6 +6883,7 @@
     },
     "/api/apps/{app_id}/pipelines/{name}": {
       "get": {
+        "description": "Cost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
         "operationId": "get_app_pipeline_invoke",
         "responses": {
           "200": {
@@ -6607,6 +6920,12 @@
             "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
             "schema": {
               "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
             }
           },
           "502": {
@@ -6647,7 +6966,7 @@
         }
       ],
       "post": {
-        "description": "Requires a WRITE-scoped token.",
+        "description": "Requires a WRITE-scoped token.\n\nCost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
         "operationId": "post_app_pipeline_invoke",
         "parameters": [
           {
@@ -6694,6 +7013,12 @@
             "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
             "schema": {
               "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
             }
           },
           "502": {
@@ -6803,6 +7128,94 @@
           "Apps"
         ]
       }
+    },
+    "/api/apps/{app_id}/pipelines/{name}/result": {
+      "get": {
+        "description": "Cost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
+        "operationId": "get_app_pipeline_result",
+        "produces": [
+          "application/json",
+          "text/csv",
+          "application/xml",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "The pipeline output rendered in its declared media type."
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "The pipeline is agentic or declares no result renderer.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
+            }
+          },
+          "502": {
+            "description": "The pipeline or its declared renderer failed.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError502"
+            }
+          },
+          "503": {
+            "description": "No pipeline runner is configured on this deployment.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Render a pipeline result in its declared media type",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "name",
+          "required": true,
+          "type": "string"
+        }
+      ]
     },
     "/api/apps/{app_id}/rearm": {
       "parameters": [
@@ -7763,11 +8176,11 @@
     },
     "/api/plugins": {
       "get": {
-        "description": "List each installed plugin with its version, source marketplace, scope, and component counts (skills, agents, commands, MCP servers, hooks). Browse installable plugins via GET /api/plugins/marketplace.\nReturns each installed plugin with its version, source marketplace,\nscope, and component counts: skills, agents, commands, MCP servers,\nand hooks.",
+        "description": "List each available built-in or installed plugin with its display name, version, source marketplace, scope, enabled state, and component counts (skills, agents, commands, MCP servers, hooks). Browse installable plugins via GET /api/plugins/marketplace.\nO(collection) in the configured plugin collection. Returns the same\nbuilt-in and enabled installed plugin components the session loader binds,\nwithout reading the components of each listed plugin again.",
         "operationId": "get_plugin_list",
         "responses": {
           "200": {
-            "description": "Installed plugin list.",
+            "description": "Available plugin list.",
             "schema": {
               "$ref": "#/definitions/PluginsListResponse"
             }
@@ -7784,7 +8197,7 @@
             "apikey": []
           }
         ],
-        "summary": "List installed plugins",
+        "summary": "List available plugins",
         "tags": [
           "Plugins"
         ]
@@ -8053,7 +8466,7 @@
         ]
       },
       "post": {
-        "description": "Create an empty session and return its `session_id`. Optionally bind a project, apply a lookup `session_tag`, and persist initial context (e.g. the model). Clients may declare capabilities via the `X-Mewbo-Capabilities` header (comma separated). Run queries with POST /api/sessions/{session_id}/query. An explicit `cwd` requires `api.allow_external_cwd`.\nCreates an empty session and returns its `session_id`. Optionally\nbinds a project, applies a lookup tag, and persists initial context\nsuch as the model to use. Clients may declare capabilities via the\n`X-Mewbo-Capabilities` header (comma separated). Run queries against\nthe session with POST /api/sessions/{session_id}/query.",
+        "description": "Create an empty session and return its `session_id`. Optionally bind a project, apply a lookup `session_tag`, and persist initial context (e.g. the model). Clients may declare capabilities via the `X-Mewbo-Capabilities` header (comma separated). Run queries with POST /api/sessions/{session_id}/query. `api.allow_external_cwd` governs only a path the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.\nCreates an empty session and returns its `session_id`. Optionally\nbinds a project, applies a lookup tag, and persists initial context\nsuch as the model to use. Clients may declare capabilities via the\n`X-Mewbo-Capabilities` header (comma separated). Run queries against\nthe session with POST /api/sessions/{session_id}/query.",
         "operationId": "post_sessions",
         "parameters": [
           {
@@ -8085,7 +8498,7 @@
             }
           },
           "403": {
-            "description": "An explicit `cwd` was supplied but `api.allow_external_cwd` is disabled.",
+            "description": "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.",
             "schema": {
               "$ref": "#/definitions/ApiErrorEnvelope403"
             }
@@ -9336,7 +9749,7 @@
             }
           },
           "403": {
-            "description": "An explicit `cwd` was supplied but `api.allow_external_cwd` is off.",
+            "description": "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.",
             "schema": {
               "$ref": "#/definitions/ApiErrorEnvelope403"
             }
@@ -10017,6 +10430,170 @@
         "summary": "List skills",
         "tags": [
           "Tools & Skills"
+        ]
+      }
+    },
+    "/api/speech/capabilities": {
+      "get": {
+        "description": "Returns whether synthesis and transcription are available, the models\nthe gateway advertises for each, the accepted voices and containers, the\nserver-side defaults an omitted field resolves to, and every limit a\nclient must respect. Poll it to decide whether to render a speaker or a\nmicrophone.\n\n`available` is derived from configuration alone \u2014 no health call is made,\nso a direction can read available while its upstream credential is dead.\nThat failure surfaces as a 502 on the call itself.\n\nCost class: `O(1)`. No network on the warm path; the first call per\nprocess adds one 3s-bounded model listing, and a failed listing is\nremembered for 60s. This endpoint does not 500 and does not spend a\nconcurrency slot.",
+        "operationId": "get_speech_capabilities",
+        "responses": {
+          "200": {
+            "description": "Speech capabilities, defaults and limits.",
+            "schema": {
+              "$ref": "#/definitions/SpeechCapabilities"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SpeechMessageError401"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Report speech capabilities",
+        "tags": [
+          "Speech"
+        ]
+      }
+    },
+    "/api/speech/synthesize": {
+      "post": {
+        "description": "Accepts `{text, model?, voice?, response_format?, verbalize?}` and\nreturns the RAW audio bytes \u2014 not base64, not an envelope. `Content-Type`\nis derived from the payload's own magic bytes rather than from what the\ngateway declared, because this gateway labels every successful synthesis\n`audio/mpeg` and has never once returned MPEG.\n\n**`text` is read as markdown by default.** Send an assistant's reply\nunmodified: headings and list items become their own spoken units, a\ncode block is announced once rather than read out symbol by symbol, a\nlink becomes its text, and a table's header is announced once before its\nrows so no row is ever dropped. `verbalize: false` speaks the string\nexactly as written.\n\nOmitted fields resolve to the server-configured defaults reported by\n`/api/speech/capabilities`. A voice or format outside the accepted sets\nis refused here, before any gateway call, because the gateway answers\nevery parameter mistake with an identical error that names no field.\n\nCost class: `O(text length)` \u2014 about half a second for a sentence and\nfour seconds for a paragraph, bounded by a 60s deadline. Concurrency: at\nmost 4 speech calls may be in flight across this route and `/transcribe`\ncombined; the 5th caller gets `503 speech_capacity_exhausted` with\n`Retry-After`, rather than queueing behind the request thread pool.",
+        "operationId": "post_speech_synthesize",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "payload",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/SpeechSynthesizeRequest"
+            }
+          }
+        ],
+        "produces": [
+          "audio/wav",
+          "audio/flac"
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw audio bytes; `Content-Type` names the real container."
+          },
+          "400": {
+            "description": "Unknown voice or format, blank or over-long text, or an unknown body key.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SpeechMessageError401"
+            }
+          },
+          "502": {
+            "description": "The gateway refused the call, or our deadline elapsed.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope502"
+            }
+          },
+          "503": {
+            "description": "Speech is unconfigured, or every in-flight slot is taken.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Synthesize speech",
+        "tags": [
+          "Speech"
+        ]
+      }
+    },
+    "/api/speech/transcribe": {
+      "post": {
+        "consumes": [
+          "multipart/form-data"
+        ],
+        "description": "Accepts `multipart/form-data` with the recording under the `file` part,\nplus optional `model` and `language` text parts. The FILENAME's extension\nis what the gateway is given as a format hint, falling back to the part's\nmimetype and then to `audio.wav`.\n\nCost class: `O(audio length)`, bounded by a 30s deadline and by a 10 MiB\nupload cap checked against `Content-Length` before anything is buffered.\nConcurrency: shares the 4-in-flight bound with `/synthesize`; the 5th\ncaller gets `503 speech_capacity_exhausted` with `Retry-After`.",
+        "operationId": "post_speech_transcribe",
+        "parameters": [
+          {
+            "description": "The recording, as a `multipart/form-data` file part.",
+            "in": "formData",
+            "name": "file",
+            "required": true,
+            "type": "file"
+          },
+          {
+            "description": "Optional model id; defaults to `speech.stt.model`.",
+            "in": "formData",
+            "name": "model",
+            "type": "string"
+          },
+          {
+            "description": "Optional BCP-47 language hint.",
+            "in": "formData",
+            "name": "language",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transcript.",
+            "schema": {
+              "$ref": "#/definitions/SpeechTranscribeResponse"
+            }
+          },
+          "400": {
+            "description": "No `file` part, or an unusable model id.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/SpeechMessageError401"
+            }
+          },
+          "413": {
+            "description": "The upload exceeds `transcription.limits.max_audio_bytes`.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope413"
+            }
+          },
+          "502": {
+            "description": "The gateway refused the call, or our deadline elapsed.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope502"
+            }
+          },
+          "503": {
+            "description": "Speech is unconfigured, or every in-flight slot is taken.",
+            "schema": {
+              "$ref": "#/definitions/SpeechErrorEnvelope503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Transcribe audio",
+        "tags": [
+          "Speech"
         ]
       }
     },
@@ -10994,6 +11571,10 @@
     },
     {
       "description": "",
+      "name": "Speech"
+    },
+    {
+      "description": "",
       "name": "System-Instructions"
     }
   ],
@@ -11048,6 +11629,7 @@
         "Agentic Search",
         "Apps",
         "Files",
+        "Speech",
         "System-Instructions"
       ]
     }

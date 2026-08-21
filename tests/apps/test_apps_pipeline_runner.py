@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from mewbo_api.apps.models import (
+    PIPELINE_ALLOWED_EXEC,
     AppFrontend,
     AppPolicies,
     AppSpec,
@@ -331,12 +332,22 @@ class TestModels:
         )
         assert p.allow_exec == ["git", "tea", "gh"]
 
-    def test_allow_exec_rejects_unvetted_binary(self):
-        with pytest.raises(ValidationError, match="unvetted binaries"):
-            PipelineSpec(
-                name="p", wake_prompt="w", on_demand=True, mode="code",
-                entrypoint="pipelines/p.py", allow_exec=["curl"],
+    def test_allow_exec_parses_then_refuses_a_deployment_disallowed_binary(self):
+        # Append-only snapshots keep parsing after an operator narrows the allowed
+        # binaries; the declaration is refused at both execution and submit seams.
+        pipeline = PipelineSpec(
+            name="p", wake_prompt="w", on_demand=True, mode="code",
+            entrypoint="pipelines/p.py", allow_exec=["curl"],
+        )
+        assert pipeline.allow_exec == ["curl"]
+        with pytest.raises(ValueError, match="deployment does not permit 'curl'"):
+            pipeline.check_exec_allowed(
+                ["curl", "--version"], allowed_binaries=PIPELINE_ALLOWED_EXEC
             )
+
+        app = _app(pipeline=pipeline)
+        with pytest.raises(ValueError, match="pipeline 'p'.*not permitted"):
+            app.ensure_exec_binaries_allowed(PIPELINE_ALLOWED_EXEC)
 
     def test_allow_egress_accepts_bare_hostname_and_lowercases(self):
         p = PipelineSpec(
@@ -408,6 +419,16 @@ class TestExecuteHappyPath:
         assert result.evaluated_at == NOW
         assert result.output == {"written": 2}
         assert result.docs_written == {"notes": 2}
+        assert result.evidence.model_dump(mode="json") == {
+            "globs": [
+                {"pattern": "*.md", "match_count": 2, "paths": ["a.md", "b.md"]}
+            ],
+            "read_paths": ["a.md", "b.md"],
+            "truncated": False,
+            # The directory the globs actually resolved under — reported so a
+            # reader can tell a missing file from one searched for elsewhere.
+            "workspace": str(workspace),
+        }
         rows = {d.key: d.doc for d in data_store.query("app-x", "notes")}
         assert rows == {"a.md": {"path": "a.md", "len": 5}, "b.md": {"path": "b.md", "len": 6}}
 
@@ -417,6 +438,78 @@ class TestExecuteHappyPath:
         result = runner.execute(_app(pipeline=pipeline), pipeline, {}, now=NOW)
         assert result.output == {"written": 0}
         assert result.docs_written == {}
+        assert result.evidence.model_dump(mode="json") == {
+            "globs": [{"pattern": "*.md", "match_count": 0, "paths": []}],
+            "read_paths": [],
+            "truncated": False,
+            # No workspace resolved at all, which is a DIFFERENT fact from an
+            # empty one and is why the field is nullable rather than "".
+            "workspace": None,
+        }
+
+    def test_evidence_caps_paths_and_signals_truncation(self):
+        from mewbo_api.apps.models import PipelineEvidence
+
+        many = {
+            f"pattern-{index}": [f"path-{index}-{entry}" for entry in range(20)]
+            for index in range(30)
+        }
+        evidence = PipelineEvidence.from_observations(
+            glob_results=many,
+            read_paths=[f"read-{index}" for index in range(40)],
+        )
+
+        assert len(evidence.globs) == 12
+        assert all(len(glob.paths) == 8 for glob in evidence.globs)
+        assert len(evidence.read_paths) == 24
+        assert evidence.truncated is True
+        assert len(str(evidence.model_dump()).encode("utf-8")) <= 4_000
+
+    def test_the_cap_holds_on_the_validate_door_too(self):
+        """`model_validate` bounds as hard as `from_observations` does.
+
+        `from_observations` is not the only way in: the runner Protocol hands
+        `run_pipeline` a plain MAPPING, which is re-validated into this model
+        before an agent reads it. With the cap living only in the classmethod,
+        that door accepted an unbounded mapping and reported `truncated: False` —
+        the one field a reader trusts to detect a cut denying that one happened,
+        which is worse than no evidence at all.
+        """
+        from mewbo_api.apps.models import PipelineEvidence
+
+        evidence = PipelineEvidence.model_validate({
+            "globs": [
+                {
+                    "pattern": f"dir{index}/**/*.json",
+                    "match_count": 500,
+                    "paths": [f"dir{index}/deep/file{entry}.json" for entry in range(500)],
+                }
+                for index in range(500)
+            ],
+            "read_paths": [f"read/{index}.txt" for index in range(5_000)],
+            "truncated": False,
+        })
+
+        assert len(evidence.globs) == 12
+        assert all(len(glob.paths) == 8 for glob in evidence.globs)
+        assert len(evidence.read_paths) == 24
+        assert evidence.truncated is True
+        # The TRUE total survives the cut — that is what distinguishes "nothing
+        # matched" from "more matched than were shown".
+        assert evidence.globs[0].match_count == 500
+
+    def test_evidence_within_the_caps_is_not_relabelled_truncated(self):
+        """The control: a small mapping passes through untouched and stays honest."""
+        from mewbo_api.apps.models import PipelineEvidence
+
+        evidence = PipelineEvidence.model_validate({
+            "globs": [{"pattern": "data/*.json", "match_count": 1, "paths": ["data/a.json"]}],
+            "read_paths": ["data/a.json"],
+            "truncated": False,
+        })
+
+        assert evidence.truncated is False
+        assert evidence.globs[0].paths == ("data/a.json",)
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +682,38 @@ class TestCtxExec:
 
         assert exc.value.code == "dry_run"
 
+    def test_rehearsal_allows_exec_without_durable_writes(
+        self, tmp_path, git_workspace, monkeypatch
+    ):
+        captured: list[list[str]] = []
+
+        class _FakePopen:
+            def __init__(self, argv, **kwargs):
+                captured.append(list(argv))
+
+            def communicate(self, timeout=None):
+                return "true\n", ""
+
+            returncode = 0
+
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        runner, _, data_store = _runner(tmp_path, workspace=git_workspace)
+        pipeline = _code_pipeline(allow_exec=["git"])
+        source = (
+            "def run(params, ctx):\n"
+            "    ctx.collection('notes').upsert('preview', {'v': 1})\n"
+            "    return ctx.exec(['git', 'rev-parse', '--is-inside-work-tree'])\n"
+        )
+        app = _app(pipeline=pipeline, source=source)
+
+        result = runner.execute(app, pipeline, {}, now=NOW, rehearse=True)
+
+        assert captured == [
+            ["git", "-c", "credential.helper=", "rev-parse", "--is-inside-work-tree"]
+        ]
+        assert result.docs_written == {"notes": 1}
+        assert data_store.query("app-x", "notes") == []
+
     def test_per_call_timeout_is_clamped_by_pipeline_ceiling(
         self, tmp_path, git_workspace, monkeypatch
     ):
@@ -704,7 +829,7 @@ class TestCtxExec:
         pipeline = _code_pipeline(allow_exec=["git"], allow_egress=["git.example.com"])
 
         with pytest.raises(ValueError):
-            pipeline.check_exec_allowed(argv)
+            pipeline.check_exec_allowed(argv, allowed_binaries=PIPELINE_ALLOWED_EXEC)
 
     @pytest.mark.parametrize(
         "argv",
@@ -720,7 +845,7 @@ class TestCtxExec:
         # The gate must not cost the flows this capability exists for.
         pipeline = _code_pipeline(allow_exec=["git"])
 
-        pipeline.check_exec_allowed(argv)
+        pipeline.check_exec_allowed(argv, allowed_binaries=PIPELINE_ALLOWED_EXEC)
 
     def test_config_injected_remote_url_is_refused(self):
         # urlparse() finds NO scheme in `remote.z.url=https://…` (the candidate
@@ -730,7 +855,8 @@ class TestCtxExec:
 
         with pytest.raises(ValueError, match="allow_egress|not permitted"):
             pipeline.check_exec_allowed(
-                ["git", "-c", "remote.z.url=https://evil.example.com/r.git", "fetch", "z"]
+                ["git", "-c", "remote.z.url=https://evil.example.com/r.git", "fetch", "z"],
+                allowed_binaries=PIPELINE_ALLOWED_EXEC,
             )
 
     def test_one_token_carrying_two_hosts_yields_both(self):
@@ -871,6 +997,25 @@ class TestParamsValidation:
         with pytest.raises(PipelineExecutionError) as exc:
             runner.execute(app, pipeline, {"n": 1}, now=NOW)
         assert exc.value.code == "params"
+
+
+class TestDeclaredResults:
+    def test_invalid_result_raises_and_never_populates_the_cache(self, tmp_path):
+        pipeline = PipelineSpec.model_validate(
+            {
+                **_code_pipeline(cache_ttl_seconds=60).model_dump(),
+                "result": {"media": "text"},
+                "tier": "render",
+            }
+        )
+        app = _app(pipeline=pipeline, source=_RETURN_ONE)
+        runner, _, _ = _runner(tmp_path)
+
+        with pytest.raises(PipelineExecutionError) as exc:
+            runner.execute(app, pipeline, {}, now=NOW)
+
+        assert exc.value.code == "result"
+        assert runner._cache == {}
 
 
 class TestCache:

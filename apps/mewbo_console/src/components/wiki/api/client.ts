@@ -11,7 +11,7 @@
  */
 
 import { readRuntimeConfig } from "../../../runtimeConfig";
-import { sseStream as genericSseStream } from "../../../api/sse";
+import { SseCursor, sseStream as genericSseStream } from "../../../api/sse";
 import { apiFetch } from "../../../api/httpBase";
 
 import type {
@@ -103,7 +103,12 @@ async function http<T>(
  */
 function sseStream<T>(
   path: string,
-  opts: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal } = {},
+  opts: {
+    method?: "GET" | "POST";
+    body?: unknown;
+    signal?: AbortSignal;
+    cursor?: SseCursor;
+  } = {},
 ): AsyncGenerator<T> {
   return genericSseStream<T>(path, {
     ...opts,
@@ -262,6 +267,8 @@ export interface WikiDefaults {
   model?: string;
   /** Default model for Q&A. Falls back to ``model`` BE-side if unset. */
   qaModel?: string;
+  /** Deployment fallback when a project does not select an embedding model. */
+  embeddingModel?: string;
   depth?: "comprehensive" | "concise";
   language?: string;
 }
@@ -354,11 +361,11 @@ export async function resumeIndexingJob(jobId: string): Promise<ResumeIndexingRe
 
 export async function* subscribeToIndexing(
   jobId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; cursor?: SseCursor } = {},
 ): AsyncGenerator<IndexingEvent, void, unknown> {
   yield* sseStream<IndexingEvent>(
     `/v1/wiki/index/${encodeURIComponent(jobId)}/stream`,
-    { signal: options.signal },
+    { signal: options.signal, cursor: options.cursor },
   );
 }
 

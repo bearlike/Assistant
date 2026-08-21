@@ -16,7 +16,7 @@ import com.mewbo.aura.ui.theme.AuraType
  * so the two evolve independently. Promoting an id here-unknown is safe by construction: it lands
  * on [GenericToolCard], never a crash and never a blank row.
  *
- * A `when` with an `else ->`, mirroring `ui/chat/ChatMessageRows.kt`'s `ActivityToolGlyphs`, rather
+ * A `when` with an `else ->`, mirroring `ui/chat/ToolCallGroupCard.kt`'s `ActivityToolGlyphs`, rather
  * than a `Map<String, @Composable>`: the map buys nothing (no runtime registration exists, or is
  * wanted) and costs the compiler's ability to see every branch.
  */

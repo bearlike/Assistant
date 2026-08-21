@@ -2,9 +2,10 @@
 
 ## Apps an agent builds and runs
 
-<div style="display: flex; justify-content: center;">
-  <img src="../assets/img/mewbo-apps-01-detail.png" alt="A live Mewbo App called LLM Model Compare, version 1, marked Live. A left filter rail covers creator or provider, release year, capabilities, minimum intelligence index, minimum output tokens per second, and maximum blended cost. The center shows stat tiles and a bar chart ranked by Coding, followed by a ranked list. A right rail shows Health with last refreshed and next refresh time and the maintainer, Recent runs, Pipelines refreshing daily, the Cron schedule, and Versions." style="width: 100%; max-width: 960px; height: auto;" />
-</div>
+<video controls preload="metadata" width="1920" height="1080">
+  <source src="../assets/videos/mewbo-apps-demo.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
 
 Describe an app in one sentence. A builder agent reads your real files, derives the data model, writes a Streamlit frontend and the pipelines that feed it, then puts it online. From then on the platform keeps it fresh, and the steady state costs you nothing.
 

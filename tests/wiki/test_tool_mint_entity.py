@@ -16,7 +16,7 @@ from mewbo_core.classes import ActionStep
 from mewbo_graph.entities.types import EntityEmbedding
 from mewbo_graph.plugins.wiki import mint_entity as mod
 from mewbo_graph.wiki.store import JsonWikiStore
-from mewbo_graph.wiki.types import make_graph_node
+from mewbo_graph.wiki.types import IndexingJob, make_graph_node
 
 SLUG = "org/repo"
 
@@ -73,7 +73,7 @@ def _patch_ctx(monkeypatch, store, embedder=None):
     monkeypatch.setattr(mod, "_resolve_runtime", lambda: SimpleNamespace(wiki_store=store))
     monkeypatch.setattr(mod, "resolve_job_ctx", lambda sid, rt: _job_ctx(store))
     monkeypatch.setattr(mod, "resolve_qa_ctx", lambda sid, rt: None)
-    monkeypatch.setattr(mod, "_make_embedder", lambda: embedder or _FakeEmbedder())
+    monkeypatch.setattr(mod, "_make_embedder", lambda *_args: embedder or _FakeEmbedder())
 
 
 def _run(tool, tool_input):
@@ -92,6 +92,28 @@ def test_mint_entity_creates_and_returns_id(tmp_path, monkeypatch):
     assert stored is not None
     # Provenance was stamped inside the tool (one mention from this mint).
     assert stored.mentions and stored.mentions[0].source == SLUG
+
+
+def test_mint_entity_log_is_owned_by_the_enrich_step(tmp_path, monkeypatch):
+    """The actual fan-out path stamps its timeline line with its aggregate step."""
+    store = JsonWikiStore(root_dir=tmp_path / "wiki")
+    store.create_job(
+        IndexingJob(
+            job_id="j1",
+            slug=SLUG,
+            status="scanning",
+            scanned_count=0,
+            total_count=0,
+            current_file=None,
+        )
+    )
+    _patch_ctx(monkeypatch, store)
+
+    _run(mod.MintEntityTool("s1"), {"name": "Ada", "type": "person"})
+
+    logs = [event for event in store.load_job_events("j1") if event["type"] == "log"]
+    enrich = next(event for event in logs if event["text"].startswith("Enriching "))
+    assert enrich["step"] == "enrich.mint_entities"
 
 
 def test_mint_entity_is_idempotent_on_resurface(tmp_path, monkeypatch):
@@ -346,7 +368,7 @@ def test_a_qa_session_mint_is_unaffected_by_any_resume_plan(tmp_path, monkeypatc
         mod, "resolve_qa_ctx",
         lambda sid, rt: SimpleNamespace(slug=SLUG, store=store, session_id="s1"),
     )
-    monkeypatch.setattr(mod, "_make_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(mod, "_make_embedder", lambda *_args: _FakeEmbedder())
 
     payload = json.loads(
         _run(mod.MintEntityTool("s1"), {"name": "Ada", "type": "person"}).content

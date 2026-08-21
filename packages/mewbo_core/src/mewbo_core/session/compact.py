@@ -195,7 +195,10 @@ async def compact_conversation(
     Returns:
         CompactionResult with summary, kept events, and restored attachments.
     """
-    from mewbo_core.llm.llm import build_chat_model  # Lazy import to avoid circular
+    from mewbo_core.llm.llm import (  # Lazy import to avoid circular
+        build_chat_model,
+        response_text,
+    )
 
     if not events:
         return CompactionResult(summary="", tokens_saved=0)
@@ -273,15 +276,7 @@ async def compact_conversation(
             else:
                 raise
     assert response is not None  # guaranteed by loop logic
-    raw_summary = response.content if hasattr(response, "content") else str(response)
-    # Reasoning models return a list of content blocks; extract text.
-    if isinstance(raw_summary, list):
-        raw_summary = next(
-            (b["text"] for b in raw_summary if isinstance(b, dict) and b.get("type") == "text"),
-            "",
-        )
-
-    summary = _extract_summary(raw_summary)
+    summary = _extract_summary(response_text(response))
     tokens_after = count_tokens(summary)
 
     # Post-compact file restoration

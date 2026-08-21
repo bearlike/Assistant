@@ -124,7 +124,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # A self-hosted forge behind a private CA is invisible to curl's system
+          # trust store: the runner exports that CA for node and for git, and
+          # nothing else. Trust the CA narrowly; AGENT_TLS_NO_VERIFY remains an
+          # explicit escape hatch only when it is configured.
           curl_flags=()
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            curl_flags+=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
           case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
           # Gitea act_runner may leave github.api_url empty; derive it.
           api="$API_URL"
@@ -163,6 +170,9 @@ jobs:
           # pull_request events carry head/base inline; comment- and
           # dispatch-triggered PR pickups must look them up.
           curl_flags=()
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            curl_flags+=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
           case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
           if [[ "${ITEM_IS_PR:-false}" == "true" && -z "${HEAD_REF:-}" ]]; then
             pr=$(curl "${curl_flags[@]}" --fail-with-body --silent --show-error \
@@ -179,6 +189,9 @@ jobs:
         run: |
           set -euo pipefail
           curl_flags=()
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            curl_flags+=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
           case "${AGENT_TLS_NO_VERIFY,,}" in true|1|yes) curl_flags+=(-k) ;; esac
           provider="gitea"
           [[ "$SERVER_URL" == "https://github.com" ]] && provider="github"

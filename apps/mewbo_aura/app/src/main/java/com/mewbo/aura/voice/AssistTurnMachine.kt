@@ -203,8 +203,27 @@ class AssistTurnMachine(
                         is TranscriberEvent.Error -> {
                             finalized = true
                             silenceJob?.cancel()
-                            haptics.listeningEnded() // §6.13/R4: capture ended without an accepted transcript.
-                            setState(readyState()) // NoMatch/Timeout/Unavailable: quiet return (§9.1).
+                            // A server-backed engine that refused is the ONE error worth saying
+                            // out loud: the user finished speaking, the recording was captured,
+                            // and it is being discarded for a reason nothing on screen shows. A
+                            // quiet return here reads as the microphone having done nothing at
+                            // all — on a voice-first surface with no visible transcript, that is
+                            // indistinguishable from the assistant ignoring them. Every other
+                            // code stays quiet (§9.1) because its cause is self-evident.
+                            if (event.code == TranscriberError.ServiceFailed) {
+                                haptics.error() // §6.13: entering AssistUiState.Error.
+                                setState(
+                                    AssistUiState.Error(
+                                        reason = "Speech service didn't respond. Check the engine in Settings.",
+                                        // Nothing to resend: the audio is gone and this surface
+                                        // cannot re-submit a recording, only a text retry.
+                                        retryText = "",
+                                    ),
+                                )
+                            } else {
+                                haptics.listeningEnded() // §6.13/R4: capture ended without an accepted transcript.
+                                setState(readyState()) // NoMatch/Timeout/Unavailable: quiet return (§9.1).
+                            }
                         }
                     }
                 }
@@ -374,7 +393,17 @@ class AssistTurnMachine(
                     // delivers `stream_end` (after `trySend`, before its own termination flag flips),
                     // and it commonly arrives right after `completion`; the done-already guard makes
                     // that pair idempotent (one `finishStreaming()`/`settle` haptic, not two).
-                    val terminal = event is SessionEvent.Completion || event is SessionEvent.StreamEnd
+                    // `StreamError` is terminal too, and leaving it out WEDGED this surface.
+                    // `RunRepository.live()` materializes an upstream failure into a StreamError
+                    // VALUE (`.catch { emit(...) }`) so every follower can see it — which means it
+                    // never throws, so the `catch` below cannot fire for it, and the flow is a
+                    // `shareIn` SharedFlow that never completes, so the post-collect fallback
+                    // cannot either. Treated as non-terminal it fell to the `!terminal` branch,
+                    // `done` never flipped, and the composer stayed disarmed while TalkBack went on
+                    // announcing "Responding" — with nothing ever arriving to correct it.
+                    val terminal = event is SessionEvent.Completion ||
+                        event is SessionEvent.StreamEnd ||
+                        event is SessionEvent.StreamError
                     // `done` is STICKY: once a terminal event has finalized the card, NEITHER branch
                     // may reset it. Without the guard on the `!terminal` branch too, any non-terminal
                     // event arriving in the gap between `completion` and `stream_end` (a stray delta,
@@ -383,6 +412,13 @@ class AssistTurnMachine(
                     // `stream_end`.
                     val alreadyDone = (_state.value as? AssistUiState.Streaming)?.done == true
                     when {
+                        // A lost stream is not a turn that finished. `finishStreaming()` plays the
+                        // settle haptic and leaves the card looking answered, which is the wrong
+                        // thing to tell someone whose connection dropped mid-reply — this surface
+                        // already has an Error state, and the throw path below routes an exception
+                        // to exactly it. Same destination, same haptic, whichever way the failure
+                        // reaches us.
+                        event is SessionEvent.StreamError && !alreadyDone -> failStreaming(event.message)
                         terminal && !alreadyDone -> finishStreaming()
                         !terminal && !alreadyDone -> setState(streamingState(done = false))
                     }
@@ -407,6 +443,19 @@ class AssistTurnMachine(
     private fun finishStreaming() {
         haptics.settle() // §6.13: the turn's natural completion fold.
         setState(streamingState(done = true))
+    }
+
+    /** The turn ended because the stream did, not because the agent finished. Shares its wording
+     * and haptic with the `catch` in [subscribe] so a failure looks the same to the user whether it
+     * arrived as a thrown exception or as a materialized `StreamError` value. */
+    private fun failStreaming(reason: String) {
+        haptics.error() // §6.13: entering AssistUiState.Error.
+        setState(
+            AssistUiState.Error(
+                reason = reason.ifBlank { "Lost connection to the run" },
+                retryText = "",
+            ),
+        )
     }
 
     private fun streamingState(done: Boolean): AssistUiState.Streaming = AssistUiState.Streaming(

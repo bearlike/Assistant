@@ -104,16 +104,22 @@ All three seams ride existing backend seams (`_trigger_deliver`, `start_async`, 
   into `_trigger_deliver`'s `allowed_tools`. An undeclared unattended fire can write its own data
   and nothing else; a pipeline needing a connector, `web_search` or a file read must DECLARE it.
   `pipeline_scope` returns `None` only when the fire is not an app pipeline at all.
-- **`on_pipeline_failure`.** The tracker's close hands the app plus a `PipelineIssue` to
+- **`on_pipeline_failure`.** The tracker hands the app plus a `PipelineIssue` to
   `AppLifecycle.handle_pipeline_failure`: `repair` starts a repair run on the maintainer via the
-  same `AppRunStarter`; `pause` calls `lifecycle.pause`; `notify` emits `app_issue` only. TWO
-  reasons reach it — a FAILED close, and a SUCCEEDED close that regressed a collection.
+  same `AppRunStarter`; `pause` calls `lifecycle.pause`; `notify` emits `app_issue`; `invalidate`
+  transitions the app to `broken`. THREE reasons reach it — a FAILED close, a SUCCEEDED materializing
+  run that regressed a collection, and a result that its post-response semantic verifier rejected.
+  Failure dispatch is rate-gated by `failure_budget`: it fires on the configured consecutive-failure
+  edge, not once per failed invocation, so an often-invoked pipeline cannot create a repair storm.
 
 ## Code pipelines — the execution engine
 
 `PipelineSpec.mode`: `agentic` (default) re-engages the maintainer LLM session on a fired trigger;
 `code` runs a deterministic `entrypoint` (`def run(params, ctx) -> Any`) with NO LLM call via
-`AppPipelineRunner` (`pipeline_runner.py`).
+`AppPipelineRunner` (`pipeline_runner.py`). `tier="materialize"` (the default) writes durable
+collection documents; `tier="render"` is code-only and returns a declared live result to its caller
+without materializing documents. The tier is chosen by the user's freshness need: a digest or rollup
+needs a snapshot; a status query or forge search must be correct when it is read.
 
 - **Placement.** Pipeline files live in the SAME `frontend.files` map under `pipelines/…` keys
   (`entrypoint` names one), since `submit_app` reads every bundle file already.
@@ -188,6 +194,13 @@ All three seams ride existing backend seams (`_trigger_deliver`, `start_async`, 
   REAL `AppDataStore` with `collection_spec=` and `max_docs=`, so schema validation and the cap
   are the SAME enforcement seam `app_data` uses. `dry_run` exercises the identical path but
   performs NO durable write and COUNTS what would write.
+- **A render result is declared data, not a renderer switch.** `ResultSpec` is the discriminated
+  `JsonResult | CsvResult | XmlResult | TextResult` union, each owning validation plus
+  `(body, content_type)` rendering. JSON may carry `json_schema`; CSV requires `columns`, whose
+  header order and per-row membership are the contract; XML accepts a mapping or list of mappings
+  under declared `root`/`item`; text requires a string. `PipelineSpec.validate_result` runs before
+  a `PipelineResult` exists, so a mismatch fails rather than returning misleading media. The
+  `/result` route requires that declaration and refuses 409 without it.
 - **Failure is RAISED (`PipelineExecutionError` with a `code` bucket), never encoded in the
   result** — `PipelineResult` (`{output, evaluated_at, cache, docs_written}`, frozen) only ever
   represents success.
@@ -268,10 +281,14 @@ real spend bound is `timeout_seconds` plus the call-count cap.
 The sandbox's default posture is NO subprocess, NO network. `ctx.exec(argv, *,
 timeout_seconds=None)` is the narrow DECLARED opt-in that lets a `mode="code"` pipeline shell out
 to a vetted binary instead of being forced into `mode="agentic"` just to reach `aider_shell_tool`.
-Two `PipelineSpec` fields, both empty by default: `allow_exec` (a subset of
-`models.PIPELINE_ALLOWED_EXEC = {git, tea, gh}`) and `allow_egress` (bare hostnames, validated
-against `_HOSTNAME_RE`). A `model_validator` rejects either on a `mode="agentic"` pipeline — an
-unreachable grant that reads as capability is a lie an audit has to re-derive.
+Two `PipelineSpec` fields, both empty by default: `allow_exec` and `allow_egress` (bare
+hostnames, validated against `_HOSTNAME_RE`). The deployment owns the executable ceiling
+(`api.apps_exec_binaries`, defaulting to `git`, `tea`, and `gh`); the manifest only declares which
+of that operator-approved set it needs. Membership is checked at the SUBMIT boundary and again at
+execution, NEVER as a field validator: the app store is append-only, so a historical snapshot must
+keep parsing after an operator narrows the set. A `model_validator` rejects either non-empty list on
+an `mode="agentic"` pipeline — an unreachable grant that reads as capability is a lie an audit has
+to re-derive.
 
 **The AUTHORIZATION rule is a method on the model (`PipelineSpec.check_exec_allowed(argv)`, argv
 as a method ARG), and the I/O edge is one atomic class (`PipelineExecutor`) with the
@@ -334,11 +351,11 @@ pipeline/workspace/redactor injected as fields.** Neither is a free function.
   redacted — the timeout text embeds argv, which can carry a credential-bearing URL, and it lands
   verbatim on the `PipelineRun.error` row `/system` renders. A non-zero exit is NOT an error (the
   pipeline decides what a failed `git` means); only a refusal, a missing binary or a timeout raises.
-- **REFUSED under `dry_run` (code `dry_run`), unlike `ctx.llm`**, which cannot mutate the world.
-  `AppLifecycle.submit` dry-runs EVERY code pipeline as its verifier, so admitting exec would let
-  merely SUBMITTING an app push to a remote nobody asked it to touch. `_verify_pipelines` classifies
-  `dry_run` alongside `params`/`workspace` as a verifier ARTIFACT, so a shelling-out pipeline still
-  verifies cleanly.
+- **Preview and submit verification are deliberately different states.** `dry_run` refuses
+  `ctx.exec`, unlike `ctx.llm`, so a user-requested preview never spawns a process. Submit uses
+  `rehearse=True` instead: durable writes and caches stay suppressed while declared `ctx.exec` calls
+  are allowed. Collapsing them would either let a preview touch a remote or let a submit skip the
+  live-tool leg it claims to verify.
 - **Credential honesty:** `ctx.exec` resolves and injects NO stored credential (unlike
   `wiki_clone_repo`'s `resolve_chain`) — it rides ambient state: an SSH agent, a `tea login`/`gh
   auth login` session. **Not a git `credential.helper`**, which the flag above disables, so an HTTPS
@@ -509,12 +526,23 @@ the scalar-only GET `run`. Least privilege stays STRUCTURAL:
 - **`/system` is the ONE introspection surface** — the console, Aura and the injected SDK all read
   `GET /api/apps/<id>/system` (`{app_id, status, freshness, triggers, runs, maintainer, pipelines,
   unscheduled_pipelines}`); do not split it into granular sub-routes. `pipelines` carries the
-  declared per-pipeline tier (`{name, schedule: <union|null>, on_demand, trigger_ref, armed}`) so a
-  client renders "refreshes hourly" vs "on-demand" vs the unscheduled warning.
+  declared per-pipeline tier (`{name, mode, tier, schedule: <union|null>, on_demand, trigger_ref,
+  armed}`) so a client renders "refreshes hourly" vs "on-demand" vs the unscheduled warning.
   `unscheduled_pipelines` is LOCKED with the console (derivation: `trigger_ref` not armed), so an
   on-demand pipeline appears there and the console suppresses the false warning via
   `pipelines[].on_demand`. Do not "fix" `unscheduled_pipelines` to exclude on-demand — that is the
   console's job with the other field.
+- **`GET /api/apps/<id>/pipelines/<name>/result` is the typed live-result surface.** It invokes a
+  code pipeline with query parameters, requires its declared `result`, and returns the declared
+  JSON/CSV/XML/text media rather than the ordinary JSON invocation envelope. It is read-auth like
+  GET invoke, so an external consumer reaches it with an issued API key — there is deliberately no
+  per-pipeline "make this public" flag, since a declaration that grants no reach the caller lacks is
+  the unreachable-capability lie this package refuses elsewhere.
+- **Synchronous execution is process-wide bounded.** `api.apps_max_concurrent_pipelines` defaults
+  to four; a non-blocking semaphore admits that many executions across the controller, and the next
+  caller gets retryable 429 rather than waiting in a request thread. `0` disables the gate. The
+  endpoint cost is `O(pipeline execution)`, never `O(1)`, and a bound on responses does not excuse
+  unbounded occupied request slots.
 - **Error envelope = a top-level `message`.** `_error()` returns `{"message": ...}` (the
   `ApiResponseKit` `shape="message"` decorators document it) so the console's `readJson` reads
   `data.message`, matching `agentic_search`. `ApiResponseKit` has no generic runtime error builder
@@ -544,9 +572,10 @@ store cap is fine — the cap is not the defect — but it must be one of those 
 ## Health honesty — "succeeded" is not "did its job"
 
 Deriving health from `stale = last_run.status != "succeeded"` misses the failure a user notices: a
-run that writes 1 doc to one collection and 0 to the collection every frontend page reads closes
-`succeeded`, every signal stays green, and the dashboard renders empty. `PipelineRun.wrote_nothing`
-does not catch it either — it asks whether the run wrote ANY doc anywhere.
+materializing run can write 1 document to one collection and 0 to the collection every frontend page
+reads, close `succeeded`, and leave the dashboard empty. `PipelineRun.wrote_nothing` does not catch
+it either — it asks whether the run wrote ANY document anywhere. A render pipeline is different:
+zero collection writes are correct because its answer is returned live, not materialized.
 
 `PipelineRun.unwritten_collections(declared_collections)` is the predicate that does:
 succeeded-only, declared names minus the keys in `docs_written`. It takes the declared names as a
@@ -559,44 +588,81 @@ collection has ever been empty"), so a pipeline that stops targeting a collectio
 fires this on every poll; and `wrote_nothing` is mirrored into no console type and rendered
 nowhere, so it stays backend-log-only.
 
-## Auto-repair on an integrity violation
+### The bundle is not the workspace
 
-`PipelineRun.new_integrity_violations` routes the violation through the SAME
-`on_pipeline_failure` dispatch a raising run uses — one dispatcher, one policy enum, one repair
-path, fed a second KIND of reason.
+`ctx.glob`/`ctx.read_file` resolve under the pipeline's WORKSPACE
+(`_resolve_app_workspace_cwd` — the maintainer session's project cwd, or its temp directory for an
+`own`-scoped app). The app's BUNDLE files live in `AppSpec.frontend.files` and reach disk only when
+`get_app`/`stage` materializes them, into a DIFFERENT directory. Nothing populates the workspace
+from the bundle.
 
-- **The run stays `succeeded`; the violation is a SEPARATE axis from run status.** Marking it
-  `failed` would corrupt `stale`/`last_success_at`/freshness. So the reason travels beside the
-  status as a **`PipelineIssue`** (`models.py`) rather than a bare `error: str | None`. Two shapes
-  (`run_failed`, `unwritten_collections`), each owning its `describe()`/`repair_brief()` prose,
-  because a repair agent told only "something went wrong" hunts for an exception that never
-  happened. `_repair_prompt` composes only the PROCEDURE and delegates the DIAGNOSIS to the issue.
-- **Anti-spam is TWO rules, both on the model, both load-bearing.** (1) *Regressed, not
-  never-populated*: a collection counts only once some earlier succeeded run of THIS pipeline
-  actually wrote it, so a first-ever run and an app whose upstream is legitimately empty dispatch
-  nothing, forever. (2) *Edge-triggered, not level-triggered*: a violation the immediately preceding
-  succeeded run already reported is subtracted, so one break dispatches ONCE — including when the
-  repair it spawned did not fix it. Suppression is per-collection (a NEW regression alongside an
-  ongoing one still gets through) and the edge RE-ARMS after a recovery. Visibility stays
-  level-triggered on `/system`; only the ACTION is edged.
-- **The baseline is the LEDGER, deliberately not a live `AppDataStore` read** — the more direct
-  question ("does this collection hold docs?") is the trap. Collections are declared APP-wide while
-  runs are per-PIPELINE, so a store read cannot attribute a collection to the pipeline that feeds
-  it: in a two-pipeline app every run of A would report B's collection as regressed, forever. The
-  ledger baseline is pipeline-attributed by construction and needs no I/O.
-  `INTEGRITY_HISTORY_LIMIT` (20) bounds the scan — a bound, not a tuning knob, and deliberately not
-  a time window, since the question is ordinal and a quiet week must not empty a slow pipeline's
-  baseline.
-- **`dispatch_failure` is reused verbatim, so the manual-fire law holds for free.** A scheduled
-  fire dispatches; a REST invoke and a manual `/fire` do not — a user hammering a broken pipeline
-  must never auto-repair or auto-pause. The agentic close seam gates on the same asymmetry via
-  `kind == "scheduled"`.
-- **An integrity issue ALSO emits `app_issue` under EVERY policy** (`needs_own_event`), unlike a
-  failure: a failed run is already user-visible as a failed ledger row, while an integrity
-  violation's row is a green `succeeded`, so without the event `repair`/`pause` would act on
-  something the user was never shown. The payload keeps its `{app_id, error}` shape and gains
-  `kind`/`pipeline`/`collections` additively. No client consumes `app_issue`, so a violation
-  reaches a user through `/system` and the backend log.
+**This is the trap that emptied a live app's collection.** Its pipeline globbed a data file it had
+shipped in its own bundle. In production every pattern matched zero files, the pipeline wrote
+nothing and closed `succeeded`; replayed locally against the staged bundle it produced thousands of
+documents. The divergence is not visible anywhere in the pipeline source, so reading the code
+cannot find it — which is why `PipelineEvidence` reports `workspace` alongside the per-pattern match
+counts, and why `run_pipeline` names this case explicitly when EVERY glob is at zero rather than
+offering the generic "check your filter" advice. Diagnosing it previously required re-implementing
+`ctx` offline, which cannot see the production workspace and so cannot settle it either.
+
+### `PipelineSpec.writes` — the fact the ledger cannot hold
+
+Both predicates above are computed against the app's DECLARED collections, which answers "did this
+run miss one" but not "was it supposed to fill one". The auto-repair baseline below needed the
+second question, and the ledger cannot answer it: a collection that has never once been written
+looks identical whether its upstream is legitimately empty or its pipeline has been broken since the
+day it shipped.
+
+`writes` is that missing fact, stated on the pipeline — the collections a `tier="materialize"` run
+is expected to produce. It defaults empty (stored snapshots must keep parsing) and is **derived at
+submit** from literal `ctx.collection("…").upsert/delete` calls in the pipeline's own source, so an
+author gets the check without knowing to ask. `AppSpec` validates the names against its collection
+namespace, since only it owns that list.
+
+**The derivation never rejects.** A computed collection handle it cannot prove statically yields
+nothing and the author declares the name explicitly instead. It is deliberately not a lint RULE:
+a new rule can retroactively fail an already-live pipeline at its next fire (see `plugin/linter.py`
+on why adding a guarded-call name is not free), and a convenience must never become a second
+execution gate.
+
+## Auto-repair on a semantic or integrity issue
+
+`PipelineRun.new_integrity_violations` and the post-response verifier route problems through the
+SAME `on_pipeline_failure` dispatch a raising run uses — one dispatcher, one policy enum, one repair
+path, with three `PipelineIssue` kinds.
+
+- **A green run remains green when the problem is orthogonal to execution.** `unwritten_collections`
+  and `verifier_failed` are separate axes from run status: the former completed but regressed a
+  materialized collection, and the latter returned a result before semantic verification rejected
+  it. Marking either `failed` would corrupt `stale`/`last_success_at`/freshness. `PipelineIssue`
+  owns their `describe()`/`repair_brief()` prose, so a repair is told whether to inspect writes,
+  computation, or a real exception rather than hunting a fictitious traceback.
+- **Integrity anti-spam is TWO rules, both on the model.** (1) *Watched, not merely declared*: a
+  collection counts once an earlier succeeded run of THIS pipeline wrote it, **or** the pipeline's
+  `writes` contract declares it. (2) *Edge-triggered, not level-triggered*: a violation already
+  reported by the preceding succeeded run is subtracted, so one break dispatches once. The ledger
+  baseline is deliberately not a live `AppDataStore` read: collections are app-wide but runs are
+  pipeline-attributed. The bounded `INTEGRITY_HISTORY_LIMIT` scan provides that attribution.
+
+  **Rule (1) used to be history-only, and that was a hole shaped exactly like the bootstrap case.**
+  A never-written collection could never enter the baseline, so a materializing pipeline that had
+  NEVER populated one closed `succeeded` forever — the newly declared collection, the one most
+  likely to be broken, was the one nothing watched. `writes` closes it by supplying the fact the
+  history cannot. A pipeline with no declaration keeps the historical behaviour exactly, so an
+  upstream that is genuinely empty still does not become an accusation.
+- **Failure dispatch is rate-gated.** `PipelineRun.should_dispatch_failure` reaches only the exact
+  `failure_budget.consecutive_failures` edge within its `window_seconds`; a succeeding latest run
+  resets the count. Scheduled failures dispatch; user-triggered REST invoke and `/fire` failures do
+  not. This separates real autonomous recovery from a client hammering a broken live result.
+- **Verifier failure counts separately because it has no failed ledger row.** The verifier runs
+  after a successful result returns. Its in-process consecutive count is windowed by the pipeline's
+  `failure_budget`; reaching `verifier.consecutive_failures_to_invalidate` forces the `invalidate`
+  policy, while the ordinary failure-budget edge follows the declared policy when dispatch is
+  allowed. A verifier success clears its consecutive state. Do not replace that state with failed
+  `PipelineRun` rows — the response genuinely succeeded.
+- **Issues that would otherwise be invisible emit `app_issue` under every policy.** A failed run
+  already has a failed ledger row; integrity and verifier issues do not. `needs_own_event` preserves
+  visibility when `repair`, `pause`, or `invalidate` acts on a green execution result.
 
 ### The repair wake — three concerns, three homes
 
@@ -682,21 +748,44 @@ Resolution order, `AppLifecycle.get_or_create_maintainer_session`: an existing, 
 session — reused, never replaced, see below); else a fresh mint through the SAME seam `submit`
 uses, persisted onto the manifest.
 
-**Why a plain new session cannot substitute — the trap.** `submit_app`/`run_pipeline`/`app_data`
-resolve their app by matching the CALLING session's id against `maintainer_session_id` /
-`owner_session_id`, and by nothing else. A session minted any other way — however it is scoped,
-however faithfully it copies the `apps` capability stamp — is invisible to those tools until its
-id actually lands on one of those two fields. **The `app_id` CONTEXT key resolves nothing
-anywhere and must never be read as authorization**: it is merged verbatim from a request
-(`backend.py:_build_context_payload`) and re-writable on any later turn, so it addresses an app
-without proving anything about it — the same ruling the wiki tier carries for `slug`.
+**Why a plain new session cannot substitute — the trap.** A session is bound to an app by TWO
+things and nothing else: its id landing on `maintainer_session_id` / `owner_session_id`, or a
+server-stamped `app:<app_id>[:<session_id>]` tag. A session minted any other way — however it is
+scoped, however faithfully it copies the `apps` capability stamp — is invisible to every app tool.
+**The `app_id` CONTEXT key resolves nothing anywhere and must never be read as authorization**: it
+is merged verbatim from a request (`backend.py:_build_context_payload`) and re-writable on any
+later turn, so it addresses an app without proving anything about it — the same ruling the wiki
+tier carries for `slug`.
 
-**`get_app` is the ONE exception, and its tier is the TAG.** `AppStagingArea.app_for_session`
-falls back to the server-stamped `app:<app_id>[:<session_id>]` tag, parsed through the core
-grammar (product `apps`, facet `app_id`) rather than prefix-matched. That is what lets an
-ADDITIONAL session opened against an app (below) read and stage it.
+**ONE resolver owns both tiers: `AppStagingArea.app_for_session`** (discovery, when the caller has
+no `app_id`) and its `O(1)` sibling `binds` (membership, when the caller already holds the app).
+Every app tool reads one of the two — `get_app`, `submit_app`, `run_pipeline`, `app_data` — and a
+tag is decoded through the core grammar (product `apps`, facet `app_id`) in a single
+`_tagged_app_ids` helper, never prefix-matched.
 
-### `new_session` — an additional session, read-plus-stage
+**Do not re-derive the rule in a tool, and do not omit `session_tags`.** Two tools re-derived it,
+resolving by the id fields alone (`app_data` by `maintainer_session_id` alone), and the result was a
+suite that DISAGREED with itself: a tag-bound composer session could stage the bundle and ship a
+whole new live version while `run_pipeline` and `app_data` told it, in the adjacent call, that no
+app was bound. The destructive operation was permitted and the two diagnostic ones refused, so a
+maintainer could push a guess and never dry-run it. A narrower private rule is not a safety tier; it
+is a drift, and the drift lands on exactly the tools an agent needs to diagnose itself. `app_data`'s
+narrower spelling also cost a pre-submit BUILDER session the ability to read back documents its own
+pipeline had just written.
+
+**`session_tags` defaults to empty, and that default fails QUIETLY** — a caller that forgets it gets
+the pre-tag behaviour with no error, which is the same outcome as re-deriving the rule by hand.
+Three call sites lost the tag tier this way independently: `run_pipeline`, `app_data`, and the Web
+IDE's `AppStagingMount`, each surfacing as a different user-visible bug. When adding a caller, pass
+the tags; when reviewing one, check that it does.
+
+The cross-tool guarantee is pinned by a test that asserts the AGREEMENT rather than any single
+verdict, because every earlier test pinned one tool against its OWN rule — which is precisely why
+three tools disagreeing stayed invisible. The tag reader is an injected collaborator for the same
+reason: it resolves a process-wide session store, so until it was injectable no test could drive
+the tag tier THROUGH a tool at all.
+
+### `new_session` — an additional session, fully bound to its one app
 
 `POST /apps/<id>/session` takes an optional `{"new_session": true}` (`AppSessionRequest`,
 `extra="forbid"`, snake_case like the rest of this RESTX surface) that ALWAYS mints. The default get-or-create is the app detail header's "open
@@ -708,9 +797,12 @@ handed the maintainer's transcript to append to.
 - **It is NOT written back to `maintainer_session_id`.** The repair wake dereferences that field,
   and two claimants would make the resolvers' first-match scan order load-bearing for which
   session keeps working — the same reason a reused builder session is never promoted.
-- **It may read, stage AND submit — but only against the app it was opened for.** `get_app` and
-  `submit` both read the tag tier; `app_data` (gated on `maintainer_session_id`) and
-  `run_pipeline` (the id-field scan) still return the uniform `not_found`.
+- **It may use every app tool — but only against the app it was opened for.** All four read the
+  same tag tier, so it reads, stages, dry-runs, queries and resubmits exactly as the maintainer
+  does. What it is NOT is the app's OWN session: `maintainer_session_id` still points elsewhere, so
+  the repair wake and the armed triggers keep belonging to that session. Naming a DIFFERENT app is
+  still the uniform `not_found` — `app_data` is the one tool taking an `app_id`, and the binding
+  scopes to exactly one.
 
   `submit`'s membership test is **"is this session server-BOUND to this app"**, resolved through
   the one seam `_bound_app_for_session` → `AppStagingArea.app_for_session`, not
@@ -746,41 +838,37 @@ already find the app through EITHER field, so writing the reused id into the oth
 give the app two live claimants and make those resolvers' first-match scan order load-bearing for
 which one keeps working. Reuse leaves the stored manifest exactly as it was.
 
-## Submit-time verifier
+## Submit-time rehearsal
 
-`_verify_pipelines` dry-runs every code pipeline through the SAME `AppPipelineRunner` the fire seam
-uses (via the already-wired `tracker.pipeline_runner`), catching what lint cannot — an import
-error, a bad `ctx.read_file` call — before a pipeline goes live.
+`_verify_pipelines` exercises every code pipeline through the SAME `AppPipelineRunner` the fire
+seam uses (via the already-wired `tracker.pipeline_runner`), catching what lint cannot — an import
+error, a bad `ctx.read_file` call, or a declared CLI invocation — before a pipeline goes live.
 
-- **Ordering is the whole point: verify runs BEFORE any mutation** — before the maintainer session
+- **Ordering is the whole point: rehearsal runs BEFORE any mutation** — before the maintainer session
   is minted, before a resubmit's prior triggers are cancelled, before pipelines arm, before the
   manifest/version persist, before the go-live seed fires. A refusal therefore leaves NO state. It
-  runs AFTER the live-overwrite guard, so a double-submit collision is reported as that rather than
-  masked by a verification error.
-- **`dry_run=True` plus calling `execute()` directly (never the tracker's `record_code_run`)
-  guarantees no durable write and no ledger row.** A dry run still makes a real, budget-bounded
-  model call when the pipeline declares `ctx.llm`; only agentic pipelines are genuinely
-  model-call-free, and only because they are skipped.
+  runs after the live-overwrite guard, so a collision is reported as one rather than masked by a
+  verification error.
+- **Declared samples are executable contracts.** Every `PipelineSample {params, label}` is replayed.
+  No samples retains the legacy `params={}` smoke, which is deliberately weaker: it cannot construct
+  a required-parameter path. A sample's parameter failure refuses submit; only the parameter-free
+  legacy smoke may be `skipped` for `params`.
+- **`execute(dry_run=False, rehearse=True)` suppresses durable writes and caches but permits declared
+  `ctx.exec`.** It is neither a normal execution nor `run_pipeline(dry_run=true)`: the former may
+  write, while the latter must never spawn a subprocess. Calling `execute` directly, never the
+  tracker's `record_code_run`, creates no ledger row.
 - **The verdict map is `{pass, fail, skipped}`, persisted on `AppVersion.verification` keyed by
-  pipeline name — but `fail` never reaches storage.** A genuine failure
-  (lint/import/runtime/syntax/traversal) raises a `ValueError` refusing the submit as an actionable
-  reask before any version row is written; the member exists for honesty should that refusal ever
-  soften. `skipped` covers four verifier ARTIFACTS, never pipeline defects: `mode="agentic"` (a
-  wake is judgment, not smoke-testable); the runner unwired (logged once, never a crash); a dry run
-  failing on `params` (a `params_schema` requiring input a `params={}` smoke cannot supply, e.g. a
-  `user_writable` form); and a dry run failing on `workspace` (no app has a bound workspace at
-  submit time — the maintainer session is not minted until after verification, so an unconditional
-  `ctx.read_file()` trips this every time). Only `params`/`workspace` codes get this treatment.
+  pipeline name — but `fail` never reaches storage.** A genuine sample failure raises a `ValueError`
+  refusing submit before a version row is written. `skipped` covers agentic pipelines, an unwired
+  runner, a parameter-free legacy smoke that cannot satisfy `params_schema`, and an unbound workspace;
+  these are rehearsal artifacts, not a way to waive a declared sample's failure.
 - **The go-live seed is not a replacement** — it is the post-live real fire that gives freshness its
-  first data point; the verifier is a pre-live smoke test.
+  first data point; rehearsal is a pre-live contract check.
 - **THE DISARM TRAP — a pipeline that swallows `PipelineExecutionError` makes this entire gate
-  unreachable.** The dry run classifies only what PROPAGATES out of `execute()`, so a pipeline
-  wrapping `ctx.read_file`/`ctx.glob` in a broad `except` returning a default verifies `"pass"` no
-  matter what broke, and defeats the `params`/`workspace` skip classification too, since those are
-  also just codes on a raised error. Live-verified: an absolute `ctx.read_file` path (a `traversal`
-  code, which this gate treats as a genuine failure) was eaten by an `except Exception: return []`;
-  the app went live, every scheduled run reported `succeeded`, and it wrote zero documents to the
-  collection its whole frontend read. `check_pipeline_error_swallow` is the structural fix.
+  unreachable.** Rehearsal classifies only what propagates out of `execute()`, so a pipeline wrapping
+  `ctx.read_file`/`ctx.glob` in a broad `except` returning a default can pass while reading nothing.
+  `check_pipeline_error_swallow` is the structural fix; do not weaken it to make a pipeline appear
+  healthy.
 
 ## Pipeline lint rules are a LIVE-FLEET MIGRATION, not a submit gate
 
@@ -881,14 +969,14 @@ Never run a real LLM or hit a real proxy.
 
 | File | Covers |
 |---|---|
-| `test_apps_lifecycle.py` | submit / re-home / pause / rollback, workspace scope, verifier verdicts, version summary, every policy value under an integrity issue |
+| `test_apps_lifecycle.py` | submit / re-home / pause / rollback, workspace scope, sample rehearsal, version summary, every policy value under integrity and verifier issues |
 | `test_apps_routes.py` | controller domain logic incl. SDK-free default, `mint_token` scope gating, read/write authorization |
 | `test_apps_routes_flask.py` | Flask client — the dual-registration guard + real startup wiring (submitter registered, SDK loaded, runner wired) |
 | `test_apps_integration.py` | the two cross-stream seams: capability build surfaces `app_data`; SDK injection at the detail seam vs the clean stored spec |
 | `test_apps_tokens.py` | signer mint/verify round-trip, write scope, 4-part blob compatibility |
-| `test_apps_pipeline_endpoints.py` | pipeline list surface, GET/POST invoke incl. params coercion/validation, agentic 409, unwired 503, runner-exception 502, the write-scope token matrix, the ledger-effect matrix |
+| `test_apps_pipeline_endpoints.py` | pipeline list surface, GET/POST invoke and `/result`, result-media failures, params coercion/validation, concurrency exhaustion, the write-scope token matrix, the ledger-effect matrix |
 | `test_apps_get_app.py` | get/stage, session scoping, hostile-`app_id` staging guard, `trigger_declared` honesty |
-| `test_run_pipeline_ledger.py` | the `run_pipeline` tool's ledger seam: an invoke ADVANCES the ledger past an older row, a timed-out invoke ledgers `failed` with its partial `docs_written` and returns the `run_key`, `dry_run` ledgers nothing, no auto-repair, unwired/unpaired degrade cleanly |
-| `test_apps_models.py::TestNewIntegrityViolations` | the two anti-spam rules as pure model tests — never-populated, cache-hit, edge suppression, edge re-arm |
-| `test_apps_pipeline_tracker.py::TestIntegrityDispatch` | the agentic close seam end-to-end: a regression dispatches while the run stays `succeeded`, repeated fires dispatch ONCE, a manual fire never dispatches, a sibling pipeline's collection is never blamed |
-| `test_apps_pipeline_runner.py::TestCodeFireIntegrityDispatch` | the code tier of the same loop |
+| `test_run_pipeline_ledger.py` | the `run_pipeline` tool's ledger seam: an invoke advances the ledger past an older row, a timed-out invoke records partial writes, `dry_run` ledgers nothing, no auto-repair, unwired/unpaired degrade cleanly |
+| `test_apps_models.py` | result contracts, append-only-safe submit boundaries, failure-budget arithmetic, integrity violations, and `PipelineIssue` semantics |
+| `test_apps_pipeline_tracker.py` | scheduled and on-request dispatch gates, integrity anti-spam, post-response verifier failure/invalidation, and a sibling pipeline's collection never being blamed |
+| `test_apps_pipeline_runner.py` | code execution, result validation, `ctx.exec` rehearsal versus preview, verifier execution, and cache behavior |

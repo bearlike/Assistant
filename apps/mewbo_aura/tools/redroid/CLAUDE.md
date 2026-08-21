@@ -44,5 +44,22 @@ don't re-derive any of these:
   thin shell that redirects into `com.google.android.googlequicksearchbox` — resolve the launch
   intent, don't assume the package you started is the one you're now looking at.
 
+## TV geometry — what this container can and cannot witness
+
+Boot at 16:9 by overriding the geometry params already in `docker-compose.yml`:
+`androidboot.redroid_width=1920 androidboot.redroid_height=1080 androidboot.redroid_dpi=213`
+(≈960×540dp landscape; the exact TV density is a judgement, the geometry is the point).
+
+- **D-pad traversal IS witnessable here, unmodified.** `adb shell input keyevent 19/20/21/22/23` is
+  dispatched by the input framework and Compose focus responds to key events — neither depends on
+  `characteristics=tv` nor on the leanback feature. This is the cheap tier for "is every control
+  reachable by a remote".
+- **`android.software.leanback` is NOT, and cannot be added.** It is declared by a permissions XML
+  baked into the image at build time and `/system` is read-only. So this container can never
+  witness store filtering, the TV launcher row, banner presentation, or any code reading
+  `hasSystemFeature(FEATURE_LEANBACK)` — those need a real Google TV image. A GitHub issue search
+  across `remote-android/redroid-doc` for tv/leanback/characteristics returned nothing; rebuilding
+  from AOSP source is the only documented lever and is not worth it.
+
 The Tier-1-vs-Tier-2 split and the build→install→verify loop itself live in
 [`apps/mewbo_aura/CLAUDE.md`](../../CLAUDE.md); this file is ops-only for the container.

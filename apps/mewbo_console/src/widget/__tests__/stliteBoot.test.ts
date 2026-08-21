@@ -150,6 +150,36 @@ describe("buildKernelOptions", () => {
     expect(wrapper).not.toContain("transform:");
   });
 
+  it("pins the sidebar gap in px, so facade's rem gap can't collapse under the basis shrink", () => {
+    // facade zeroes every sidebar margin/padding and re-expresses separation as
+    // one 0.125rem gap — 2px at its assumed 16px root, but 1.56px once
+    // APP_REM_BASIS_PX shrinks the root to 12.5px, which renders a section
+    // label as colliding with the widget beneath it. An absolute px value is
+    // the only spelling that survives a basis change.
+    const wrapper = (
+      buildKernelOptions(payload, { theme: "dark", wheelUrls }).files["app.py"] as { data: string }
+    ).data;
+    expect(wrapper).toContain(String.raw`[data-testid=\"stSidebar\"] div[data-testid=\"stVerticalBlock\"]`);
+    expect(wrapper).toMatch(/gap: 8px !important/);
+    // A rem gap here is the defect itself — it would re-multiply with the basis.
+    expect(wrapper).not.toMatch(/gap: [\d.]+rem !important/);
+  });
+
+  it("forces stSidebarNav into the chrome palette, since facade's own CSS never targets it", () => {
+    // facade/theme.py styles stSidebar and everything authored inside it, but
+    // has no rule for Streamlit's auto-generated multipage page-link list —
+    // and that widget paints from Streamlit's own theme state at first mount,
+    // ahead of config.toml being honored, so it needs a direct DOM override
+    // rather than relying on facade's stylesheet or the theme engine.
+    const wrapper = (
+      buildKernelOptions(payload, { theme: "dark", wheelUrls }).files["app.py"] as { data: string }
+    ).data;
+    expect(wrapper).toContain(String.raw`[data-testid=\"stSidebarNav\"]`);
+    expect(wrapper).toContain(String.raw`[data-testid=\"stSidebarNavLink\"][aria-current=\"page\"]`);
+    expect(wrapper).toContain("var(--chrome-background)");
+    expect(wrapper).toContain("var(--chrome-foreground)");
+  });
+
   it("shrinks the rem BASIS, not just the elements it can name", () => {
     // The whole point of the density fix: Streamlit's control heights, gaps,
     // paddings and heading sizes are all rem-derived, so the `html` font-size

@@ -115,9 +115,8 @@ class ReadFileTool(AbstractTool):
             return MockSpeaker(content=str(exc))
         text = self._io.read_text(target, silent=True)
         if text is None:
-            message = f"{request.path}: unable to read"
             MockSpeaker = get_mock_speaker()
-            return MockSpeaker(content=message)
+            return MockSpeaker(content=self._unreadable(request.path, target))
 
         DEFAULT_LINE_LIMIT = 2000
 
@@ -162,6 +161,26 @@ class ReadFileTool(AbstractTool):
         }
         MockSpeaker = get_mock_speaker()
         return MockSpeaker(content=payload)
+
+    @staticmethod
+    def _unreadable(path: str, target: Path) -> str:
+        """Name WHY a read failed, so a wrong guess reads as a wrong guess.
+
+        ``InputOutput.read_text`` already separates "not found" from "is a
+        directory" from an OS error — but it reports the distinction through
+        its own console writer and returns ``None`` for all of them, and this
+        caller silences that writer. So every cause used to arrive as one
+        indistinguishable string, which left a model unable to tell a path it
+        guessed wrong from a repository it cannot read. Those warrant opposite
+        responses: correct the path, or stop. Reading the cause back off the
+        resolved target keeps the vendored writer silent, since its output goes
+        nowhere a model ever sees.
+        """
+        if target.is_dir():
+            return f"{path}: is a directory, not a file"
+        if not target.exists():
+            return f"{path}: not found"
+        return f"{path}: unable to read"
 
 
 class AiderListDirTool(AbstractTool):

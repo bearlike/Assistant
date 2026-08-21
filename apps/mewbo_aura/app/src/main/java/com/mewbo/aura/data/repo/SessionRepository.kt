@@ -17,6 +17,21 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.Json
 
 /**
+ * How many candidates one recents fetch lets the server examine — measured, not chosen by taste.
+ *
+ * The drawer narrows client-side to mobile-origin rows by default
+ * ([com.mewbo.aura.ui.sessions.RecentsFilter.MOBILE_ONLY]), so the bound has to be deep enough that
+ * the FILTERED list still fills the rail. Against the deployed store (721 sessions), newest-first:
+ * 50 candidates returned 46 rows of which 24 were mobile, and 100 candidates returned 84 rows
+ * carrying the SAME 24 mobile rows — mobile yield SATURATES at 50, so doubling the bound buys the
+ * rail zero extra rows for +434 KB. 24 rows is roughly twice a drawer screenful, and the transfer
+ * drops from 3,071,030 bytes / 1.77 s to 413,708 bytes / 0.17 s.
+ *
+ * This is a ceiling on the WORK, not on the response alone: the server applies it at the store.
+ */
+private const val RECENTS_FETCH_LIMIT = 50
+
+/**
  * List/create/history for sessions. Backend is the source of truth (D-5, no local database) - this
  * only keeps a simple in-memory cache of the last-fetched list and per-session transcripts so
  * screens have something to render immediately on process-alive navigation.
@@ -40,8 +55,19 @@ class SessionRepository @Inject constructor(
     private val _transcripts = MutableStateFlow<Map<String, SessionHistory>>(emptyMap())
     val transcripts: StateFlow<Map<String, SessionHistory>> = _transcripts.asStateFlow()
 
+    /**
+     * Fetches the recents list. **Cost: `O(collection)`, capped at [RECENTS_FETCH_LIMIT]
+     * candidates** — never `O(all history)`, which is what this was before the cap
+     * ([AuraApi.listSessions] carries the measurement).
+     *
+     * The bound is NOT a parameter, deliberately. Every caller here wants the recents window (the
+     * drawer's refresh-on-open, the assist machine's continue-last-session lookup, `forkSession`'s
+     * best-effort re-read), and a `limit` parameter defaulted to "everything" is exactly the
+     * fail-open the required parameter one layer down exists to prevent. A future caller that
+     * genuinely needs a different window adds its own method rather than widening this one.
+     */
     suspend fun refreshSessions(includeArchived: Boolean = false): List<SessionSummary> {
-        val response = api.listSessions(includeArchived)
+        val response = api.listSessions(includeArchived, RECENTS_FETCH_LIMIT)
         val summaries = response.sessions.map { it.toDomain() }
         _sessions.value = summaries
         return summaries

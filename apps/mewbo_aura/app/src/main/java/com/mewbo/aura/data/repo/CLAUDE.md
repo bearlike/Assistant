@@ -28,7 +28,27 @@ streams; the UI sees only domain objects and `Flow<SessionEvent>`.
   It reads the `410` body `{"error":{"code":"session_terminated",…,"retryable":false}}` and raises a typed
   `SessionTerminatedException` instead of a bare `HttpException`, so envelope parsing lives HERE, never
   per-screen; a body that isn't the envelope falls through to `HttpException` unchanged. `send`/`sendQuery`/
-  `retryFrom` all route through it (409 running / 410 terminated), because each starts a run.
+  `retryFrom` all route through it, because each starts a run.
+- **`RunPhase` is not a liveness fact, so `sendQuery` treats a `409` as a ROUTE CORRECTION, not an
+  error.** `ChatViewModel` picks steer-vs-fresh from `RunPhase` before the call — but that phase says
+  what the client is WATCHING, and three paths deliberately stop it watching a run that is still
+  going: `stop()` (a client-side detach by contract), a `stream_error` ("you are no longer seeing
+  this run", not "the run failed"), and a failed live collector. Each leaves the phase outside
+  `Sending`/`Streaming` while the server still reports `running`, so the follow-up takes `/query`
+  into a busy session. Measured on the deployed API — **`/query` while running ⇒ `409`
+  `{"message": "Session is already running."}`; `/message` while running ⇒ `202`; `/message` while
+  idle ⇒ `200` + a fresh `run_id`.** `/message` is therefore correct in BOTH states and only the
+  `/query` leg can be wrong about liveness, so `sendQuery` re-routes its `409` onto `send` and
+  returns `Enqueued`. Before that, the `409` fell through to a bare `HttpException` and the user's
+  follow-up rendered as an `HTTP 409` ErrorCard instead of a queued message.
+  - **Re-route, don't pre-check.** A liveness read is stale the moment it returns; the `409` IS the
+    server's answer about the very request being made, and it keeps the happy path at one round
+    trip. The web console routes on a polled `activeSession.running` and carries the same race with
+    no recovery — this is console parity in OUTCOME, one step better in mechanism.
+  - **Only `409` re-routes.** A `410` must keep reaching `errorFor`, or a terminated session would
+    steer forever instead of flipping the composer's terminal state.
+  - Attachments cannot follow onto `/message` (no such field), so a re-routed turn is text-only —
+    the identical limitation the console's running branch has, which skips the upload entirely.
 - **`RunNotifications` `fun interface` is declared HERE** (dependency flows down — the repo never
   imports `notify/`). `onRunStarted` fires on the three run-START paths only: `send` (200), `sendQuery`
   (202), `retryFrom` (`preview = null`, no fresh query text). Impl `RunNotificationLauncher` in
@@ -64,7 +84,21 @@ destructive REWIND of the SAME session (truncate the transcript at `from_ts`, th
   fatal `NetworkOnMainThreadException` on the not-yet-buffered 401 body.
 - **`SessionContext`** is the SINGLE scope-assembly point — the backend re-resolves model/project/tools
   from EACH `/query`'s own context, so context is RESENT every turn (omitting it silently reverts turn
-  2+ to the config-default model + a temp-dir cwd). `mcp_tools` omitted ⇒ all tools; non-empty ⇒ allowlist.
+  2+ to the config-default model + a temp-dir cwd).
+  - **Both tool lists are THREE-STATE, and only `null` may omit the key.** `mcp_tools` omitted ⇒ all
+    tools, `[]` ⇒ a real ceiling of zero, non-empty ⇒ that allowlist. `device_tools` is the same
+    shape with a DIFFERENT absent arm: omitted ⇒ silence, and the server falls back to the newest
+    context event that carries the key, so an omitted empty list leaves a revoked device tool bound.
+    Testing either for truthiness (`isNullOrEmpty`) is a fail-open the server cannot detect —
+    absence and never-declared are the same bytes — and it shipped: 525 persisted `aura-android`
+    context events carried `mcp_tools: []` exactly zero times. The write seam
+    (`buildSessionContext`), the derivation (`ComposerScope.toolsNarrowed`/`mcpToolsForContext`) and
+    the hydration read (`SessionEvent.lastContextMcpTools`) must agree on all three states or the
+    session re-widens a turn later; each looks correct in isolation, so the ROUND TRIP is the test.
+  - **A MOBILE-origin session is `purpose_bound` server-side, so `allowed_tools` is refused on every
+    `/query` after creation** (`SessionSpec.OVERRIDABLE_WHEN_UNBOUND`, refusal only logged). The
+    ceiling this client sends therefore binds at session CREATION and nowhere else — a mid-session
+    change to the picker reaches the wire correctly and is dropped on arrival.
 - `ModelRepository` (lazy catalog), `SessionScopeRepository`, `AttachmentRepository` (the two-step
   multipart flow, [`data/api/CLAUDE.md`](../api/CLAUDE.md)).
 

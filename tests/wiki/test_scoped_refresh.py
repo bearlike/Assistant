@@ -136,7 +136,8 @@ def refresh(tmp_path, monkeypatch):
             staticmethod(lambda: embedder is not None),
         )
         monkeypatch.setattr(
-            "mewbo_graph.wiki.embedder.make_embedder_or_none", lambda: embedder
+            "mewbo_graph.wiki.embedder.make_embedder_or_none",
+            lambda model=None: embedder,
         )
         store = JsonWikiStore(root_dir=tmp_path / "wiki")
         store.create_job(IndexingJob(
@@ -183,7 +184,17 @@ def test_scoped_refresh_leaves_untouched_files_in_the_graph(refresh) -> None:
     """
     store = refresh(CHANGED_AFTER)
 
-    assert store.get_job("j-refresh").status == "complete"
+    job = store.get_job("j-refresh")
+    assert job is not None and job.status == "complete"
+    assert job.progress is not None
+    scan = {record.key: record for record in job.progress.steps_in("scan")}
+    assert set(scan) == {
+        "scan.discover",
+        "scan.inspect_files",
+        "scan.persist_manifest",
+    }
+    assert all(record.state == "done" for record in scan.values())
+    assert scan["scan.inspect_files"].current == scan["scan.inspect_files"].total == 2
     files = _files_in_graph(store)
     assert "kept.py" in files, (
         "the untouched file's nodes were reaped — a commit-scoped supersede ran "
@@ -444,7 +455,7 @@ def test_a_cancel_between_phases_stops_the_refresh(tmp_path, monkeypatch) -> Non
 # ── the stamped fingerprint must equal the probed one ────────────────────────
 
 
-def test_the_probe_agrees_with_what_the_graph_phase_stamps(monkeypatch) -> None:
+def test_the_probe_agrees_with_what_the_graph_phase_stamps(tmp_path, monkeypatch) -> None:
     """A just-indexed project must read as reusable against a fresh probe.
 
     This is the one failure in the whole refresh path that is INVISIBLE to every
@@ -476,7 +487,8 @@ def test_the_probe_agrees_with_what_the_graph_phase_stamps(monkeypatch) -> None:
     from mewbo_graph.plugins.wiki.scoped_refresh import current_index_fingerprint
     from mewbo_graph.wiki.types import CodeGraph
 
-    probed = current_index_fingerprint()
+    store = JsonWikiStore(root_dir=tmp_path / "wiki")
+    probed = current_index_fingerprint(store, "acme/repo")
 
     # The three non-embedding legs are read from the SAME helpers the stamp site
     # calls, so any future divergence has to be a real one rather than two
@@ -488,7 +500,7 @@ def test_the_probe_agrees_with_what_the_graph_phase_stamps(monkeypatch) -> None:
     # The embedding leg is the one with a normalisation step between config and
     # the stamped value, so it gets the load-bearing assertion.
     if _embeddings_enabled():
-        assert probed.embedding_model == _make_embedder().model, (
+        assert probed.embedding_model == _make_embedder(store, "acme/repo").model, (
             "the probe disagrees with what the graph phase would stamp — every "
             "refresh would report fingerprint_mismatch and silently rebuild"
         )
@@ -510,15 +522,17 @@ def test_the_probe_agrees_with_what_the_graph_phase_stamps(monkeypatch) -> None:
             "needs-a-prefix" if keys[-1] == "model" else default
         ),
     )
-    forced = current_index_fingerprint()
-    assert forced.embedding_model == _make_embedder().model
+    forced = current_index_fingerprint(store, "acme/repo")
+    assert forced.embedding_model == _make_embedder(store, "acme/repo").model
     assert forced.embedding_model == "openai/needs-a-prefix", (
         "the probe returned a raw config value — the stamp site normalises it, "
         "so every refresh would compare un-normalised against normalised"
     )
 
 
-def test_embeddings_disabled_reads_as_stale_against_a_vectorised_index(monkeypatch) -> None:
+def test_embeddings_disabled_reads_as_stale_against_a_vectorised_index(
+    tmp_path, monkeypatch
+) -> None:
     """Turning embedding OFF must invalidate an index that HAS vectors.
 
     The mirror of the test above, and the reason ``embedding_model`` is nullable
@@ -533,7 +547,8 @@ def test_embeddings_disabled_reads_as_stale_against_a_vectorised_index(monkeypat
     monkeypatch.setattr(
         "mewbo_graph.wiki.embedder.Embedder.enabled", staticmethod(lambda: False)
     )
-    probed = current_index_fingerprint()
+    store = JsonWikiStore(root_dir=tmp_path / "wiki")
+    probed = current_index_fingerprint(store, "acme/repo")
     assert probed.embedding_model is None
 
     vectorised = probed.model_copy(update={"embedding_model": "openai/some-embedder"})

@@ -26,10 +26,10 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from typing import Literal
+from typing import Literal, get_args, get_origin
 
 from mewbo_core.workspaces.workspace import get_active_project_root
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from mewbo_tools.integration.landlock import ShellScope, scoped_preexec
 
@@ -128,6 +128,54 @@ class ShellSessionArgs(BaseModel):
         except re.error as exc:
             raise ValueError(f"filter is not a valid regular expression: {exc}") from exc
         return value
+
+    @classmethod
+    def explain_errors(cls, exc: ValidationError) -> str:
+        """Render EVERY error with its field path, then the expected field set.
+
+        ``exc.errors()[0]["msg"]`` alone is the refusal that kept a real agent
+        looping: "Extra inputs are not permitted" without ``loc`` never says
+        WHICH key was extra, so the only strategy left is dropping keys at
+        random. Naming the whole contract also covers the caller this tool is
+        aliased to serve — a Claude-Code-shaped agent definition maps
+        ``BashOutput``/``KillShell`` onto this tool by NAME only, so its model
+        arrives speaking another vocabulary (``bash_id``) and must be able to
+        re-derive the real one from a single refusal.
+        """
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in err['loc']) or '(arguments)'}: "
+            f"{err['msg']}"
+            for err in exc.errors()
+        )
+        return f"{problems}. Expected fields: {cls.describe_fields()}."
+
+    @classmethod
+    def describe_fields(cls) -> str:
+        """The accepted argument names with their choices/bounds, derived.
+
+        Read off ``model_fields`` rather than hand-written, so a field added to
+        this model appears in the refusal for free instead of drifting.
+        """
+        parts: list[str] = []
+        for name, field in cls.model_fields.items():
+            detail = ""
+            annotation = field.annotation
+            if get_origin(annotation) is Literal:
+                detail = "|".join(repr(v) for v in get_args(annotation))
+                detail = f" ({detail})"
+            else:
+                lower = next(
+                    (m.ge for m in field.metadata if getattr(m, "ge", None) is not None),
+                    None,
+                )
+                upper = next(
+                    (m.le for m in field.metadata if getattr(m, "le", None) is not None),
+                    None,
+                )
+                if lower is not None or upper is not None:
+                    detail = f" ({lower}..{upper})"
+            parts.append(f"{name}{detail}")
+        return ", ".join(parts)
 
 
 class OutputBuffer:

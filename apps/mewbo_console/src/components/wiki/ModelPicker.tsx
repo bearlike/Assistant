@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "@/components/ui/focus-ring";
 
 import { ModelBrandIcon } from "../ModelBrandIcon";
+import { ModelPickerTabs } from "../ModelPickerTabs";
 import { formatModelName } from "../../utils/model";
 import { isUnsupportedModel } from "../../utils/modelSupport";
 import { useModels } from "../../hooks/useModels";
@@ -50,6 +51,14 @@ interface ModelPickerProps {
   /** Native hover hint on the trigger (the repo's `title` idiom — no Tooltip
    *  primitive is vendored). */
   title?: string;
+  /** Supplying `fallbackModels` switches the popover from the plain model
+   *  list onto the shared tabbed Model | Fallback panel (`ModelPickerTabs`) —
+   *  the same mechanism the Tasks composer uses. Omit it for model-only
+   *  surfaces (recovery card, Q&A dock). */
+  fallbackEnabled?: boolean;
+  fallbackModels?: string[];
+  onFallbackEnabledChange?: (enabled: boolean) => void;
+  onFallbackModelsChange?: (next: string[]) => void;
 }
 
 /**
@@ -139,12 +148,37 @@ export function ModelPicker({
   className,
   defaultLabel,
   title,
+  fallbackEnabled,
+  fallbackModels,
+  onFallbackEnabledChange,
+  onFallbackModelsChange,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const pick = (id: string) => {
     onChange(id);
     setOpen(false);
   };
+  // Presence of the full fallback wiring, not a separate boolean prop,
+  // decides the popover shape — a caller either wants the whole mechanism or
+  // none of it, so there is no state where these could disagree.
+  const { models, loading, error, refresh } = useModels();
+  const tabBody =
+    fallbackModels != null && onFallbackEnabledChange != null && onFallbackModelsChange != null ? (
+      <ModelPickerTabs
+        models={models}
+        value={value || null}
+        onSelect={(id) => pick(id ?? "")}
+        defaultLabel={defaultLabel}
+        loading={loading}
+        error={error}
+        onRefresh={refresh}
+        fallbackEnabled={!!fallbackEnabled}
+        fallbackModels={fallbackModels}
+        onFallbackEnabledChange={onFallbackEnabledChange}
+        onFallbackModelsChange={onFallbackModelsChange}
+      />
+    ) : null;
+  const fallbackActive = tabBody != null && !!fallbackEnabled && (fallbackModels?.length ?? 0) > 0;
 
   // `min-w-0` + `whitespace-nowrap` + a max-width on the compact pill
   // prevents the model id from wrapping or overflowing the dock row when a
@@ -180,6 +214,11 @@ export function ModelPicker({
           >
             {isDefault ? defaultLabel : formatModelName(value)}
           </span>
+          {fallbackActive && (
+            <span className="shrink-0 min-w-[16px] h-4 px-1 inline-flex items-center justify-center rounded-full bg-[hsl(var(--primary))]/15 text-2xs font-medium text-[hsl(var(--primary-text))]">
+              +{fallbackModels?.length}
+            </span>
+          )}
           <ChevronDown className="h-3 w-3 text-[hsl(var(--muted-foreground))] shrink-0" />
         </button>
       </PopoverTrigger>
@@ -187,9 +226,12 @@ export function ModelPicker({
         align="start"
         sideOffset={6}
         collisionPadding={16}
-        className="w-[340px] max-w-[calc(100vw-2rem)] p-0 rounded-lg border-[hsl(var(--border-strong))] bg-[hsl(var(--popover))] overflow-hidden"
+        className={cn(
+          "p-0 rounded-lg border-[hsl(var(--border-strong))] bg-[hsl(var(--popover))] overflow-hidden",
+          tabBody ? "w-80 max-h-[460px] flex flex-col" : "w-[340px] max-w-[calc(100vw-2rem)]",
+        )}
       >
-        <ModelMenu value={value} onSelect={pick} defaultLabel={defaultLabel} />
+        {tabBody ?? <ModelMenu value={value} onSelect={pick} defaultLabel={defaultLabel} />}
       </PopoverContent>
     </Popover>
   );

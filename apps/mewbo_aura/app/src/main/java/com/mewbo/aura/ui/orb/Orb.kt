@@ -1,6 +1,8 @@
 package com.mewbo.aura.ui.orb
 
 import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Box
@@ -14,6 +16,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.center
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -213,6 +217,7 @@ private object OrbUniformMath {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun RuntimeShader.setOrbUniforms(
     resolution: Size,
     time: Float,
@@ -263,11 +268,25 @@ fun Orb(
 
     val describedModifier = modifier.semantics { contentDescription = state.accessibilityLabel() }
 
+    // The AGSL gate comes FIRST: on API 30-32 there is no RuntimeShader to freeze, so the
+    // reduced-motion path below is unreachable there too.
+    if (!AuraShaders.supported) {
+        ShaderFreeOrb(palette = palette, modifier = describedModifier, size = size)
+        return
+    }
+
     if (extras.reducedMotion) {
         ReducedMotionOrb(state = state, palette = palette, modifier = describedModifier, size = size)
         return
     }
 
+    ShaderOrb(state = state, palette = palette, modifier = describedModifier, size = size)
+}
+
+/** The live AGSL orb — everything [Orb] resolves to once the shader gate and reduced motion say so. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@Composable
+private fun ShaderOrb(state: OrbState, palette: List<Color>, modifier: Modifier, size: Dp) {
     val shader = remember { RuntimeShader(ORB_SHADER_SRC) }
     val timeSeconds = rememberShaderTimeSeconds()
 
@@ -308,7 +327,7 @@ fun Orb(
     val rotationState = remember { ShaderRotationAccumulator() }
 
     Box(
-        modifier = describedModifier
+        modifier = modifier
             .size(size)
             // Binding fix (v1 review): graphicsLayer{} instead of Modifier.scale() so the
             // transition-driven pulse scale never recomposes — only reads State in the draw phase.
@@ -353,6 +372,7 @@ fun Orb(
  * gradient circle — a visibly different, lower-fidelity shape; the brief requires a static but
  * still-crisp flower here, not a fallback shape.
  */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
 private fun ReducedMotionOrb(state: OrbState, palette: List<Color>, modifier: Modifier, size: Dp) {
     val shader = remember { RuntimeShader(ORB_SHADER_SRC) }
@@ -385,6 +405,33 @@ private fun ReducedMotionOrb(state: OrbState, palette: List<Color>, modifier: Mo
                     )
                     drawRect(brush = brush)
                 }
+            },
+    )
+}
+
+/**
+ * Shader-free fallback for API 30-32 ([AuraShaders]): a static radial gradient through the SAME
+ * per-state [palette] the shader is handed, falling to fully transparent before the draw bounds
+ * (the orb's standing "alpha reaches 0 before any draw bound" law, expressed as a gradient stop
+ * rather than an AGSL edge window).
+ *
+ * It is deliberately NOT a second rendering of the clay-flower silhouette: the SDF is AGSL-only,
+ * and the surface this path serves is a television where the orb is decorative. Shape fidelity is
+ * traded for a working install; palette and presence are kept.
+ */
+@Composable
+private fun ShaderFreeOrb(palette: List<Color>, modifier: Modifier, size: Dp) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .drawWithCache {
+                val radius = this.size.minDimension / 2f
+                val brush = Brush.radialGradient(
+                    colors = listOf(palette[0], palette[1], palette[2], Color.Transparent),
+                    center = this.size.center,
+                    radius = radius,
+                )
+                onDrawBehind { drawCircle(brush = brush, radius = radius, center = this.size.center) }
             },
     )
 }

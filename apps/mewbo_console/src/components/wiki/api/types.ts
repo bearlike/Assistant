@@ -192,6 +192,8 @@ export interface WizardSubmission {
   /** Ordered cross-model fallback ladder for the indexing run. Omitted or
    *  empty = no ladder; a non-empty list IS the ladder. */
   fallbackModels?: string[];
+  /** Omitted = inherit the deployment's default embedding model. */
+  embeddingModel?: string;
   /** Free-text operator guidance appended to the indexer's playbook. Omitted =
    *  no guidance. Capped server-side (4000 chars): it is appended to the prompt
    *  of every page the indexer writes, so it is paid once per page. */
@@ -223,6 +225,7 @@ export interface WizardSubmission {
 export interface ProjectSettingsEditable {
   model?: boolean;
   fallbackModels?: boolean;
+  embeddingModel?: boolean;
   ref?: boolean;
   depth?: boolean;
   language?: boolean;
@@ -269,6 +272,8 @@ export interface GitProjectSettings {
   model: string;
   /** Ordered cross-model fallback ladder. null/absent = no ladder. */
   fallbackModels?: string[] | null;
+  /** null/absent = inherit the deployment's default embedding model. */
+  embeddingModel?: string | null;
   /** Branch/tag pinned for indexing; null = the repo's default branch. */
   ref: string | null;
   depth: "comprehensive" | "concise";
@@ -300,6 +305,7 @@ export interface CatalogProjectSettings {
   slug: string;
   model?: string;
   fallbackModels?: string[] | null;
+  embeddingModel?: string | null;
   desc?: string;
   credential?: ProjectSettingsCredential;
   editable?: ProjectSettingsEditable;
@@ -325,6 +331,8 @@ export interface ProjectSettingsPatch {
   /** `null` clears the ladder; an absent key leaves it untouched — the same
    *  omit-vs-null distinction `ref` carries. */
   fallbackModels?: string[] | null;
+  /** `null` returns to the deployment default; absent leaves it untouched. */
+  embeddingModel?: string | null;
   ref?: string | null;
   depth?: "comprehensive" | "concise";
   language?: string;
@@ -427,6 +435,43 @@ export interface ScopePreview {
   llmCalls: number;
 }
 
+/**
+ * One declared step's observed state. A ledger records the small, ordered plan
+ * rather than one entry per processed unit, so snapshots stay bounded while a
+ * reader can still see a silent uncountable step as open work.
+ */
+export interface StepRecord {
+  /** Stable dotted identifier for this declared step. */
+  key: string;
+  /** Human-facing description of the work. */
+  label: string;
+  /** Coarse rendering bucket — the indexer's phase name. */
+  group: string;
+  /** Plural noun for counted work; absent means the step is uncountable. */
+  unit?: string | null;
+  /** Relative share of this operation's declared cost. */
+  weight: number;
+  state: "pending" | "running" | "done" | "skipped" | "failed";
+  startedAt?: string | null;
+  endedAt?: string | null;
+  current?: number | null;
+  total?: number | null;
+  /** The last unit the step observed, such as a file path. */
+  detail?: string;
+  /** Why this step was skipped or failed. */
+  note?: string;
+}
+
+/**
+ * The declared, ordered plan for an indexing operation. The backend owns the
+ * weights because they belong to the work itself; consumers render this outline
+ * instead of guessing phase shares locally.
+ */
+export interface ProgressLedger {
+  version: 1;
+  steps: StepRecord[];
+}
+
 export interface IndexingJob {
   jobId: string;
   /** Canonical fully-qualified slug ``host/owner/repo``. */
@@ -468,25 +513,23 @@ export interface IndexingJob {
   /** ISO timestamp at which the current ``phase`` started — drives ETA. */
   phaseStartedAt?: string | null;
   /**
-   * Generic per-phase progress — the ONE mechanism for every phase beyond
-   * scan/pages (today: ``graph`` nodes/edges built, ``enrich`` entities
-   * extracted; works for a future phase with zero FE changes). The BE
-   * resets all three ``phaseProgress*`` fields to ``null`` on every
-   * ``emit_phase`` transition, so a non-null value here always belongs to
-   * the phase named by `phase` above — never a stale leftover from a phase
-   * that already ended. Additive: absent on a job from before this field
-   * shipped, and on a phase that never populates it (clone/plan/finalize),
-   * in which case `progress.ts:IndexingProgress` renders that phase exactly
-   * as it did before this field existed.
+   * SUPERSEDED by {@link progress}. Kept for an in-flight job and older
+   * snapshots; its shared register has no step owner, so new clients prefer
+   * the ledger's per-step counters.
    */
   phaseProgressCurrent?: number | null;
-  /** Paired with {@link phaseProgressCurrent}. `null`/absent means "a
-   *  running count with no known total yet" — real progress, but no
-   *  fraction to paint until the total is knowable. */
+  /** SUPERSEDED by {@link progress}. Paired with `phaseProgressCurrent` only
+   *  for jobs created before the ledger was available. */
   phaseProgressTotal?: number | null;
-  /** Unit label for the pair above — `"files"` / `"units"` / `"pages"` (or
-   *  another BE-chosen noun). `null`/absent falls back to a generic label. */
+  /** SUPERSEDED by {@link progress}. Unit label for the legacy shared
+   *  progress triple; absent falls back to a generic label. */
   phaseProgressUnit?: string | null;
+  /**
+   * Declared indexing plan plus every step's observed state. Absent on older
+   * snapshots, where `IndexingProgress` deliberately uses the legacy phase
+   * fallback instead of inventing a partial ledger.
+   */
+  progress?: ProgressLedger;
   /**
    * ISO timestamp of the last progress signal of any kind (not scoped to
    * one phase, unlike {@link phaseStartedAt}). Reserved for a future
@@ -657,6 +700,15 @@ export type IndexingPhase =
 export interface IndexingLogEntry {
   level: "info" | "warn" | "error";
   text: string;
+  /**
+   * Declared step this line was emitted inside — the backend stamps the open
+   * step onto every log it writes, and absent means the work ran outside any
+   * declared scope. The activity pane groups consecutive lines by it, which is
+   * the whole reason the backend carries it: without the key a reader gets
+   * thousands of undifferentiated lines and no way to tell which step produced
+   * which.
+   */
+  step?: string | null;
   /** Wall-clock seconds since epoch when this line was emitted (UI sort key). */
   ts?: number;
 }
@@ -673,12 +725,28 @@ export type IndexingEvent =
   | { type: "phase"; name: IndexingPhase }
   | { type: "plan_committed"; totalPages: number }
   | { type: "page_committed"; pageId: string; index: number; totalPages: number }
+  /** Snapshot of the declared plan and its derived whole-operation numbers.
+   *  `steps` lets a consumer that does not need grouping still render the
+   *  ordered outline; `groups` preserves the backend's phase grouping. */
+  | {
+      type: "progress";
+      version: 1;
+      fraction: number;
+      etaSeconds: number | null;
+      elapsedSeconds: number | null;
+      activeKey: string | null;
+      groups: Array<{ key: string; steps: StepRecord[] }>;
+      steps: StepRecord[];
+    }
   /** Emitted once, at the end of a SCOPED refresh's delta pass — the SAME
    *  counts as {@link IndexingJob.scopePreview}, carried inline (never
    *  nested under a sub-key) so folding it onto the job snapshot is a
    *  straight spread. Never emitted on a full rebuild or a first index. */
   | ({ type: "scope_preview" } & ScopePreview)
-  | { type: "log"; level: "info" | "warn" | "error"; text: string };
+  /** A timeline line, attributed to the declared step that was open when the
+   *  backend wrote it. `step` is absent for work outside any declared scope
+   *  and for a job older than the ledger. */
+  | { type: "log"; level: "info" | "warn" | "error"; text: string; step?: string | null };
 
 // ── Q&A ────────────────────────────────────────────────────────────────
 

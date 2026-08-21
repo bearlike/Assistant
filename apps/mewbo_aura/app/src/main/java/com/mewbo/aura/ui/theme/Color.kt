@@ -56,11 +56,43 @@ object AuraColors {
     val iconPrimary = Color(0xFFE9EAED)
     val outlineHairline = Color(0xFF2A2B2E)
 
+    /**
+     * The D-pad focus ring — where a remote currently IS.
+     *
+     * Deliberately NOT [accentPrimary], which already means "selected": on a television the focused
+     * row and the selected row are routinely different rows, and painting them the same colour
+     * makes the remote's position unreadable at the exact moment it matters. A near-white ring also
+     * survives being drawn over any surface token in this palette, which a tinted ring does not —
+     * the focusable set spans [surfaceCanvas], [surfaceDrawer] and [surfaceInput].
+     *
+     * Focus is not a touch state: a finger never grants it, so this ring is invisible on a handheld
+     * unless a keyboard or remote is attached. That is why the focus layer is NOT gated on
+     * `TelevisionChecker` — there is no phone regression to gate away from.
+     */
+    val focusRing = Color(0xFFE9EAED)
+
     // ---- §3.2 Accent & brand ----
     val accentPrimary = Color(0xFF4C6EF5)
     val accentOnAccent = Color(0xFFFFFFFF)
     val accentMuted = Color(0xFF3A4570)
     val accentError = Color(0xFFE46962)
+
+    /**
+     * The one affirmative-state tint: a permission the system has granted, a connection a live
+     * probe answered. Settings is its only consumer today.
+     *
+     * It exists because the palette had no way to say "this is on" that was not
+     * [accentPrimary] — and that token already means "selected", so a granted permission wearing it
+     * reads as a highlighted row rather than a working capability. Desaturated to sit in the same
+     * family as [accentError]'s coral rather than a signal green, and measured at 9.7:1 against
+     * [surfaceCanvas], comfortably past the 4.5:1 floor.
+     *
+     * **This tint is never the only signal.** Every surface painting it also renders a glyph and a
+     * word, because colour alone fails for a colour-blind reader and under high contrast — see
+     * `ui/settings/CLAUDE.md`. It is deliberately clear of the yellow/green the aurora rejected
+     * (§4 aura colour law); that law scopes the atmospheric wash, not a status glyph.
+     */
+    val accentSuccess = Color(0xFF71C285)
 
     /**
      * Composer scope-row provenance accents (user directive): the project scope and the

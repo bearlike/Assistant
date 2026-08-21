@@ -37,7 +37,7 @@ def client(monkeypatch, store):
     from flask import Flask
     from mewbo_api.wiki.routes import register
 
-    monkeypatch.setattr(embedder_mod, "make_embedder_or_none", lambda: None)
+    monkeypatch.setattr(embedder_mod, "make_embedder_or_none", lambda model=None: None)
     monkeypatch.setattr(routes_mod, "_make_insight_llm", lambda: None)
 
     app = Flask(__name__)

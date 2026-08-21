@@ -1,4 +1,4 @@
-> ↑ [apps/mewbo_aura/CLAUDE.md](../../../../../../../../CLAUDE.md) · [root](../../../../../../../../../../CLAUDE.md) · children: [theme](theme/CLAUDE.md) · [orb](orb/CLAUDE.md) · [aurora](aurora/CLAUDE.md) · [chat](chat/CLAUDE.md) · [composer](composer/CLAUDE.md) · [overlay](overlay/CLAUDE.md) · [common](common/CLAUDE.md) · [navigation](navigation/CLAUDE.md) · [sessions](sessions/CLAUDE.md) · [search](search/CLAUDE.md) · [settings](settings/CLAUDE.md)
+> ↑ [apps/mewbo_aura/CLAUDE.md](../../../../../../../../CLAUDE.md) · [root](../../../../../../../../../../CLAUDE.md) · children: [theme](theme/CLAUDE.md) · [orb](orb/CLAUDE.md) · [aurora](aurora/CLAUDE.md) · [chat](chat/CLAUDE.md) · [composer](composer/CLAUDE.md) · [overlay](overlay/CLAUDE.md) · [apps](apps/CLAUDE.md) · [control](control/CLAUDE.md) · [common](common/CLAUDE.md) · [navigation](navigation/CLAUDE.md) · [sessions](sessions/CLAUDE.md) · [search](search/CLAUDE.md) · [settings](settings/CLAUDE.md)
 
 # Aura UI — Compose Surface Guidance (hub)
 
@@ -21,6 +21,8 @@ child before re-deriving anything about it.**
 | [`chat/widget/`](chat/widget/CLAUDE.md) | the Streamlit widget WebView card (ready-signal contract) |
 | [`composer/`](composer/CLAUDE.md) | `AuraComposer`, five `ComposerState`s, `RmsWaveform`, docked-scope-row alignment anchor |
 | [`overlay/`](overlay/CLAUDE.md) | the assist-overlay render of `AssistUiState` |
+| [`apps/`](apps/CLAUDE.md) | Mewbo Apps gallery/detail/create + `AppWebView`'s two-door payload delivery and the fixed `mewbo-app-payload` envelope |
+| [`control/`](control/CLAUDE.md) | the device-control overlay: the two-window host, the capture/tap veil, the narration fold |
 | [`common/`](common/CLAUDE.md) | shared vocabulary: `ActionSheet`, `AuraBottomSheet`, `MarkdownMessage`/`MarkdownBuffer`, `ErrorCard`, `NoticeHost`, `TypingIndicator`, `AttachmentTile` |
 | [`navigation/`](navigation/CLAUDE.md) | the drawer + routes + `SessionActionsSheet` |
 | [`sessions/`](sessions/CLAUDE.md) | recents view-state + the pure rail helpers (`RecentsFilter`/`SessionGrouping`/`RelativeTime`) |

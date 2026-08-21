@@ -303,13 +303,29 @@ class WikiCheckoutMount:
 
 
 class AppStagingMount:
-    """Tier 3 — an app's builder/maintainer session mounts that app's staging dir.
+    """Tier 3 — an app's builder/maintainer/opened-against session mounts its staging dir.
 
     Staging is EPHEMERAL: an app's source lives in its manifest and reaches disk
     only when something materializes it, so this tier MATERIALIZES on demand
     through ``AppStagingArea`` — the one implementation ``get_app``'s ``stage``
     operation also calls. Refusing instead would leave the feature working only
     in the rare window after a stage and before a restart.
+
+    **Must pass ``session_tags``, exactly like every other app surface.**
+    ``app_for_session`` resolves by two id FIELDS first (owner/maintainer) and
+    only THEN by the server-stamped ``app:<id>:<session_id>`` tag — see
+    ``mewbo_api/apps/CLAUDE.md`` → "ONE resolver owns both tiers". Omitting the
+    tag argument silently drops back to the pre-tag behaviour, and it is a
+    DEFAULT that fails quietly rather than an error: this tier, ``run_pipeline``
+    and ``app_data`` each lost the tag tier this way, independently. A session
+    opened via ``POST /apps/<id>/session
+    {"new_session": true}`` (the composer's "start a new conversation" action)
+    is neither the owner nor the maintainer, so it resolved to no app at all and
+    the Web IDE answered "session has no project in context" for a session that
+    plainly has one open. Read off the already-injected ``runtime.session_store``
+    — the same collaborator ``CatalogProjectMount`` reads context off — rather
+    than the apps plugin's own ``session_tags_for`` singleton, which would open
+    a second store connection this tier has no need for.
 
     Cost: ``O(collection)`` in the number of stored apps for the session→app
     scan, plus ``O(one app)`` for the write (the bundle is capped at submit).
@@ -321,7 +337,8 @@ class AppStagingMount:
         from mewbo_api.apps.store import get_app_store
 
         area = AppStagingArea(session_id=session_id)
-        app = area.app_for_session(get_app_store())
+        tags = runtime.session_store.tags_for_session(session_id)
+        app = area.app_for_session(get_app_store(), session_tags=tags)
         if app is None:
             return None
         try:

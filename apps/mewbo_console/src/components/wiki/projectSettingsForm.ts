@@ -22,6 +22,9 @@ import { isCatalogSettings } from "./api/types";
 
 export const settingsSchema = z.object({
   model: z.string().trim(),
+  /** Empty means inherit the deployment default. A typed value is sent as a
+   *  project override; clearing it explicitly sends `null`. */
+  embeddingModel: z.string().trim(),
   /** Newline-separated in the form; `string[] | null` on the wire — the same
    *  textarea-shaped representation `dirs`/`files` use, chosen because rhf
    *  reports a plain string dirty reliably where an array field reports a
@@ -89,6 +92,7 @@ export type SettingsValues = z.infer<typeof settingsSchema>;
 /** Wire field → form field. Used to pin server field errors to their input. */
 export const FORM_FIELD_BY_WIRE: Record<ProjectSettingsField, keyof SettingsValues> = {
   model: "model",
+  embeddingModel: "embeddingModel",
   fallbackModels: "fallbackModels",
   ref: "branch",
   depth: "depth",
@@ -118,6 +122,7 @@ export function formFieldFor(wire: string): keyof SettingsValues | undefined {
  */
 export const INDEX_TIME_FIELDS: Array<keyof ProjectSettingsPatch> = [
   "model",
+  "embeddingModel",
   "fallbackModels",
   "ref",
   "depth",
@@ -138,6 +143,7 @@ export const needsReindex = (patch: ProjectSettingsPatch): boolean =>
  *  so these values are never shown to anyone. */
 export const EMPTY_FORM: SettingsValues = {
   model: "",
+  embeddingModel: "",
   fallbackModels: "",
   branch: "",
   depth: "comprehensive",
@@ -159,6 +165,7 @@ export function seedFrom(s: ProjectSettings): SettingsValues {
   return {
     ...EMPTY_FORM,
     model: s.model ?? "",
+    embeddingModel: s.embeddingModel ?? "",
     fallbackModels: (s.fallbackModels ?? []).join("\n"),
     branch: git?.ref ?? "",
     depth: git?.depth ?? EMPTY_FORM.depth,
@@ -168,6 +175,7 @@ export function seedFrom(s: ProjectSettings): SettingsValues {
     files: (git?.files ?? []).join("\n"),
     graphOnly: git?.graphOnly ?? false,
     customInstructions: git?.customInstructions ?? "",
+    desc: s.desc ?? "",
     // Deliberately NOT seeded from the DTO: the server sends names, not
     // entries, so there is nothing here that could be round-tripped. Untouched
     // means unchanged; see the field's comment in `settingsSchema`.
@@ -218,6 +226,9 @@ export function buildPatch(
 ): ProjectSettingsPatch {
   const patch: ProjectSettingsPatch = {};
   if (dirty.model) patch.model = values.model.trim();
+  if (dirty.embeddingModel) {
+    patch.embeddingModel = values.embeddingModel.trim() || null;
+  }
   // An emptied ladder is an explicit "no fallback" (null), distinct from
   // omitting the key, which leaves the stored ladder alone.
   if (dirty.fallbackModels) {

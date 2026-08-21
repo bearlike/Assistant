@@ -7,6 +7,12 @@
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/aura_surface_canvas</item>
+        <!-- Both attrs are deprecated, and from Android 15 statusBarColor is disabled outright
+             while navigationBarColor survives for 3-button navigation only (forced to 80% alpha)
+             and is disabled under gesture navigation. They stay because minSdk is 33, where they
+             still apply and set the very first frame's bars before MainActivity's
+             enableEdgeToEdge() runs. Deleting them as "deprecated" regresses API 33/34 alone,
+             which is why nothing on a current device would show it. -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>

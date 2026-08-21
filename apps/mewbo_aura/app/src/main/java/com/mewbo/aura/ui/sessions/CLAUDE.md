@@ -9,8 +9,16 @@ Scope: `ui/sessions/` — `SessionsViewModel`/`SessionsUiState` plus the pure, u
 - **`RecentsFilter`** (`MOBILE_ONLY` / `ALL`). `MOBILE_ONLY` matches `origin == "mobile"`; **a `null`
   origin is NOT mobile and is excluded by the default filter.** The default is `MOBILE_ONLY`, held in
   the VM and NOT in `SessionsUiState`, so it survives a refresh (which replaces the state) and resets
-  on VM recreation. Filtering is CLIENT-SIDE over the full fetched list — `GET /api/sessions` returns
-  everything, so the filter cannot starve.
+  on VM recreation. Filtering is CLIENT-SIDE over a **BOUNDED** fetch: `SessionRepository`'s
+  `RECENTS_FETCH_LIMIT` caps how many candidates `GET /api/sessions` examines, so this filter narrows
+  a window, not the store. **It therefore CAN starve** — a window carrying no mobile-origin session
+  renders "No mobile chats yet" while older ones exist beyond it. Accepted because the server orders
+  newest-first and a session Aura creates is mobile-origin, so the window keeps this device's own
+  history by construction; the bound was measured at the depth where mobile yield saturates (the
+  constant's KDoc carries the numbers). `RecentsFilter.ALL` re-reads the SAME window, never a wider
+  fetch. **Do not "fix" a starved rail by raising the bound** — `GET /api/sessions` has no `origin`
+  parameter, so real mobile scoping is a backend change; fetching more to filter harder client-side
+  re-opens the unbounded 3 MB transfer the bound exists to close.
 - **`SessionsViewModel` is stale-while-revalidate.** The VM is recreated per chat back-stack entry, so
   it SEEDS its initial state from the `@Singleton` `SessionRepository`'s shared cache
   (`Loaded(cached)` when non-empty) and re-fetches in the background. `refresh()` likewise keeps the

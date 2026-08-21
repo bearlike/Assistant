@@ -111,6 +111,23 @@ export class BrokerServer {
     }
   }
 
+  /**
+   * Pull the configured image before serving, so the FIRST launch on a fresh
+   * host doesn't pay a cold registry pull inline with a session open — and so
+   * a host that never had the image at all doesn't fail every launch forever.
+   * Never throws, for the same reason `sweep` doesn't: a registry hiccup at
+   * boot must delay readiness, not refuse it — `create`'s own `ensureImage`
+   * call retries on the next launch either way.
+   */
+  async ensureImage(): Promise<void> {
+    try {
+      await this.containers.ensureImage();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.log.warn(`ide-broker: startup image pull failed, continuing: ${reason}`);
+    }
+  }
+
   async listen(): Promise<string> {
     const address = await this.instance.listen({
       host: this.config.host,

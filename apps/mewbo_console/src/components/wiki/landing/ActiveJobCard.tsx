@@ -71,6 +71,7 @@ export function ActiveJobCard({ job, onOpen }: { job: IndexingJob; onOpen: () =>
         )}
         <span className="inline-flex items-center gap-1 ml-auto tabular-nums">
           {`${pct}% · ${progress.label}`}
+          {progress.statusLine && <span className="opacity-70 ml-1.5">· {progress.statusLine}</span>}
           {etaLabel && <span className="opacity-70 ml-1.5">· {etaLabel}</span>}
         </span>
       </div>

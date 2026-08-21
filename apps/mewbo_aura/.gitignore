@@ -5,6 +5,7 @@ local.properties
 .kotlin/
 tools/redroid/data/
 tools/redroid/data-gms/
+tools/redroid/data-tv/
 # Enterprise flavor root CA — baked at build time by the seedEnterpriseCa Gradle task.
 # Kept out of git so it never reaches the public GitHub mirror (source or APK).
 app/src/enterprise/res/raw/*.crt

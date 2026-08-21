@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -73,6 +74,7 @@ import {
   useBranches,
   useProjectSettings,
   useUpdateProject,
+  useWikiDefaults,
   useWikiLanguages,
   useWikiProjectBySlug,
 } from "./api/hooks";
@@ -229,6 +231,7 @@ export function ProjectSettingsDialog({
   const [banner, setBanner] = useState<string | null>(null);
   const updateM = useUpdateProject(slug);
   const { models: allModels } = useModels();
+  const wikiDefaults = useWikiDefaults();
   // UI-only: the wire has no "enabled" field, so an armed-but-empty ladder has
   // to be expressible locally or the switch would flip itself back off.
   const [fallbackOn, setFallbackOn] = useState(false);
@@ -387,7 +390,73 @@ export function ProjectSettingsDialog({
                 </p>
               )}
 
-              {canEdit("model") && (
+              {/* Model and its fallback ladder render as ONE tabbed picker
+                  when both are server-editable — the same merged mechanism
+                  `ModelSelector`/the wizard use. Nested `FormField`s stay
+                  independent rhf `Controller`s (own field name, own dirty
+                  tracking, own `FormMessage`), so the per-field PATCH gate
+                  above ("Only the DIRTY subset is PATCHed") is unaffected;
+                  this only changes how the two controls are LAID OUT. */}
+              {canEdit("model") && canEdit("fallbackModels") && (
+                <FormField
+                  control={form.control}
+                  name="model"
+                  render={({ field: modelField }) => (
+                    <FormField
+                      control={form.control}
+                      name="fallbackModels"
+                      render={({ field: fallbackField }) => (
+                        <FormItem className="space-y-1.5">
+                          <FormLabel>Model</FormLabel>
+                          <FormControl>
+                            <ModelPicker
+                              value={modelField.value}
+                              onChange={modelField.onChange}
+                              variant="full"
+                              fallbackEnabled={fallbackOn}
+                              fallbackModels={splitLines(fallbackField.value)}
+                              onFallbackEnabledChange={(on) => {
+                                setFallbackOn(on);
+                                if (!on) fallbackField.onChange("");
+                              }}
+                              onFallbackModelsChange={(next) =>
+                                fallbackField.onChange(next.join("\n"))
+                              }
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                />
+              )}
+
+              {canEdit("embeddingModel") && (
+                <FormField
+                  control={form.control}
+                  name="embeddingModel"
+                  render={({ field }) => (
+                    <FormItem className="space-y-1.5">
+                      <FormLabel>Embedding model</FormLabel>
+                      <FormDescription>
+                        Leave blank to inherit the deployment default. Changing this
+                        model requires a full re-index before the new setting applies.
+                      </FormDescription>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          aria-label="Embedding model"
+                          placeholder={wikiDefaults.data?.embeddingModel ?? "Deployment default"}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {canEdit("model") && !canEdit("fallbackModels") && (
                 <FormField
                   control={form.control}
                   name="model"
@@ -407,7 +476,7 @@ export function ProjectSettingsDialog({
                 />
               )}
 
-              {canEdit("fallbackModels") && (
+              {!canEdit("model") && canEdit("fallbackModels") && (
                 <FormField
                   control={form.control}
                   name="fallbackModels"

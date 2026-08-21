@@ -1,5 +1,6 @@
 {
   "name": "widget-builder",
+  "display_name": "Custom Widgets",
   "description": "st-widget-builder sub-agent for stlite console widgets.",
   "version": "0.1.0",
   "author": "Mewbo",

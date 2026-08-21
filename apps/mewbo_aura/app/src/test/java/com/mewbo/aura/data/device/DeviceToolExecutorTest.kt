@@ -2,11 +2,16 @@ package com.mewbo.aura.data.device
 
 import com.mewbo.aura.data.api.DeviceToolResultRequest
 import com.mewbo.aura.data.model.DeviceToolCallPayload
+import com.mewbo.aura.data.device.shizuku.DeviceControlBinder
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatus
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatusSource
 import com.mewbo.aura.data.model.SessionEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -45,14 +50,34 @@ class DeviceToolExecutorTest {
         nowEpochSeconds: Double = 0.0,
         handlers: List<DeviceToolHandler> = emptyList(),
         disabledToolIds: Set<String> = emptySet(),
+        controlSession: DeviceControlSession = grantedSession(),
     ) = DeviceToolExecutor(
         resultReporter = reporter,
         callLedger = ledger,
         clock = DeviceClock { nowEpochSeconds },
         gate = DeviceToolGate { disabledToolIds },
+        controlSession = controlSession,
         handlers = handlers,
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
     )
+
+    /** Most tests here are about dedup/staleness/error mapping and never touch a
+     * control tool, so they get a session that has already taken the grant — an
+     * inactive default would silently turn every one of them into a test of the
+     * grant gate instead of the thing it names. */
+    private fun grantedSession(): DeviceControlSession =
+        DeviceControlSession(
+            DeviceControlStatusSource { MutableStateFlow(DeviceControlStatus.Ready) },
+            DeviceControlBinder { true },
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+        ).also { runBlocking { it.start() } }
+
+    private fun ungrantedSession(): DeviceControlSession =
+        DeviceControlSession(
+            DeviceControlStatusSource { MutableStateFlow(DeviceControlStatus.Ready) },
+            DeviceControlBinder { true },
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+        )
 
     private fun call(
         callId: String = "call-1",
@@ -208,6 +233,112 @@ class DeviceToolExecutorTest {
 
         assertEquals(1, handler.callCount)
         assertEquals("ok", reporter.reports.single().request.status)
+    }
+
+    // --- the grant's ANSWER layer ---
+
+    @Test
+    fun `a control tool is refused while no grant is held, and its handler never runs`() = runTest {
+        // The half of the grant that a stale server cannot route around. The
+        // handler never running is the assertion that matters: a refusal that
+        // still taps the screen is not a refusal.
+        val handler = FakeHandler("device_action")
+        val reporter = FakeResultReporter()
+        val exec = executor(reporter = reporter, handlers = listOf(handler), controlSession = ungrantedSession())
+
+        exec.handle("session-1", call(toolId = "device_action"))
+
+        assertEquals(0, handler.callCount)
+        val report = reporter.reports.single()
+        assertEquals("error", report.request.status)
+        assertEquals("device_control_not_started", report.request.error?.code)
+        assertTrue(
+            "the refusal must name the recovery, not just the state",
+            report.request.error?.message?.contains("device_control_start") == true,
+        )
+    }
+
+    @Test
+    fun `a control tool whose grant lost its binder reports the SUBSTRATE reason`() = runTest {
+        // Not `device_control_not_started`: the model would call start, which
+        // refuses for the identical reason, and neither party can break out.
+        val status = MutableStateFlow<DeviceControlStatus>(DeviceControlStatus.Ready)
+        val session = DeviceControlSession(
+            DeviceControlStatusSource { status },
+            DeviceControlBinder { true },
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+        )
+        session.start()
+        val handler = FakeHandler("device_ui")
+        val reporter = FakeResultReporter()
+        val exec = executor(reporter = reporter, handlers = listOf(handler), controlSession = session)
+
+        status.value = DeviceControlStatus.NotRunning
+        exec.handle("session-1", call(toolId = "device_ui"))
+
+        assertEquals(0, handler.callCount)
+        assertEquals("shizuku_not_running", reporter.reports.single().request.error?.code)
+    }
+
+    @Test
+    fun `the same control tool runs once the grant is taken`() = runTest {
+        val session = ungrantedSession()
+        val handler = FakeHandler("device_ui")
+        val reporter = FakeResultReporter()
+        val exec = executor(reporter = reporter, handlers = listOf(handler), controlSession = session)
+
+        exec.handle("session-1", call(callId = "before", toolId = "device_ui"))
+        session.start()
+        exec.handle("session-1", call(callId = "after", toolId = "device_ui"))
+
+        assertEquals(1, handler.callCount)
+        assertEquals(listOf("error", "ok"), reporter.reports.map { it.request.status })
+    }
+
+    @Test
+    fun `a non-control device tool is untouched by the grant`() = runTest {
+        // The gate is per-family. An alarm or a battery read has nothing to do
+        // with driving the screen and must not be collateral.
+        val handler = FakeHandler("device_get_battery")
+        val reporter = FakeResultReporter()
+        val exec = executor(reporter = reporter, handlers = listOf(handler), controlSession = ungrantedSession())
+
+        exec.handle("session-1", call(toolId = "device_get_battery"))
+
+        assertEquals(1, handler.callCount)
+        assertEquals("ok", reporter.reports.single().request.status)
+    }
+
+    @Test
+    fun `a control tool that is BOTH disabled and ungranted reports the disabled reason`() = runTest {
+        // Order matters for the message the user hears: a tool the user
+        // switched off is not fixed by starting a grant, so telling the model
+        // to start one would send them round a loop that cannot terminate.
+        val reporter = FakeResultReporter()
+        val exec = executor(
+            reporter = reporter,
+            disabledToolIds = setOf("device_shell"),
+            controlSession = ungrantedSession(),
+        )
+
+        exec.handle("session-1", call(toolId = "device_shell"))
+
+        assertEquals("tool_disabled", reporter.reports.single().request.error?.code)
+    }
+
+    @Test
+    fun `the lifecycle pair is never gated on the grant it exists to create`() = runTest {
+        val start = FakeHandler("device_control_start")
+        val stop = FakeHandler("device_control_stop")
+        val reporter = FakeResultReporter()
+        val exec = executor(reporter = reporter, handlers = listOf(start, stop), controlSession = ungrantedSession())
+
+        exec.handle("session-1", call(callId = "c1", toolId = "device_control_start"))
+        exec.handle("session-1", call(callId = "c2", toolId = "device_control_stop"))
+
+        assertEquals(1, start.callCount)
+        assertEquals(1, stop.callCount)
+        assertEquals(listOf("ok", "ok"), reporter.reports.map { it.request.status })
     }
 
 

@@ -56,9 +56,10 @@ depend on what the api image already ships (mewbo_core, pydantic, pymongo).
   owns ports 5125/3001/27018 wherever this runs, so the demo stack must be
   bootable next to it: `docker-compose.demo.yml` uses the default bridge network
   with `name: mewbo-demo` and publishes exactly one loopback debug port (3210).
-- **`:demo` image tags.** Services build `mewbo-api:demo` / `mewbo-console:demo`
-  with `pull_policy: missing`. Never tag over `ghcr.io/...:latest` — the deployed
-  stack pulls those.
+- **`:demo` image tags.** Services build `mewbo-base:demo`, `mewbo-api:demo`, and
+  `mewbo-console:demo`; Compose never pulls those local-only tags. The api uses
+  the local demo base rather than a published runtime image. Never tag over
+  `ghcr.io/...:latest` — the deployed stack pulls those.
 - **Ephemeral mongo = determinism.** No volume, no auth (`mongodb://mongo:27017`,
   isolated network). Every `demo-up` is a clean world; `demo-seed` recreates it.
 - **API healthcheck is authed `GET /api/sessions`, NOT `/api/models`.**
@@ -219,8 +220,9 @@ which is the intended staleness signal.
 ## Scope boundaries
 
 Local web screenshots only, via `make demo-*`, covering console + wiki + search +
-settings. Android capture (redroid + Maestro), video rendering (Playwright
-`recordVideo` + ffmpeg) and CI wiring are out of scope.
+settings. Android capture (redroid + Maestro) and video rendering (Playwright
+`recordVideo` + ffmpeg) are out of scope. CI reuses the same `make demo` entry
+point through the manually dispatched Demo Screenshots workflow.
 
 `make demo-frame` publishes what `shots.ts` captures, and nothing else — the two
 sets are exactly equal, because `docs/assets/img-src/` holds only what this

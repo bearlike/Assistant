@@ -15,39 +15,45 @@ run exit — a builder calls it, inspects ``docs_written``/``output``, fixes the
 code, and calls it again, all within the same build turn.
 
 Resolution mirrors ``app_data``'s three guarantees, adapted to a session with
-no ``app_id`` argument (there is exactly one app per maintainer/builder
-session, so the tool resolves it by SCOPE alone — the same query
-``AppPipelineRunTracker._app_for_session`` already uses at the trigger-fire
-seam): the app whose ``maintainer_session_id`` OR ``owner_session_id`` equals
-this session, the named pipeline within it, a refusal for an ``agentic``
-pipeline (it runs by being woken via its ``wake_prompt``, never invoked as a
-tool), and — only then — the registered :class:`~mewbo_api.apps.plugin.runtime.PipelineRunner`.
-An unwired runner degrades to a clean error, never a crash (mirrors
-``submit_app``'s "apps runtime not configured" seam).
+no ``app_id`` argument (there is exactly one app per bound session, so the tool
+resolves it by SCOPE alone): the app the SERVER bound this session to —
+:meth:`~mewbo_api.apps.staging.AppStagingArea.app_for_session`, the ONE
+resolution path ``get_app`` and ``submit_app`` also read — the named pipeline
+within it, a refusal for an ``agentic`` pipeline (it runs by being woken via its
+``wake_prompt``, never invoked as a tool), and — only then — the registered
+:class:`~mewbo_api.apps.plugin.runtime.PipelineRunner`. An unwired runner
+degrades to a clean error, never a crash (mirrors ``submit_app``'s "apps runtime
+not configured" seam).
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from mewbo_core.tooling.session_tools import DEFAULT_SESSION_TOOL_MODES
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from mewbo_api.apps.models import PIPELINE_TIMEOUT_CEILING_SECONDS
+from mewbo_api.apps.models import (
+    PIPELINE_TIMEOUT_CEILING_SECONDS,
+    PipelineEvidence,
+    PipelineResult,
+)
 from mewbo_api.apps.plugin.runtime import (
     AppStore,
     PipelineLedger,
     PipelineRunner,
     current_pipeline_ledger,
     current_pipeline_runner,
+    session_tags_for,
 )
+from mewbo_api.apps.staging import AppStagingArea
 from mewbo_api.apps.store import get_app_store
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from mewbo_core.classes import ActionStep
     from mewbo_core.contracts.types import Event
@@ -148,14 +154,15 @@ class RunPipelineTool:
         app_store: AppStore | None = None,
         runner: PipelineRunner | None = None,
         ledger: PipelineLedger | None = None,
+        tags_reader: Callable[[str], Sequence[str]] | None = None,
     ) -> None:
-        """Bind the owning session + the two collaborators.
+        """Bind the owning session + the two collaborators and the tag reader.
 
         Args:
-            session_id: The builder/maintainer session — the scope boundary. The
-                app is resolved as whichever one this session owns or maintains
-                (there is exactly one; unlike ``app_data`` this tool takes no
-                ``app_id`` argument, so it can't be pointed at a foreign app).
+            session_id: The bound session — the scope boundary. The app is
+                resolved as whichever one the SERVER bound this session to (there
+                is exactly one; unlike ``app_data`` this tool takes no ``app_id``
+                argument, so it can't be pointed at a foreign app).
             event_logger: Accepted for the ``SessionToolRegistry`` manifest
                 constructor shape; unused (this tool emits no transcript event).
             app_store: Manifest read store. ``None`` (the plugin path) resolves
@@ -170,11 +177,18 @@ class RunPipelineTool:
                 through. ``None`` (the plugin path) resolves from the down-only
                 :func:`current_pipeline_ledger` seam; still ``None`` after that
                 degrades to the *runner* path with ``run_key: None``.
+            tags_reader: Reads this session's server-stamped tags — the second
+                binding tier. Injected rather than reached for, because the
+                default (``session_tags_for``) resolves a process-wide session
+                store: a test could otherwise never drive the tag tier THROUGH
+                this tool, which is why the tier could drift out of three of the
+                four app tools without a single test noticing.
         """
         self._session_id = session_id
         self._app_store = app_store
         self._runner = runner
         self._ledger = ledger
+        self._tags_reader = tags_reader or session_tags_for
 
     # -- Protocol surface (defined explicitly — structural Protocol, no inherited bodies) --
 
@@ -273,7 +287,14 @@ class RunPipelineTool:
 
         app = self._resolve_app(app_store)
         if app is None:
-            return self._err("not_found", "no app is bound to this session")
+            return self._err(
+                "not_found",
+                "no app is bound to this session — the server binds an app by its "
+                "owner/maintainer session or by a stamped app tag, and this session "
+                "carries neither. Call get_app(operation='get') to confirm what this "
+                "session can see; if that also reports no app, this session was never "
+                "opened against one and no pipeline is invocable from it.",
+            )
 
         pipeline = self._find_pipeline(app, args.pipeline)
         if pipeline is None:
@@ -318,10 +339,17 @@ class RunPipelineTool:
                 "output": result.output,
                 "evaluated_at": result.evaluated_at,
                 "docs_written": dict(result.docs_written),
+                "evidence": result.evidence.model_dump(mode="json"),
                 "cache_hit": result.cache == "hit",
             }
             return self._ok(
-                self._render(outcome, pipeline=pipeline, dry_run=False, run_key=run_key)
+                self._render(
+                    outcome,
+                    pipeline=pipeline,
+                    declared_collections=[collection.name for collection in app.collections],
+                    dry_run=False,
+                    run_key=run_key,
+                )
             )
 
         if ledger is None and not args.dry_run:
@@ -342,7 +370,13 @@ class RunPipelineTool:
             return self._err(*self._failure(code, str(exc), run_key=None))
 
         return self._ok(
-            self._render(outcome, pipeline=pipeline, dry_run=args.dry_run, run_key=None)
+            self._render(
+                outcome,
+                pipeline=pipeline,
+                declared_collections=[collection.name for collection in app.collections],
+                dry_run=args.dry_run,
+                run_key=None,
+            )
         )
 
     @staticmethod
@@ -418,18 +452,25 @@ class RunPipelineTool:
     # -- resolution helpers ---------------------------------------------------
 
     def _resolve_app(self, app_store: AppStore) -> AppSpec | None:
-        """The app this session owns or maintains.
+        """The app the SERVER bound this session to, or ``None``.
 
-        Mirrors ``AppPipelineRunTracker._app_for_session``. ``run_pipeline`` has
-        no ``app_id`` argument, so scope is derived purely from the session:
-        the builder session (pre-submit, ``owner_session_id``) or the
-        maintainer session (post-submit re-invocation, ``maintainer_session_id``)
-        — either binds this session to exactly one app.
+        Delegates to :meth:`~mewbo_api.apps.staging.AppStagingArea.app_for_session`
+        — the two id FIELDS (``maintainer_session_id`` / ``owner_session_id``)
+        first, then the server-stamped ``app:<id>`` TAG — so this tool, ``get_app``
+        and ``submit_app`` give ONE answer about which app a session may act on.
+
+        Re-deriving the id-field half here was the bug: a tag-bound composer
+        session (``AppLifecycle.open_session(fresh=True)``, which is what the
+        console mints for a turn against an existing app) resolved for ``get_app``
+        and for ``submit_app`` — i.e. it could REPLACE the live app with a new
+        version — while this tool told it no app was bound. The safest operation
+        in the suite was refused to a session already trusted with the most
+        dangerous one, which left a maintainer able to read the source and ship a
+        guess but never to dry-run it.
         """
-        for app in app_store.list_apps(include_archived=True):
-            if self._session_id in (app.maintainer_session_id, app.owner_session_id):
-                return app
-        return None
+        return AppStagingArea(session_id=self._session_id).app_for_session(
+            app_store, session_tags=self._tags_reader(self._session_id)
+        )
 
     @staticmethod
     def _find_pipeline(app: AppSpec, name: str) -> PipelineSpec | None:
@@ -449,17 +490,27 @@ class RunPipelineTool:
 
     @staticmethod
     def _render(
-        outcome: dict[str, Any], *, pipeline: PipelineSpec, dry_run: bool, run_key: str | None
+        outcome: dict[str, Any],
+        *,
+        pipeline: PipelineSpec,
+        declared_collections: Sequence[str],
+        dry_run: bool,
+        run_key: str | None,
     ) -> dict[str, Any]:
-        """Shape the runner's outcome dict into the agent-facing result envelope.
+        """Shape a bounded pipeline outcome into the agent-facing result envelope.
 
         ``outcome`` is exactly ``AppPipelineRunner.run_pipeline``'s return shape:
-        ``{output, evaluated_at, docs_written, cache_hit}``. ``output`` is
-        serialized to text and truncated to :data:`_MAX_OUTPUT_CHARS` with a note
-        — a runaway pipeline result can't balloon the model's context. ``cache``
-        folds the runner's per-call ``cache_hit`` together with the pipeline's
-        declared ``cache_ttl_seconds`` (data this tool already has from the
-        resolved spec — the runner doesn't need to report it back).
+        ``{output, evaluated_at, docs_written, evidence, cache_hit}``. ``output``
+        and ``evidence`` are already bounded independently — output by this tool,
+        evidence by ``PipelineEvidence`` at the runner — so a diagnostic result
+        cannot balloon model context. ``cache`` folds the runner's per-call
+        ``cache_hit`` together with the pipeline's declared ``cache_ttl_seconds``.
+
+        A materializing pipeline that misses its explicit ``writes`` contract stays
+        execution-successful (the integrity verifier owns health policy), but gets
+        a terse, direct diagnostic: which expected collections did not materialize
+        and what action separates the usual causes. This is the feedback loop that
+        lets the model correct a no-write pipeline before it resubmits it.
 
         ``run_key`` names the :class:`PipelineRun` row this invoke wrote, so the
         caller can read the run back directly instead of inferring whether its work
@@ -484,14 +535,70 @@ class RunPipelineTool:
             evaluated_at.isoformat() if isinstance(evaluated_at, datetime) else evaluated_at
         )
 
+        docs_written = outcome.get("docs_written") or {}
+        evidence = outcome.get("evidence") or {
+            "globs": [],
+            "read_paths": [],
+            "truncated": False,
+        }
+        # The runner hands this tool a dict via its Protocol. Rebuild the model
+        # here rather than trusting a custom/fake runner's arbitrary mapping: the
+        # result is model-facing and its evidence must stay structurally bounded.
+        result = PipelineResult(
+            output=raw_output,
+            evaluated_at=(
+                evaluated_at
+                if isinstance(evaluated_at, datetime)
+                else datetime.now(timezone.utc)
+            ),
+            cache="hit" if bool(outcome.get("cache_hit", False)) else "miss",
+            docs_written=docs_written,
+            evidence=PipelineEvidence.model_validate(evidence),
+        )
+        unwritten = result.unwritten_collections(declared_collections)
+        missing_expected = result.missing_expected_writes(pipeline.writes)
+        attention: dict[str, object] | None = None
+        if pipeline.expects_writes() and missing_expected:
+            attention = {
+                "missing_expected_writes": missing_expected,
+                "next_step": (
+                    "Inspect evidence.globs for zero matches, then check the source "
+                    "filter or collection name before changing the pipeline."
+                ),
+            }
+        # Every glob matching nothing is a DIFFERENT failure from a filter that
+        # excluded every row, and it has one overwhelmingly common cause worth
+        # naming outright: `ctx` is scoped to the workspace, while the app's
+        # BUNDLE files (what `get_app`/`stage` puts on disk, and what a pipeline
+        # author is usually looking at while writing the glob) live elsewhere. A
+        # local replay against the staged bundle then succeeds while production
+        # reads an unrelated, frequently empty directory — a divergence that is
+        # invisible in the pipeline source, so the tool has to say it.
+        globs = result.evidence.globs
+        if globs and not any(glob.match_count for glob in globs):
+            attention = dict(attention or {})
+            attention["all_globs_matched_nothing"] = True
+            attention["workspace"] = result.evidence.workspace
+            attention["next_step"] = (
+                "Every glob matched zero files. `ctx.glob`/`ctx.read_file` resolve "
+                "under `evidence.workspace` — NOT the app bundle that "
+                "get_app(operation='stage') writes to disk. A file you can see in "
+                "the staged bundle is not visible here unless something puts it in "
+                "the workspace. Confirm which directory actually holds the inputs "
+                "before editing the pipeline."
+            )
+
         return {
             "pipeline": pipeline.name,
             "output": output_text,
             "output_truncated": truncated,
             "evaluated_at": evaluated_at_str,
-            "docs_written": outcome.get("docs_written") or {},
+            "docs_written": dict(result.docs_written),
+            "unwritten_collections": unwritten,
+            "evidence": result.evidence.model_dump(mode="json"),
+            "attention": attention,
             "cache": {
-                "hit": bool(outcome.get("cache_hit", False)),
+                "hit": result.cache == "hit",
                 "ttl_seconds": pipeline.cache_ttl_seconds,
             },
             "dry_run": dry_run,

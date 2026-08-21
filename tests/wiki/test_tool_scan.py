@@ -249,6 +249,21 @@ def test_scan_updates_current_file(tmp_path: Path) -> None:
 # ── Test 6: manifest is sorted ───────────────────────────────────────────────
 
 
+def test_scan_completion_log_is_owned_by_manifest_persistence(tmp_path: Path) -> None:
+    """The scan's terminal count is attributed to the persistence it summarizes."""
+    _, store, job_id = _run_scan(
+        tmp_path,
+        TINY_REPO,
+        {"filter_mode": "exclude", "dirs": [], "files": []},
+        job_id="job-scan-log",
+        session_id="sess-scan-log",
+    )
+
+    logs = [event for event in store.load_job_events(job_id) if event["type"] == "log"]
+    complete = next(event for event in logs if event["text"].startswith("Scanned "))
+    assert complete["step"] == "scan.persist_manifest"
+
+
 def test_scan_persists_sorted_manifest(tmp_path: Path) -> None:
     """Persisted manifest paths are lexicographically sorted."""
     _, store, _ = _run_scan(

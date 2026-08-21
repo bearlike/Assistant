@@ -54,3 +54,67 @@ Scope: `ui/common/` — the small composables shared across surfaces. Each has O
   composer's pre-send chip.
 - **`ChatOverflowMenu`** — the one overflow-menu style (`surfaceSelected`, 20dp radius); v1 ships only
   working items, no disabled stubs.
+
+## The D-pad layer — five files now, and none of the first four is gated on being a television
+
+Focus is not a touch state: a finger never grants it, so a handheld renders none of this unless a
+keyboard or remote is attached. Gating on `TelevisionChecker`/`DeviceShape` would buy nothing and add
+a code path that only runs on hardware nobody in the loop is holding, for the three files below that
+say so. `LocalDeviceShape` (below) is read only where a control's affordance genuinely differs by
+device — `ImeOnConfirmOnly` is that narrow case, not a general license to gate focus mechanics on it.
+
+- **`FocusRing` (`Modifier.auraFocusRing`)** — the one visible focus state, tokens from `ui/theme/`
+  (`AuraColors.focusRing`, `AuraSpacing.Focus`). **⚠️ It must precede the click modifier.**
+  `onFocusChanged` observes only focus targets that FOLLOW it in the chain, so
+  `Modifier.clickable{}.auraFocusRing()` compiles, draws nothing, and warns about nothing — an entire
+  wave of ring calls shipped in that order and every one was dead code. A Material
+  `IconButton`/`Switch`/`Button` applies its click after its `modifier`, so passing the ring as that
+  component's `modifier` is already correct; only hand-built `Box`/`Row` chains can get it wrong.
+  Where the click arrives inside a caller's `modifier` parameter, the ring leads:
+  `Modifier.auraFocusRing().then(modifier)`.
+- **`DpadFocusEscape` (`TextFieldFocusEscape` + `Modifier.dpadFocusEscape`)** — lets a remote out of a
+  text field, which is the single reason the app was navigable by nothing at all before it existed.
+  The decision is a pure function of key (+ selection + length, where a caret exists), so the whole
+  trade table is testable without composing a field. Two overloads share one key-handling body
+  (`dpadEscape`), differing only in which table they consult:
+  - **`dpadFocusEscape(selection, textLength)`** — for a field backed by `TextFieldValue`. Up/Down
+    always escape (a wrapped draft has no reliable last-line signal, and re-trapping the remote is
+    the unbounded failure); Left/Right escape only from a collapsed caret at the boundary, so
+    in-text editing survives.
+  - **`dpadFocusEscape()`** — the no-selection form, for a field backed by a plain `String` (no caret
+    to consult): every arrow escapes, horizontal included. A strictly worse trade than the overload
+    above, taken only where the richer one is unavailable — guessing "not at the boundary" would
+    re-trap the remote (the unbounded failure), while guessing "at the boundary" costs only
+    within-text caret movement in a single-line field. **Do not "fix" a caller onto the richer
+    overload by converting its `String` state to a `TextFieldValue`** — that moves selection
+    ownership into the field and reintroduces cursor-jump on every external state change, a worse
+    regression than the one being traded.
+- **`ImeOnConfirmOnly` (`Modifier.imeOnConfirmOnly`)** — separates "this field is focused" from
+  "the user wants to type", the fact `dpadFocusEscape` alone does not fix. A Compose field raises the soft keyboard the
+  moment it gains focus; on a handheld that is correct (focus only ever arrives from a tap), but a
+  remote's D-pad traversal moves focus THROUGH a field on the way past it, so merely navigating
+  raised a full-screen IME — and BACK dismisses that IME instead of moving focus, so the remote
+  oscillated and never got past the field even with the escape modifier applied. On television the
+  keyboard now opens only on an explicit confirm (`DirectionCenter`/`Enter`/`NumPadEnter`); BACK then
+  closes it and leaves focus ON the field, so the next arrow navigates normally. **On a handheld this
+  returns the receiver completely unchanged** — no focus observer, no key handler added — gated on
+  `LocalDeviceShape.current.opensKeyboardOnFocus`, and safe as an early return for the same reason
+  that local is `static`: a device does not stop being a television, so the composition never takes
+  the other arm later. Applied on every text field in the app now (composer, settings fields,
+  search, question-card answers, session rename), not only the composer.
+- **`DpadFocusContainer`** — a `focusGroup` + `exit = Cancel` wrapping every route, so focus cannot
+  leave the rendered tree. **Do not re-add a recover-after-the-fact leg: it cannot work.** One was
+  built, wired at the navigation host, and observed doing nothing — Compose dispatches no key event
+  at all once nothing holds focus, which is exactly the state it would need to recover from. It was
+  deleted rather than left in place looking like a safety net. This wrapper is a backstop; the one
+  strand actually reproduced on a device was cured at its source, the composer refusing a downward
+  move (`ui/composer/`).
+- **`LocalDeviceShape`** (`LocalDeviceShape.kt`) — `staticCompositionLocalOf<DeviceShape>`, provided
+  once by `MainActivity` from `DeviceShape.of(televisionChecker)`. Defaults to `DeviceShape.Handheld`,
+  the safe direction: a preview, test, or future host that forgets to provide it renders the touch
+  design, which is merely wrong-looking on a television, where the reverse would hide affordances a
+  finger needs. Carries the device differences as MEMBERS (`opensKeyboardOnFocus`,
+  `hasOverlayPermissionScreen` — `data/device/CLAUDE.md`) rather than a
+  boolean answered per call site. **The ONE device-shape seam left in the UI layer** — it replaced an
+  earlier `LocalIsTelevision` boolean local outright (deleted, not deprecated); every reader in this
+  package, `ImeOnConfirmOnly` included, now asks a `DeviceShape` member instead of a raw boolean.

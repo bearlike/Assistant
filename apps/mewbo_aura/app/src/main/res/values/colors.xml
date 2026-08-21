@@ -4,4 +4,10 @@
          ui/theme/Color.kt) because android:windowBackground must resolve before any Compose
          content exists. -->
     <color name="aura_surface_canvas">#FF000000</color>
+    <!-- Brand clay (ui/theme/Color.kt `clayCore` / the orb gradient's leading stop). An XML
+         resource for the same reason as above: `Notification.Builder.setColor` takes a platform
+         colour int at a boundary Compose never reaches. It tints the shade entry's small-icon
+         badge and app name while device control is held — NOT the status-bar glyph, which SystemUI
+         tints itself (see drawable/ic_stat_device_control.xml). Keep in lockstep with `clayCore`. -->
+    <color name="aura_clay_core">#FFC15F3C</color>
 </resources>

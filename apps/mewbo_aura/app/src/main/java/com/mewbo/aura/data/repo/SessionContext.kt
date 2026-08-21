@@ -20,6 +20,17 @@ import kotlinx.serialization.json.buildJsonObject
  * context (task brief scopes it to "re-enumerated FRESH on every `/query`" specifically), so
  * [deviceTools] defaults to `null`/omitted for [SessionRepository.createSession]'s call site.
  *
+ * **Both tool lists are THREE-STATE, and the empty case must survive the wire.** `null` omits the
+ * key; an EMPTY list is written as `[]`, because a client that advertises no tools has declared a
+ * real ceiling, not an absent one. Testing either list for truthiness (`isNullOrEmpty`) collapses
+ * "I turned everything off" into "I have no preference" - a fail-open the server cannot detect,
+ * since absence and never-declared are the same bytes. The two ABSENT states do NOT mean the same
+ * thing, which is why each key is written on its own `!= null` test rather than one shared helper:
+ * - `mcp_tools` absent => no ceiling, the backend binds its default set (`_extract_allowed_tools`).
+ * - `device_tools` absent => SILENCE, and the backend falls back to the session's newest context
+ *   event that carries the key (`DeviceToolBinding.declaration_for`). So an omitted empty list here
+ *   leaves a previously-declared set bound - the user revokes a device tool and it stays live.
+ *
  * **[project] carries a RESERVED value as well as real keys**, and this function is the one place
  * that decision reaches the wire. Three states, all expressed through this one field:
  * `null`/blank omits it entirely (a throwaway temp-dir cwd),
@@ -38,6 +49,6 @@ internal fun buildSessionContext(
     put("client", JsonPrimitive("aura-android"))
     if (!model.isNullOrBlank()) put("model", JsonPrimitive(model))
     if (!project.isNullOrBlank()) put("project", JsonPrimitive(project))
-    if (!mcpTools.isNullOrEmpty()) put("mcp_tools", JsonArray(mcpTools.map { JsonPrimitive(it) }))
-    if (!deviceTools.isNullOrEmpty()) put("device_tools", JsonArray(deviceTools.map { it.toContextEntry() }))
+    if (mcpTools != null) put("mcp_tools", JsonArray(mcpTools.map { JsonPrimitive(it) }))
+    if (deviceTools != null) put("device_tools", JsonArray(deviceTools.map { it.toContextEntry() }))
 }

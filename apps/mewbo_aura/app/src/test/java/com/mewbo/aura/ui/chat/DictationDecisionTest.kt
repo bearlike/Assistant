@@ -71,10 +71,15 @@ class DictationDecisionTest {
     }
 
     @Test
-    fun `every Error variant reverts to Idle - NoMatch, Timeout, Unavailable and Other alike`() {
+    fun `EVERY Error variant reverts to Idle, ServiceFailed included`() {
+        // Exhaustive over the enum on purpose: a new code added without a decision here would
+        // otherwise fall through whatever branch happened to be last. The composer always returns
+        // to rest; which errors additionally SAY something is a side effect at the call site
+        // (`ChatViewModel.startDictation`), never part of this pure mapping — the same split
+        // `Unavailable`'s mic-disable already lives on.
         val listening = DictationState.Listening(partial = "partial", rmsDb = 0.5f)
-        for (code in listOf(TranscriberError.NoMatch, TranscriberError.Timeout, TranscriberError.Unavailable, TranscriberError.Other)) {
-            assertEquals(DictationState.Idle, DictationDecision.next(listening, TranscriberEvent.Error(code)))
+        for (code in TranscriberError.entries) {
+            assertEquals("$code", DictationState.Idle, DictationDecision.next(listening, TranscriberEvent.Error(code)))
         }
     }
 }

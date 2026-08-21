@@ -116,6 +116,8 @@ export interface WizardState {
   depth: "comprehensive" | "concise";
   language: string;
   model: string;
+  /** Empty = inherit the deployment's default embedding model. */
+  embeddingModel: string;
   /** Opt-in cross-model fallback for the indexing run. `fallbackEnabled` gates
    *  the control; `fallbackModels` is the ordered ladder. Only a non-empty
    *  ladder is submitted — there is no separate "enabled" wire field. */
@@ -183,9 +185,10 @@ export function useWizardMachine({ initialUrl = "", initialRepo }: UseWizardMach
   const developerMode = Boolean(
     (config?.runtime as { developer_mode?: boolean } | undefined)?.developer_mode
   );
-  const { models: modelList, defaultModel } = useModels();
+  const { defaultModel } = useModels();
   const wikiDefaults = useWikiDefaults();
   const seedModel = wikiDefaults.data?.model || defaultModel;
+  const embeddingDefault = wikiDefaults.data?.embeddingModel;
   const submit = useSubmitWizard();
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -204,6 +207,7 @@ export function useWizardMachine({ initialUrl = "", initialRepo }: UseWizardMach
     depth: "comprehensive",
     language: "en",
     model: "",
+    embeddingModel: "",
     fallbackEnabled: false,
     fallbackModels: [],
     ref: "",
@@ -363,6 +367,9 @@ export function useWizardMachine({ initialUrl = "", initialRepo }: UseWizardMach
       ...(state.fallbackEnabled && fallbackLadder.length > 0
         ? { fallbackModels: fallbackLadder }
         : {}),
+      ...(state.embeddingModel.trim()
+        ? { embeddingModel: state.embeddingModel.trim() }
+        : {}),
       // Only forward the developer-mode opt-in when it's actually available
       // and engaged — the field is omitted entirely otherwise.
       ...(developerMode && state.graphOnly ? { graphOnly: true } : {}),
@@ -392,8 +399,8 @@ export function useWizardMachine({ initialUrl = "", initialRepo }: UseWizardMach
   return {
     platformList,
     languageList,
-    modelList,
     developerMode,
+    embeddingDefault,
     state,
     set,
     errors,

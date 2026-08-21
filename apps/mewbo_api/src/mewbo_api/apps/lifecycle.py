@@ -36,6 +36,7 @@ from mewbo_core.session.session_provenance import APPS_TAG_PREFIX, SessionTag
 from mewbo_core.triggers.spec import TriggerProvenance
 
 from .models import (
+    PIPELINE_ALLOWED_EXEC,
     AppFrontend,
     AppReadyEvent,
     AppSpec,
@@ -44,10 +45,12 @@ from .models import (
     AppVersionAuthor,
     AppVersionSummary,
     PipelineIssue,
+    PipelineSample,
     PipelineSpec,
     WorkspaceRef,
 )
 from .pipeline_runner import PipelineExecutionError
+from .plugin.linter import derive_collection_writes
 from .staging import AppStagingArea
 from .store import new_app_id
 
@@ -184,6 +187,7 @@ class AppLifecycle:
         background_runner: Callable[[Callable[[], None]], None] | None = None,
         now_fn: Callable[[], datetime] | None = None,
         project_catalog: ProjectCatalog | None = None,
+        allowed_exec_binaries: frozenset[str] = PIPELINE_ALLOWED_EXEC,
     ) -> None:
         """Capture the injected collaborators; default ``now_fn`` is UTC now.
 
@@ -219,6 +223,7 @@ class AppLifecycle:
         self.background_runner = background_runner or self._spawn_daemon
         self.now_fn = now_fn or self._utcnow
         self.project_catalog = project_catalog
+        self.allowed_exec_binaries = allowed_exec_binaries
         # One warning per lifecycle for an unwired catalog: a submit must not
         # crash over missing wiring, but a deployment running the submit
         # boundary with the check disabled has to be readable in the log.
@@ -436,10 +441,14 @@ class AppLifecycle:
         A fresh session is deliberately NOT written back to
         ``maintainer_session_id``: the repair wake dereferences that field, and a
         second claimant would make the resolvers' first-match scan order decide
-        which session keeps working. It is bound by its TAG instead, and it is
-        therefore READ-plus-STAGE only — see :meth:`AppStagingArea.app_for_session`
-        for what that tier resolves and this class's ``submit`` for why a
-        non-maintainer can never overwrite a live app.
+        which session keeps working. It is bound by its TAG instead — see
+        :meth:`AppStagingArea.app_for_session`, which every app tool resolves
+        through, so a tag-bound session can read, stage, dry-run, query and
+        resubmit exactly as a maintainer can. What it is NOT is the app's OWN
+        session: ``maintainer_session_id`` still points elsewhere, so the repair
+        wake and the armed triggers keep belonging to that session and never to
+        this one (see this class's ``submit`` for why the submitter is never read
+        as the maintainer).
 
         Returns ``None`` for an unknown *app_id*; else ``(session_id, created)``.
         """
@@ -591,7 +600,9 @@ class AppLifecycle:
         authority for the app's IDENTITY — ``owner_session_id`` / ``created_at`` /
         ``workspace_ref`` are preserved from it and only the builder-authored
         CONTENT (frontend, collections, pipelines, policies, title/summary/icon)
-        is taken from *draft*.
+        is taken from *draft*. The one repair exception is a server-bound session
+        replacing an unresolvable legacy ``workspace_ref``: retaining a poisoned
+        identity would make every later app session unusable.
 
         A submit for an app whose row is NOT ``building``/``draft`` is REFUSED
         unless the calling session is one the SERVER bound to this app — the
@@ -619,26 +630,39 @@ class AppLifecycle:
         """
         now = self.now_fn()
         self._validate_code_pipelines(draft)
+        draft = self._derive_pipeline_writes(draft)
         # Duplicate pipeline names silently shadow one another at every first-match
         # resolver (the fire seam, the ledger, the trigger binding), so refuse them
         # at the submit boundary before anything arms.
         draft.ensure_unique_pipeline_names()
+        draft.ensure_exec_binaries_allowed(self.allowed_exec_binaries)
         # timeout_seconds parses up to 600 (the append-only-store bound — see the
         # field's own comment) but the real ceiling a pipeline may EXECUTE at is
         # narrower; refuse a new/updated pipeline over it here rather than let it
         # go live and get silently clamped at run time.
         draft.ensure_pipeline_timeouts_fit()
-        # A shared workspace key becomes the agent sessions' ``project`` context
-        # field, which the maintainer resolves through the SAME catalog on every
-        # turn — so a key that catalog cannot resolve wedges the app's whole
-        # agent side. Refuse it here, before anything persists.
-        self._validate_workspace_ref(draft.workspace_ref)
         app_id = draft.app_id
         existing = self.app_store.get(app_id)
         # The app the SERVER bound this session to, if any — the id fields it owns
         # OR the stamped tag it was opened against. It decides BOTH branches below:
         # which app this session may update, and which it may not create.
         bound = self._bound_app_for_session(builder_session_id)
+        # An existing row normally owns workspace identity. A server-bound
+        # resubmit may repair the one legacy shape that cannot safely persist:
+        # a shared key the catalog cannot resolve. Select the value that will
+        # actually be written before validating it, so validation cannot bless
+        # the draft while persistence restores the poisoned row.
+        workspace_ref = existing.workspace_ref if existing is not None else draft.workspace_ref
+        if existing is not None and bound is not None and bound.app_id == app_id:
+            try:
+                self._validate_workspace_ref(existing.workspace_ref)
+            except ValueError:
+                workspace_ref = draft.workspace_ref
+        # A shared workspace key becomes the agent sessions' ``project`` context
+        # field, which the maintainer resolves through the SAME catalog on every
+        # turn — so a key that catalog cannot resolve wedges the app's whole
+        # agent side. Refuse it here, before anything persists.
+        self._validate_workspace_ref(workspace_ref)
         is_maintainer_resubmit = False
         if bound is not None and bound.app_id != app_id:
             # A session bound to app A minting app B is the FORK this guard exists
@@ -669,7 +693,7 @@ class AppLifecycle:
                 )
             is_maintainer_resubmit = True
         # Verify every code pipeline actually RUNS before anything persists/arms — a
-        # dry-run failure refuses the submit (an agent-fixable reask, same UX as a
+        # rehearsal failure refuses the submit (an agent-fixable reask, same UX as a
         # lint finding) rather than shipping a live app that breaks on first fire. It
         # runs AFTER the live-overwrite guard (so a collision reports as one, never
         # masked by a verification error) but BEFORE the maintainer session is minted
@@ -707,11 +731,11 @@ class AppLifecycle:
                 # A live app with no maintainer session is not reachable through
                 # the normal paths (submit always stamps one); minting one is the
                 # honest recovery and there are no prior triggers to cancel.
-                maintainer = self._mint_maintainer_session(app_id, base.workspace_ref)
+                maintainer = self._mint_maintainer_session(app_id, workspace_ref)
             else:
                 self.trigger_store.cancel_for_session(maintainer)
         else:
-            maintainer = self._mint_maintainer_session(app_id, base.workspace_ref)
+            maintainer = self._mint_maintainer_session(app_id, workspace_ref)
 
         # The wakeability floor is enforced HERE, on the incoming draft — not at
         # model parse, where it would reject stored version snapshots carrying
@@ -737,7 +761,7 @@ class AppLifecycle:
         spec = draft.model_copy(
             update={
                 "owner_session_id": base.owner_session_id,
-                "workspace_ref": base.workspace_ref,
+                "workspace_ref": workspace_ref,
                 "created_at": base.created_at,
                 "maintainer_session_id": maintainer,
                 "pipelines": pipelines,
@@ -833,6 +857,30 @@ class AppLifecycle:
             )
 
     @staticmethod
+    def _derive_pipeline_writes(draft: AppSpec) -> AppSpec:
+        """Fill empty materialization contracts from literal source-level writes.
+
+        This runs after the entrypoint existence check and before every submit
+        boundary validation, so an auto-derived name receives the same collection
+        namespace check as an explicit one. It deliberately never rewrites an
+        explicit contract and never rejects an unprovable source shape: static
+        analysis is a convenience, not a second execution gate. A builder retains
+        control for a computed collection name by declaring ``writes`` directly.
+        """
+        derived: list[PipelineSpec] = []
+        for pipeline in draft.pipelines:
+            if pipeline.mode != "code" or pipeline.tier != "materialize" or pipeline.writes:
+                derived.append(pipeline)
+                continue
+            assert pipeline.entrypoint is not None  # validated immediately before this method
+            names = derive_collection_writes(draft.frontend.files[pipeline.entrypoint])
+            if not names:
+                derived.append(pipeline)
+                continue
+            derived.append(pipeline.model_copy(update={"writes": tuple(sorted(names))}))
+        return draft.model_copy(update={"pipelines": derived})
+
+    @staticmethod
     def _validate_code_pipelines(draft: AppSpec) -> None:
         """Reject a ``mode="code"`` pipeline whose entrypoint isn't a bundle file (submit boundary).
 
@@ -853,45 +901,12 @@ class AppLifecycle:
                 )
 
     def _verify_pipelines(self, draft: AppSpec, *, now: datetime) -> dict[str, PipelineVerdict]:
-        """Dry-run every code pipeline through the fire plane's runner (submit boundary).
+        """Rehearse every code pipeline through the fire plane's runner before mutation.
 
-        The verifier: for each ``mode="code"`` pipeline, execute a dry run via the
-        SAME :class:`AppPipelineRunner` the fire seam uses (reached through the wired
-        ``tracker.pipeline_runner`` — no new DI), so a pipeline that can't lint,
-        import, or run refuses the submit HERE (an actionable ``ValueError`` → the
-        builder's reask) instead of going live and failing on its first fire.
-        ``dry_run=True`` guarantees NO durable write, and calling ``execute`` directly
-        (never the tracker's ``record_code_run``) guarantees NO ledger row — the
-        verify must leave no trace.
-
-        A code pipeline's dry run executes the REAL runner path — including a real,
-        budget-bounded ``ctx.llm`` call if the pipeline declares one. Only AGENTIC
-        pipelines make no model call, and only because they are skipped (below) — the
-        verifier is not model-call-free in general.
-
-        Per-pipeline verdicts land on the version row (``AppVersion.verification``):
-
-        * ``mode="agentic"`` ⇒ ``"skipped"`` — an agentic wake is judgment, not a
-          smoke-testable transform, so it is not run (a documented honest gap).
-        * runner unwired ⇒ ``"skipped"`` + one loud log — never a crash
-          (unwired-tolerant, mirroring the seed/fire seams).
-        * a dry run that fails on ``params`` or ``workspace`` ⇒ ``"skipped"`` — both
-          are verifier ARTIFACTS at submit time, not pipeline defects (a
-          ``params_schema`` requiring params a ``params={}`` smoke can't supply, e.g.
-          a ``user_writable`` form; and ``ctx.read_file`` on the not-yet-bound
-          workspace). See the except below.
-        * otherwise ``"pass"`` on a clean dry run; a genuine failure (lint / import /
-          runtime / traversal / …) never reaches a persisted ``"fail"`` because it
-          refuses the submit first.
-
-        **The disarm trap:** this dry run can only classify a ``PipelineExecutionError``
-        that actually propagates out of ``execute()`` — it does no static analysis of
-        the pipeline body. A pipeline whose own code catches and swallows
-        ``PipelineExecutionError`` (e.g. a broad ``except`` around ``ctx.read_file``)
-        makes BOTH the genuine-failure refusal above AND the ``params``/``workspace``
-        skip-classification unreachable: the swallowed error never reaches this method,
-        so the dry run returns normally and the pipeline verifies ``"pass"`` regardless
-        of what actually broke.
+        Each declared sample exercises its real params and permits ``ctx.exec`` while
+        suppressing durable writes. A pipeline without samples retains the legacy
+        ``params={}`` smoke, which may be skipped when its schema requires input.
+        Calling ``execute`` directly creates no ledger row.
         """
         runner = self.tracker.pipeline_runner if self.tracker is not None else None
         verdicts: dict[str, PipelineVerdict] = {}
@@ -910,31 +925,34 @@ class AppLifecycle:
                     )
                     logged_unwired = True
                 continue
-            try:
-                runner.execute(draft, pipeline, {}, now=now, dry_run=True)
-            except PipelineExecutionError as exc:
-                # Three error buckets are verifier ARTIFACTS at submit time, never
-                # pipeline defects, so they are "skipped" not "fail":
-                #  - "params": the pipeline requires params a params={} smoke can't
-                #    supply (e.g. a user_writable form).
-                #  - "workspace": at submit time NO app has a bound workspace yet (the
-                #    maintainer session isn't minted until after this runs), so an
-                #    unconditional ctx.read_file() raises this EVERY time — always an
-                #    artifact of verifying early, never a defect (ctx.glob just
-                #    returns [] with no workspace, so only read_file trips it).
-                #  - "dry_run": ctx.exec refuses to spawn under a dry run, because THIS
-                #    verify pass is a dry run — a submit must never reach a real remote.
-                #    A pipeline that shells out is therefore unverifiable here by
-                #    construction, which is an artifact of the gate, not a defect.
-                # traversal / lint / runtime / import / syntax stay genuine failures.
-                if exc.code in ("params", "workspace", "dry_run"):
-                    verdicts[pipeline.name] = "skipped"
-                    continue
-                raise ValueError(
-                    f"pipeline {pipeline.name!r} failed verification — {exc} — fix "
-                    "the pipeline and resubmit"
-                ) from exc
-            verdicts[pipeline.name] = "pass"
+
+            # A pipeline that declares nothing still gets the legacy params-free
+            # smoke — as ONE unlabelled sample rather than a ``None`` standing in
+            # for a sample, so the loop body has a single type to reason about.
+            # Whether samples were DECLARED is a separate question from what is
+            # being run, and only the former decides how a params failure is read.
+            declared_samples = bool(pipeline.samples)
+            samples = pipeline.samples or [PipelineSample()]
+            for index, sample in enumerate(samples, start=1):
+                params = sample.params
+                sample_name = sample.label or f"sample {index}"
+                try:
+                    runner.execute(
+                        draft, pipeline, params, now=now, dry_run=False, rehearse=True
+                    )
+                except PipelineExecutionError as exc:
+                    # A params-free legacy smoke cannot construct required input, and
+                    # submit precedes maintainer workspace binding. Declared samples
+                    # are executable contracts, so their parameter failures refuse.
+                    if exc.code == "workspace" or (exc.code == "params" and not declared_samples):
+                        verdicts[pipeline.name] = "skipped"
+                        break
+                    raise ValueError(
+                        f"pipeline {pipeline.name!r} {sample_name!r} failed verification — "
+                        f"{exc} — fix the pipeline and resubmit"
+                    ) from exc
+            else:
+                verdicts[pipeline.name] = "pass"
         return verdicts
 
     def _warn_on_unscheduled_pipelines(
@@ -1292,6 +1310,11 @@ class AppLifecycle:
             self._start_repair_run(app, issue)
         elif policy == "pause":
             self.pause(app.app_id)
+        elif policy == "invalidate":
+            app.transition("broken", now=self.now_fn())
+            self.app_store.save(app)
+            self._emit_app_issue(app, issue)
+            return
         if policy == "notify" or issue.needs_own_event:
             self._emit_app_issue(app, issue)
 

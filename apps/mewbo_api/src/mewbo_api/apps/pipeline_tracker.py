@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from mewbo_core.common import get_logger
@@ -174,6 +174,10 @@ class AppPipelineRunTracker:
         # serves; a coarse lock is the smallest correct scope at fire/​fire
         # frequency (an open is rare — a manual fire or a trigger tick).
         self._open_lock = threading.Lock()
+        # Semantic verification has no failed ledger row: the execution result was
+        # real and stays succeeded. Keep its edge state separate from provenance.
+        self._verifier_failures: dict[tuple[str, str], list[datetime]] = {}
+        self._verifier_failures_lock = threading.Lock()
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -255,15 +259,13 @@ class AppPipelineRunTracker:
         two callers:
 
         * the **scheduled fire seam** (``kind="scheduled"``, ``dispatch_failure=True``)
-          — ignores the returned ``result`` (it only needs the ledger row), and a
-          failure DISPATCHES the ``on_pipeline_failure`` policy (an autonomous
-          schedule failing is exactly what repair/pause/notify exists for);
+          — ignores the returned ``result`` and permits a failure-policy dispatch only
+          when the pipeline's failure budget reaches its edge;
         * the **on-request REST invoke endpoint** (``kind="on_request"``,
           ``dispatch_failure=False``, ``require_effect=True``) — reads
-          ``result.output`` for its response, and a failure does NOT auto-repair/pause:
-          a user manually invoking a pipeline that errors should surface the error, not
-          flip the app to ``paused``/spawn a repair run. The endpoint maps the failure
-          to its HTTP status from ``run.error`` (``result is None`` ⇒ it failed).
+          ``result.output`` for its response, and explicitly vetoes auto-repair/pause
+          for run failures. The endpoint maps the failure to its HTTP status from
+          ``run.error`` (``result is None`` ⇒ it failed).
 
         It NEVER raises — a runner failure closes the row ``failed`` (with the error)
         and returns ``(failed_run, None)``, so a caller reads the outcome off the row
@@ -312,23 +314,26 @@ class AppPipelineRunTracker:
                 run.record_write(collection, count)
             run.close(now=now, status="failed", error=str(exc))
             self.run_store.save(run)  # a failure is never suppressed by require_effect
-            if dispatch_failure and self.failure_handler is not None:
-                self.failure_handler.handle_pipeline_failure(
-                    app, PipelineIssue.run_failed(pipeline.name, str(exc))
+            if dispatch_failure:
+                self._dispatch_failure(
+                    app, pipeline, PipelineIssue.run_failed(pipeline.name, str(exc)), now=now
                 )
             return run, None
         for collection, count in result.docs_written.items():
             run.record_write(collection, count)
         run.close(now=now, status="succeeded", cache=result.cache)
-        had_effect = result.cache == "miss" and bool(result.docs_written)
-        if not require_effect or had_effect:
+        had_effect = result.cache == "miss" and (
+            bool(result.docs_written) or not pipeline.expects_writes()
+        )
+        persisted = not require_effect or had_effect
+        if persisted:
             self.run_store.save(run)
-        if dispatch_failure:
-            # Same flag, same law: only an autonomous fire reacts. A manual invoke
-            # or /fire passes dispatch_failure=False and therefore never
-            # auto-repairs on an integrity violation either — a user hammering a
-            # broken pipeline must not spawn repair runs.
+        if dispatch_failure and pipeline.expects_writes():
             self._dispatch_integrity(app, run)
+        if persisted and result.cache == "miss":
+            self._start_verifier(
+                app, pipeline, result, now=now, dispatch_failure=dispatch_failure
+            )
         return run, result
 
     # -- on-demand fire seam (manual refresh: /fire route, go-live + re-arm seed) --
@@ -485,14 +490,11 @@ class AppPipelineRunTracker:
         session ends) resolves to no app and is a clean no-op. Run outcome →
         ledger status: an ``error`` closes the run ``failed``, else ``succeeded``.
 
-        **Kind-aware failure dispatch:** only a failed ``kind="scheduled"`` run
-        dispatches the ``on_pipeline_failure`` policy — an autonomous schedule
-        breaking is exactly what repair/pause/notify exists for. A failed
-        ``kind="on_request"`` run (a manual ``/fire``) does NOT auto-repair/pause
-        the app, in parity with the manual REST-invoke ruling: a user-triggered
-        failure surfaces the error, it never flips a live app to ``paused`` or
-        spawns a repair run. The run is still ledgered ``failed`` either way — the
-        provenance is real; only the reaction differs.
+        **Kind-aware failure dispatch:** a failed ``kind="scheduled"`` run may
+        dispatch the ``on_pipeline_failure`` policy when its failure budget reaches
+        an edge. A failed ``kind="on_request"`` run does not dispatch here, in
+        parity with the manual REST-invoke veto. The run is ledgered ``failed``
+        either way — provenance is real; only the reaction is vetoed.
         """
         app = self._app_for_session(session_id)
         if app is None:
@@ -509,34 +511,147 @@ class AppPipelineRunTracker:
             self.run_store.save(run)
             if status == "failed" and run_kind == "scheduled" and failed_pipeline is None:
                 failed_pipeline = pipeline.name
-            if status == "succeeded" and run_kind == "scheduled":
-                # A run can close green and still have stopped doing its job. Same
-                # kind-gating as the failure dispatch above: only an autonomous
-                # schedule reacts, never a manual /fire (kind="on_request").
-                self._dispatch_integrity(app, run)
-            if run.wrote_nothing:
-                logging.warning(
-                    "pipeline run {} for app {} succeeded but wrote no documents",
-                    run.run_key,
-                    app.app_id,
-                )
-            else:
-                # wrote_nothing already covers the all-empty case (every declared
-                # collection would show up below too); only worth a SEPARATE log
-                # when the run wrote SOMETHING but silently missed one collection.
-                unwritten = run.unwritten_collections([c.name for c in app.collections])
-                if unwritten:
+            if pipeline.expects_writes():
+                if status == "succeeded" and run_kind == "scheduled":
+                    # A run can close green and still have stopped doing its job. Same
+                    # kind-gating as the failure dispatch above: only an autonomous
+                    # schedule reacts, never a manual /fire (kind="on_request").
+                    self._dispatch_integrity(app, run)
+                if run.wrote_nothing:
                     logging.warning(
-                        "pipeline run {} for app {} succeeded but left declared "
-                        "collection(s) {} untouched",
+                        "pipeline run {} for app {} succeeded but wrote no documents",
                         run.run_key,
                         app.app_id,
-                        unwritten,
                     )
-        if failed_pipeline is not None and self.failure_handler is not None:
-            self.failure_handler.handle_pipeline_failure(
-                app, PipelineIssue.run_failed(failed_pipeline, error)
+                else:
+                    # wrote_nothing already covers the all-empty case (every declared
+                    # collection would show up below too); only worth a SEPARATE log
+                    # when the run wrote SOMETHING but silently missed one collection.
+                    unwritten = run.unwritten_collections([c.name for c in app.collections])
+                    if unwritten:
+                        logging.warning(
+                            "pipeline run {} for app {} succeeded but left declared "
+                            "collection(s) {} untouched",
+                            run.run_key,
+                            app.app_id,
+                            unwritten,
+                        )
+        if failed_pipeline is not None:
+            pipeline = next(p for p in app.pipelines if p.name == failed_pipeline)
+            self._dispatch_failure(
+                app, pipeline, PipelineIssue.run_failed(failed_pipeline, error), now=now
             )
+
+    # -- failure + integrity dispatch ----------------------------------------
+
+    def _dispatch_failure(
+        self, app: AppSpec, pipeline: PipelineSpec, issue: PipelineIssue, *, now: datetime
+    ) -> None:
+        """Dispatch a non-vetoed issue only when the failure budget reaches its edge."""
+        if self.failure_handler is None:
+            return
+        history = self.run_store.list_runs(
+            app.app_id, pipeline_name=pipeline.name, limit=self.INTEGRITY_HISTORY_LIMIT
+        )
+        if PipelineRun.should_dispatch_failure(history, pipeline.failure_budget, now=now):
+            self.failure_handler.handle_pipeline_failure(app, issue)
+
+    def _start_verifier(
+        self,
+        app: AppSpec,
+        pipeline: PipelineSpec,
+        result: PipelineResult,
+        *,
+        now: datetime,
+        dispatch_failure: bool,
+    ) -> None:
+        """Verify a settled result off-thread so semantic checks cannot delay callers."""
+        if pipeline.verifier is None or self.pipeline_runner is None:
+            return
+        threading.Thread(
+            target=lambda: self._verify_result(
+                app, pipeline, result, now=now, dispatch_failure=dispatch_failure
+            ),
+            daemon=True,
+        ).start()
+
+    def _verify_result(
+        self,
+        app: AppSpec,
+        pipeline: PipelineSpec,
+        result: PipelineResult,
+        *,
+        now: datetime,
+        dispatch_failure: bool,
+    ) -> None:
+        """Run one bounded verifier and route its failure through the policy dispatcher."""
+        runner = self.pipeline_runner
+        if runner is None:  # pragma: no cover - guarded by _start_verifier
+            return
+        try:
+            runner.verify(app, pipeline, result, now=now)
+        except PipelineExecutionError as exc:
+            logging.warning(
+                "pipeline verifier failed for app {} pipeline {}: {}",
+                app.app_id,
+                pipeline.name,
+                exc,
+            )
+            if exc.code != "verifier":
+                return
+            self._record_verifier_failure(
+                app, pipeline, str(exc), now=now, dispatch_failure=dispatch_failure
+            )
+        except Exception:
+            logging.warning(
+                "pipeline verifier raised for app {} pipeline {}",
+                app.app_id,
+                pipeline.name,
+                exc_info=True,
+            )
+        else:
+            logging.info(
+                "pipeline verifier passed for app {} pipeline {}", app.app_id, pipeline.name
+            )
+            with self._verifier_failures_lock:
+                self._verifier_failures.pop((app.app_id, pipeline.name), None)
+
+    def _record_verifier_failure(
+        self,
+        app: AppSpec,
+        pipeline: PipelineSpec,
+        error: str,
+        *,
+        now: datetime,
+        dispatch_failure: bool,
+    ) -> None:
+        """Count semantic failures locally because their successful runs stay honest."""
+        verifier = pipeline.verifier
+        if verifier is None:  # pragma: no cover - guarded by _start_verifier
+            return
+        key = (app.app_id, pipeline.name)
+        window_start = now - timedelta(seconds=pipeline.failure_budget.window_seconds)
+        with self._verifier_failures_lock:
+            failures = [at for at in self._verifier_failures.get(key, []) if at >= window_start]
+            failures.append(now)
+            self._verifier_failures[key] = failures
+            consecutive = len(failures)
+        issue = PipelineIssue.verifier_failed(pipeline.name, error)
+        if consecutive == verifier.consecutive_failures_to_invalidate:
+            if self.failure_handler is not None:
+                self.failure_handler.handle_pipeline_failure(
+                    app.model_copy(
+                        update={
+                            "policies": app.policies.model_copy(
+                                update={"on_pipeline_failure": "invalidate"}
+                            )
+                        }
+                    ),
+                    issue,
+                )
+        elif dispatch_failure and consecutive == pipeline.failure_budget.consecutive_failures:
+            if self.failure_handler is not None:
+                self.failure_handler.handle_pipeline_failure(app, issue)
 
     # -- integrity dispatch (a green run that stopped doing its job) --------
 
@@ -562,8 +677,11 @@ class AppPipelineRunTracker:
         prior_runs = self.run_store.list_runs(
             app.app_id, pipeline_name=run.pipeline_name, limit=self.INTEGRITY_HISTORY_LIMIT
         )
+        pipeline = next((p for p in app.pipelines if p.name == run.pipeline_name), None)
         regressed = run.new_integrity_violations(
-            [c.name for c in app.collections], prior_runs=prior_runs
+            [c.name for c in app.collections],
+            prior_runs=prior_runs,
+            expected_writes=pipeline.writes if pipeline is not None else (),
         )
         if not regressed:
             return

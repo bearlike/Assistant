@@ -63,6 +63,13 @@ def store(tmp_path):
 class TestRoundTrip:
     """Submission → record → submission, which is the path a refresh replays."""
 
+    def test_embedding_model_survives_the_record(self) -> None:
+        """Refresh must replay the project's vector model, not the server default."""
+        replayed = ProjectSettings.from_submission(
+            _submission(embeddingModel="openai/text-embedding-3-large")
+        ).to_submission()
+        assert replayed.embedding_model == "openai/text-embedding-3-large"
+
     def test_both_fields_survive_the_record(self) -> None:
         sub = _submission(customInstructions="Describe the Compose layer", mcpServers=SERVERS)
         replayed = ProjectSettings.from_submission(sub).to_submission()

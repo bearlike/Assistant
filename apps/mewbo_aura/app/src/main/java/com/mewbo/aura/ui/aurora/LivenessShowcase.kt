@@ -124,6 +124,18 @@ private fun EdgeGlowPage() {
     // does: snap to 1 for the ignite, then exhale to 0 over bloomSettleMs while the Listen dwell
     // begins (launch, so the settle runs concurrently and doesn't block the state timeline).
     val bloom = remember { Animatable(0f) }
+    // The device-control profile, side by side with the assist overlay's on the same page: the two
+    // differ ONLY by these two arguments, so toggling in place is what makes "border, not bottom
+    // wash" and "visibly flowing, still calm" checkable rather than asserted. Both must be watched
+    // across TIME (the aurora time traps) - a single frame can sit in a locally-monochrome region
+    // of the hue field and read as a regression that is not there.
+    //
+    // Expected on this page and NOT a bug: with the border profile on, Replay's perimeter BLOOM no
+    // longer swells. The shader takes max(iPerimeterBloom, iPerimeterFloor) and the biased floor is
+    // now 1.0, so a bloom of 1 adds nothing over it - what still reads is the CPU-side lerp to the
+    // ignition colour pair. No production surface hits this pairing: the device-control overlay
+    // (the only bias-1 caller) passes no bloom, and the assist overlay blooms at bias 0.
+    var border by remember { mutableStateOf(false) }
 
     LaunchedEffect(replayTick) {
         if (replayTick == 0) return@LaunchedEffect
@@ -153,6 +165,8 @@ private fun EdgeGlowPage() {
             perimeterBloom = bloom.asState(),
             hueDriftAmount = 1f,
             perimeterPresence = 1f,
+            perimeterBias = if (border) 1f else 0f,
+            speedScale = if (border) AuraMotion.deviceControlFlowScale else 1f,
         )
         Column(
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
@@ -163,7 +177,7 @@ private fun EdgeGlowPage() {
             // Six state buttons no longer fit one screen width unscrolled (Rest was the one that
             // tipped it over) - a plain non-scrolling Row doesn't clip cleanly, it compresses/wraps
             // the overflowing children instead. horizontalScroll is this codebase's established
-            // fix for exactly this shape (ChatMessageRows.kt, AuraComposer.kt).
+            // fix for exactly this shape (ToolCallGroupCard.kt, AuraComposer.kt).
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -177,6 +191,9 @@ private fun EdgeGlowPage() {
             }
             TextButton(enabled = !replaying, onClick = { replayTick++ }) {
                 Text(if (replaying) "Replaying…" else "Replay: Bloom -> Listen -> Think -> Rest")
+            }
+            TextButton(onClick = { border = !border }) {
+                Text(if (border) "Profile: border (device control)" else "Profile: bottom bloom (overlay)")
             }
         }
     }

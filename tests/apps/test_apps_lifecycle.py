@@ -51,20 +51,22 @@ class _FakeResult:
 class _FakeRunner:
     """Fake ``AppPipelineRunner`` for code-pipeline verify + SEED fires (records + echoes).
 
-    Records ``(app_id, pipeline_name, dry_run)`` per call so a test can tell the
-    submit-time verifier's dry run (``dry_run=True``) apart from the go-live/re-arm
-    seed fire (``dry_run=False``) — both ride this same runner.
+    Records ``(app_id, pipeline_name, dry_run, rehearse)`` per call so a test can
+    distinguish submit-time rehearsal from the go-live/re-arm seed fire — both
+    ride this same runner.
     """
 
     def __init__(
         self, *, docs_written: dict[str, int] | None = None, raises: Exception | None = None
     ) -> None:
-        self.calls: list[tuple[str, str, bool]] = []
+        self.calls: list[tuple[str, str, bool, bool]] = []
         self._docs = docs_written if docs_written is not None else {"c": 1}
         self._raises = raises
 
-    def execute(self, app, pipeline, params, *, now, dry_run=False):  # noqa: ANN001, ANN201
-        self.calls.append((app.app_id, pipeline.name, dry_run))
+    def execute(  # noqa: ANN001, ANN201
+        self, app, pipeline, params, *, now, dry_run=False, rehearse=False
+    ):
+        self.calls.append((app.app_id, pipeline.name, dry_run, rehearse))
         if self._raises is not None:
             raise self._raises
         return _FakeResult(output={"ok": True}, evaluated_at=now, docs_written=dict(self._docs))
@@ -124,6 +126,13 @@ class FakeSessions:
 
 def _frontend() -> AppFrontend:
     return AppFrontend(entrypoint="app.py", files={"app.py": "import streamlit as st\n"})
+
+
+def _frontend_with_pipeline(source: str) -> AppFrontend:
+    return AppFrontend(
+        entrypoint="app.py",
+        files={"app.py": "import streamlit as st\n", "pipelines/ingest.py": source},
+    )
 
 
 def _make(tmp_path, *, policy: TriggerPolicy | None = None, run_starter=None):
@@ -187,19 +196,76 @@ def _real_runner(tmp_path) -> AppPipelineRunner:
     )
 
 
-def _draft(app_id: str, *, builder_sid: str, pipelines=None) -> AppSpec:
+def _draft(app_id: str, *, builder_sid: str, pipelines=None, frontend=None) -> AppSpec:
     return AppSpec(
         app_id=app_id,
         title="Inbox digest",
         summary="Groups email into tasks.",
         owner_session_id=builder_sid,
         workspace_ref=WorkspaceRef(kind="own", key="default"),
-        frontend=_frontend(),
+        frontend=frontend or _frontend(),
         pipelines=pipelines or [],
         status="building",
         created_at=NOW,
         updated_at=NOW,
     )
+
+
+class TestDerivedPipelineWrites:
+    def test_submit_derives_literal_collection_writes(self, tmp_path):
+        lifecycle, _, _, _ = _make(tmp_path)
+        pipeline = PipelineSpec(
+            name="ingest",
+            wake_prompt="go",
+            on_demand=True,
+            mode="code",
+            entrypoint="pipelines/ingest.py",
+        )
+        draft = _draft(
+            "app-derived-writes",
+            builder_sid="builder",
+            frontend=_frontend_with_pipeline(
+                "def run(params, ctx):\n"
+                "    ctx.collection('records').upsert('r1', {'value': 1})\n"
+                "    return {}\n"
+            ),
+            pipelines=[pipeline],
+        ).model_copy(
+            update={
+                "collections": [CollectionSpec(name="records", json_schema={"type": "object"})]
+            }
+        )
+
+        live = lifecycle.submit(draft, builder_session_id="builder")
+
+        assert live.pipelines[0].writes == ("records",)
+
+    def test_submit_preserves_explicit_collection_writes(self, tmp_path):
+        lifecycle, _, _, _ = _make(tmp_path)
+        pipeline = PipelineSpec(
+            name="ingest",
+            wake_prompt="go",
+            on_demand=True,
+            mode="code",
+            entrypoint="pipelines/ingest.py",
+            writes=("records",),
+        )
+        draft = AppSpec(
+            app_id="app-explicit-writes",
+            title="Inbox digest",
+            owner_session_id="builder",
+            workspace_ref=WorkspaceRef(kind="own", key="default"),
+            frontend=_frontend_with_pipeline("def run(params, ctx):\n    return {}\n"),
+            collections=[CollectionSpec(name="records", json_schema={"type": "object"})],
+            pipelines=[pipeline],
+            status="building",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+
+        live = lifecycle.submit(draft, builder_session_id="builder")
+
+        assert live.pipelines[0].writes == ("records",)
 
 
 class TestCreateDraft:
@@ -260,6 +326,28 @@ class TestSubmit:
         # The payload round-trips (no raw datetime / non-JSON value leaks) — this
         # is now the ONE emission site (the submit_app tool no longer double-fires it).
         assert ast.literal_eval(str(ready["payload"])) == ready["payload"]
+
+    def test_submit_refuses_disallowed_exec_binary_actionably(self, tmp_path):
+        lifecycle, app_store, _, _ = _make(tmp_path)
+        lifecycle.allowed_exec_binaries = frozenset({"git"})
+        pipeline = PipelineSpec(
+            name="sync",
+            wake_prompt="w",
+            on_demand=True,
+            mode="code",
+            entrypoint="pipelines/sync.py",
+            allow_exec=["tea"],
+        )
+        draft = _draft("app-x", builder_sid="builder-1", pipelines=[pipeline])
+        files = {**draft.frontend.files, "pipelines/sync.py": "def run(p, c):\n    return {}\n"}
+        frontend = draft.frontend.model_copy(update={"files": files})
+
+        with pytest.raises(ValueError, match="pipeline 'sync'.*not permitted"):
+            lifecycle.submit(
+                draft.model_copy(update={"frontend": frontend}), builder_session_id="builder-1"
+            )
+
+        assert app_store.get("app-x") is None
 
     def test_rehomes_pipeline_trigger_onto_maintainer(self, tmp_path):
         lifecycle, _, trigger_store, _ = _make(tmp_path)
@@ -823,7 +911,10 @@ class TestGoLiveSeed:
         assert runs[0].docs_written == {"tasks": 3}  # an explicit fire ALWAYS ledgers
         # The runner is hit twice: the submit-time verifier's dry run (leaves no
         # ledger row) then the go-live seed's real fire (the one row asserted above).
-        assert runner.calls == [("app-x", "report", True), ("app-x", "report", False)]
+        assert runner.calls == [
+            ("app-x", "report", False, True),
+            ("app-x", "report", False, False),
+        ]
 
     def test_a_seed_failure_never_fails_submit(self, tmp_path):
         # An agentic seed whose wake raises must not sink the submit — the app is
@@ -948,7 +1039,9 @@ class TestRearm:
         result = lifecycle.rearm(app_store.get("app-x"), seed=True, now=NOW)
         assert result["seeded"] == ["report"]
         # Re-arm has no verifier (only submit does), so its seed is the sole call.
-        assert runner.calls == [("app-x", "report", False)]  # the re-armed pipeline fired once
+        assert runner.calls == [
+            ("app-x", "report", False, False)
+        ]  # the re-armed pipeline fired once
 
     def test_cancels_a_stale_paused_trigger_before_rearming(self, tmp_path):
         # A trigger paused via the generic triggers route (app stays live) isn't
@@ -1037,7 +1130,7 @@ class TestSubmitVerifier:
     def test_dry_run_failure_refuses_submit_naming_the_pipeline(self, tmp_path):
         lifecycle, app_store, *_ = _make_seeding(tmp_path, runner=_real_runner(tmp_path))
         draft = self._code_draft("app-x", "def run(params, ctx):\n    raise ValueError('boom')\n")
-        with pytest.raises(ValueError, match="'p' failed verification"):
+        with pytest.raises(ValueError, match="pipeline 'p' 'sample 1' failed verification"):
             lifecycle.submit(draft, builder_session_id="builder-1")
         # Nothing persisted, armed, or ledgered — the verifier runs before all of it.
         assert app_store.get("app-x") is None
@@ -1087,15 +1180,12 @@ class TestSubmitVerifier:
         assert live.status == "live"  # went live, no refusal
         assert app_store.get_version("app-x", 1).verification == {"p": "skipped"}
 
-    def test_exec_pipeline_is_skipped_not_failed(self, tmp_path):
-        # ctx.exec REFUSES under a dry run, and the submit-time verifier IS a dry
-        # run — so a CLI-plumbed pipeline is unverifiable here by construction.
-        # That must be "skipped" (a verifier artifact), never a refused submit,
-        # or declaring allow_exec would make an app unshippable.
+    def test_exec_pipeline_rehearses_and_passes_submit_verification(self, tmp_path):
+        # A rehearsal retains dry-run write suppression but executes a declared
+        # subprocess, so submit verifies the live-tool leg rather than skipping it.
         #
         # The workspace resolver must return a REAL directory: ctx.exec checks the
-        # workspace BEFORE dry_run, so the shared `_real_runner` (which resolves
-        # None) would produce "skipped" for the wrong reason and prove nothing.
+        # workspace before it can reach the subprocess boundary.
         workspace = tmp_path / "ws"
         workspace.mkdir()
         runner = AppPipelineRunner(
@@ -1109,8 +1199,34 @@ class TestSubmitVerifier:
 
         live = lifecycle.submit(draft, builder_session_id="builder-1")
 
-        assert live.status == "live"  # went live, no refusal
-        assert app_store.get_version("app-x", 1).verification == {"p": "skipped"}
+        assert live.status == "live"
+        assert app_store.get_version("app-x", 1).verification == {"p": "pass"}
+
+    def test_samples_replay_real_params_under_rehearsal(self, tmp_path):
+        class _SampleRunner(_FakeRunner):
+            def __init__(self) -> None:
+                super().__init__()
+                self.sample_params: list[dict] = []
+
+            def execute(self, app, pipeline, params, *, now, dry_run=False, rehearse=False):  # noqa: ANN001, ANN201
+                self.sample_params.append(dict(params))
+                return super().execute(
+                    app, pipeline, params, now=now, dry_run=dry_run, rehearse=rehearse
+                )
+
+        runner = _SampleRunner()
+        lifecycle, app_store, *_ = _make_seeding(tmp_path, runner=runner)
+        draft = self._code_draft(
+            "app-x",
+            "def run(params, ctx):\n    return params\n",
+            samples=[{"params": {"account": "a"}, "label": "primary"}],
+        )
+
+        lifecycle.submit(draft, builder_session_id="builder-1")
+
+        assert runner.sample_params[0] == {"account": "a"}
+        assert runner.calls[0] == ("app-x", "p", False, True)
+        assert app_store.get_version("app-x", 1).verification == {"p": "pass"}
 
     def test_params_required_pipeline_is_skipped_not_failed(self, tmp_path):
         # A user_writable form pipeline REQUIRES params — a params={} smoke can't
@@ -1284,6 +1400,55 @@ class TestVersionSummary:
         assert summary.pipelines_added == ["digest"]
         # v1 also carries a summary (everything added, prev=None).
         assert app_store.get_version("app-x", 1).summary is not None
+
+
+class TestVerifierFailurePolicy:
+    def test_verifier_failure_invalidates_without_reaching_the_caller(self, tmp_path):
+        from mewbo_api.apps.models import VerifierSpec
+        from mewbo_api.apps.pipeline_runner import PipelineExecutionError
+
+        class _VerifierRunner(_FakeRunner):
+            def verify(self, app, pipeline, result, *, now):  # noqa: ANN001, ANN201
+                raise PipelineExecutionError("verifier", "semantic mismatch")
+
+        runner = _VerifierRunner()
+        lifecycle, app_store, run_store, _, sessions = _make_seeding(tmp_path, runner=runner)
+        pipeline = PipelineSpec(
+            name="p",
+            wake_prompt="w",
+            on_demand=True,
+            mode="code",
+            entrypoint="pipelines/p.py",
+            verifier=VerifierSpec(
+                entrypoint="pipelines/verify.py", consecutive_failures_to_invalidate=1
+            ),
+        )
+        app = _draft("app-x", builder_sid="b", pipelines=[pipeline]).model_copy(
+            update={
+                "status": "live",
+                "maintainer_session_id": "maintainer",
+                "frontend": AppFrontend(
+                    entrypoint="app.py",
+                    files={
+                        "app.py": "x",
+                        "pipelines/p.py": "def run(params, ctx):\n    return {}\n",
+                        "pipelines/verify.py": "def verify(result, ctx):\n    return None\n",
+                    },
+                ),
+            }
+        )
+        app_store.save(app)
+        tracker = lifecycle.tracker
+        assert tracker is not None
+        result = _FakeResult(output={"ok": True}, evaluated_at=NOW)
+
+        # The direct worker target is the off-thread body's caller-facing
+        # contract: it catches verifier errors and dispatches the typed issue.
+        tracker._verify_result(app, pipeline, result, now=NOW, dispatch_failure=True)
+        assert app_store.get("app-x").status == "broken"
+        issues = [event for event in sessions.events["maintainer"] if event["type"] == "app_issue"]
+        assert issues[-1]["payload"]["kind"] == "verifier_failed"
+        assert run_store.list_runs("app-x") == []
 
 
 class TestIntegrityIssuePolicy:

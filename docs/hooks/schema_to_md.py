@@ -107,6 +107,21 @@ def _escape_pipe(s: str) -> str:
     return s.replace("|", "&#124;")
 
 
+def _table_cell(s: str) -> str:
+    """Make a description safe to interpolate into a single markdown table row.
+
+    A table row is one line of markdown: a literal newline inside a cell ends
+    the row early and corrupts every row after it in the section. The
+    console's ``FieldHelp`` contract deliberately shapes a description as a
+    summary line, a blank line, then narrative — that two-paragraph text is
+    correct for the Settings UI popover, so the fix belongs here rather than
+    in the source description. ``md_in_html`` is already enabled
+    (``mkdocs.yml``), so a literal ``<br>`` renders inside a table cell same
+    as the rest of this page already relies on raw HTML passing through.
+    """
+    return _escape_pipe(s).replace("\n\n", "<br><br>").replace("\n", "<br>")
+
+
 # Nesting is shallow by design (the deepest config submodel sits three levels
 # below its section), so this bound only exists to keep a future schema change
 # from turning a build into a runaway walk. The cycle guard below is the real
@@ -239,7 +254,7 @@ def _render_class_section(
             if prop.get("x-protected") or prop.get("x-secret"):
                 desc = f"{desc} ⚠️" if desc else "⚠️"
             lines.append(
-                f"| `{key}` | {_escape_pipe(type_str)} | {default_str} | {_escape_pipe(desc)} |"
+                f"| `{key}` | {_escape_pipe(type_str)} | {default_str} | {_table_cell(desc)} |"
             )
         lines.append("")
 
@@ -252,7 +267,7 @@ def _render_class_section(
             default_str = _default_label(prop)
             desc = _description(prop, defs)
             lines.append(
-                f"    | `{key}` | {_escape_pipe(type_str)} | {default_str} | {_escape_pipe(desc)} |"
+                f"    | `{key}` | {_escape_pipe(type_str)} | {default_str} | {_table_cell(desc)} |"
             )
         lines.append("")
 

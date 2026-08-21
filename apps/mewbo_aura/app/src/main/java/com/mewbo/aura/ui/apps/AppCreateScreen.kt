@@ -44,6 +44,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbo.aura.data.model.ProjectSummary
 import com.mewbo.aura.ui.common.ErrorCard
+import com.mewbo.aura.ui.common.dpadFocusEscape
+import com.mewbo.aura.ui.common.imeOnConfirmOnly
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraSpacing
 import com.mewbo.aura.ui.theme.AuraType
@@ -105,7 +107,12 @@ fun AppCreateScreen(
                 placeholder = { Text("e.g. Track my weekly reading list and remind me on Sundays") },
                 minLines = 3,
                 maxLines = 6,
-                modifier = Modifier.fillMaxWidth(),
+                // Without these a remote that reaches the intent field can neither leave it nor see
+                // the rest of the form behind the IME. Plain String state, so every arrow escapes.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .dpadFocusEscape()
+                    .imeOnConfirmOnly(),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = AuraColors.textPrimary,
                     unfocusedTextColor = AuraColors.textPrimary,

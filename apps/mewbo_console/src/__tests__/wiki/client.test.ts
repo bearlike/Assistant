@@ -13,6 +13,8 @@ import type { MockInstance } from "vitest";
 // so setting it here before tests run is sufficient — no module re-import needed.
 (window as unknown as Record<string, unknown>).__MEWBO_CONFIG__ = { VITE_API_KEY: "test-key" };
 
+import { SseCursor } from "../../api/sse";
+
 import {
   cancelIndexingJob,
   createIndexingJob,
@@ -494,6 +496,20 @@ describe("subscribeToIndexing", () => {
 
     const events = await collect(subscribeToIndexing("j2"));
     expect(events.map((e) => e.type)).toEqual(["queued", "complete"]);
+  });
+
+  it("retains the last frame id and sends it on a resumed subscription", async () => {
+    const cursor = new SseCursor();
+    fetchSpy.mockResolvedValueOnce(sseResp([
+      `id: 17\nevent: queued\ndata: ${JSON.stringify({ jobId: "j-resume", slug: "s", totalCount: 1 })}\n\n`,
+    ]));
+    await collect(subscribeToIndexing("j-resume", { cursor }));
+    expect(cursor.lastEventId).toBe("17");
+
+    fetchSpy.mockResolvedValueOnce(sseResp([sseFrame("complete", { landingPageId: "c", pageCount: 1 })]));
+    await collect(subscribeToIndexing("j-resume", { cursor }));
+    const init = (fetchSpy.mock.calls[1] as [string, RequestInit])[1];
+    expect(new Headers(init.headers).get("Last-Event-ID")).toBe("17");
   });
 
   it("appends api_key as a query param to the SSE URL", async () => {

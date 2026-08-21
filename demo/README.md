@@ -7,8 +7,8 @@ images). Nobody hand-captures screenshots; when the UI changes, the flows are
 re-run and the artifacts are overwritten in place. A broken flow **is** the
 staleness signal.
 
-This directory implements the local screenshot PoC; Android capture, video
-rendering, and CI wiring are later phases of the same effort.
+This directory implements the reproducible web screenshot pipeline. Android
+capture and video rendering remain separate work.
 
 ## Quickstart
 
@@ -21,9 +21,15 @@ make demo-shots-web  # run the Playwright flows, overwrite docs/assets/img/*
 make demo-down       # tear down (removes volumes — the stack is ephemeral)
 ```
 
-Prerequisites: Docker with the compose plugin. First `demo-up` builds
-`mewbo-api:demo` / `mewbo-console:demo` from the local Dockerfiles (never touching
-the deployed `ghcr.io/...:latest` tags) and pulls the pinned Playwright image.
+To regenerate the same set remotely, run the **Demo Screenshots** workflow from
+the Actions page. It executes the end-to-end target against the repository's
+default branch and opens or updates a pull request when the generated images
+change.
+
+Prerequisites: Docker with the compose plugin. `demo-up` builds
+`mewbo-base:demo`, `mewbo-api:demo`, and `mewbo-console:demo` from the local
+Dockerfiles (never touching the deployed `ghcr.io/...:latest` tags) and pulls
+the pinned Playwright image.
 
 The console is published loopback-only for humans at
 `http://127.0.0.1:3210` (`DEMO_CONSOLE_PORT`); everything else stays inside the

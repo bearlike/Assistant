@@ -65,6 +65,18 @@ validates and must never be the thing that reports a bad argument. `check_agents
 keeps a hardcoded arm because it is loop-injected and owns no class to declare on —
 a third such tool declares rather than growing a third arm.
 
+**`extra_session_tools` is gated on `capability_mode`, and that append is the ONLY one downstream of
+`build_for`'s gates.** It sits after them, so before this it was a hole in every privilege ceiling
+for the one tool population a CLIENT controls. Tolerable while that meant `setAlarm`; not once it
+includes a shell at shell UID, which a `read_only` sub-agent would have been handed. It routes
+through the same `capability_mode_admits` predicate, and a tool declaring no `capability` is read as
+`execute` — session tools are actions, so an undeclared tier fails closed.
+
+`ClientDeclaredTool` declares two of the five knobs: `max_result_chars = 30_000` (matching the
+registry's shell spec rather than a fresh number, because device output is shell-class and each
+truncation costs a network round trip to the device, not a local pipe read) and
+`capability = "execute"` so the gate above has a tier to read.
+
 ## `allowed_tools` is THREE-STATE
 
 **Every test on it is `is None`, never truthiness.** `None` is unrestricted, `[]`
@@ -127,6 +139,92 @@ CALL SITE, never on the cached runner instance (per-agent state baked into a
 uses, so searchable ≡ bound and a strictly-scoped agent can never widen via search.
 `select:` on a supplemented name is a no-op, and supplemented names are NOT in
 `_deferred_ids`, so the re-bind discovery scanner ignores them.
+
+## A model-facing schema is READ, not RESOLVED
+
+**Do not assume a model will dereference `$ref`.** Two unrelated small models (a
+26B MoE and a 9B) were each handed `present_ui`'s FULL untruncated schema —
+11,082 characters, delivered complete through `tool_search`, no truncation
+anywhere — and neither could call the tool. One ran
+`tool_search select:GenerativeUISpec` and
+`select:AlertNode,BadgeNode,CardNode,…`, trying to resolve `$ref` TARGETS as if
+they were tools. Both then used `$defs` KEYS as object keys. Seven of twelve
+calls were rejected.
+
+**That is observed behaviour, not a measured cause**, and the honesty matters
+because the schema was also 3,144 tokens with an eleven-way recursive union —
+three confounded variables, no ablation. A literature check found **no** public
+benchmark isolating flattened-vs-`$ref` accuracy (BFCL, ToolBench and API-Bank
+all vary function *count*, not schema indirection). What corroborates the
+mechanism is at the ENGINE layer rather than the model layer: llama.cpp's own
+GBNF README says its JSON-schema converter handles a subset, that **unsupported
+features are skipped silently**, and that **nested `$ref`s are broken** — and a
+reported 8B case had an enum behind a `$def` accept arbitrary objects while the
+same enum inlined worked. So a schema can be grammatically enforced, weakened,
+or unenforced with nothing logged either way.
+
+**The corollary is a debugging rule: never infer that guided decoding is engaged
+because a schema was submitted.** vLLM has a confirmed case where a reasoning
+parser routed generation into an unconstrained channel and the grammar never
+bound, on the same server and schema where the other API path was constrained.
+Check the serving backend and the compiled grammar, not the request.
+
+Three rules follow, and all three are cheap:
+
+- **State the vocabulary flat, in the DESCRIPTION.** A closed set of names and
+  their required fields belongs in prose the model reads before it decides
+  anything — `present_ui`'s whole eleven-component vocabulary is 93 tokens that
+  way against 3,144 tokens of schema. DERIVE it from the model
+  (`GenerativeUISpec.component_guide()` reads `model_fields`), never hand-write
+  it: a hand-written list is a mirror, and mirrors drift.
+- **Never let a Python class name reach the model.** Pydantic keys a `$def` by
+  CLASS, so a discriminated union offers `#/$defs/AlertNode` for a variant whose
+  only legal tag is `Alert`. Fix it at pydantic's OWN seam — a
+  `GenerateJsonSchema` subclass overriding `normalize_name`, passed through
+  `pydantic_to_openai_tool(schema_generator=…)`; `ComponentTagSchema` is the
+  worked example. `ConfigDict(title=…)` does NOT do it (verified: it sets
+  `title` and leaves the key). **Do not post-process the emitted dict** — the
+  name appears as the `$defs` key, in every `$ref` STRING, and in the
+  discriminator mapping, and a pass that finds only some of them leaves the
+  schema self-inconsistent, which is worse than not renaming. Overriding
+  `normalize_name` makes pydantic repoint all three itself.
+- **Delete wrapper levels that carry no information.** A field whose only job is
+  to hold one other field is a level that can only be got wrong: five of those
+  seven rejections were `present_ui`'s old `spec` wrapper — sent as a bare list,
+  as an object, with node fields spread onto it, with `$defs` names as its keys.
+  It is gone; `PresentUiArgs` subclasses `GenerativeUISpec` so `root` is
+  top-level, and the EMITTED event keeps its frozen `spec: {"root": […]}` shape.
+
+**A rejection is model-facing text too, so it must teach.** A bare pydantic error
+names the failing path and stops, leaving the caller to INFER the contract from a
+sequence of refusals — which both traced models did out loud, and one of them
+inferred wrongly, announced the wrong shape as a key insight, and sent it. Append
+the canonical call and the derived vocabulary to the error. This is ADDITIVE:
+validation stays exactly as strict, nothing is coerced, and no evidence is
+normalized away. Size `max_result_chars` for it.
+
+`pydantic_to_openai_tool` strips `title` at every depth (it long claimed to and
+only did the top level). `properties` and `$defs` are NAME MAPS — recursion
+enters them through VALUES only, or a field genuinely called `title` (`Card`,
+`Alert`) vanishes from the model's view while validation still requires it. Flat
+schemas save nothing; nested ones save 6-10% (`submit_app`: 3,096 → 2,893).
+
+**A discriminated union is a PORTABILITY liability, and the vendor limits are
+published.** Pydantic emits `oneOf` + `discriminator`; OpenAI's structured-output
+docs list `anyOf` and document neither `oneOf` nor `discriminator`, and Gemini's
+subset likewise. Anthropic's strict tool use caps a request at **16 union-type
+parameters** (also 20 strict tools, 24 optional params) and returns a 400,
+`Schema is too complex for compilation`, past its grammar budget — its own
+guidance is to flatten. `present_ui`'s eleven-way recursive union is inside that
+cap today and could stop being so.
+
+**What is NOT established**: that per-variant typed alternatives are easier for a
+model to FILL than a generic `{component, props}` bag. `nodes.py` used to assert
+that flatly; no measurement supports it in either direction. What per-variant
+contracts definitely buy is post-generation validation and renderer safety, which
+is reason enough to keep them — but the call-success half is an empirical
+question about a specific model and backend, and the way to settle it is an A/B
+against the deployed endpoint, not an argument.
 
 ## A SessionTool that RETURNS a structured-error envelope is a FAILED step
 

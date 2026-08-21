@@ -33,6 +33,41 @@ services:
       - androidboot.redroid_net_ndns=1
       - androidboot.redroid_net_dns1=127.0.0.11
 
+  # TV-geometry variant — the SAME AOSP base, booted at 16:9 landscape so D-pad
+  # focus traversal can be witnessed on hardware we already run. Opt-in:
+  #   docker compose --profile tv up -d
+  #   adb connect localhost:5557
+  #   adb -s localhost:5557 shell input keyevent 20   # DPAD_DOWN
+  # This works because KEYCODE_DPAD_* is dispatched by the input framework and
+  # Compose focus responds to key events — neither depends on the leanback
+  # feature. What it can NEVER witness: `android.software.leanback` (declared by
+  # a permissions XML baked at image build, and /system is read-only), the TV
+  # launcher row, banner presentation, or any hasSystemFeature(FEATURE_LEANBACK)
+  # branch. Those need a real Google TV emulator image.
+  redroid-tv:
+    image: redroid/redroid:13.0.0-latest
+    container_name: aura-redroid-tv
+    profiles: ["tv"]
+    privileged: true            # required: binder/ashmem access
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g           # == mem_limit ⇒ no swap; see header
+    pids_limit: 4096
+    volumes:
+      - ./data-tv:/data         # separate state from the phone-geometry service
+    ports:
+      - "5557:5555"             # adbd (5555 base, 5556 gms)
+    networks:
+      - default
+      - assistant
+    command:
+      - androidboot.redroid_width=1920
+      - androidboot.redroid_height=1080
+      - androidboot.redroid_dpi=213   # ≈960x540dp landscape; tvdpi-ish
+      - androidboot.redroid_net_ndns=1
+      - androidboot.redroid_net_dns1=127.0.0.11
+
   # GMS variant — MindTheGapps baked into the same redroid 13 base so its
   # stock assistant app can run as an assistant-role/overlay UX reference.
   # Opt-in (plain `docker compose up -d` never starts it):

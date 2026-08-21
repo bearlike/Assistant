@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.mewbo.aura.data.api.QuestionAnswerItemDto
 import com.mewbo.aura.data.model.AttachmentPayload
 import com.mewbo.aura.data.model.ChatItem
+import com.mewbo.aura.data.device.DeviceControlSession
+import com.mewbo.aura.data.device.DeviceShape
+import com.mewbo.aura.data.device.DeviceToolCatalog
 import com.mewbo.aura.data.model.ComposerScope
 import com.mewbo.aura.data.model.SessionEvent
 import com.mewbo.aura.data.model.TextPayload
@@ -67,13 +70,22 @@ class ChatViewModel @Inject constructor(
     private val settingsStore: SettingsStore,
     private val sessionScopeRepository: SessionScopeRepository,
     private val attachmentRepository: AttachmentRepository,
+    private val deviceControlSession: DeviceControlSession,
+    /** Read for exactly one question - whether a TYPED turn is read aloud
+     * ([SpeechController.narratesTurn]). A television has no voice entry point, so under the
+     * handheld modality rule every turn on that shape is silent. */
+    private val deviceShape: DeviceShape,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     private val binding = SessionBinding()
-    private val speech = SpeechController(synthesizer, viewModelScope)
+    private val speech = SpeechController(synthesizer, viewModelScope, deviceShape)
+
+    /** Settings' "Speak responses". A plain field, not state: only the speak-along fold below
+     * reads it, and nothing renders from it here — the Settings screen has its own flow. */
+    @Volatile private var speakResponsesEnabled = true
     private var streamJob: Job? = null
     private var dictationJob: Job? = null
 
@@ -136,6 +148,21 @@ class ChatViewModel @Inject constructor(
         }
         viewModelScope.launch {
             settingsStore.streamlitWidgetsEnabled.collect { widgetsEnabled = it }
+        }
+        viewModelScope.launch {
+            settingsStore.speakResponses.collect { speakResponsesEnabled = it }
+        }
+        viewModelScope.launch {
+            // The device-tool list is decided by what the phone currently permits, and that
+            // changes while the app is open — authorising Shizuku happens in ANOTHER app, so
+            // nothing here would otherwise notice. Measured: Settings correctly read "Ready"
+            // while the composer still showed the pre-authorisation tool count, and only a
+            // force-stop corrected it. Two surfaces describing one session, disagreeing.
+            //
+            // `tools()` is always fresh when called; the staleness is the cached answer. So the
+            // signal carries no payload — a collector re-runs the fetch it already owns, scoped
+            // and degrading exactly as it does everywhere else.
+            sessionScopeRepository.deviceToolsChanged.collect { refreshComposerScope(onNotice = {}) }
         }
         viewModelScope.launch {
             // Only seeds the CURRENT scope while still on a fresh/unsaved chat (binding.currentId ==
@@ -233,12 +260,31 @@ class ChatViewModel @Inject constructor(
 
     fun toggleTool(toolId: String) {
         _state.update { it.copy(composerScope = it.composerScope.toggleTool(toolId)) }
+        persistDeviceToolIntent(toolId)
     }
 
     /** Toggle-sheet server-row bulk action - mirrors [toggleTool]'s style over
      * [ComposerScope.setServerTools]. */
     fun toggleServer(toolIds: List<String>, active: Boolean) {
         _state.update { it.copy(composerScope = it.composerScope.setServerTools(toolIds, active)) }
+        toolIds.forEach { persistDeviceToolIntent(it) }
+    }
+
+    /**
+     * A device tool toggled in the picker is persisted to the SAME store Settings
+     * writes, not merely narrowed for this run.
+     *
+     * The picker's allowlist reaches the agent as `context.mcp_tools`, and device
+     * tools are appended AFTER that gate — so switching one off in the picker
+     * would change the row and leave the tool bound. A control that visibly does
+     * nothing is worse than no control. Routing it to the one persisted set keeps
+     * the two surfaces telling the same story rather than inventing a second
+     * source of truth.
+     */
+    private fun persistDeviceToolIntent(toolId: String) {
+        if (toolId !in DeviceToolCatalog.ALL.map { it.toolId }) return
+        val enabled = _state.value.composerScope.isToolActive(toolId)
+        viewModelScope.launch { settingsStore.setDeviceToolEnabled(toolId, enabled) }
     }
 
     /** Resolves each picked [Uri] (display name/size/mime) and stages the ones under
@@ -490,6 +536,14 @@ class ChatViewModel @Inject constructor(
                         )
                     ) {
                         is SendResult.RunStarted -> subscribeLive(id)
+                        // Reached when the server refused this "fresh" turn with a 409 and the
+                        // repository re-routed it onto the steer path - i.e. runPhase had left
+                        // Sending/Streaming while the run had NOT ended (a stop(), a stream_error,
+                        // a dropped collector), so the route pick above was made on a stale view of
+                        // liveness. Re-subscribing is the whole recovery: it puts the user back on
+                        // the run their message just steered. streamJob is always inactive on that
+                        // path - every route into it either cancels the collector or lets
+                        // transformWhile end it - so the guard is about the ordinary steer case.
                         is SendResult.Enqueued -> if (streamJob?.isActive != true) subscribeLive(id)
                         // /query's 200: a slash command was handled inline - no run started.
                         is SendResult.SlashHandled -> _state.update { it.copy(runPhase = RunPhase.Idle) }
@@ -694,15 +748,50 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** Client-side detach only - the backend run keeps going (v1 semantics, task brief). Also a
-     * barge-in trigger ("the run-stop control") - stopping the run stops its speech. */
+    /**
+     * The run-stop control. Three effects, in this order, and the order is the design.
+     *
+     * **1. The device-control grant is released, synchronously and first.** This is the half that
+     * actually holds: a user who stops a run has withdrawn permission for an agent to drive their
+     * phone, and after this every `device_ui`/`device_action`/`device_shell` call is refused with
+     * `device_control_not_started` regardless of what the server does next. It runs before the
+     * network call and does not depend on it, because a stop that only works while the backend is
+     * reachable is not a stop. [DeviceControlSession.stop] is documented idempotent precisely
+     * because its release paths race — this is the same class of caller as the ongoing
+     * notification's own Stop (a person saying stop), not a second automatic opinion of the kind
+     * `notify/CLAUDE.md` rules out for `RunRepository`.
+     *
+     * **2. The client detaches** (cancel the collector, barge in on speech, drop the phase to
+     * [RunPhase.Idle]) exactly as before. A follow-up typed into the now-idle composer is still
+     * correct: [RunRepository.sendQuery] re-routes the resulting `409` onto the steer path.
+     *
+     * **3. `POST /interrupt` is fired best-effort** — the strongest server-side signal that does not
+     * destroy the session. **It does not end the run, and this is measured, not assumed:** a live run
+     * answered `202 interrupted: true` and then ran to normal completion 91 s later. All it reliably
+     * buys is the `[System: Current step interrupted by user.]` marker reaching the model and the
+     * release of a run blocked on an `ask_user_question`.
+     *
+     * **A failed interrupt is deliberately not surfaced to the user, and the reason is not
+     * convenience.** Reporting the failure would imply that its success meant the run had stopped —
+     * which is the very falsehood this method used to tell. The call carries no information about
+     * whether anything stopped, so neither outcome is reportable; what IS true after this method
+     * returns is true on both paths (the grant is gone, the client has detached), and that is what
+     * the surface shows. The honest missing piece is a server operation meaning "cancel this run,
+     * keep the session" — `SessionRuntime.cancel()` implements exactly that and is currently
+     * reachable only through `/terminate`, which kills the session with it.
+     */
     fun stop() {
+        deviceControlSession.stop()
+        val id = binding.currentId
         streamJob?.cancel()
         streamJob = null
         speech.bargeIn()
         _state.update {
             if (it.runPhase == RunPhase.Streaming || it.runPhase == RunPhase.Sending) it.copy(runPhase = RunPhase.Idle) else it
         }
+        // Launched on viewModelScope, never awaited: the two effects above are the ones the user can
+        // verify, and neither may wait on a socket. No session bound ⇒ nothing to interrupt.
+        if (id != null) viewModelScope.launch { runRepository.interrupt(id) }
     }
 
     fun retry() {
@@ -740,7 +829,7 @@ class ChatViewModel @Inject constructor(
      * already listening (defensive - [ComposerState][com.mewbo.aura.ui.composer.ComposerState]'s
      * own C1/C3 split means the mic glyph and the stop tile are never both reachable at once).
      */
-    fun startDictation() {
+    fun startDictation(onNotice: (String) -> Unit = {}) {
         if (_state.value.dictation is DictationState.Listening) return
         // Barge-in ("startDictation()") - about to speak into the mic, so whatever
         // was speaking stops.
@@ -752,6 +841,15 @@ class ChatViewModel @Inject constructor(
                     if (event is TranscriberEvent.Final) haptics.transcriptAccepted()
                     if (event is TranscriberEvent.Error && event.code == TranscriberError.Unavailable) {
                         _state.update { it.copy(dictationAvailable = false) }
+                    }
+                    // The one error that is not a quiet-cancel. A server-backed engine that
+                    // refused means the user's recording was captured and then discarded for a
+                    // reason nothing on screen shows — and `DictationDecision` maps EVERY error
+                    // to Idle, so without this the composer just returns to rest and the whole
+                    // utterance vanishes. The mic itself is never disabled: the failure is the
+                    // remote service, and on-device dictation is one Settings row away.
+                    if (event is TranscriberEvent.Error && event.code == TranscriberError.ServiceFailed) {
+                        onNotice("Speech service didn't respond — check the engine in Settings")
                     }
                     _state.update { it.copy(dictation = DictationDecision.next(it.dictation, event)) }
                 }
@@ -841,14 +939,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** `null` for every non-[SessionEvent.Completion] event - [applyEvent] leaves [ChatUiState.runPhase]
-     * untouched in that case. */
-    private fun completionPhaseFor(event: SessionEvent): RunPhase? {
-        if (event !is SessionEvent.Completion) return null
-        val failed = event.payload.error != null || event.payload.lastError != null
-        return if (failed) RunPhase.Error else RunPhase.Done
-    }
-
     /**
      * [completionPhase], when non-null, lands in the SAME [_state] emission as the folded [items]
      * update - never a separate later `_state.update`. Splitting them (the original shape here)
@@ -924,7 +1014,11 @@ class ChatViewModel @Inject constructor(
             speech.onAssistantMessage(
                 item = items.lastOrNull { it is ChatItem.AssistantMessage } as? ChatItem.AssistantMessage,
                 modality = _state.value.activeTurnModality,
-                muted = _state.value.speechMuted,
+                // The Settings switch folds into `muted` rather than becoming a second gate, so
+                // there is one place that decides whether a reply is spoken. Until this read
+                // existed the switch was inert: it persisted a value, rendered a state, and no
+                // speech path consulted it — the reply was spoken on every voice turn regardless.
+                muted = _state.value.speechMuted || !speakResponsesEnabled,
             )
         }
         _state.update {
@@ -937,6 +1031,31 @@ class ChatViewModel @Inject constructor(
             )
         }
     }
+}
+
+/**
+ * The run-outcome decision as a pure predicate (extracted top-level, like [widgetGateDropsReplay]
+ * below, so it is directly unit-testable without constructing the whole ViewModel + its
+ * Context-backed `SettingsStore`): the [RunPhase] a [SessionEvent] settles the run into, or `null`
+ * for every non-[SessionEvent.Completion] event - [ChatViewModel.applyEvent] leaves
+ * [ChatUiState.runPhase] untouched in that case.
+ *
+ * **Failure keys on `error` ALONE, never `lastError`.** `lastError` is a sticky diagnostic recording
+ * the last tool failure inside the run; the orchestrator sets `error` only on its own terminal-failure
+ * path, so a run that recovered from a failed tool call and went on to answer carries `lastError`
+ * residue while `error` stays null - and that is a SUCCESS. Reading `lastError` here surfaced an
+ * internal tool/MCP error as a session-level failure: the composer flipped to [RunPhase.Error] under a
+ * complete, correct reply.
+ *
+ * This is the THIRD copy of one decision, and the other two are the reference:
+ * `TranscriptReducer.foldCompletion` (which spawns the [com.mewbo.aura.data.model.ChatItem.ErrorCard])
+ * and `RunNotificationController.completionNotice` (which announces the notification) both key on
+ * `error` alone. All three must agree - a card without a phase, or a phase without a card, is a
+ * surface disagreeing with itself about whether the turn worked.
+ */
+internal fun completionPhaseFor(event: SessionEvent): RunPhase? {
+    if (event !is SessionEvent.Completion) return null
+    return if (event.payload.error != null) RunPhase.Error else RunPhase.Done
 }
 
 /**

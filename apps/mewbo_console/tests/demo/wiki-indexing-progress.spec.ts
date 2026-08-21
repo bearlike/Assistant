@@ -29,8 +29,8 @@ test("wikiIndexingProgress — finalizing job", async ({ page, demo }) => {
   await expect(page.getByText(DEMO_JOB.slug).first()).toBeVisible();
 
   // Phase rail — all seven phases render as dots + labels regardless of
-  // progress; "finalize" is the last, reached one.
-  await expect(page.getByText("finalize", { exact: true })).toBeVisible();
+  // progress; "Finish" is the user-facing label for the reached final phase.
+  await expect(page.getByText("Finish", { exact: true }).first()).toBeVisible();
 
   // Pin the exact percent (finalize's floor, per progress.ts' PHASE_RANGE
   // [95,100] — this job carries no finalize sub-progress) rather than
@@ -46,7 +46,7 @@ test("wikiIndexingProgress — finalizing job", async ({ page, demo }) => {
   await expect(page.getByText("Built graph: 715 nodes, 3918 edges")).toBeVisible();
   await expect(page.getByText("Embedded 715 nodes (dim=3072)")).toBeVisible();
   await expect(
-    page.locator('div[class*="max-h-[280px]"] > div'),
+    page.getByRole("log", { name: "Indexer activity" }).getByRole("listitem"),
   ).toHaveCount(7);
 
   await demo.capturePage("wikiIndexingProgress");

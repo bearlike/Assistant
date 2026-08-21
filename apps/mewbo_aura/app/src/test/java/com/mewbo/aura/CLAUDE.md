@@ -2,10 +2,147 @@
 
 # Aura JVM Test Idioms — app/src/test/
 
-Scope: `app/src/test/java/com/mewbo/aura/` — plain-JVM unit tests (Robolectric is NOT in the
-dependency catalog; every test double here is a hand-rolled fake, never a mock of an Android SDK
-class). These are project-specific traps found the hard way; check here before re-deriving any of
-them.
+Scope: `app/src/test/java/com/mewbo/aura/` — unit tests. These are project-specific traps found the
+hard way; check here before re-deriving any of them.
+
+**Plain JVM is the default and stays the default.** Almost every double here is a hand-rolled fake
+rather than a mock of an Android SDK class, and almost every suite runs with no Android on the
+classpath at all. Robolectric IS in the catalog now, but it is the EXCEPTION, taken only where the
+behaviour under test is an Android object doing its job:
+
+| Suite | Why it needs Android |
+|---|---|
+| `ui/control/DeviceControlOverlayTest` | the whole behaviour IS adding and removing a `WindowManager` window |
+| `ui/chat/ChatTranscriptDisclaimerTest`, `ui/composer/ComposerPrimaryActionTest`, `ui/settings/SettingsRowRenderTest` | Compose semantics — the claim is what RENDERS, not what a predicate returns |
+
+Reach for it only when a pure test structurally cannot observe the failure — a fold cannot see the
+absence of a window. A Robolectric class pays a real per-class setup cost, so anything expressible
+as a pure function belongs in a plain-JVM suite. `ui/chat/ChatViewModelTest` is the worked example
+of how far plain JVM reaches: a whole ViewModel over a faked HTTP/SSE seam, no Android runner.
+
+## Under Robolectric a frame loop HANGS the suite — it does not fail it
+
+The worst shape a gate can take, because it reads as a slow suite rather than a bug. Measured: a
+worker pinned at 122% CPU for ten minutes, no timeout, no output.
+
+**The one rule behind three symptoms: the Compose test framework suspends only the INFINITE-ANIMATION
+clock, so any bare frame or delay loop escapes it.**
+
+- `ShadowChoreographer.isPaused` is `false` by default, which posts vsync callbacks at zero delay.
+  Any surface carrying an aurora/orb shader drives an unbounded frame loop, so `ShadowLooper.idle()`
+  drains a queue that refills itself and never returns. `setPaused(true)` + `setFrameDelay(16ms)` in
+  `@Before` starves every frame source regardless of which loop produced it, and makes `idleFor` a
+  bounded number of frames. This is the general cure; the two below are the same defect seen closer.
+- `RmsWaveform` runs a bare `while (true) { withFrameNanos { … } }`. Unlike
+  `withInfiniteAnimationFrameMillis` (what `ShaderFrameClock` uses, and what `InfiniteAnimationPolicy`
+  suspends), it never yields an idle frame — so `waitForIdle()` spins. Test `ComposerState.Dictation`
+  with a non-null `partialText`, taking the transcript branch instead of the bars.
+- `rememberStreamedText` runs an unbounded `while (true) { … delay(…) }` while `isStreaming`. Express
+  "no settled reply" as a transcript with no assistant message at all — the same input to the gate.
+
+## Text measures at 1px/char here, so a width assertion over text may have NO power to fail
+
+Two facts, both measured with throwaway probes, and the second explains every confusing reading the
+first produces.
+
+**1. The text substrate is degenerate, uniformly.** Reading `TextLayoutResult.size` from
+`onTextLayout` — the text box itself, not a node's bounds — one 23-character string rendered at three
+styles in one composition came back **23 × 35, one line, for all three**:
+
+```
+sectionHeader  14sp (lineHeight 18sp) → 23 x 35
+listItem       16sp (lineHeight 23sp) → 23 x 35
+caption        12sp (lineHeight 17sp) → 23 x 35
+```
+
+One pixel per character and ONE identical height across three different line heights, at
+`density=1.0`.
+
+**The mechanism is not a font problem at all — Robolectric's `Paint` does not measure text.**
+Disassembled from `shadows-framework-4.16.1.jar`:
+
+```
+protected float measureText(java.lang.String);
+   1: aload_1
+   2: invokevirtual  // Method java/lang/String.length:()I
+   5: i2f
+   6: invokespecial  // Method applyTextScaleX:(F)F
+```
+
+It returns the CHARACTER COUNT. `GraphicsModeConfigurer` defaults to `Mode.LEGACY` — "shadows that
+are no-ops and fakes" — and nothing in this module sets `@GraphicsMode`, so every text measurement
+here is `text.length()`. That is why the number is exactly 1.000 and not 1.02: **a measurement
+landing on an exact round value is a code path, not data.** Chasing the magnitude cost four dead
+font-shaped hypotheses (per-style resolution, async loading, layout slot, missing resource); reading
+the shadow source settled it in two files.
+
+**2. `boundsInRoot` reports the LAYOUT SLOT, not the text box.** This is what makes the first fact
+easy to misdiagnose. Same 23-character string, one composition:
+
+```
+bare Text (sizes to content)                    →  23px
+Text.fillMaxWidth() in Column(weight(1f)) in Row → 309px
+```
+
+So a "sane-looking" width is not evidence that metrics work somewhere — it is a weighted slot's
+width being reported. One such reading (191px, from a mutated header) was chased as a harness
+anomaly for hours; it was an allocation, and it shrank by exactly the badge's extra width, which the
+arithmetic showed once anyone compared the two deltas.
+
+**The consequence for writing tests here.** A bounds comparison over text can be true of the slots
+while saying nothing about the glyphs. Two rules:
+
+- **Assert the CONTROL render is non-degenerate before trusting any comparison against it.** A
+  comparison between two degenerate renders passes with zero power to fail — the same disease as a
+  missing permission request, just wearing an assertion instead of an absence.
+- **Read `TextLayoutResult.size` when the claim is about TEXT**; `boundsInRoot` when the claim is
+  about layout. They are different questions and only one of them is about the font.
+
+**The cure: `@GraphicsMode(GraphicsMode.Mode.NATIVE)`, and it targets `METHOD`** — so a test that
+genuinely needs real text gets it without imposing native graphics on every Robolectric suite in the
+module. Measured, same fixture, both modes:
+
+```
+LEGACY  title (23 chars, 14sp) → 23.0 x 35.0    ← text.length()
+NATIVE  title (23 chars, 14sp) → 150.0 x 17.0   ← a real advance width
+```
+
+`SettingsRowRenderTest`'s squeeze test carries that annotation for exactly this reason. Under the
+default it was comparing `23 == 23` and would have passed however narrow the allocation became; its
+earlier red came from a mutation that changed the node's SIZING MODE (`weight` defaults to
+`fill = true`), not from the squeeze it names. **A red is not proof of power — check WHY it went
+red.** A sibling test asserting the same law over `SettingsRow` was written, went green, and was
+deleted before anyone noticed; that one had no control assertion to catch it.
+
+**One coverage gap this leaves, worth knowing:** under LEGACY every item composes, because a lazy
+list decides what fits from measured heights and the stub makes everything the same small size. So
+**no test at the default mode can catch a virtualisation regression**, and a node-count assertion
+over a `LazyColumn` is only safe while the fixture is small enough that virtualisation never engages
+— a property of the fixture, not of the assertion.
+
+## `mockito-core` is no longer only for `android.net.Uri`
+
+A Robolectric test needing a real `SettingsStore` must mock `KeystoreCipher`: its constructor calls
+`KeyStore.getInstance("AndroidKeyStore")` and Robolectric ships no such JCA provider, so it throws
+`NoSuchAlgorithmException`. `SettingsStore` itself stays real.
+
+## A post-restore green can be FAKE — `--rerun-tasks` on the confirming run
+
+When proving a test can fail, restoring the production file byte-identically makes the task inputs
+identical too, so Gradle serves `:app:testPublicDebugUnitTest` `FROM-CACHE` and hands back the
+**pre-mutation** XML — same content, same timestamp. Measured; it will happen every time. The
+confirming run needs `--rerun-tasks`, and the check is the XML `timestamp` attribute, not the count.
+
+Worked example of the check discriminating rather than merely being asserted — a red→green cycle run
+WITHOUT `--rerun-tasks`, where every set advanced and so every run genuinely executed:
+
+```
+baseline green   00:28:22 / 00:28:30 / 00:28:31
+RED (flipped)    00:29:41 / 00:29:48 / 00:29:50
+green (restored) 00:30:42 / 00:30:49 / 00:30:51
+```
+
+A cache hit would have replayed the 00:28 timestamps verbatim.
 
 ## `backgroundScope` does NOT run under `advanceUntilIdle()` in this project's kotlinx-coroutines-test version — PROBED, not assumed
 
@@ -53,6 +190,30 @@ only for a class with an infinite `init`-block collector that would otherwise tr
 (`AssistTurnMachine`). A `ViewModel` whose coroutines all COMPLETE (a one-shot `refresh()` that ends when
 the fetch returns) has no such collector, so the plain MainDispatcher idiom suffices. `SessionsViewModelTest`
   is the reference implementation; its KDoc states the distinction explicitly.
+
+## A class under test that hops to `Dispatchers.IO` is NOT driven by `advanceUntilIdle()`
+
+`advanceUntilIdle()` drains the TEST SCHEDULER. A suspend function that does real work inside
+`withContext(Dispatchers.IO)` has left that scheduler entirely — it is on a genuine thread pool — so
+the scheduler goes idle while the work is still running, and an assertion right after
+`advanceUntilIdle()` reads the state from BEFORE it finished. **This passes or fails by timing**,
+which is the worst shape a gate can take: green locally, red on a loaded machine, and neither result
+means anything.
+
+Injecting an `UnconfinedTestDispatcher`-backed scope does NOT fix it. Unconfined only means the
+coroutine starts eagerly in the caller's thread; the `withContext(Dispatchers.IO)` inside still hops.
+So a class whose `check()` never leaves the scheduler completes synchronously inside the triggering
+call, while its `download()` on the same scope does not — the same object, two different rules.
+
+`data/update/AppUpdateRepositoryTest` is the worked example: `AppUpdateRepository.fetch()` streams a
+file inside `withContext(Dispatchers.IO)`, so the suite polls WALL-CLOCK time for the terminal state
+(`withContext(Dispatchers.Default) { delay(5) }` in a bounded loop) rather than virtual time. Two
+rules make that poll honest rather than a sleep-and-hope:
+
+- **Bound it**, so a hang fails the test instead of wedging the suite.
+- **Assert the terminal state's own FIELDS afterwards**, never just that the state changed. A helper
+  that returned one state too early then fails the very next assertion, instead of passing silently
+  on an intermediate value.
 
 ## `ScriptedTranscriber`: one script per `listen()` call, never a shared replay-from-zero or a shared consumption cursor
 

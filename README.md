@@ -37,13 +37,13 @@ The wiki, the search, the apps and the task runner all run on one harness, so an
 
 ### Agentic tasks
 
-A long run is a fleet, not a chat. Approve the plan, then watch the tree and steer or stop any branch. Authority only narrows going down. Retries and model fallback absorb the failures, and one trace makes the result reviewable rather than merely finished.
+A long run is a fleet, not a chat. Approve the plan, then watch the tree and steer or stop any branch. Authority only narrows going down. Retries and model fallback absorb the failures, and one trace, generative UI included, makes the result reviewable.
 
 [Docs →](https://docs.mewbo.com/latest/web/sessions/)
 
 </td>
 <td width="50%">
-  <a href="https://docs.mewbo.com/latest/web/sessions/"><img src="docs/assets/img/mewbo-tasks-demo.gif" alt="A Mewbo task in the web console. The request asks for trending repositories in an organisation to be visualised as a widget ranked by 30 day star growth, and an inline widget renders a ranked card grid of six repositories with language, star count and star delta" width="100%" /></a>
+  <a href="https://docs.mewbo.com/latest/web/sessions/"><img src="docs/assets/img/mewbo-tasks-demo.gif" alt="A Mewbo task in the web console. The request asks for the latest open-source models under 50 billion parameters that excel at agentic tool use, and the agent streams a ranked shortlist of model cards with release, license, size, context window and tool-use benchmark evidence, ending in a how-to-choose comparison table" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -63,6 +63,20 @@ Indexing lifts a repository's ASTs into a three layer memory graph, so pages are
 <tr>
 <td width="50%" valign="middle">
 
+### Agentic Apps
+
+The same harness builds an app against a structured playbook, then verifies it. Its frontend ships as WASM and runs in the browser sandbox, so you operate no new service. Triggers and schedules come out of the same build, so upkeep ships with the app.
+
+[Docs →](https://docs.mewbo.com/latest/apps/)
+
+</td>
+<td width="50%">
+  <a href="https://docs.mewbo.com/latest/apps/"><img src="docs/assets/img/mewbo-apps-demo.gif" alt="A Mewbo App called LLM Model Compare being rebuilt by an agent. An agent todos card ticks off steps after approval of a Hugging Face metadata enrichment, and the live app then renders a Model Rankings bar chart and a capability radar chart comparing models across agentic tool use, coding and other domains" width="100%" /></a>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
 ### Agentic Search
 
 No single index spans the systems that hold your answer. Attach them as APIs, databases or MCP servers, and probe agents route by a graph of reachability rather than content, each writing its route back.
@@ -72,20 +86,6 @@ No single index spans the systems that hold your answer. Attach them as APIs, da
 </td>
 <td width="50%">
   <a href="https://docs.mewbo.com/latest/features-search/"><img src="docs/assets/img/mewbo-search-05-synthesis.png" alt="Agentic Search results for a question about how a self hosted CI fleet splits between runners and control plane. A synthesis card cites three sources with a confidence score, twelve ranked results follow across Code and Web filters, and a right rail shows the agent trace with a coordinator and two probe sub-agents reporting steps, duration and tokens" width="100%" /></a>
-</td>
-</tr>
-<tr>
-<td width="50%" valign="middle">
-
-### Agentic Apps
-
-The same harness builds an app against a structured playbook, then verifies it. Its frontend ships as WASM and runs in the browser sandbox, so you operate no new service. Triggers and schedules come out of the same build, so upkeep ships with the app.
-
-[Docs →](https://docs.mewbo.com/latest/apps/)
-
-</td>
-<td width="50%">
-  <a href="https://docs.mewbo.com/latest/apps/"><img src="docs/assets/img/mewbo-apps-01-detail.png" alt="A live Mewbo App called LLM Model Compare. A filter rail on the left narrows by provider, release year, capabilities, intelligence index, throughput and blended cost. The centre shows stat tiles and a bar chart ranked by coding score. A right rail reports health, recent runs, daily pipelines, cron schedules and versions" width="100%" /></a>
 </td>
 </tr>
 <tr>
@@ -130,6 +130,7 @@ The Android client runs the same sessions you have at your desk, registered as t
 - **[Code intelligence](https://docs.mewbo.com/latest/features-lsp/).** Language servers are discovered automatically and rerun diagnostics after every edit, so a run sees the same errors your editor would.
 - **[Web IDE](https://docs.mewbo.com/latest/web/ide/).** Each session can open its own code-server container, started on demand and reaped when its time to live runs out. Take the files over mid-run without leaving the browser.
 - **[Any provider, every surface](https://docs.mewbo.com/latest/llm-setup/).** Bring the models you already pay for. The terminal, the console, Android, the REST API, an MCP server, Home Assistant, Nextcloud Talk and email all drive the same session.
+- **[Speak in, hear back](https://docs.mewbo.com/latest/configuration/#speech).** Speech to text and text to speech, everywhere.
 
 ## 🚀 Get started
 

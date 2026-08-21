@@ -163,7 +163,7 @@
         },
         "allow_external_cwd": {
           "default": false,
-          "description": "Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers that manage their own worktrees.",
+          "description": "Allow callers to anchor sessions in arbitrary host paths via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. A directory belonging to a configured project, managed project or worktree, or registered repository checkout is always accepted, as is a re-send of the session's own bound directory; this flag governs host paths a caller names that the server does not already own.",
           "title": "Allow External Cwd",
           "type": "boolean"
         },
@@ -180,6 +180,21 @@
           "title": "Apps Token Secret",
           "type": "string",
           "x-secret": true
+        },
+        "apps_exec_binaries": {
+          "description": "Command-line programs a Mewbo App's code pipeline may run. A pipeline must still declare the ones it needs, so this is a ceiling the deployment sets rather than a grant: a program absent here cannot be reached however the pipeline is written. Widening it is an operator decision \u2014 pipeline code runs in-process, so a program added here runs with the API server's own file and network access, and a program that can be steered into running other programs effectively grants a shell.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Apps Exec Binaries",
+          "type": "array"
+        },
+        "apps_max_concurrent_pipelines": {
+          "default": 4,
+          "description": "How many Mewbo App pipelines may execute at once. A pipeline runs synchronously and holds one of the server's request threads for its whole duration, so without a bound enough concurrent invocations starve every other endpoint. Past this many, an invocation is refused with a retryable 429 and the rest of the API keeps serving. 0 removes the bound.",
+          "minimum": 0,
+          "title": "Apps Max Concurrent Pipelines",
+          "type": "integer"
         },
         "auth": {
           "$ref": "#/$defs/APIAuthConfig",
@@ -1199,7 +1214,7 @@
       "properties": {
         "envmode": {
           "default": "dev",
-          "description": "Free-text label for this deployment (e.g. dev, staging, prod). Its only effect is being stamped onto every Langfuse trace as the `release` tag, so you can filter and compare traces across environments.",
+          "description": "Free-text label for this deployment (e.g. dev, staging, prod). It becomes the Langfuse tracing `environment`, so traces from one deployment can be filtered and compared without staging traffic polluting production aggregates. Lowercased and punctuation-stripped on the way out, since Langfuse rejects other shapes. The trace `release` is the running Mewbo version and is not set here.",
           "examples": [
             "dev"
           ],
@@ -1384,6 +1399,107 @@
         }
       },
       "title": "Traversal",
+      "type": "object"
+    },
+    "SpeechConfig": {
+      "additionalProperties": false,
+      "description": "Which gateway models handle speech, and which gateway serves them.\n\nThe three connection fields are all optional and all empty by default,\nbecause the common deployment has one gateway: speech falls back to\n``llm.api_base``/``llm.api_key`` whenever these are blank, so an install\nthat never writes a ``speech`` block still works. They exist for the\ndeployment that genuinely splits the two, which is a real shape \u2014 a\nself-hosted synthesis backend beside a hosted chat provider \u2014 and refusing\nto represent it would only push the operator into running one gateway they\ndo not want.",
+      "properties": {
+        "api_base": {
+          "default": "",
+          "description": "Base URL of the gateway that serves the speech models. Leave it empty to use the same gateway as the language models.\n\nSet this only when speech is served somewhere other than the endpoint under Language Model, such as a synthesis service running beside a hosted chat provider.",
+          "examples": [
+            "",
+            "https://my-litellm-proxy.example.com/v1"
+          ],
+          "title": "Api Base",
+          "type": "string"
+        },
+        "api_key": {
+          "default": "",
+          "description": "Key for the speech gateway. Leave it empty to reuse the language model key.\n\nOnly needed alongside a separate speech endpoint above. Setting one here without the other is almost always a mistake, because the key is then sent to the language model gateway that already had one.",
+          "examples": [
+            "sk-xxxxxxxx"
+          ],
+          "title": "Api Key",
+          "type": "string",
+          "x-secret": true
+        },
+        "timeout": {
+          "default": 90.0,
+          "description": "Seconds to wait for the speech gateway before giving up.\n\nSynthesis is not instant and scales with the length of the text: a sentence takes about half a second and a paragraph about four, so a short timeout cuts off long answers. Raising it has a cost too, because a request that is going to fail holds a server slot for the whole wait.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout",
+          "type": "number"
+        },
+        "tts": {
+          "$ref": "#/$defs/SpeechTtsConfig",
+          "description": "Reading an answer aloud."
+        },
+        "stt": {
+          "$ref": "#/$defs/SpeechSttConfig",
+          "description": "Turning a recording into text."
+        }
+      },
+      "title": "Speech",
+      "type": "object",
+      "x-group": "models",
+      "x-order": 5
+    },
+    "SpeechSttConfig": {
+      "additionalProperties": false,
+      "description": "Speech to text: which model turns a recording into words.",
+      "properties": {
+        "model": {
+          "default": "nova-3",
+          "description": "Model that transcribes a recording. Leave it empty to turn dictation off.\n\nThis is a model id your LLM gateway advertises. Transcription models are separate from both chat models and the text-to-speech model above, so the id here will not appear in the model picker used for answers.",
+          "examples": [
+            "nova-3"
+          ],
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "title": "Speech to text",
+      "type": "object"
+    },
+    "SpeechTtsConfig": {
+      "additionalProperties": false,
+      "description": "Text to speech: which model reads an answer aloud, and in whose voice.",
+      "properties": {
+        "model": {
+          "default": "supertonic-3",
+          "description": "Model that turns text into audio. Leave it empty to turn read aloud off.\n\nThis is a model id your LLM gateway advertises, and speech models are a separate family from the chat models the answer itself runs on. A chat model named here is refused by the gateway at the moment someone presses play, not when this page is saved.",
+          "examples": [
+            "supertonic-3",
+            "supertonic-3-hd"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "voice": {
+          "default": "nova",
+          "description": "Voice the reader speaks in. Type the name your gateway knows it by.\n\nThis was once a fixed list of eleven, which was wrong for a self-hosted gateway: a backend can carry its own trained voice style, and a name absent from that list was refused here before the gateway ever saw it. The gateway decides what a voice is. A name it does not know fails the request when someone presses play, the same way an unknown model does.",
+          "examples": [
+            "nova",
+            "alloy",
+            "shimmer"
+          ],
+          "title": "Voice",
+          "type": "string"
+        },
+        "response_format": {
+          "default": "wav",
+          "description": "Audio format the gateway returns. WAV is the safe default and FLAC is the same audio in a smaller file.\n\nOnly these two are accepted. Asking for MP3, Opus, AAC or raw PCM fails the request, so they are not offered here.",
+          "enum": [
+            "wav",
+            "flac"
+          ],
+          "title": "Response Format",
+          "type": "string"
+        }
+      },
+      "title": "Text to speech",
       "type": "object"
     },
     "StorageConfig": {
@@ -1992,6 +2108,10 @@
     },
     "context": {
       "$ref": "#/$defs/ContextConfig"
+    },
+    "speech": {
+      "$ref": "#/$defs/SpeechConfig",
+      "description": "Speech models for reading answers aloud and for dictation."
     },
     "token_budget": {
       "$ref": "#/$defs/TokenBudgetConfig"

@@ -145,6 +145,11 @@ class RealtimeSessionRecorder:
         with langfuse_session_context(
             self.session_id,
             source_platform=self.surface,
+            # Same rule as the orchestrator's turn trace: name the KIND of
+            # work, never this execution of it. Without a name the trace
+            # inherits whatever the LangChain runnable is called, which is
+            # identical for every turn and makes the session page unreadable.
+            trace_name=f"turn:{self.surface or 'unknown'}",
             tags=list(provenance.tags),
             metadata=provenance.metadata,
         ):

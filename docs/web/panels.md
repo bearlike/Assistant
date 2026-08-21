@@ -46,7 +46,7 @@ That is what makes the vocabulary portable. The eleven components describe a pan
 
 ## Refining a panel in place
 
-Each panel gets an id when it is presented. Presenting again with that id replaces the panel where it already sits, instead of a near duplicate stacking up below it. A long run that keeps narrowing an answer leaves one current panel behind, not a pile of drafts.
+Each panel gets an id when it is presented, and the model may author a readable one of its own. Presenting again with that id replaces the panel where it already sits, instead of a near duplicate stacking up below it. A long run that keeps narrowing an answer leaves one current panel behind, not a pile of drafts. A panel can also grow in place: a `Card` or `Stack` given an `id` becomes addressable, and later calls append into it or update it by name, so a rich panel is assembled from several small calls.
 
 ## Turning it on
 

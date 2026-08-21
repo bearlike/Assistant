@@ -338,24 +338,57 @@ class TestErrorPayloadUnsuppressed:
     """Drives the real emission rule — deleting it must fail these."""
 
     @staticmethod
-    def _attach(last_error: str, done_reason: str | None) -> tuple[dict, TaskQueue]:
+    def _attach(
+        last_error: str, done_reason: str | None, blocked_code: str | None = None
+    ) -> tuple[dict, TaskQueue]:
         orch = Orchestrator.__new__(Orchestrator)
         orch._model_name = "model-a"
         tq = TaskQueue(_human_message="task", action_steps=[])
         tq.last_error = last_error
         payload: dict = {"done": True, "done_reason": done_reason, "task_result": "out"}
-        orch._attach_failure_record(payload, tq, done_reason)
+        # A real state, because the gate reads ``terminal_status`` off it rather
+        # than re-deriving an outcome from ``done_reason`` at the call site.
+        state = OrchestrationState(goal="task", done=True, done_reason=done_reason)
+        state.blocked_code = blocked_code
+        orch._attach_failure_record(payload, tq, state)
         return payload, tq
 
-    def test_error_survives_a_completed_reason(self):
-        """The suppression that made a wrong status unfalsifiable."""
-        payload, _tq = self._attach("ERROR: clone failed for slug", "completed")
+    def test_a_blocked_run_keeps_the_error_despite_a_completed_reason(self):
+        """The regression withholding ``error`` from a success nearly caused.
+
+        A run that died against a credential, a network path or a quota keeps
+        ``done_reason == "completed"`` on purpose and carries the wall ONLY in
+        ``blocked_code`` — so ``terminal_status`` calls it a success. Gating on
+        that projection alone dropped the error from exactly the runs a user
+        must see, and silently: a client reading neither field (Aura reads
+        ``error`` alone) then renders a clean success for a run that did no
+        work. ``blocked_code`` is therefore consulted independently, the same
+        way the status layer and the console already consult it.
+        """
+        payload, _tq = self._attach(
+            "ERROR: clone failed for slug", "completed", blocked_code="repo_access"
+        )
         assert payload["error"].startswith("ERROR: clone failed")
         assert payload["last_error"] == payload["error"]
+
+    def test_completed_reason_carries_the_record_but_not_the_card_trigger(self):
+        """A recovered tool failure is not a session failure.
+
+        ``error`` is the one key a client renders as a user-facing error card,
+        so emitting it here put an error under a complete, correct answer. The
+        RECORD still rides the payload on ``last_error``/``error_detail``, which
+        is what keeps a LAUNDERED run (a halt presenting as success) falsifiable
+        against its own record — only the render trigger is withheld.
+        """
+        payload, _tq = self._attach("ERROR: clone failed for slug", "completed")
+        assert "error" not in payload
+        assert payload["last_error"].startswith("ERROR: clone failed")
         assert payload["error_detail"]["kind"] == "tool_failure"
 
     def test_error_still_rides_a_failed_reason(self):
-        payload, _tq = self._attach("litellm.RateLimitError: slow down", "error")
+        """A run that stopped short keeps the card trigger — it really failed."""
+        payload, _tq = self._attach("litellm.RateLimitError: slow down", "unmet_goal")
+        assert payload["error"] == payload["last_error"]
         assert payload["error_detail"]["kind"] == "rate_limited"
 
     def test_sticky_error_is_clamped_on_the_attribute_too(self):

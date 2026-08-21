@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.SolidColor
@@ -46,6 +47,8 @@ import com.mewbo.aura.ui.common.AuraBottomSheet
 import com.mewbo.aura.ui.common.SheetActionRow
 import com.mewbo.aura.ui.common.SheetErrorCaption
 import com.mewbo.aura.ui.common.SheetHeader
+import com.mewbo.aura.ui.common.dpadFocusEscape
+import com.mewbo.aura.ui.common.imeOnConfirmOnly
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraSpacing
 import com.mewbo.aura.ui.theme.AuraType
@@ -212,8 +215,15 @@ private fun RenamePane(
             cursorBrush = SolidColor(AuraColors.accentPrimary),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (canCommit) commit() }),
+            // This field holds a TextFieldValue, so it gets the precise escape table — within-text
+            // horizontal caret movement survives. The rename pane is bottom-most in its sheet, so
+            // Down is cancelled for the same reason the composer cancels it: the move does not
+            // merely fail, it strands focus on a node the IME's reflow destroys.
             modifier = Modifier
                 .fillMaxWidth()
+                .focusProperties { down = FocusRequester.Cancel }
+                .dpadFocusEscape(selection = field.selection, textLength = field.text.length)
+                .imeOnConfirmOnly()
                 .padding(horizontal = AuraSpacing.screenGutter, vertical = AuraSpacing.Composer.gapTight)
                 .focusRequester(focusRequester),
         )

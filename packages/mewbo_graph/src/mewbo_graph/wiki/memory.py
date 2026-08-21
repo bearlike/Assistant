@@ -379,6 +379,7 @@ class InsightIngestor:
         store: WikiStoreBase,
         *,
         embedder: EmbedderProtocol | None = None,
+        slug: str | None = None,
         llm: Any = None,
         condenser: InsightCondenser | None = None,
         clock: Any = None,
@@ -416,9 +417,9 @@ class InsightIngestor:
         from .structure_provider import CodeStructureProvider
 
         if embedder is None:
-            from .embedder import make_embedder_or_none
+            from .embedder import make_embedder_for_or_none
 
-            embedder = make_embedder_or_none() or _NullEmbedder()
+            embedder = make_embedder_for_or_none(store, slug or "") or _NullEmbedder()
         if deduper is None:
             deduper = InsightDeduper(
                 store=store,

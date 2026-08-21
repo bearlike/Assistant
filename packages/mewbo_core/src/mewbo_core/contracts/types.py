@@ -230,6 +230,31 @@ class LlmFallbackPayload(TypedDict):
     sticky: NotRequired[bool]
 
 
+class LlmCallEndPayload(TypedDict):
+    """Payload emitted for a SUCCESSFUL ``llm_call_end`` event.
+
+    Brackets the whole ``RetryStrategy`` logical call — retries and fallback
+    attempts included, not just the final attempt — so ``duration_ms`` is the
+    wall time a caller actually waited, not the cheapest leg of it. The failed
+    variant of this event (``success: False``) carries ``error_type``/``reason``
+    instead and is a separate, untyped payload — it never reaches this arm.
+    """
+
+    agent_id: str
+    depth: int
+    step: int
+    success: Literal[True]
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
+    reasoning_output_tokens: int
+    cumulative_input_tokens: int
+    cumulative_output_tokens: int
+    duration_ms: int
+
+
 class RecoveryHaltPayload(TypedDict):
     """Payload emitted when the doom-loop guard halts a no-progress run.
 
@@ -404,6 +429,7 @@ EventPayload = (
     | RecoveryPayload
     | LlmRetryPayload
     | LlmFallbackPayload
+    | LlmCallEndPayload
     | RecoveryHaltPayload
     | TodosPayload
     | DeviceToolCallPayload

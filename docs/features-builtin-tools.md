@@ -7,6 +7,9 @@ They read files, edit them, run shell commands, list directories, query language
 session between projects, put a question back to you, and fetch the schemas of tools that were
 deferred to save context.
 
+A connected client can also contribute tools of its own for the length of a session — that is how
+a session reaches an Android phone. See [Tools a client brings with it](#client-declared).
+
 For setup, see [Getting Started](getting-started.md). For permissions and approval modes, see
 [The Interface](terminal/interface.md).
 
@@ -28,6 +31,25 @@ A session also binds `update_todos`, `ask_user_question`, `present_ui`, `list_pr
 `switch_project`, each under the conditions its section names below. Every tool returns a JSON payload tagged with `kind`, and the
 shapes are listed under
 [Architecture Overview → Built-in tools](core-orchestration.md#built-in-tools).
+
+## Tools a client brings with it {#client-declared}
+
+The catalog above is what the server carries. A **client** can add tools of its own for the length
+of a session, and the server runs no code for them: it delivers the call down the session's live
+stream, the client executes it, and the client posts the result back.
+
+The Android app is the one that does this today. It offers `device_*` tools that act on the phone
+itself — reading the time or battery, setting an alarm, sending a text, and, once you turn it on,
+seeing and using the screen. Which of them a session gets depends on what that phone currently
+permits, so the list is decided per session rather than per deployment.
+
+Two consequences worth knowing. A device tool exists only while a client is attached to serve it,
+so it is absent from a session driven by a trigger or the API. And a permission you have not
+granted means the tool is never offered at all — the model is not told about a tool it would only
+fail to call.
+
+- [Device Tools](android/device-tools.md) — the full list, what each needs, and the screen-control gate.
+- [Device Tool Bridge](api/device-tools.md) — the wire contract a client implements to offer its own.
 
 ---
 
@@ -299,9 +321,11 @@ vocabulary component by component and is the page to read before asking for one.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object | Yes | The component tree, a `root` array of typed nodes |
+| `root` | array | Yes | The component tree: a top-level array of typed nodes, with no wrapper object around it |
 | `summary` | string | Yes | One short line naming what the panel shows, up to 200 characters |
-| `ui_id` | string | No | The id returned by an earlier call. Pass it to replace that panel in place instead of adding another one below it |
+| `ui_id` | string | No | The id of the panel being addressed. Omit to create a new panel; the agent may author a readable id of its own |
+| `operation` | string | No | `replace` (default) redraws the whole panel; `append` adds the nodes in `root` to an existing panel; `update` swaps the one container named by `target` for the single node in `root` |
+| `target` | string | No | A container id (the `id` given to a `Card` or `Stack`) that `append` adds into or `update` replaces |
 
 ### Behavior notes
 
@@ -311,6 +335,10 @@ vocabulary component by component and is the page to read before asking for one.
   two are alternatives rather than layers, and a panel is the cheaper one.
 - **The call does not end the turn**, so the agent presents a panel mid-run and still writes its
   closing reply.
+- **A rich panel is built across several small calls, not one large one.** A `Card` or `Stack`
+  may carry an `id`, and later calls append into or update that container by name. Every emitted
+  event still carries the complete tree, so other clients and replay see ordinary panel
+  replacements.
 - **It is bound only when the client advertises the `generative_ui` capability.** The console does,
   on every request. A CLI, email or chat session never binds the tool, which is why every panel also
   carries the plain-text rendering computed when it was presented.

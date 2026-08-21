@@ -1,5 +1,6 @@
 {
   "name": "harness",
+  "display_name": "Agent Harness",
   "description": "mewbo-harness skill — how this harness itself behaves (result caps, timeouts, paths, deferred tools, delegation).",
   "version": "0.1.0",
   "author": "Mewbo"

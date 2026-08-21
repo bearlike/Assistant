@@ -8,8 +8,12 @@ from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase_once
+from mewbo_graph.plugins.wiki._ctx import ProgressReporter, emit_log, emit_phase_once
 from mewbo_graph.plugins.wiki.clone import _resolve_runtime  # noqa: F401 — per-module test seam
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    PAGES_STEPS,
+    planned_steps_for_slug,
+)
 from mewbo_graph.wiki.types import IndexingJob
 
 if TYPE_CHECKING:
@@ -73,6 +77,8 @@ class WikiSubmitPageTool(WikiSessionTool):
         # whole-phase skips, this one refuses ONE page while the rest of the
         # fan-out keeps writing, so the pages phase really is underway.
         emit_phase_once(ctx, "pages")
+        progress = ProgressReporter(ctx)
+        progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "pages"))
 
         # 3. Checkpoint-aware resume, per page. ``graph``/``enrich``/``plan`` are
         # whole-phase skips; ``pages`` is decided page by page, and until this
@@ -159,6 +165,13 @@ class WikiSubmitPageTool(WikiSessionTool):
                 )
             except Exception:
                 pass
+            # An empty plan names no denominator. A page outside it is still
+            # persisted and counted so the divergence stays visible, but a
+            # fraction of 1/0 is not a valid progress measurement. The aggregate
+            # opened by plan commit remains running until its final planned page.
+            progress.report("pages.write", submitted_count, total_pages or None, detail=page_id)
+            if total_pages and submitted_count >= total_pages:
+                progress.finish("pages.write")
             if total_pages:
                 emit_log(ctx, f"Wrote page {submitted_count}/{total_pages}: {page_id}")
             else:

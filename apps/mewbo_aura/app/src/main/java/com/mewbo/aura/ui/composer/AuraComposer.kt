@@ -34,6 +34,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -45,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import com.mewbo.aura.data.model.StagedAttachment
 import com.mewbo.aura.ui.chat.ChatIcons
 import com.mewbo.aura.ui.common.AttachmentGlyphs
+import com.mewbo.aura.ui.common.dpadFocusEscape
+import com.mewbo.aura.ui.common.imeOnConfirmOnly
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraMotion
 import com.mewbo.aura.ui.theme.AuraShape
@@ -396,7 +400,22 @@ private fun ComposerTextField(
         onTextLayout = { layoutResult -> onLineCountChange(layoutResult.lineCount) },
         textStyle = textStyle.copy(color = AuraColors.textPrimary),
         cursorBrush = SolidColor(AuraColors.accentPrimary),
-        modifier = modifier,
+        // Without this the composer is a focus trap and the app is unnavigable by remote from its
+        // first frame — the field takes focus on launch and eats all four arrow keys. See
+        // [com.mewbo.aura.ui.common.TextFieldFocusEscape] for the trade this makes.
+        modifier = modifier
+            // The composer is the bottom-most control on every surface that hosts it, so a
+            // downward move has nowhere legitimate to land. Left to Compose it does not simply
+            // fail: focus leaves for a node that the IME's own reflow then destroys, and the
+            // remote is stranded with no focus at all and no gesture to get it back. Cancelling
+            // the move makes `moveFocus` report false, which hands the key back to the caret.
+            .focusProperties { down = FocusRequester.Cancel }
+            .dpadFocusEscape(selection = draft.selection, textLength = draft.text.length)
+            // Escaping the field is only half of it on a remote: focusing a Compose field raises
+            // the IME, and the IME then eats BACK, so traversing PAST the composer was impossible
+            // even with the escape above. Returns this chain untouched where focus and
+            // intent-to-type are the same event, i.e. everywhere a finger is the input device.
+            .imeOnConfirmOnly(),
         decorationBox = { innerTextField ->
             Box(contentAlignment = Alignment.CenterStart) {
                 if (draft.text.isEmpty()) {

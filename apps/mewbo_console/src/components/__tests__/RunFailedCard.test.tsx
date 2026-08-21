@@ -9,6 +9,8 @@
  * replays full history on load.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunFailedCard } from "../RunFailedCard";
@@ -34,9 +36,16 @@ function completion(payload: Record<string, unknown>, ts: string): EventRecord {
   return { ts, type: "completion", payload };
 }
 
+function renderWithQueryClient(ui: ReactElement) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
 describe("RunFailedCard", () => {
   it("offers recovery while collapsed — the body stays hidden", () => {
-    render(<RunFailedCard failure={CLASSIFIED} onRetry={vi.fn()} onContinue={vi.fn()} />);
+    renderWithQueryClient(<RunFailedCard failure={CLASSIFIED} onRetry={vi.fn()} onContinue={vi.fn()} />);
     expect(screen.getByText("Retry")).toBeInTheDocument();
     expect(screen.getByText("Continue")).toBeInTheDocument();
     // Collapsed by default: the error text is not in the document at all.
@@ -45,7 +54,7 @@ describe("RunFailedCard", () => {
 
   it("recovering does not toggle the card open", () => {
     const onRetry = vi.fn();
-    render(<RunFailedCard failure={CLASSIFIED} onRetry={onRetry} onContinue={vi.fn()} />);
+    renderWithQueryClient(<RunFailedCard failure={CLASSIFIED} onRetry={onRetry} onContinue={vi.fn()} />);
     fireEvent.click(screen.getByText("Retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
     // The click must not bubble to LogEventCard's expand handler.
@@ -53,7 +62,7 @@ describe("RunFailedCard", () => {
   });
 
   it("shows the classified title, provider chip and honest truncation count", () => {
-    render(<RunFailedCard failure={CLASSIFIED} />);
+    renderWithQueryClient(<RunFailedCard failure={CLASSIFIED} />);
     expect(screen.getByText("Run failed")).toBeInTheDocument();
     expect(screen.getByText("Upstream bad gateway")).toBeInTheDocument();
     expect(screen.getByText("anthropic")).toBeInTheDocument();
@@ -65,13 +74,13 @@ describe("RunFailedCard", () => {
   });
 
   it("renders read-only without recovery handlers", () => {
-    render(<RunFailedCard failure={CLASSIFIED} />);
+    renderWithQueryClient(<RunFailedCard failure={CLASSIFIED} />);
     expect(screen.queryByText("Retry")).toBeNull();
     expect(screen.queryByText("Continue")).toBeNull();
   });
 
   it("degrades to the legacy error string when error_detail is absent", () => {
-    render(
+    renderWithQueryClient(
       <RunFailedCard failure={{ reason: "error", text: "boom" }} />,
     );
     expect(screen.getByText("Run failed")).toBeInTheDocument();
@@ -83,7 +92,7 @@ describe("RunFailedCard", () => {
   });
 
   it("renders header-only (no expander) when the failure carries no text", () => {
-    render(<RunFailedCard failure={{ reason: "max_steps_reached", text: "" }} />);
+    renderWithQueryClient(<RunFailedCard failure={{ reason: "max_steps_reached", text: "" }} />);
     const title = screen.getByText("Task interrupted — step limit reached");
     fireEvent.click(title);
     expect(screen.queryByLabelText("Copy error detail")).toBeNull();
@@ -92,7 +101,7 @@ describe("RunFailedCard", () => {
 
 describe("LogsView — only the newest completion offers recovery", () => {
   it("gives Retry/Continue to the latest failure, not an earlier one", () => {
-    render(
+    renderWithQueryClient(
       <LogsView
         events={[
           completion({ done: true, done_reason: "error", error: "first" }, "2026-04-05T10:00:00Z"),
@@ -108,7 +117,7 @@ describe("LogsView — only the newest completion offers recovery", () => {
   });
 
   it("withholds recovery once a later run completed successfully", () => {
-    render(
+    renderWithQueryClient(
       <LogsView
         events={[
           completion({ done: true, done_reason: "error", error: "boom" }, "2026-04-05T10:00:00Z"),
@@ -124,7 +133,7 @@ describe("LogsView — only the newest completion offers recovery", () => {
   });
 
   it("renders a goal-not-met run as a failure, never a completed card", () => {
-    render(
+    renderWithQueryClient(
       <LogsView
         events={[
           completion(
@@ -142,7 +151,7 @@ describe("LogsView — only the newest completion offers recovery", () => {
   });
 
   it("renders a blocked run as a failure even though done_reason stays completed", () => {
-    render(
+    renderWithQueryClient(
       <LogsView
         events={[
           completion(

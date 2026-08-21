@@ -179,6 +179,7 @@ class PluginManifest:
     """Parsed .claude-plugin/plugin.json manifest."""
 
     name: str
+    display_name: str | None = None
     description: str = ""
     version: str = ""
     author: str = ""
@@ -269,6 +270,11 @@ def _manifest_from_data(data: dict, plugin_dir: Path) -> PluginManifest | None:
 
     return PluginManifest(
         name=str(name),
+        display_name=(
+            str(data["display_name"]).strip()
+            if isinstance(data.get("display_name"), str) and data["display_name"].strip()
+            else None
+        ),
         description=str(data.get("description", "")),
         version=str(data.get("version", "")),
         author=author,

@@ -19,14 +19,18 @@ Three deliberate differences from the device-tool bridge:
   message rides the normal steer queue), an interrupt reads ``interrupted``,
   a cancel reads ``cancelled``. That keeps every supersede rule in THIS one
   wait loop — the ``/message`` and ``/interrupt`` routes are untouched.
-- **No ``has_subscribers`` short-circuit.** The console holds the transcript
+- **No presence short-circuit at all.** The console holds the transcript
   SSE open now, but subscriber-presence would STILL false-negative: the
   stream is closed as soon as a session stops running and the client
   re-subscribes a moment later, so a viewer sitting in front of the session
   has no subscription at all during each reconnect gap. Gating delivery on a
   live subscriber would drop exactly the questions asked in those windows.
   The ``ask_user`` capability advertisement is the delivery gate instead —
-  a session that never advertised it never binds the tool at all.
+  a session that never advertised it never binds the tool at all. The device
+  bridge does ask (``SessionEventBus.has_executor``) because it has a wait
+  budget to protect, and it pays for the same reconnect gap with a grace
+  window; a question that waits for a human indefinitely has nothing to
+  protect and needs no window.
 - **No expiry-based reaping.** The dispatcher coroutine owns the entry's
   whole lifecycle (create → wait → take/withdraw in ``finally``), so the
   registry needs no deadline bookkeeping: an entry cannot outlive its

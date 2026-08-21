@@ -2,11 +2,45 @@
 
 # Aura Navigation + Drawer — ui/navigation/
 
-Scope: `ui/navigation/` — `AuraNavHost` (the `ModalNavigationDrawer` + routes), `AuraDrawerContent`
-(pure content, the left rail), `SessionActionsSheet` (recents long-press). There is no standalone
-sessions list screen; [`ui/sessions/`](../sessions/CLAUDE.md) holds only view-state + pure rail
-helpers. Visual laws + provenance: [`DESIGN.md`](../../../../../../../../../DESIGN.md)
-(Recents rail).
+Scope: `ui/navigation/` — `AuraNavHost` (routes + the device-shape shell pick), `NavigationHost`
+(the chrome abstraction), `AuraDrawerContent` (pure content, shared by both shells),
+`SessionActionsSheet` (recents long-press). There is no standalone sessions list screen;
+[`ui/sessions/`](../sessions/CLAUDE.md) holds only view-state + pure rail helpers. Visual laws +
+provenance: [`DESIGN.md`](../../../../../../../../../DESIGN.md) (Recents rail).
+
+## Two shells, picked by device shape
+
+`AuraNavHost`'s `ChatHomeDestination` runs the ONE exhaustive `when (LocalDeviceShape.current)` this
+package owns — the case `DeviceShape`'s own KDoc blesses (`data/device/CLAUDE.md`): it picks between
+two whole navigation compositions, never a boolean asked at each control.
+
+- **`HandheldChatHome`** — today's `ModalNavigationDrawer`, unchanged (anatomy below).
+- **`TelevisionChatHome`** — a permanent left rail (`AuraSpacing.NavigationRail.width`, no scrim, no
+  open/close state, no menu button). `ChatScreen`'s `onMenuTap` is `null` here — there is no drawer
+  to reveal, so no button that would reveal it, and `ChatTopBar` renders no menu glyph when it is
+  `null`.
+
+**A rail is the right shape for a remote, and patching the modal drawer to work by remote was tried
+in spirit and rejected.** A sheet has to be summoned (no summoning gesture on a remote), it lands
+over content behind a scrim (nothing to see through on a television), and every press inside it then
+has to happen inside a container focus must be prevented from leaking out of — none of that buys
+anything at 960dp of width, where the rail simply fits. Keeping navigation permanently on screen
+removes the open/close state, the scrim, the summoning button and the containment question outright:
+focus moves left into navigation and right into the transcript, and the reported "I can never reach
+Settings" cannot occur because Settings is never off screen.
+
+`NavigationHost` (`ModalSheet(isOpen)` / `PersistentRail`) is the ONE difference between the shells,
+expressed as data so `AuraDrawerContent` never asks what device it is on to answer it — the rows are
+shared; only the frame differs.
+
+- `isActive` — whether the content is on screen and should refresh its sessions + claim initial
+  focus. A modal sheet's is its open/closed state; a rail's is always `true`.
+- `containsFocus` — whether focus must be prevented from crossing the content's boundary. **`true`
+  only for the modal sheet, and it acts in BOTH directions**: a sheet composed while closed still
+  sits in the focus graph (so an unconditional `exit = Cancel` would trap a remote inside an
+  invisible drawer — worse than the escape it fixes), and an open sheet sits over content whose rows
+  must not be reachable through it. A rail is `false` — focus moving right into the transcript is the
+  primary way it is used, and containing it would strand the remote in the navigation list.
 
 ## Routes
 
@@ -20,10 +54,23 @@ entry). The **handoff draft** is a RAW `SavedStateHandle` value (arbitrary compo
 URL-safe), consumed as a `StateFlow` (NOT a one-shot `LaunchedEffect(entry)` — a `launchSingleTop`
 handoff onto the current entry reuses it and a plain effect would never re-fire).
 
-## Drawer anatomy
+## Drawer anatomy (handheld shell — the rail shares the rows, not the frame)
 
 Wordmark → New chat → Search chats → **hairline divider** (`outlineHairline`) → `RecentsHeader` →
 date-bucketed recents → **hairline divider** → pinned footer, over a `surfaceDrawer` (#0F1012) fill.
+This is `AuraDrawerContent`'s content in both shells; what follows is the handheld sheet's own frame
+and anatomy. The television differences are two, both about a remote's ONE-dimensional reach:
+
+- **Settings is hoisted into the top action group** (New chat / Search chats / Apps), and the
+  footer's own Settings icon button drops — one affordance per shape, never two. In the footer it sat
+  AFTER an unbounded `LazyColumn`, which composes only what is on screen, so two-dimensional focus
+  search into not-yet-composed recents rows overshot it entirely and Settings was unreachable by any
+  path. The footer itself still renders (account line only) when there is a display name to show —
+  dropping it would lose information with no other home in the rail.
+- **Recents is capped at `TvRecentsCap` (6) unpinned rows** — a reach budget, not a design number:
+  every row is one more D-pad press between the top group and anything below the list. Pinned rows
+  are exempt (a pin means "keep this in reach"), and whatever the cap hides stays reachable through
+  Search chats.
 
 - **`ModalDrawerSheet` never casts a shadow by default** — m3 1.4.0 forwards `drawerTonalElevation` into
   an inner `Surface` that never sets `shadowElevation` (byte-verified vs `NavigationDrawer.kt`), and its

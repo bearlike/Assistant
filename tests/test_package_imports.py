@@ -19,7 +19,7 @@ spends a whole interpreter per package, and
 ``test_each_package_was_probed_in_a_genuinely_fresh_interpreter`` asserts the
 isolation actually held rather than assuming it.
 
-**Package roots are not enough.** Four of the seven root ``__init__.py`` files
+**Package roots are not enough.** Four of the eight root ``__init__.py`` files
 are docstring-only by deliberate design — a subpackage that re-exports its
 modules makes importing one of them execute all of them, which changes what
 module-level side effects fire and in what order. So ``import mewbo_core``
@@ -187,7 +187,7 @@ class DistributedPackage(BaseModel):
         return tuple(name for name, importable in self._walk() if not importable)
 
 
-# The seven packages this repository distributes. `mewbo_ha_conversation` is
+# The eight packages this repository distributes. `mewbo_ha_conversation` is
 # deliberately absent: it is a path source rather than a workspace member
 # because it depends on Home Assistant, whose Python floor cannot intersect this
 # workspace's, so it is not installed in the environment the suite runs in and
@@ -222,6 +222,10 @@ DISTRIBUTED_PACKAGES: tuple[DistributedPackage, ...] = (
         import_name="mewbo_mcp",
         src_root=REPO_ROOT / "apps" / "mewbo_mcp" / "src" / "mewbo_mcp",
     ),
+    DistributedPackage(
+        import_name="mewbo_speech",
+        src_root=REPO_ROOT / "packages" / "mewbo_speech" / "src" / "mewbo_speech",
+    ),
 )
 
 # Every `.py` file under a package root that is NOT a module of that package,
@@ -252,6 +256,18 @@ NOT_PACKAGE_MODULES: frozenset[str] = frozenset(
         "mewbo_api.apps.plugin.examples.components.metric_header",
         "mewbo_api.apps.plugin.examples.email_organizer.app",
         "mewbo_api.apps.plugin.examples.email_organizer.pages.all_mail",
+        # The app-builder recipe cookbook: pipeline sources an agent reads as
+        # worked examples, executed only by the pipeline runner in its own
+        # curated namespace. They are not importable here by construction — the
+        # runner's allowlist bans what a normal import needs — and their
+        # directories are hyphenated so nothing can accidentally import them.
+        "mewbo_api.apps.plugin.examples.recipes.cli-json.repos",
+        "mewbo_api.apps.plugin.examples.recipes.cli-text.branches",
+        "mewbo_api.apps.plugin.examples.recipes.files-to-collection.expenses",
+        "mewbo_api.apps.plugin.examples.recipes.llm-transform.triage",
+        "mewbo_api.apps.plugin.examples.recipes.user-input.add_note",
+        "mewbo_api.apps.plugin.examples.recipes.verifier.summary",
+        "mewbo_api.apps.plugin.examples.recipes.verifier.verify_summary",
         "mewbo_api.apps.plugin.sdk.mewbo_app",
     }
 )
@@ -379,7 +395,7 @@ class FreshInterpreterProbe:
 
 @pytest.fixture(scope="module")
 def reports(tmp_path_factory: pytest.TempPathFactory) -> dict[str, PackageImportReport]:
-    """Probe all seven packages concurrently; one report each.
+    """Probe all eight packages concurrently; one report each.
 
     Concurrent because the probes are independent by construction — that is the
     property being tested — and because sequential runs cost ~61s against ~19s

@@ -33,6 +33,22 @@ def test_respects_extra_forbid():
     assert schema["function"]["parameters"].get("additionalProperties") is False
 
 
+def test_dedents_a_docstring_from_a_pydantic_metaclass():
+    """The model's runtime docstring can retain source indentation on Python 3.11."""
+
+    class IndentedDescription(BaseModel):
+        """First line.
+
+        The indented line must be sent to the model without leading whitespace.
+        """
+
+    schema = pydantic_to_openai_tool(IndentedDescription, name="do_thing")
+
+    assert schema["function"]["description"] == (
+        "First line.\n\nThe indented line must be sent to the model without leading whitespace."
+    )
+
+
 def test_rejects_non_pydantic():
     import pytest
     with pytest.raises(TypeError):

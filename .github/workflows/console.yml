@@ -83,6 +83,7 @@ jobs:
         run: npm run build
 
       - name: Upload build artifact
+        if: github.server_url == 'https://github.com'
         uses: actions/upload-artifact@v4
         with:
           name: console-dist

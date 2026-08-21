@@ -8,7 +8,6 @@ import android.media.RingtoneManager
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
-import android.os.VibratorManager
 
 /**
  * Fired by the [AlarmManager.setAlarmClock][android.app.AlarmManager.setAlarmClock] scheduled in
@@ -31,7 +30,7 @@ class WakeAlarmReceiver : BroadcastReceiver() {
             play()
         }
 
-        val vibrator = (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        val vibrator = VibratorResolver.resolve(context)
         vibrator?.vibrate(VibrationEffect.createWaveform(VIBRATE_PATTERN, 0))
 
         Handler(Looper.getMainLooper()).postDelayed({

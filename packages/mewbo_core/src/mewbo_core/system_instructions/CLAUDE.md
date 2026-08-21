@@ -153,14 +153,20 @@ line changes in the same commit.
    in `session_provenance.py` so the surface vocabulary has one home and every entry
    traces to a real stamp site. It is a VOCABULARY, not a validator — `surface` stays
    a plain `str` so a new client that stamps its own string keeps working.
-2. **There is NO enum of capability ids anywhere.** A capability is only ever a
-   string two sides agree on, so the only truth is the union of
-   `requires-capabilities` across plugin manifests and AgentDefs — which is why the
-   app COMPUTES it instead of hardcoding it, and why a plugin shipping a new
-   capability appears in the operator's list the moment it is installed. It resolves
-   to `scg`/`stlite`/`wiki` — but ONLY once `mewbo_graph` has been imported, since
-   the wiki/scg plugin roots arrive via the down-only `register_builtin_root` push.
-   A lean install legitimately reports just `stlite`.
+2. **The capability row is COMPUTED, and `capabilities.py`'s registry is NOT the
+   thing to compute it from.** `capabilities.py` does now hold a closed `Capability`
+   `Literal` + `ALL_CAPABILITIES`, but that is the FIRST-PARTY set — the one the
+   first-party clients advertise and the first-party plugins require, closed so a
+   tripwire can pin the TypeScript and Kotlin mirrors to it. It is deliberately not
+   the answer here: a third-party plugin ships capability ids nothing in core has
+   ever heard of, so the only honest truth for an OPERATOR is still the union of
+   `requires-capabilities` across installed plugin manifests and AgentDefs. That is
+   why the app computes it, and why a plugin shipping a new capability appears in
+   the operator's list the moment it is installed. Swapping this for
+   `ALL_CAPABILITIES` would silently drop every third-party id from the row.
+   It resolves to `scg`/`stlite`/`wiki` — but ONLY once `mewbo_graph` has been
+   imported, since the wiki/scg plugin roots arrive via the down-only
+   `register_builtin_root` push. A lean install legitimately reports just `stlite`.
 3. **`project` is `None` for EVERY managed-worktree session**, not only an unscoped
    one: `TraceProvenance._facets_from_context` routes a `managed:<uuid>` value to
    the `worktree` facet and never into `metadata["project"]`.

@@ -46,6 +46,11 @@ def test_recover_redrives_resume_once_per_slug(tmp_path):
     _project(store, "host/a")
     _job(store, "j1", "host/a", "scanning")
     _job(store, "j2", "host/a", "queued")  # same slug
+    # Recovery selects the latest job by phase_started_at. Give the intended
+    # re-drive target a distinct, later timestamp instead of relying on the
+    # filesystem's arbitrary order for equal missing timestamps.
+    store.update_job("j1", phase_started_at="2026-06-07T00:00:02Z")
+    store.update_job("j2", phase_started_at="2026-06-07T00:00:01Z")
     runtime = _runtime(store)
 
     refreshed = JobRecovery.recover_interrupted(store, runtime)

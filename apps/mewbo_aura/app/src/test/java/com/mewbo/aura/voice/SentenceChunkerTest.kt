@@ -64,6 +64,44 @@ class SentenceChunkerTest {
     }
 
     @Test
+    fun `a reconciliation that SHRINKS the buffer still speaks the new tail`() {
+        val chunker = SentenceChunker("msg1")
+
+        // Three sentences spoken, cursor at 34 — past the end of the replacement below.
+        assertEquals(3, chunker.push("Alpha one. Beta two. Gamma three. ").size)
+
+        // The server replaces the buffer with a SHORTER correction. Clamping the old
+        // cursor to the new length read this tail as already-spoken and returned
+        // nothing; the resume point moves back to where the two buffers diverge.
+        assertEquals(listOf(Utterance("msg1:3", "Zeta.")), chunker.push("Alpha one. Zeta."))
+    }
+
+    @Test
+    fun `a shrink with no complete sentence still leaves the tail flushable`() {
+        val chunker = SentenceChunker("msg1")
+        chunker.push("Alpha one. Beta two. Gamma three. ")
+
+        // No terminator, so push emits nothing — but it must still COMMIT the moved
+        // cursor, or flush() resumes past the end and the whole tail is lost.
+        assertTrue(chunker.push("Alpha one. Zeta").isEmpty())
+        assertEquals(Utterance("msg1:3", "Zeta"), chunker.flush())
+    }
+
+    @Test
+    fun `truncating the tail does not re-speak the whole reply`() {
+        val chunker = SentenceChunker("msg1")
+
+        // Cursor lands at 13 — only the first sentence is spoken, the rest is unsent.
+        assertEquals(listOf(Utterance("msg1:0", "Hello world.")), chunker.push("Hello world. Se"))
+
+        // A buffer shorter than the cursor, agreeing on everything already spoken.
+        // A reset-to-zero cure would re-speak "Hello world." here, which is a worse
+        // defect than the one being fixed: the listener hears the reply twice.
+        assertTrue(chunker.push("Hello world").isEmpty())
+        assertNull(chunker.flush())
+    }
+
+    @Test
     fun `flush emits the trailing remainder once streaming ends`() {
         val chunker = SentenceChunker("msg1")
         chunker.push("Hello world. Almost done")

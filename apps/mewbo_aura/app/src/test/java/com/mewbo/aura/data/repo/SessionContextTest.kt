@@ -63,11 +63,29 @@ class SessionContextTest {
         assertEquals("auto", ComposerScope.AUTO_PROJECT_KEY)
     }
 
+    // ── the mcp_tools tri-state ─────────────────────────────────────────────
+    // All three arms are pinned together deliberately. Only the non-empty case was covered before,
+    // and that is precisely what let `isNullOrEmpty()` sit here: it is correct on two of the three
+    // states, and the one it gets wrong (empty) fails OPEN, so nothing downstream reports it.
+
     @Test
-    fun `an empty mcp_tools list is omitted the same as null - untouched means untouched`() {
-        val context = buildSessionContext(model = null, project = null, mcpTools = emptyList())
+    fun `a null mcp_tools list omits the key - no ceiling, the backend binds every tool`() {
+        val context = buildSessionContext(model = null, project = null, mcpTools = null)
 
         assertFalse(context.containsKey("mcp_tools"))
+    }
+
+    @Test
+    fun `an EMPTY mcp_tools list is sent as an empty array, never omitted`() {
+        // The whole defect: `isNullOrEmpty()` collapsed this into the null arm above, so a user who
+        // switched every tool off transmitted "I have no preference" and the server re-bound the
+        // entire MCP registry. Absence and a declared zero are opposite instructions on the wire
+        // (`_extract_allowed_tools` preserves `[]` on purpose) and the client must be able to say
+        // both.
+        val context = buildSessionContext(model = null, project = null, mcpTools = emptyList())
+
+        assertTrue(context.containsKey("mcp_tools"))
+        assertEquals(0, context["mcp_tools"]?.jsonArray?.size)
     }
 
     @Test
@@ -79,10 +97,25 @@ class SessionContextTest {
         assertTrue(context.containsKey("mcp_tools"))
     }
 
+    // ── the device_tools tri-state ──────────────────────────────────────────
+    // Same SHAPE as mcp_tools, different meaning for the absent arm, so it is pinned separately
+    // rather than by analogy: `DeviceToolBinding.declaration_for` treats a missing key as SILENCE
+    // and falls back to the session's newest context event that carries one. An omitted empty list
+    // therefore leaves a previously-declared set bound - a revoked device tool stays live.
+
     @Test
-    fun `device_tools is omitted when null or empty, same as mcp_tools`() {
+    fun `a null device_tools list omits the key - this call site declares nothing`() {
+        // createSession's arm: session creation is not where device tools are enumerated, so it
+        // says nothing and lets the /query that follows declare them.
         assertFalse(buildSessionContext(model = null, project = null, mcpTools = null, deviceTools = null).containsKey("device_tools"))
-        assertFalse(buildSessionContext(model = null, project = null, mcpTools = null, deviceTools = emptyList()).containsKey("device_tools"))
+    }
+
+    @Test
+    fun `an EMPTY device_tools list is sent as an empty array, never omitted`() {
+        val context = buildSessionContext(model = null, project = null, mcpTools = null, deviceTools = emptyList())
+
+        assertTrue(context.containsKey("device_tools"))
+        assertEquals(0, context["device_tools"]?.jsonArray?.size)
     }
 
     @Test

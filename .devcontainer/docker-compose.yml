@@ -26,6 +26,17 @@ services:
     init: true
     command: sleep infinity
 
+    # Compose does NOT add host.docker.internal for you the way a plain
+    # `docker run` on Linux does with `--add-host=…:host-gateway` — this is
+    # that same mapping, spelled for Compose. It is what lets an agent in here
+    # reach the host's own grove-mcp (networked MCP transport, :7431) by a
+    # name that also resolves for a host-side Claude session, so ONE .mcp.json
+    # URL serves both. `host-gateway` is Docker's own sentinel, resolved to
+    # whatever bridge gateway this container actually gets — never hardcode
+    # the IP, a fresh network is minted per workspace.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     volumes:
       # Relative to THIS file, so it resolves correctly in any git worktree
       # rather than being pinned to one checkout path.

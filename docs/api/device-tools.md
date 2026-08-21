@@ -121,13 +121,40 @@ On failure, post to the same route with `status` set to `error`. The `error` obj
 
 The agent sees the call as a failed tool step and continues with that error in context.
 
+### Returning an image
+
+A result may carry one image, which the model sees as an image rather than as text. Put base64 data in `image_base64` inside your `result` object, and name its type in `image_media_type`:
+
+```json
+{
+  "call_token": "Q1sT9x...redacted",
+  "status": "ok",
+  "result": {
+    "image_base64": "/9j/4AAQSkZJRgABAQ...",
+    "image_media_type": "image/jpeg",
+    "screen_width": 1440,
+    "screen_height": 3120
+  }
+}
+```
+
+The server lifts those two fields out of the JSON and attaches the image to the tool result the model reads. The rest of your `result` object arrives alongside it as text, so a caller can return both a picture and the facts that describe it.
+
+Three things follow from that design:
+
+- **The base64 never reaches the transcript.** It is removed from the JSON before the result is recorded, so a session's stored history does not grow by the size of every image, and reading that history back does not re-download them.
+- **Send an image only with `status: "ok"`.** A failed result must be text. The model provider rejects a request whose failed tool result carries a non-text block, which fails the whole turn rather than just the call.
+- **Send it already sized.** An image costs the model roughly a thousand tokens or more, in proportion to its dimensions. Scale and compress before encoding rather than sending a full-resolution capture.
+
+Older images are removed from the conversation when it is compacted, leaving a note in their place that says the image can be requested again. The newest one is kept.
+
 The result body fields:
 
 | Field | Required | Description |
 |---|---|---|
 | `call_token` | yes | The single-use token from the `device_tool_call` event. |
 | `status` | yes | `ok` or `error`. |
-| `result` | when `ok` | The tool's return value. Any JSON. |
+| `result` | when `ok` | The tool's return value. Any JSON. `image_base64` and `image_media_type`, if present, are lifted out and attached as an image. |
 | `error` | when `error` | An object with `code` and `message`. At least one must be non-empty. |
 
 ### Response codes

@@ -261,10 +261,12 @@ class RuntimeConfig(BaseModel):
     envmode: str = Field(
         "dev",
         description=(
-            "Free-text label for this deployment (e.g. dev, staging, prod). Its "
-            "only effect is being stamped onto every Langfuse trace as the "
-            "`release` tag, so you can filter and compare traces across "
-            "environments."
+            "Free-text label for this deployment (e.g. dev, staging, prod). It "
+            "becomes the Langfuse tracing `environment`, so traces from one "
+            "deployment can be filtered and compared without staging traffic "
+            "polluting production aggregates. Lowercased and punctuation-"
+            "stripped on the way out, since Langfuse rejects other shapes. The "
+            "trace `release` is the running Mewbo version and is not set here."
         ),
         examples=["dev"],
     )
@@ -696,6 +698,187 @@ class LLMConfig(BaseModel):
         if self.fallback.enabled:
             return list(self.fallback.models) or list(self.fallback_models)
         return list(self.fallback_models)
+
+
+class SpeechTtsConfig(BaseModel):
+    """Text to speech: which model reads an answer aloud, and in whose voice."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_default=True,
+        json_schema_extra={"title": "Text to speech"},
+    )
+
+    model: str = Field(
+        "supertonic-3",
+        description=(
+            "Model that turns text into audio. Leave it empty to turn read aloud off.\n\n"
+            "This is a model id your LLM gateway advertises, and speech models are a "
+            "separate family from the chat models the answer itself runs on. A chat "
+            "model named here is refused by the gateway at the moment someone presses "
+            "play, not when this page is saved."
+        ),
+        examples=["supertonic-3", "supertonic-3-hd"],
+    )
+    voice: str = Field(
+        "nova",
+        description=(
+            "Voice the reader speaks in. Type the name your gateway knows it by.\n\n"
+            "This was once a fixed list of eleven, which was wrong for a self-hosted "
+            "gateway: a backend can carry its own trained voice style, and a name "
+            "absent from that list was refused here before the gateway ever saw it. "
+            "The gateway decides what a voice is. A name it does not know fails the "
+            "request when someone presses play, the same way an unknown model does."
+        ),
+        examples=["nova", "alloy", "shimmer"],
+    )
+    response_format: Literal["wav", "flac"] = Field(
+        "wav",
+        description=(
+            "Audio format the gateway returns. WAV is the safe default and FLAC is "
+            "the same audio in a smaller file.\n\n"
+            "Only these two are accepted. Asking for MP3, Opus, AAC or raw PCM fails "
+            "the request, so they are not offered here."
+        ),
+    )
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _normalize_model(cls, value: Any) -> str:
+        return str(value).strip() if value is not None else ""
+
+    DEFAULT_VOICE: ClassVar[str] = "nova"
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def _normalize_voice(cls, value: Any) -> str:
+        """Trim padding, and resolve an empty value to the default.
+
+        Case is PRESERVED. Folding it presumed every voice name was OpenAI's;
+        an operator-defined style may be capitalised, and lowercasing it sends
+        the gateway a name it need not recognise.
+
+        Blank resolves rather than travelling as empty, because the gateway
+        answers an omitted voice with an opaque 500 — the one failure this
+        field can still prevent locally, now that which names EXIST is the
+        gateway's fact rather than ours.
+        """
+        if value is None:
+            return cls.DEFAULT_VOICE
+        return str(value).strip() or cls.DEFAULT_VOICE
+
+
+class SpeechSttConfig(BaseModel):
+    """Speech to text: which model turns a recording into words."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_default=True,
+        json_schema_extra={"title": "Speech to text"},
+    )
+
+    model: str = Field(
+        "nova-3",
+        description=(
+            "Model that transcribes a recording. Leave it empty to turn dictation off.\n\n"
+            "This is a model id your LLM gateway advertises. Transcription models are "
+            "separate from both chat models and the text-to-speech model above, so the "
+            "id here will not appear in the model picker used for answers."
+        ),
+        examples=["nova-3"],
+    )
+    @field_validator("model", mode="before")
+    @classmethod
+    def _normalize_model(cls, value: Any) -> str:
+        return str(value).strip() if value is not None else ""
+
+
+class SpeechConfig(BaseModel):
+    """Which gateway models handle speech, and which gateway serves them.
+
+    The three connection fields are all optional and all empty by default,
+    because the common deployment has one gateway: speech falls back to
+    ``llm.api_base``/``llm.api_key`` whenever these are blank, so an install
+    that never writes a ``speech`` block still works. They exist for the
+    deployment that genuinely splits the two, which is a real shape — a
+    self-hosted synthesis backend beside a hosted chat provider — and refusing
+    to represent it would only push the operator into running one gateway they
+    do not want.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_default=True,
+        json_schema_extra={"title": "Speech", "x-group": "models", "x-order": 5},
+    )
+
+    api_base: str = Field(
+        "",
+        description=(
+            "Base URL of the gateway that serves the speech models. Leave it "
+            "empty to use the same gateway as the language models.\n\n"
+            "Set this only when speech is served somewhere other than the "
+            "endpoint under Language Model, such as a synthesis service running "
+            "beside a hosted chat provider."
+        ),
+        examples=["", "https://my-litellm-proxy.example.com/v1"],
+    )
+    api_key: str = Field(
+        "",
+        description=(
+            "Key for the speech gateway. Leave it empty to reuse the language "
+            "model key.\n\n"
+            "Only needed alongside a separate speech endpoint above. Setting one "
+            "here without the other is almost always a mistake, because the key "
+            "is then sent to the language model gateway that already had one."
+        ),
+        examples=["sk-xxxxxxxx"],
+        json_schema_extra={"x-secret": True},
+    )
+    #: Mirrors ``mewbo_speech.gateway.DEFAULT_SPEECH_TIMEOUT``, and the two are
+    #: pinned equal by ``tests/test_config_speech.py``. Duplicated rather than
+    #: imported because core must not reach UP into a capability library, and
+    #: the value cannot simply be left to the package: once this typed field
+    #: exists, its default is what the accessor returns, so the package's own
+    #: ``default=`` argument never runs again. A silent divergence here would
+    #: change the deployed timeout while both files still read as correct.
+    timeout: float = Field(
+        90.0,
+        gt=0,
+        description=(
+            "Seconds to wait for the speech gateway before giving up.\n\n"
+            "Synthesis is not instant and scales with the length of the text: a "
+            "sentence takes about half a second and a paragraph about four, so a "
+            "short timeout cuts off long answers. Raising it has a cost too, "
+            "because a request that is going to fail holds a server slot for the "
+            "whole wait."
+        ),
+    )
+    tts: SpeechTtsConfig = Field(
+        default_factory=lambda: SpeechTtsConfig.model_validate({}),
+        description="Reading an answer aloud.",
+    )
+    stt: SpeechSttConfig = Field(
+        default_factory=lambda: SpeechSttConfig.model_validate({}),
+        description="Turning a recording into text.",
+    )
+
+    @field_validator("api_base", "api_key", mode="before")
+    @classmethod
+    def _normalize_connection(cls, value: Any) -> str:
+        """Trim both, because only blank means "fall back to the llm section".
+
+        A key or URL pasted with a trailing newline is not blank, so it wins the
+        ``or`` the reader falls back through and is then sent verbatim. The
+        gateway answers that with an auth failure or a bad URL, neither of which
+        points at the whitespace. Nothing downstream trims, so this is the only
+        place it can happen.
+        """
+        return str(value).strip() if value is not None else ""
+
+
+def _speech_config_default() -> SpeechConfig:
+    return SpeechConfig.model_validate({})
 
 
 class ContextConfig(BaseModel):
@@ -1321,10 +1504,12 @@ class APIConfig(BaseModel):
     allow_external_cwd: bool = Field(
         False,
         description=(
-            "Allow callers to anchor sessions in an arbitrary host path via the "
-            "`cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. "
-            "Off by default; enable only for trusted external workspace managers "
-            "that manage their own worktrees."
+            "Allow callers to anchor sessions in arbitrary host paths via the `cwd` "
+            "field on POST /api/sessions and POST /api/sessions/{id}/query. A "
+            "directory belonging to a configured project, managed project or worktree, "
+            "or registered repository checkout is always accepted, as is a re-send of "
+            "the session's own bound directory; this flag governs host paths a caller "
+            "names that the server does not already own."
         ),
     )
     max_concurrent_streams: int = Field(
@@ -1351,6 +1536,30 @@ class APIConfig(BaseModel):
             "back to the master token, logging one startup warning."
         ),
         json_schema_extra={"x-secret": True},
+    )
+    apps_exec_binaries: list[str] = Field(
+        default_factory=lambda: ["git", "tea", "gh"],
+        description=(
+            "Command-line programs a Mewbo App's code pipeline may run. A pipeline "
+            "must still declare the ones it needs, so this is a ceiling the "
+            "deployment sets rather than a grant: a program absent here cannot be "
+            "reached however the pipeline is written. Widening it is an operator "
+            "decision — pipeline code runs in-process, so a program added here runs "
+            "with the API server's own file and network access, and a program that "
+            "can be steered into running other programs effectively grants a shell."
+        ),
+    )
+    apps_max_concurrent_pipelines: int = Field(
+        4,
+        ge=0,
+        description=(
+            "How many Mewbo App pipelines may execute at once. A pipeline runs "
+            "synchronously and holds one of the server's request threads for its "
+            "whole duration, so without a bound enough concurrent invocations "
+            "starve every other endpoint. Past this many, an invocation is refused "
+            "with a retryable 429 and the rest of the API keeps serving. 0 removes "
+            "the bound."
+        ),
     )
     auth: APIAuthConfig = Field(
         default_factory=lambda: APIAuthConfig.model_validate({}),
@@ -3566,6 +3775,10 @@ class AppConfig(BaseModel):
     context: ContextConfig = Field(
         default_factory=_context_config_default,
         description="Context window selection and event filtering.",
+    )
+    speech: SpeechConfig = Field(
+        default_factory=_speech_config_default,
+        description="Speech models for reading answers aloud and for dictation.",
     )
     token_budget: TokenBudgetConfig = Field(
         default_factory=_token_budget_config_default,

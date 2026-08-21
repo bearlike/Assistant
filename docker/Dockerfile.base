@@ -16,7 +16,7 @@ FROM python:3.11-trixie
 # one product version. CI overrides this from the release branch, so a stale
 # default only ever surfaced on local and compose builds, mislabelling the image
 # and, here, exporting a wrong ENV VERSION at runtime.
-ARG VERSION="0.0.13"
+ARG VERSION="0.0.14"
 ARG USERNAME=mewbo
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID

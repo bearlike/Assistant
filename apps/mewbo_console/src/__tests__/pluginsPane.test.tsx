@@ -37,10 +37,12 @@ const uninstallPlugin = vi.mocked(client.uninstallPlugin);
 const INSTALLED: PluginSummary[] = [
   {
     name: "core-plugin",
+    display_name: "Core Plugin",
     description: "Ships with the deployment.",
     version: "1.0.0",
     marketplace: "anthropics/claude-plugins-official",
     scope: "user",
+    enabled: true,
     skills: 2,
     agents: 1,
     commands: 0,
@@ -88,17 +90,38 @@ afterEach(() => {
   cleanup();
 });
 
-test("renders installed plugins from listPlugins()", async () => {
+test("groups built-in plugins first and uses server display names", async () => {
+  listPlugins.mockResolvedValue([
+    {
+      name: "generative-ui",
+      display_name: "Generative UI",
+      description: "Structured panels.",
+      version: "1.0.0",
+      marketplace: "built-in",
+      scope: "built-in",
+      enabled: true,
+      skills: 1,
+      agents: 0,
+      commands: 0,
+      mcp_servers: 0,
+      has_hooks: false,
+    },
+    ...INSTALLED,
+  ]);
+
   render(<PluginsPane />);
 
-  expect(await screen.findByText("core-plugin")).toBeInTheDocument();
+  await screen.findByText("Generative UI");
+  const builtIns = screen.getByRole("region", { name: "Built-in plugins" });
+  const externals = screen.getByRole("region", { name: "External plugins" });
+  expect(builtIns).toHaveTextContent("Generative UI");
+  expect(builtIns).not.toHaveTextContent("Core Plugin");
+  expect(externals).toHaveTextContent("Core Plugin");
+  expect(externals).not.toHaveTextContent("Generative UI");
   expect(screen.getByText("hooks")).toBeInTheDocument();
-  // Count badges pluralize: "2 skills" but "1 agent" (it used to say "1 agents").
   expect(screen.getByText("2 skills")).toBeInTheDocument();
   expect(screen.getByText("1 agent")).toBeInTheDocument();
 
-  // Marketplace section renders both listMarketplacePlugins() entries with
-  // Install affordances (neither is in the installed list).
   expect(await screen.findByText("widget-plugin")).toBeInTheDocument();
   expect(screen.getByLabelText("Install widget-plugin")).toBeInTheDocument();
   expect(screen.getByLabelText("Install reporting-plugin")).toBeInTheDocument();
@@ -128,10 +151,12 @@ test("install fires installPlugin and invalidates so the pane reflects the refet
       ...INSTALLED,
       {
         name: "widget-plugin",
+        display_name: "Widget Plugin",
         description: "Adds widget-building skills.",
         version: "0.2.0",
         marketplace: "anthropics/claude-plugins-official",
         scope: "user",
+        enabled: true,
         skills: 1,
         agents: 0,
         commands: 0,
@@ -162,12 +187,14 @@ test("uninstall fires uninstallPlugin and invalidates so the pane reflects the r
   listPlugins.mockResolvedValueOnce(INSTALLED).mockResolvedValueOnce([]);
 
   render(<PluginsPane />);
-  await screen.findByLabelText("Uninstall core-plugin");
+  await screen.findByLabelText("Uninstall Core Plugin");
 
-  await user.click(screen.getByLabelText("Uninstall core-plugin"));
+  await user.click(screen.getByLabelText("Uninstall Core Plugin"));
 
   expect(uninstallPlugin).toHaveBeenCalledWith("core-plugin");
   await waitFor(() => expect(listPlugins).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.getByText("No plugins installed.")).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByText("No external plugins installed.")).toBeInTheDocument(),
+  );
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Uninstalled "core-plugin".'));
 });

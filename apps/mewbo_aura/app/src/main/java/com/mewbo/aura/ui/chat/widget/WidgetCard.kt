@@ -39,9 +39,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.mewbo.aura.IS_DEBUG_BUILD
 import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.ui.chat.ChatIcons
-import com.mewbo.aura.ui.navigation.IS_DEBUG_BUILD
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraShape
 import com.mewbo.aura.ui.theme.AuraSpacing

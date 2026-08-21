@@ -98,3 +98,20 @@ only; fork reads `ts` alone), so `steer` is adopted down the same dedupe branch.
   `ToolSummary`, `StagedAttachment`, `Session`/`SessionSummary` (`running: Boolean` is the liveness
   signal — `status` never literally reads `"running"`; `terminated`/`terminated_at` are durable),
   `ProjectSummary` (`contextKey` = bare name or `managed:<id>`), `ChatItem`.
+
+## Device tools are stamped into the tool list, not fetched
+
+`GET api/tools` enumerates the MCP/core registry; a `device_*` tool is DECLARED by the client on
+each query and appears in no catalog response. So it appeared in no group of the picker — the one
+family that acts on the user's own phone, including a shell at shell UID, was the only one missing
+from the surface built for controlling tool exposure.
+
+`SessionScopeRepository.tools()` appends them with `scope = FACET_DEVICE`, which is a real member of
+`FACET_ORDER` (second, ahead of `system`) so the existing grouping, ordering and facet-count code
+carries them with no special case. It appends the ADVERTISED list, so a tool switched off in
+Settings or gated out by a missing permission is absent here too — the picker describes the session,
+not the build.
+
+**Toggling one there persists to the SAME store Settings writes.** The picker's allowlist reaches
+the agent as `context.mcp_tools`, and device tools are appended AFTER that gate, so a picker-only
+toggle would move the switch and leave the tool bound — a control that visibly does nothing.

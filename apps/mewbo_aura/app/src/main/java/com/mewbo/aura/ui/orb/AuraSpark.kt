@@ -1,6 +1,8 @@
 package com.mewbo.aura.ui.orb
 
 import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.center
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -122,6 +126,7 @@ internal object SparkUniformMath {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun RuntimeShader.setSparkUniforms(
     resolution: Size,
     rotation: Float,
@@ -156,11 +161,25 @@ fun AuraSpark(
     val extras = LocalAssistantExtras.current
     val describedModifier = modifier.semantics { contentDescription = state.accessibilityLabel() }
 
+    // The AGSL gate comes FIRST: on API 30-32 there is no RuntimeShader to freeze, so the
+    // reduced-motion path below is unreachable there too.
+    if (!AuraShaders.supported) {
+        ShaderFreeSpark(modifier = describedModifier, size = size)
+        return
+    }
+
     if (extras.reducedMotion) {
         ReducedMotionSpark(modifier = describedModifier, size = size)
         return
     }
 
+    ShaderSpark(state = state, modifier = describedModifier, size = size)
+}
+
+/** The live AGSL spark — what [AuraSpark] resolves to once the shader gate and reduced motion say so. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@Composable
+private fun ShaderSpark(state: SparkState, modifier: Modifier, size: Dp) {
     val shader = remember { RuntimeShader(SPARK_SHADER_SRC) }
     val timeSeconds = rememberShaderTimeSeconds()
 
@@ -187,7 +206,7 @@ fun AuraSpark(
     val sweepState = remember { ShaderRotationAccumulator() }
 
     Box(
-        modifier = describedModifier
+        modifier = modifier
             .size(size)
             .drawWithCache {
                 val brush = ShaderBrush(shader)
@@ -220,6 +239,7 @@ fun AuraSpark(
  * no per-state energy/desaturation uniforms, so there is nothing left to distinguish once motion is
  * removed (the accessibility label alone still differs, applied by the caller's modifier).
  */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
 private fun ReducedMotionSpark(modifier: Modifier, size: Dp) {
     val shader = remember { RuntimeShader(SPARK_SHADER_SRC) }
@@ -244,6 +264,32 @@ private fun ReducedMotionSpark(modifier: Modifier, size: Dp) {
                         stops = AuraColors.sparkGradient,
                     )
                     drawRect(brush = brush)
+                }
+            },
+    )
+}
+
+/**
+ * Shader-free fallback for API 30-32 ([AuraShaders]): the brand conic gradient
+ * ([AuraColors.sparkGradient]) as a static Compose sweep gradient on a disc, closed back to its
+ * leading stop so the seam the shader hides in its `fract()` wrap stays hidden here too.
+ *
+ * As with the orb, the clay-flower silhouette is AGSL-only and is not re-derived — this keeps the
+ * brand gradient and the mark's presence, not its shape.
+ */
+@Composable
+private fun ShaderFreeSpark(modifier: Modifier, size: Dp) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .drawWithCache {
+                val stops = AuraColors.sparkGradient
+                val brush = Brush.sweepGradient(
+                    colors = stops + stops.first(),
+                    center = this.size.center,
+                )
+                onDrawBehind {
+                    drawCircle(brush = brush, radius = this.size.minDimension / 2f, center = this.size.center)
                 }
             },
     )

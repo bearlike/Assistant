@@ -144,13 +144,46 @@ class TestToolSchemaGolden:
         assert json.loads(json.dumps(PRESENT_UI_SCHEMA, sort_keys=True)) == expected
 
     def test_schema_carries_the_component_discriminator(self):
+        """``root`` is a TOP-LEVEL argument — there is no ``spec`` wrapper.
+
+        The wrapper was the single most-failed part of this tool across two
+        traced sessions, so its absence here is the assertion, not an incidental
+        path change: reading through a ``$defs/GenerativeUISpec`` hop again
+        would mean it had come back.
+        """
         from mewbo_core.builtin_plugins.generative_ui.present_ui import PRESENT_UI_SCHEMA
 
-        defs = PRESENT_UI_SCHEMA["function"]["parameters"]["$defs"]
-        items = defs["GenerativeUISpec"]["properties"]["root"]["items"]
+        params = PRESENT_UI_SCHEMA["function"]["parameters"]
+        assert sorted(params["required"]) == ["root", "summary"]
+        assert "spec" not in params["properties"]
+        items = params["properties"]["root"]["items"]
         assert items["discriminator"]["propertyName"] == "component"
         assert len(items["discriminator"]["mapping"]) == 11
         assert len(items["oneOf"]) == 11
+
+    def test_defs_are_keyed_by_component_tag_not_python_class_name(self):
+        """A leaked ``$defs`` name must be a name that validates.
+
+        Pydantic keys a definition after its CLASS, so this schema used to offer
+        ``#/$defs/AlertNode`` for a component whose only legal tag is ``Alert``.
+        A traced model copied that key into a payload — twice — after failing to
+        dereference the ``$ref`` it belonged to. Every pointer is checked, not
+        just the keys: a rename that missed the discriminator mapping would
+        leave the schema self-inconsistent, which is worse than not renaming.
+        """
+        from mewbo_core.builtin_plugins.generative_ui.present_ui import PRESENT_UI_SCHEMA
+
+        params = PRESENT_UI_SCHEMA["function"]["parameters"]
+        tags = {member.component_tag() for member in _union_members()}
+        assert tags <= set(params["$defs"])
+        assert not [name for name in params["$defs"] if name.endswith("Node")]
+        mapping = params["properties"]["root"]["items"]["discriminator"]["mapping"]
+        assert mapping == {tag: f"#/$defs/{tag}" for tag in sorted(tags)}
+        # The recursive arm too — ``Card.children`` re-references the union.
+        child_map = params["$defs"]["Card"]["properties"]["children"]["items"][
+            "discriminator"
+        ]["mapping"]
+        assert child_map == mapping
 
     def test_schema_never_offers_a_reconciliation_key(self):
         """``key`` is emitted by nobody and offered to the model nowhere.
@@ -261,12 +294,20 @@ class TestProjectionsGolden:
         )
 
     def test_props_are_the_typed_fields_with_structure_removed(self):
-        """The conversion is total: no field is dropped and none is invented."""
+        """The conversion is total: no field is dropped and none is invented.
+
+        A container's ``id`` counts as structure — it addresses the node for
+        append/update server-side and is deliberately kept off the wire so the
+        frozen renderer shape is byte-identical with or without addressing.
+        """
         spec = GenerativeUISpec.model_validate(REPRESENTATIVE_TREE)
         card = spec.root[1]
         wire = card.to_spec_node()
         assert set(wire) == {"component", "props", "children"}
-        assert set(wire["props"]) == set(type(card).model_fields) - {"component", "children"}
+        assert set(wire["props"]) == (
+            set(type(card).model_fields) - type(card)._STRUCTURAL_FIELDS
+        )
+        assert "id" not in wire["props"]
 
     def test_heading_levels_render_below_the_page_title(self):
         spec = GenerativeUISpec.model_validate(

@@ -117,6 +117,11 @@ class MewboApp:
         """Synchronous, token-authenticated GET of a same-origin app endpoint."""
         return self._send("GET", path, params=params)
 
+    def _get_text(self, path: str, params: dict[str, str] | None = None) -> str:
+        """Synchronous GET returning the response body unchanged, not JSON-decoded."""
+        result = self._send("GET", path, params=params, parse_json=False)
+        return result if isinstance(result, str) else ""
+
     def _post(self, path: str, body: Any) -> Any:
         """Synchronous, token-authenticated POST (JSON body) of a same-origin app endpoint.
 
@@ -135,6 +140,7 @@ class MewboApp:
         *,
         params: dict[str, str] | None = None,
         body: Any = None,
+        parse_json: bool = True,
     ) -> Any:
         """The shared XHR core behind :meth:`_get` / :meth:`_post`.
 
@@ -191,6 +197,8 @@ class MewboApp:
             raise AppTokenExpired("the app's access token has expired — refresh the app")
         if not 200 <= status < 300:
             raise AppRequestError(f"request to {path} failed ({status}): {text}")
+        if not parse_json:
+            return text
         return json.loads(text) if text else None
 
     def _is_cross_origin(self) -> bool:
@@ -275,7 +283,7 @@ class _AppPipelines:
     def list(self) -> list[dict[str, Any]]:
         """List this app's declared pipelines.
 
-        Each row: ``{name, mode, on_demand, schedule, armed, params_schema,
+        Each row: ``{name, mode, tier, on_demand, schedule, armed, params_schema,
         cache_ttl_seconds}`` — a projection distinct from ``/system``'s
         pipeline rows (no ``trigger_ref``/``entrypoint``; those never cross
         the wire to a client).
@@ -314,6 +322,26 @@ class _AppPipelines:
                 )
             query[key] = str(value)
         return self._app._get(f"pipelines/{name}", query or None)
+
+    def result(self, name: str, params: dict[str, Any] | None = None) -> str:
+        """Invoke a rendered pipeline and return its declared response body as text.
+
+        This has the same scalar-query limitation as :meth:`run`: a dict/list
+        value cannot cross the GET path and is refused client-side before any
+        network call. The server returns the declared JSON/CSV/XML/text body
+        directly, so this method intentionally does not JSON-decode it.
+        """
+        query: dict[str, str] = {}
+        for key, value in (params or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                raise AppRequestError(
+                    f"params[{key!r}] is a {type(value).__name__} — object/array "
+                    "params can't be sent over this read-only GET path (v1 limitation)"
+                )
+            query[key] = str(value)
+        return self._app._get_text(f"pipelines/{name}/result", query or None)
 
     def refresh(self, name: str) -> dict[str, Any]:
         """Trigger an on-demand refresh of a pipeline (``POST .../pipelines/<name>/fire``).

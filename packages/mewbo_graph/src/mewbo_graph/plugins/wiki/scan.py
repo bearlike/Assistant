@@ -14,7 +14,12 @@ from mewbo_core.config import get_config_value
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
+from mewbo_graph.plugins.wiki._ctx import ProgressReporter
 from mewbo_graph.plugins.wiki.clone import _resolve_runtime  # noqa: F401 — per-module test seam
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    SCAN_STEPS,
+    planned_steps_for_slug,
+)
 from mewbo_graph.wiki.memory_types import FileManifest
 from mewbo_graph.wiki.refresh import ChangeDetector
 from mewbo_graph.wiki.types import IndexingJob
@@ -343,10 +348,13 @@ class WikiScanTreeTool(WikiSessionTool):
 
         from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase  # noqa: PLC0415
         emit_phase(ctx, "scan")
+        progress = ProgressReporter(ctx)
+        progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "scan"))
 
-        files = _collect_files(clone_dir, args)
-        total = len(files)
-        emit_log(ctx, f"Scanning {total} files in {clone_dir.name}…")
+        with progress.step("scan.discover"):
+            files = _collect_files(clone_dir, args)
+            total = len(files)
+            emit_log(ctx, f"Scanning {total} files in {clone_dir.name}…")
 
         # 4. Emit scanning/scanned events, fold the summary, build the manifest.
         summary = ScanSummary()
@@ -354,82 +362,85 @@ class WikiScanTreeTool(WikiSessionTool):
         last_flush = time.monotonic()
         pending_events: list[dict[str, Any]] = []
 
-        for idx, rel in enumerate(files):
-            abs_path = clone_dir / rel
-            file_str = str(rel)
+        with progress.step("scan.inspect_files", total=total) as step:
+            for idx, rel in enumerate(files):
+                abs_path = clone_dir / rel
+                file_str = str(rel)
 
-            scanning_evt: dict[str, Any] = {
-                "type": "scanning",
-                "file": file_str,
-                "index": idx,
-                "totalCount": total,
-            }
-            scanned_evt: dict[str, Any] = {
-                "type": "scanned",
-                "file": file_str,
-                "index": idx,
-                "totalCount": total,
-            }
+                scanning_evt: dict[str, Any] = {
+                    "type": "scanning",
+                    "file": file_str,
+                    "index": idx,
+                    "totalCount": total,
+                }
+                scanned_evt: dict[str, Any] = {
+                    "type": "scanned",
+                    "file": file_str,
+                    "index": idx,
+                    "totalCount": total,
+                }
 
-            pending_events.extend([scanning_evt, scanned_evt])
+                pending_events.extend([scanning_evt, scanned_evt])
 
-            now = time.monotonic()
-            if now - last_flush >= _FLUSH_INTERVAL_S or idx == total - 1:
-                for evt in pending_events:
-                    ctx.store.append_job_event(ctx.job_id, evt)
-                pending_events = []
-                last_flush = now
-                # Persist scanned_count on the same flush cadence so the
-                # /v1/wiki/index/<id> snapshot (used by the landing-page
-                # "Indexing now" tile) shows real progress. SSE consumers
-                # fold events live and don't need this; HTTP pollers do.
-                #
-                # currentFile rides that SAME write rather than an unconditional
-                # update_job per file, which would cost one store round-trip for
-                # every file in the repo (~2,000 on a real one) for a field the
-                # UI merely samples. The last file always flushes (``idx ==
-                # total - 1``), so a finished job still names the file it ended
-                # on; in between, progress advances every 50ms, which is faster
-                # than anyone reads it.
-                # ``last_progress_at`` rides this SAME write rather than getting
-                # a PhaseProgress of its own. Scan already owns an honest
-                # per-file counter pair and a 50ms flush; routing it through the
-                # 5s phase-progress throttle would either halve the live scan
-                # cadence or double this write — and this write was deliberately
-                # collapsed down from one-per-file. One extra field on a write
-                # that already happens buys scan its place in the "is this job
-                # still moving" signal for nothing.
-                ctx.store.update_job(
-                    ctx.job_id,
-                    scanned_count=idx + 1,
-                    current_file=file_str,
-                    last_progress_at=IndexingJob.format_stamp(
-                        datetime.now(timezone.utc)
-                    ),
+                now = time.monotonic()
+                if now - last_flush >= _FLUSH_INTERVAL_S or idx == total - 1:
+                    for evt in pending_events:
+                        ctx.store.append_job_event(ctx.job_id, evt)
+                    pending_events = []
+                    last_flush = now
+                    # Persist scanned_count on the same flush cadence so the
+                    # /v1/wiki/index/<id> snapshot (used by the landing-page
+                    # "Indexing now" tile) shows real progress. SSE consumers
+                    # fold events live and don't need this; HTTP pollers do.
+                    #
+                    # currentFile rides that SAME write rather than an unconditional
+                    # update_job per file, which would cost one store round-trip for
+                    # every file in the repo (~2,000 on a real one) for a field the
+                    # UI merely samples. The last file always flushes (``idx ==
+                    # total - 1``), so a finished job still names the file it ended
+                    # on; in between, progress advances every 50ms, which is faster
+                    # than anyone reads it.
+                    # ``last_progress_at`` rides this SAME write rather than getting
+                    # a PhaseProgress of its own. Scan already owns an honest
+                    # per-file counter pair and a 50ms flush; routing it through the
+                    # 5s phase-progress throttle would either halve the live scan
+                    # cadence or double this write — and this write was deliberately
+                    # collapsed down from one-per-file. One extra field on a write
+                    # that already happens buys scan its place in the "is this job
+                    # still moving" signal for nothing.
+                    ctx.store.update_job(
+                        ctx.job_id,
+                        scanned_count=idx + 1,
+                        current_file=file_str,
+                        last_progress_at=IndexingJob.format_stamp(
+                            datetime.now(timezone.utc)
+                        ),
+                    )
+
+                size = abs_path.stat().st_size
+                summary.record(rel, size)
+                entries.append(
+                    FileManifest(
+                        slug=ctx.slug,
+                        path=file_str,
+                        # Reuses the reader's own hash so the two sides agree by
+                        # construction: ``ChangeDetector`` diffs the working tree
+                        # against exactly this field, and a manifest hashed any
+                        # other way would report every file modified forever.
+                        content_hash=ChangeDetector._hash_file(abs_path),
+                        last_indexed_commit=ctx.commit_sha,
+                    )
                 )
-
-            size = abs_path.stat().st_size
-            summary.record(rel, size)
-            entries.append(
-                FileManifest(
-                    slug=ctx.slug,
-                    path=file_str,
-                    # Reuses the reader's own hash so the two sides agree by
-                    # construction: ``ChangeDetector`` diffs the working tree
-                    # against exactly this field, and a manifest hashed any
-                    # other way would report every file modified forever.
-                    content_hash=ChangeDetector._hash_file(abs_path),
-                    last_indexed_commit=ctx.commit_sha,
-                )
-            )
+                step.advance(idx + 1, total, detail=file_str)
 
         # Flush any remaining events (handles total == 0 case cleanly).
         for evt in pending_events:
             ctx.store.append_job_event(ctx.job_id, evt)
 
-        self._persist_manifest(ctx, entries)
+        with progress.step("scan.persist_manifest") as step:
+            self._persist_manifest(ctx, entries)
+            step.log(f"Scanned {total} files")
 
-        emit_log(ctx, f"Scanned {total} files")
         return MockSpeaker(content=str(summary.as_result()))
 
     @staticmethod

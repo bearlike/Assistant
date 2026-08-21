@@ -1,5 +1,6 @@
 {
   "name": "scg",
+  "display_name": "Agentic Search",
   "description": "Source Capability Graph — map connector reachability + route/traverse it for Agentic Search.",
   "version": "0.1.0",
   "author": "Mewbo",

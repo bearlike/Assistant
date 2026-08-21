@@ -24,6 +24,14 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 
 /**
+ * The bound `SessionRepository.refreshSessions` puts on the wire. Every stub here must name it, or
+ * the mock answers `null` and the fetch NPEs — which is the point: the recents fetch has no
+ * unbounded spelling left for a test to accidentally exercise. `SessionRepositoryTest` owns the
+ * assertion on the value itself.
+ */
+private const val RECENTS_FETCH_LIMIT = 50
+
+/**
  * Recents-rail caching contract. The drawer's [SessionsViewModel] is recreated per chat
  * back-stack entry, so it must render the `@Singleton` [SessionRepository]'s last-loaded list
  * INSTANTLY (never the skeleton while a cache exists) and reconcile in the background —
@@ -52,7 +60,7 @@ class SessionsViewModelTest {
 
     /** A repo whose shared cache is already populated, mirroring a process-alive re-navigation. */
     private suspend fun seededRepo(api: AuraApi, vararg ids: String): SessionRepository {
-        `when`(api.listSessions(false)).thenReturn(sessionsResponse(*ids))
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(sessionsResponse(*ids))
         return SessionRepository(api, json).also { it.refreshSessions() }
     }
 
@@ -61,7 +69,7 @@ class SessionsViewModelTest {
         val api = mock(AuraApi::class.java)
         val repo = seededRepo(api, "s1")
         // The background refresh the freshly-constructed VM fires returns a newer list.
-        `when`(api.listSessions(false)).thenReturn(sessionsResponse("s1", "s2"))
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(sessionsResponse("s1", "s2"))
 
         val vm = SessionsViewModel(repo)
 
@@ -80,7 +88,7 @@ class SessionsViewModelTest {
     @Test
     fun `first launch with an empty cache shows the skeleton, then the fetched list`() = runTest(dispatcher) {
         val api = mock(AuraApi::class.java)
-        `when`(api.listSessions(false)).thenReturn(sessionsResponse("s1"))
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(sessionsResponse("s1"))
         val repo = SessionRepository(api, json) // never refreshed — cache genuinely empty
 
         val vm = SessionsViewModel(repo)
@@ -97,7 +105,7 @@ class SessionsViewModelTest {
     fun `a failed background refresh keeps the cached list rather than blanking`() = runTest(dispatcher) {
         val api = mock(AuraApi::class.java)
         val repo = seededRepo(api, "s1", "s2")
-        `when`(api.listSessions(false)).thenThrow(RuntimeException("network down"))
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenThrow(RuntimeException("network down"))
 
         val vm = SessionsViewModel(repo)
 
@@ -121,7 +129,7 @@ class SessionsViewModelTest {
         `when`(api.renameSession("s1", RenameSessionRequest("New title")))
             .thenReturn(RenameSessionResponseDto(sessionId = "s1", title = "New title"))
         // The trailing server-truth reconciliation sees the renamed row.
-        `when`(api.listSessions(false)).thenReturn(
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(
             SessionsListResponseDto(
                 sessions = listOf(SessionSummaryDto(sessionId = "s1", title = "New title", origin = "mobile")),
             ),

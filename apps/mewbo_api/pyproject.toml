@@ -1,8 +1,8 @@
 [project]
 name = "mewbo-api"
-version = "0.0.13"
+version = "0.0.14"
 description = "REST API Engine wrapped around the Mewbo core."
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.10,<4.0"
 authors = [
   { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
@@ -31,6 +31,15 @@ dependencies = [
 # see packages/mewbo_graph/src/mewbo_graph/wiki/embedder.py.
 wiki = [
     "mewbo-graph[treesitter,retrieval]>=0.0.13",
+]
+# Gateway-backed speech (synthesis + transcription) lives in the optional
+# `mewbo-speech` library. This extra forwards to it so the public name and the
+# Docker `SPEECH_EXTRAS` toggle stay in step, mirroring `wiki` above. Base
+# `mewbo-api` installs speech-less: `speech/__init__.py` guards the import and
+# returns False, so the namespace simply never mounts and the server boots
+# clean. That absence IS the availability signal a client reads as a 404.
+speech = [
+    "mewbo-speech[gateway]>=0.0.1",
 ]
 # DockerContainerBackend (ide.py) — the pre-broker Web IDE path used by the
 # existing test suite and by a developer running the API against a local

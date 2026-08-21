@@ -15,12 +15,20 @@ Scope: `data/sse/` — `SessionStreamClient`, which owns ALL OkHttp-SSE mechanic
 - Backoff `INITIAL_BACKOFF_MS = 500` → `MAX_BACKOFF_MS = 15_000` (×2, reset on a clean connect).
   Reconnect loop `while (isActive && !terminated)`; `CancellationException` rethrown, `IOException`
   swallowed → backoff+reconnect.
-- **Every (re)connect replays the FULL persisted backlog** — the stream endpoint has no partial-resume
-  cursor. This class deliberately does NOT filter or dedupe by `ts`: a strictly-greater cursor is lossy
-  when two events share a `ts`, and would defeat the reducer's content-key dedupe. Idempotent reduction
-  is what makes reconnects safe, so **dedupe belongs ONLY to `TranscriptReducer`**
-  ([`data/model/CLAUDE.md`](../model/CLAUDE.md)). The `/events?after=` backfill cursor is a REST call
-  on [`AuraApi`](../api/CLAUDE.md), not here.
+- **The FIRST connect replays the full backlog; a RECONNECT carries `?after=<newest ts seen>`.** The
+  stream endpoint does support that cursor (`backend.py`'s stream generator trims its once-only replay
+  to that timestamp or later), and using it is not optional politeness: the server closes an IDLE
+  session's stream within milliseconds, so anything that re-subscribes — notably the device-control
+  hold ([`notify/CLAUDE.md`](../../notify/CLAUDE.md)) — would otherwise re-transfer the whole
+  transcript every few seconds.
+- **The server's `after` is INCLUSIVE, which is the whole reason it is compatible with the next rule.**
+  Everything sharing the cursor's `ts` is re-sent, so no event can be lost by resuming. What stays
+  banned is a CLIENT-side strictly-greater filter: that one silently drops an event sharing a `ts` with
+  the last one seen, and would defeat the reducer's content-key dedupe. This class still filters and
+  dedupes NOTHING — the cursor narrows the server's WORK, never the client's view of it. Idempotent
+  reduction is what makes reconnects safe, so **dedupe belongs ONLY to `TranscriptReducer`**
+  ([`data/model/CLAUDE.md`](../model/CLAUDE.md)). A separate `/events?after=` backfill cursor also
+  exists as a REST call on [`AuraApi`](../api/CLAUDE.md); that one is not this.
 
 ## The `trySend` + `terminated`-regardless-of-landing hazard
 

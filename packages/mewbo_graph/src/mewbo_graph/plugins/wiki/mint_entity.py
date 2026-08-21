@@ -18,11 +18,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import (
-    PhaseProgress,
+    ProgressReporter,
     emit_phase_once,
     resolve_job_ctx,
     resolve_qa_ctx,
     resolve_runtime,
+)
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    ENRICH_STEPS,
+    planned_steps_for_slug,
 )
 
 if TYPE_CHECKING:
@@ -36,11 +40,11 @@ def _resolve_runtime() -> Any:
     return resolve_runtime()
 
 
-def _make_embedder() -> Any:
-    """Construct an Embedder or None; isolated so tests can stub it offline."""
-    from mewbo_graph.wiki.embedder import make_embedder_or_none  # noqa: PLC0415
+def _make_embedder(store: Any, slug: str) -> Any:
+    """Construct a project Embedder or None; isolated so tests can stub it offline."""
+    from mewbo_graph.wiki.embedder import make_embedder_for_or_none  # noqa: PLC0415
 
-    return make_embedder_or_none()
+    return make_embedder_for_or_none(store, slug)
 
 
 def _entities_enabled() -> bool:
@@ -123,9 +127,9 @@ class _EntityBuilder:
     """
 
     @staticmethod
-    def _embedder() -> Any:
-        """Resolve an embedder, falling back to the BM25-only null object."""
-        embedder = _make_embedder()
+    def _embedder(store: Any, slug: str) -> Any:
+        """Resolve a project embedder, falling back to the BM25-only null object."""
+        embedder = _make_embedder(store, slug)
         if embedder is None:
             from mewbo_graph.wiki.memory import _NullEmbedder  # noqa: PLC0415
 
@@ -133,16 +137,20 @@ class _EntityBuilder:
         return embedder
 
     @staticmethod
-    def build_resolver(store: Any) -> Any:
-        """Build an ``EntityResolver`` over *store* (read-only path)."""
+    def build_resolver(store: Any, slug: str) -> Any:
+        """Build an ``EntityResolver`` over one project's store (read-only path)."""
         from mewbo_graph.entities.resolver import EntityResolver  # noqa: PLC0415
 
-        embedder = _EntityBuilder._embedder()
+        embedder = _EntityBuilder._embedder(store, slug)
         return EntityResolver(store=store, embedder=embedder)
 
     @staticmethod
     def build_minter(
-        store: Any, *, commit_sha: str | None = None, job_id: str | None = None
+        store: Any,
+        slug: str,
+        *,
+        commit_sha: str | None = None,
+        job_id: str | None = None,
     ) -> Any:
         """Build an ``EntityMinter`` (resolve → upsert) over *store* (write path).
 
@@ -152,7 +160,7 @@ class _EntityBuilder:
         """
         from mewbo_graph.entities.minter import EntityMinter  # noqa: PLC0415
 
-        embedder = _EntityBuilder._embedder()
+        embedder = _EntityBuilder._embedder(store, slug)
         from mewbo_graph.entities.resolver import EntityResolver  # noqa: PLC0415
 
         resolver = EntityResolver(store=store, embedder=embedder)
@@ -193,6 +201,7 @@ class MintEntityTool(WikiSessionTool):
         # enrich work starting.
         rp = getattr(ctx, "resume_plan", None)
         if rp is not None and rp.should_skip("enrich"):
+            ProgressReporter(ctx).skip_group("enrich", note="reused on resume")
             return MockSpeaker(content=json.dumps({
                 "ok": True,
                 "skipped": "entities already minted — reused on resume",
@@ -211,8 +220,18 @@ class MintEntityTool(WikiSessionTool):
 
         from mewbo_graph.entities.types import Entity  # noqa: PLC0415
 
+        # The fan-out receives a fresh tool per mint. Declare idempotently so its
+        # reporter reloads prior history, then scope the one durable work unit.
+        progress = ProgressReporter(ctx) if getattr(ctx, "job_id", None) else None
+        if progress is not None:
+            progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "enrich"))
+        # The ledger's step scope is intentionally narrower than one mint: the
+        # fan-out uses a new reporter per invocation, and closing the step would
+        # clear the legacy count before the next worker can publish its position.
+        # The counted update is therefore the durable fan-out boundary.
         minter = _EntityBuilder.build_minter(
             ctx.store,
+            ctx.slug,
             commit_sha=getattr(ctx, "commit_sha", None),
             job_id=getattr(ctx, "job_id", None),
         )
@@ -225,25 +244,26 @@ class MintEntityTool(WikiSessionTool):
         )
         entity = minter.upsert(extracted, source=ctx.slug, slug=ctx.slug)
         self._anchor_entity(ctx, entity, args.anchors)
-        # Report the fan-out's progress. The unit is one minted entity and the
-        # total is genuinely unknowable mid-fan-out, so this reports a running
-        # count and the entity just written — the whole question a reader has
-        # during a phase that otherwise wrote nothing between its first mint and
-        # its last. The count is a store read, so it rides ``units_of`` and is
-        # only paid when a throttled write actually fires. A fresh tool instance
-        # per mint is why that throttle is seeded from the job, not this object.
-        if getattr(ctx, "job_id", None):
-            PhaseProgress(
+        if progress is not None:
+            total = ctx.store.count_entities(
+                ctx.slug, commit_sha=getattr(ctx, "commit_sha", None)
+            )
+            progress.report(
+                "enrich.mint_entities",
+                total,
+                None,
+                detail=f"{entity.name} ({entity.type})",
+            )
+            from mewbo_graph.plugins.wiki._ctx import emit_log  # noqa: PLC0415
+
+            # The enrich fan-out has one durable aggregate step rather than a
+            # per-entity scope. Name its owner explicitly so fresh tool instances
+            # cannot let their timeline line escape the declared work record.
+            emit_log(
                 ctx,
-                label="Enriching",
-                unit="entities",
-                units_of=lambda: (
-                    ctx.store.count_entities(
-                        ctx.slug, commit_sha=getattr(ctx, "commit_sha", None)
-                    ),
-                    None,
-                ),
-            ).advance(detail=f"{entity.name} ({entity.type})")
+                f"Enriching {total}: {entity.name} ({entity.type})",
+                step="enrich.mint_entities",
+            )
         return MockSpeaker(
             content=json.dumps({"ok": True, "entity": entity.model_dump()})
         )
@@ -318,7 +338,7 @@ class ResolveEntityTool(WikiSessionTool):
 
         from mewbo_graph.entities.types import Entity  # noqa: PLC0415
 
-        resolver = _EntityBuilder.build_resolver(ctx.store)
+        resolver = _EntityBuilder.build_resolver(ctx.store, ctx.slug)
         probe = Entity(name=args.name, type=args.type or "concept")
         decision = resolver.resolve(ctx.slug, probe)
         match = None

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -467,6 +468,7 @@ private fun scopeSectionRank(scope: String): Int =
 
 private fun scopeSectionLabel(scope: String): String = when (scope) {
     "project" -> "Project"
+    "device" -> "This device"
     "system" -> "System"
     "plugin" -> "Plugin"
     "builtin" -> "Built-in"
@@ -475,6 +477,7 @@ private fun scopeSectionLabel(scope: String): String = when (scope) {
 
 private fun scopeSectionIcon(scope: String): ImageVector = when (scope) {
     "project" -> ChatIcons.ProjectScope // folder / workspace
+    "device" -> Icons.Filled.PhoneAndroid // acts on the phone itself
     "system" -> Icons.Filled.Settings // gear
     "plugin" -> Icons.Filled.Extension // puzzle piece — the canonical plugin glyph
     "builtin" -> ChatIcons.ToolScope // wrench (core tooling)

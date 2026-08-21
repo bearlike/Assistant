@@ -25,6 +25,11 @@ from typing import Any, ClassVar
 
 from flask import Flask, Request, Response, g, request, stream_with_context
 from flask_restx import Api, Resource, fields
+from mewbo_core.capabilities import (
+    CAPABILITY_HEADER,
+    DEVICE_CONTROL_CAPABILITY,
+    parse_capability_header,
+)
 from mewbo_core.classes import TaskQueue
 from mewbo_core.common import get_logger
 from mewbo_core.config import (
@@ -81,7 +86,7 @@ from mewbo_core.tooling.ask_user import (
     QuestionAnswerItem,
     QuestionDispatcher,
 )
-from mewbo_core.tooling.client_tools import ClientDeclaredTool, ClientToolSpec, DeviceToolDispatcher
+from mewbo_core.tooling.client_tools import ClientDeclaredTool, DeviceToolDispatcher
 from mewbo_core.tooling.exit_plan_mode import PLAN_DIR_ROOT, plan_file_for, session_temp_dir
 from mewbo_core.tooling.session_tools import SessionTool
 from mewbo_core.tooling.tool_registry import (
@@ -110,6 +115,7 @@ from werkzeug.exceptions import NotFound
 from werkzeug.utils import secure_filename
 
 from mewbo_api.config_view import ConfigSchemaView
+from mewbo_api.contracts import ApiResponse
 from mewbo_api.errors import (
     RequestInvalid,
     StreamCapacityExhausted,
@@ -516,7 +522,11 @@ except Exception:
 # RunStoreSearchLauncher for the agentic-search SessionTool. Unconditional
 # (no feature flag) — a session simply never advertises `device_tools` when
 # the feature isn't in use.
-from mewbo_api.device_tools import ApiDeviceToolDispatcher, get_pending_calls  # noqa: E402
+from mewbo_api.device_tools import (  # noqa: E402
+    ApiDeviceToolDispatcher,
+    DeviceToolBinding,
+    get_pending_calls,
+)
 
 DeviceToolDispatcher.register(ApiDeviceToolDispatcher(runtime=runtime))
 
@@ -1242,6 +1252,24 @@ def _extract_allowed_tools(context_payload: dict[str, object]) -> list[str] | No
     return None
 
 
+def _extract_denied_tools(context_payload: dict[str, object]) -> list[str] | None:
+    """Extract a client-declared session/registry tool denylist, if present.
+
+    NOT three-state, unlike :func:`_extract_allowed_tools`: deny is purely
+    subtractive, so an absent key and an empty list mean the same "nothing
+    denied" thing — there is no distinct ceiling to preserve by returning ``[]``
+    verbatim. Mirrors ``SessionSpec.denied_tools`` (`session_spec.py`), which
+    persists the same key under the same wire name.
+    """
+    if not context_payload:
+        return None
+    denied = context_payload.get("denied_tools")
+    if isinstance(denied, list):
+        cleaned = [str(t) for t in denied if t]
+        return cleaned or None
+    return None
+
+
 def _extract_strict_tool_scope(context_payload: dict[str, object]) -> bool:
     """Extract the persisted ``strict_tool_scope`` flag from context, if present.
 
@@ -1289,35 +1317,6 @@ def _extract_session_step_budget(context_payload: dict[str, object]) -> int:
     if isinstance(val, int) and val > 0:
         return val
     return int(get_config_value("agent", "session_step_budget", default=0))
-
-
-def _extract_device_tools(context_payload: dict[str, object]) -> list[ClientToolSpec]:
-    """Validate ``context.device_tools`` raw JSON schemas into specs.
-
-    Raises ``ValueError`` (caller maps to 400) on a malformed entry, or on a
-    duplicate ``tool_id`` within the declaration — a client-declared tool that
-    fails validation must never silently vanish from the run, and
-    ``SessionToolRegistry.build_for`` resolves session tools by id (first
-    match wins), so a silent duplicate would leave the second declaration
-    invisible rather than rejected.
-    """
-    if not context_payload:
-        return []
-    raw = context_payload.get("device_tools")
-    if not isinstance(raw, list) or not raw:
-        return []
-    specs: list[ClientToolSpec] = []
-    seen_ids: set[str] = set()
-    for entry in raw:
-        try:
-            spec = ClientToolSpec.model_validate(entry)
-        except ValidationError as exc:
-            raise ValueError(f"Invalid device tool declaration: {exc}") from exc
-        if spec.tool_id in seen_ids:
-            raise ValueError(f"Duplicate device tool_id declared: {spec.tool_id!r}")
-        seen_ids.add(spec.tool_id)
-        specs.append(spec)
-    return specs
 
 
 # Reverse-invocation trigger subsystem (WP3). Populated by
@@ -1368,9 +1367,14 @@ def _derive_tool_grants(
     ever poisoning the session's context. Re-drive sites that read
     ALREADY-persisted context (``/message`` re-engage, ``/recover``) must use
     :func:`_derive_tool_grants_tolerant` instead — see its docstring.
+
+    ``O(1)`` when *context_payload* declares device tools (every ordinary
+    ``/query``), else one narrowed store read — ``_device_tools`` resolves a
+    payload that is SILENT about them from the session's record rather than
+    reading the silence as a revocation.
     """
     allowed_tools = _extract_allowed_tools(context_payload)
-    device_specs = _extract_device_tools(context_payload)
+    device_specs = _device_tools.specs_for(session_id, context_payload)
     extra_session_tools: list[SessionTool] = [
         ClientDeclaredTool(session_id, spec) for spec in device_specs
     ]
@@ -1387,7 +1391,7 @@ def _derive_tool_grants_tolerant(
     """Self-healing sibling of :func:`_derive_tool_grants` for RE-DRIVES.
 
     ``/message`` re-engage and ``/recover`` derive grants from the session's
-    LAST-PERSISTED context event, not a fresh request body they could 400 on
+    PERSISTED declaration, not a fresh request body they could 400 on
     behalf of. If that persisted context was ever poisoned by a malformed
     ``device_tools`` declaration — a stale write from before the
     validate-before-persist ordering existed, or any future write path that
@@ -1430,7 +1434,6 @@ def _deliver_user_turn(session_id: str, text: str) -> TurnDelivery:
     if runtime.enqueue_message(session_id, text):
         return TurnDelivery(outcome="steered")
     last_context = _load_last_context(session_id)
-    model_name = str(last_context.get("model", "")) or None
     # Resolve cwd from session context (honours persisted external cwd) or
     # fall back to the per-session temp dir for sessions without a project.
     session_cwd = _resolve_session_cwd(session_id) or session_temp_dir(session_id)
@@ -1440,6 +1443,20 @@ def _deliver_user_turn(session_id: str, text: str) -> TurnDelivery:
     # first re-engage after a switch.
     reengage_spec = _session_specs.load(session_id)
     project_autoselect = is_auto_project(reengage_spec.project)
+    # The SPEC for the same reason, and this one was measured. ``last_context``
+    # is the NEWEST context event, not a merge, so the loose ``model`` key is
+    # present only when that particular event happened to carry it — and the
+    # capability re-write this seam's own callers perform does not. A session
+    # created on one model then answered on another two hours later, with no
+    # fallback and nothing logged, because the newest event was
+    # ``{"client_capabilities": [...]}`` and an absent key reads as "no model
+    # chosen" and falls through to ``llm.default_model``.
+    #
+    # ``SessionSpecStore.load`` is narrowed to the newest event CARRYING the
+    # typed mirror, which is exactly the read that cannot miss this way. The
+    # loose key stays as the fallback for a transcript written before the mirror
+    # existed.
+    model_name = reengage_spec.model or str(last_context.get("model", "")) or None
     budget = _extract_session_step_budget(last_context)
     max_iters = int(get_config_value("agent", "max_iters", default=30))
     # Tolerant: re-engagement reads PERSISTED context it can't 400 on
@@ -1469,6 +1486,10 @@ def _deliver_user_turn(session_id: str, text: str) -> TurnDelivery:
         hook_manager=_hook_manager,
         mode=_parse_mode(last_context.get("mode")),
         allowed_tools=scope.allowed_tools,
+        # A client-declared deny is a session fact, not an RBAC grant, so it
+        # rides straight off the persisted context rather than through
+        # ``SessionScope`` — re-engagement must not silently forget it.
+        denied_tools=_extract_denied_tools(last_context),
         # Re-apply persisted scope instead of silently
         # widening back to the unscoped default on re-engage — e.g. a
         # wiki-qa session's ``strict_tool_scope``/playbook survive a
@@ -1508,6 +1529,31 @@ def _load_last_context(session_id: str) -> dict[str, object]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def _speech_model_ids() -> frozenset[str]:
+    """Every model id that is a speech route, in either direction.
+
+    The chat picker subtracts these, and it asks the SPEECH namespace rather
+    than deriving its own answer: that module already discovers the gateway's
+    modes and caches the result, so a second derivation here would be a second
+    thing to keep true. It falls back to the configured ids when the namespace
+    is absent (a deployment without the extra) or discovery is unavailable.
+
+    Cost class: ``O(1)`` — a cached lookup, or a handful of configured names.
+    """
+    try:
+        from mewbo_api.speech import speech_model_ids
+
+        discovered = speech_model_ids()
+    except Exception:  # noqa: BLE001 — the model list must never fail on speech
+        discovered = frozenset()
+    try:
+        speech = get_config().speech
+    except Exception:  # noqa: BLE001 — nor on config
+        return discovered
+    configured = {speech.tts.model.strip(), speech.stt.model.strip()}
+    return discovered | frozenset(name for name in configured if name)
+
+
 def _extract_fallback_models(context_payload: dict[str, object]) -> tuple[str, ...] | None:
     """Read an opt-in fallback model list from the request context.
 
@@ -1541,6 +1587,20 @@ _session_specs = SessionSpecStore(
         session_id, payload
     ),
     load_tags=lambda session_id: runtime.session_store.tags_for_session(session_id),
+    latest_event_of_type=lambda session_id, event_type, payload_key: (
+        runtime.session_store.latest_event_of_type(
+            session_id, event_type, payload_key=payload_key
+        )
+    ),
+)
+
+# The ONE reader of a session's client-declared device tools, late-bound to the
+# store for the same reason ``_session_specs`` is. It reads the newest context
+# event that CARRIES the declaration rather than the newest context event, so a
+# writer with no reason to know device tools exist — an approved plan's
+# ``{"mode": "act"}``, a recovery re-inject, a fork's provenance stamp — cannot
+# de-register them by staying silent.
+_device_tools = DeviceToolBinding(
     latest_event_of_type=lambda session_id, event_type, payload_key: (
         runtime.session_store.latest_event_of_type(
             session_id, event_type, payload_key=payload_key
@@ -1650,8 +1710,12 @@ class ExternalCwdPolicy:
     """Gate and validate caller-supplied host paths for session working directories.
 
     Resolution order (applied by :meth:`resolve`):
-    1. Explicit ``cwd`` from the request (top-level or ``context.cwd``) —
-       wins over a project-derived path when ``api.allow_external_cwd`` is on.
+    1. Explicit ``cwd`` from the request (top-level or ``context.cwd``) wins over
+       a project-derived path when ``api.allow_external_cwd`` is on, or when the
+       server already knows the directory through the session binding or catalog.
+       The catalog leg is reached only while the flag is off and the path is not
+       the session's own, so currently-working requests retain their O(1) path;
+       catalog ownership is O(collection) and these handlers are budgeted O(1).
     2. Project-derived path via :func:`_resolve_project_cwd` — unchanged
        existing behaviour.
     3. ``None`` — caller falls back to ``session_temp_dir``.
@@ -1661,9 +1725,15 @@ class ExternalCwdPolicy:
     globals.
     """
 
-    def __init__(self, config: AppConfig) -> None:
-        """Initialise with the application config (reads ``api.allow_external_cwd``)."""
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        catalog: Callable[[], ProjectCatalog] | None = None,
+    ) -> None:
+        """Initialise with the config and a live catalog accessor when available."""
         self._enabled: bool = config.api.allow_external_cwd
+        self._catalog: Callable[[], ProjectCatalog] | None = catalog
 
     @staticmethod
     def _extract_cwd(request_data: dict[str, object]) -> str | None:
@@ -1677,11 +1747,30 @@ class ExternalCwdPolicy:
             return None
         return raw.strip() or None
 
+    def _server_knows(self, raw_cwd: str, bound_cwd: str | None) -> bool:
+        """Whether *raw_cwd* is a directory this server already issued or owns."""
+        # The binding is O(1), needs no store, and distinguishes a session's echoed
+        # directory from a new host-path claim before the catalog's O(collection) walk.
+        if bound_cwd and ProjectCatalog.same_dir_key(raw_cwd) == ProjectCatalog.same_dir_key(
+            bound_cwd
+        ):
+            return True
+        if self._catalog is None:
+            return False
+        try:
+            return self._catalog().owns_path(raw_cwd)
+        except Exception:
+            # A filter that cannot be applied must refuse rather than fail open: a
+            # dead project store costs a refusal, never an unchecked host path.
+            return False
+
     def resolve(
         self,
         request_data: dict[str, object],
+        *,
+        bound_cwd: str | None = None,
     ) -> tuple[str | None, tuple[dict, int] | None]:
-        """Resolve the working directory for a session start.
+        """Resolve a caller-supplied working directory when one is present.
 
         Returns ``(cwd, None)`` on success or ``(None, error_response)`` when
         the caller provided a ``cwd`` that failed validation.
@@ -1689,52 +1778,54 @@ class ExternalCwdPolicy:
         ``session_temp_dir`` or another default.
         """
         raw_cwd = self._extract_cwd(request_data)
-        if raw_cwd is not None:
-            if not self._enabled:
-                return None, (
-                    {
-                        "error": {
-                            "code": 403,
-                            "reason": (
-                                "api.allow_external_cwd is disabled; "
-                                "explicit cwd is not permitted."
-                            ),
-                        }
-                    },
-                    403,
-                )
-            if not os.path.exists(raw_cwd):
-                return None, (
-                    {
-                        "error": {
-                            "code": 400,
-                            "reason": f"cwd path does not exist: {raw_cwd}",
-                        }
-                    },
-                    400,
-                )
-            if not os.path.isdir(raw_cwd):
-                return None, (
-                    {
-                        "error": {
-                            "code": 400,
-                            "reason": f"cwd path is not a directory: {raw_cwd}",
-                        }
-                    },
-                    400,
-                )
-            # Root-derivation seam. This validated external cwd is the
-            # session's working directory, and thus (once workspace enforcement is
-            # enabled) the workspace-containment ROOT: it flows unchanged to
-            # ``ToolUseLoop.cwd``, which builds the ``WorkspaceContainment(root=cwd)``
-            # for the run. External workspace managers anchor sessions at
-            # their worktree root, so the anchored cwd already IS the project root —
-            # no separate enclosing-project derivation is needed in v1. The D5
-            # "enclosing project root" refinement (git-toplevel / RepoIdentity) would
-            # plug in HERE, narrowing the returned path before it becomes the root.
-            return raw_cwd, None
-        # No explicit cwd → delegate to project resolution.
-        return None, None
+        if raw_cwd is None:
+            # No explicit cwd → delegate to project resolution.
+            return None, None
+        if not self._enabled and not self._server_knows(raw_cwd, bound_cwd):
+            return None, (
+                {
+                    "error": {
+                        "code": 403,
+                        "reason": (
+                            "api.allow_external_cwd is disabled; "
+                            "explicit cwd is not permitted."
+                        ),
+                    }
+                },
+                403,
+            )
+        # A server-known project can still have been reaped, so validate every
+        # accepted path rather than handing a vanished directory to the run.
+        if not os.path.exists(raw_cwd):
+            return None, (
+                {
+                    "error": {
+                        "code": 400,
+                        "reason": f"cwd path does not exist: {raw_cwd}",
+                    }
+                },
+                400,
+            )
+        if not os.path.isdir(raw_cwd):
+            return None, (
+                {
+                    "error": {
+                        "code": 400,
+                        "reason": f"cwd path is not a directory: {raw_cwd}",
+                    }
+                },
+                400,
+            )
+        # Root-derivation seam. This validated external cwd is the session's
+        # working directory, and thus (once workspace enforcement is enabled) the
+        # workspace-containment ROOT: it flows unchanged to ``ToolUseLoop.cwd``,
+        # which builds the ``WorkspaceContainment(root=cwd)`` for the run. External
+        # workspace managers anchor sessions at their worktree root, so the anchored
+        # cwd already IS the project root — no separate enclosing-project derivation
+        # is needed in v1. The D5 "enclosing project root" refinement (git-toplevel /
+        # RepoIdentity) would plug in HERE, narrowing the returned path before it
+        # becomes the root.
+        return raw_cwd, None
 
 
 class RunReadinessGate:
@@ -1874,6 +1965,14 @@ from mewbo_api.wiki import init_wiki  # noqa: E402
 # can emit the terminal ``complete`` event + reconcile the answer snapshot
 # (the QA counterpart to indexing's wiki_finalize tool).
 init_wiki(app, runtime, hook_manager=_hook_manager)
+
+# Speech backend (opt-in via the mewbo-speech package). Mounts /api/speech* when
+# the optional capability library resolves and returns False silently otherwise,
+# so the mount's own presence IS the availability signal a client reads — there
+# is no second "speech is enabled" registry to keep in step with reality.
+from mewbo_api.speech import init_speech  # noqa: E402
+
+init_speech(api)
 
 # Product-wide repository registry. Registered HERE rather than from
 # ``init_wiki`` deliberately: that function returns early on an install without
@@ -2169,6 +2268,7 @@ from mewbo_api.apps.routes import (  # noqa: E402
     AppsRoutesController,
     init_apps_routes,
 )
+from mewbo_api.apps.staging import AppStagingArea, AppStagingError  # noqa: E402
 from mewbo_api.apps.store import (  # noqa: E402
     get_app_data_store,
     get_app_store,
@@ -2232,16 +2332,55 @@ def _resolve_app_workspace_cwd(app: AppSpec) -> str | None:
 
     Reuses the maintainer session's OWN cwd resolution (``_resolve_session_cwd``):
     a ``shared`` workspace wrote a ``project`` context event on the maintainer, so
-    this resolves the SAME project cwd a trigger re-engage would; an ``own`` (v1
-    isolated) app has no project, so it falls back to the maintainer's temp dir.
+    this resolves the SAME project cwd a trigger re-engage would.
+
+    **The fallback is the app's STAGING directory, not the session temp dir.** An
+    ``own``-scoped app has no project, and so did a ``shared`` one whose project
+    stopped resolving — both landed in ``session_temp_dir``, which is the wrong
+    directory twice over:
+
+    * **Nothing ever puts anything there.** An agentic capture stage told to
+      "write snapshots into the app workspace" writes them where the app's files
+      demonstrably ARE — the staging directory ``get_app``/``stage`` materializes
+      into. A two-stage app (agentic captures files, code pipeline ingests them)
+      therefore wrote to one directory and read from another, every glob matched
+      nothing, and the run reported success. That is not a hypothetical: it is
+      how a live app served an empty collection while holding 7 MB of fresh
+      snapshots on disk.
+    * **It does not survive a restart.** ``/tmp/mewbo/sessions`` is container
+      local while the staging root is a volume, so even a correct handoff was
+      destroyed by the next deploy — and the two stages are deliberately minutes
+      apart.
+
+    Pointing at staging makes the durable directory the one pipelines read, and
+    makes ``ctx`` see the same files the maintainer edits. Note the consequence:
+    ``submit_app`` reads that whole directory, so a pipeline writing data files
+    beside its source will carry them into the next version's bundle.
+
     ``None`` when the app has no maintainer yet (a still-building draft) — the
     runner then treats the workspace as empty (``glob`` → ``[]``, ``read_file`` →
-    a clean error), never reaching outside a scope.
+    a clean error), never reaching outside a scope. The directory is NOT created
+    or materialized here: a missing one globs empty, and re-materializing the
+    bundle on every run would overwrite a freshly captured file with the older
+    copy stored in the manifest.
     """
     maintainer = app.maintainer_session_id
     if not maintainer:
         return None
-    return _resolve_session_cwd(maintainer) or session_temp_dir(maintainer)
+    project_cwd = _resolve_session_cwd(maintainer)
+    if project_cwd:
+        return project_cwd
+    try:
+        return str(AppStagingArea(session_id=maintainer).directory_for(app.app_id))
+    except AppStagingError as exc:
+        # A stored app_id that escapes its session dir — refused rather than
+        # silently relocated. An empty workspace is the honest degradation.
+        logging.warning(
+            "apps: staging workspace refused for app {} ({}); pipelines run with no workspace",
+            app.app_id,
+            exc,
+        )
+        return None
 
 
 # The X-Mewbo-Surface value stamped on a code-pipeline's ctx.llm run so its
@@ -2396,6 +2535,11 @@ def init_apps() -> None:
         # re-points that same object's config/store fields, so the lifecycle sees
         # every later re-pointing.
         project_catalog=_catalog(),
+        # The deployment's ceiling on what a pipeline may shell out to. A pipeline
+        # still DECLARES the binaries it needs; this only bounds what it is allowed
+        # to declare, so widening the reachable set stays an operator act rather
+        # than something an app can grant itself.
+        allowed_exec_binaries=frozenset(_config.api.apps_exec_binaries),
     )
     # Code-pipeline executor: runs a ``mode="code"`` pipeline's
     # entrypoint deterministically (no LLM call) at the fire seam + on demand. The
@@ -2411,6 +2555,10 @@ def init_apps() -> None:
         # client). Unwired ⇒ ctx.llm raises a clean "not configured"; a pipeline must
         # still DECLARE a positive llm_budget_tokens to reach it.
         llm_invoke=_apps_llm_invoke,
+        # Same ceiling the lifecycle admits against, read from the same setting —
+        # a submit-time refusal and an execution-time refusal that disagreed would
+        # let an app pass admission and then fail on every fire.
+        allowed_exec_binaries=frozenset(_config.api.apps_exec_binaries),
     )
     # Push it to the plugin's run_pipeline seam (mirrors register_app_submitter);
     # unwired ⇒ run_pipeline degrades to a clean "not configured" error.
@@ -2470,6 +2618,11 @@ def init_apps() -> None:
         require_master_token=_require_master_token,
         require_permission=_require_permission,
         sdk_files=_load_app_sdk_files(),
+        # A pipeline executes synchronously and holds a request thread for its whole
+        # life, so this is a slice of the worker's total concurrency rather than a
+        # per-app knob. Past it a caller is refused with a retryable 429, which is
+        # diagnosable; queueing behind the thread pool wedges every other endpoint.
+        apps_max_concurrent_pipelines=_config.api.apps_max_concurrent_pipelines,
         # The SAME code-pipeline engine the fire seam + run_pipeline tool use
         # — GET/POST .../pipelines/<name> executes for real
         # instead of 503ing "pipeline execution not configured".
@@ -2612,7 +2765,8 @@ session_create_model = ns.model(
             description=(
                 "Free-form context object persisted with the session. Recognized "
                 "keys include `project`, `model`, `mcp_tools` (tool allowlist), "
-                "`skill`, and `fallback_models`."
+                "`denied_tools` (tool denylist — purely subtractive, applies over "
+                "every other gate), `skill`, and `fallback_models`."
             ),
         ),
         "attachments": fields.List(
@@ -2652,7 +2806,8 @@ session_query_model = ns.model(
             description=(
                 "Free-form context object persisted with the session. Recognized "
                 "keys include `project`, `model`, `mcp_tools` (tool allowlist), "
-                "`skill`, and `fallback_models`."
+                "`denied_tools` (tool denylist — purely subtractive, applies over "
+                "every other gate), `skill`, and `fallback_models`."
             ),
         ),
         "attachments": fields.List(
@@ -2881,7 +3036,9 @@ sync_query_model = ns.model(
             required=False,
             description=(
                 "Free-form context object persisted with the session. Recognized "
-                "keys include `project`, `model`, and `mcp_tools` (tool allowlist)."
+                "keys include `project`, `model`, `mcp_tools` (tool allowlist), and "
+                "`denied_tools` (tool denylist — purely subtractive, applies over "
+                "every other gate)."
             ),
         ),
         "attachments": fields.List(
@@ -3969,14 +4126,48 @@ config_response_model = ns.model(
     },
 )
 
+class PluginListItem(ApiResponse):
+    """One plugin's stable identity, availability, and contribution summary."""
+
+    name: str
+    display_name: str
+    description: str
+    version: str
+    marketplace: str
+    scope: str
+    enabled: bool
+    skills: int
+    agents: int
+    commands: int
+    mcp_servers: int
+    has_hooks: bool
+
+
+class PluginsListResponse(ApiResponse):
+    """The bounded plugin availability projection for the configured installation."""
+
+    plugins: list[PluginListItem]
+
+
 plugin_model = ns.model(
     "Plugin",
     {
         "name": fields.String(example="code-review"),
+        "display_name": fields.String(
+            example="Code Review",
+            description=(
+                "Human-readable label. Falls back to `name` for a plugin whose "
+                "manifest sets no `display_name`."
+            ),
+        ),
         "description": fields.String(example="Multi-agent code review."),
         "version": fields.String(example="1.2.0"),
         "marketplace": fields.String(example="official"),
         "scope": fields.String(example="user"),
+        "enabled": fields.Boolean(
+            example=True,
+            description="Whether the configured plugin selection makes this plugin available.",
+        ),
         "skills": fields.Integer(example=1),
         "agents": fields.Integer(example=0),
         "commands": fields.Integer(example=1),
@@ -4493,6 +4684,13 @@ class Models(Resource):
             models = get_config().llm.list_models()
         except ValueError:
             models = [default_model] if default_model != "unknown" else []
+        # A speech route is not a chat model, and the gateway's listing cannot
+        # say so — it returns bare ids, and the route carrying each one's mode is
+        # closed to the runtime key. So the ids the operator has already NAMED as
+        # speech routes are removed here. Without this the answer picker offers
+        # every text-to-speech and transcription model the gateway serves, and
+        # choosing one fails only later, when the turn runs.
+        models = [name for name in models if name not in _speech_model_ids()]
         # Per-model capability map. Frontend uses ``supports_vision`` to
         # gate image attachments at file-selection time (Q5 option B
         # complement — backend still rejects on upload as a safety net).
@@ -5348,8 +5546,9 @@ class Sessions(Resource):
             "a project, apply a lookup `session_tag`, and persist initial context "
             "(e.g. the model). Clients may declare capabilities via the "
             "`X-Mewbo-Capabilities` header (comma separated). Run queries with "
-            "POST /api/sessions/{session_id}/query. An explicit `cwd` requires "
-            "`api.allow_external_cwd`."
+            "POST /api/sessions/{session_id}/query. `api.allow_external_cwd` governs "
+            "only a path the server does not already own; configured, managed, "
+            "worktree, repository-checkout, and session-bound directories are accepted."
         ),
     )
     @ns.response(
@@ -5362,7 +5561,11 @@ class Sessions(Resource):
         403,
         descriptions={
             400: "An explicit `cwd` was supplied but the path does not exist / is not a dir.",
-            403: "An explicit `cwd` was supplied but `api.allow_external_cwd` is disabled.",
+            403: (
+                "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not "
+                "already own; configured, managed, worktree, repository-checkout, and "
+                "session-bound directories are accepted."
+            ),
         },
     )
     @kit.auth_error()
@@ -5393,15 +5596,13 @@ class Sessions(Resource):
         # Capability header — clients may declare supported features (e.g. "stlite"
         # for the widget builder). Parse comma-separated values and persist in the
         # session context so the Orchestrator can conditionally enable agent types.
-        capabilities_header = request.headers.get("X-Mewbo-Capabilities", "")
-        if capabilities_header:
-            client_capabilities = [
-                c.strip() for c in capabilities_header.split(",") if c.strip()
-            ]
-            if client_capabilities:
-                context_payload["client_capabilities"] = client_capabilities
+        client_capabilities = parse_capability_header(
+            request.headers.get(CAPABILITY_HEADER, "")
+        )
+        if client_capabilities:
+            context_payload["client_capabilities"] = list(client_capabilities)
         # External cwd (external workspace managers): explicit cwd wins.
-        ext_policy = ExternalCwdPolicy(get_config())
+        ext_policy = ExternalCwdPolicy(get_config(), catalog=_catalog)
         ext_cwd, ext_err = ext_policy.resolve(payload)
         if ext_err is not None:
             return ext_err
@@ -5479,7 +5680,13 @@ class SessionQuery(Resource):
     )
     @kit.errors(
         403,
-        descriptions={403: "An explicit `cwd` was supplied but `api.allow_external_cwd` is off."},
+        descriptions={
+            403: (
+                "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not "
+                "already own; configured, managed, worktree, repository-checkout, and "
+                "session-bound directories are accepted."
+            )
+        },
     )
     @kit.errors(
         409, shape="message", descriptions={409: "A run is already active for this session."}
@@ -5530,35 +5737,13 @@ class SessionQuery(Resource):
         # is the interactive turn's OWN advertisement (run_capabilities is
         # turn-scoped, never persisted to the spec), not a spec override, so a
         # body-only "ask_user" declaration on /query must still reach it.
-        capabilities_header = request.headers.get("X-Mewbo-Capabilities", "")
-        requested_capabilities: Sequence[str] | None = None
-        if capabilities_header:
-            parsed = [c.strip() for c in capabilities_header.split(",") if c.strip()]
-            if parsed:
-                requested_capabilities = parsed
+        parsed = parse_capability_header(request.headers.get(CAPABILITY_HEADER, ""))
+        requested_capabilities: Sequence[str] | None = list(parsed) if parsed else None
         if requested_capabilities is None:
             requested_capabilities = SessionSpec.normalize_ids(
                 request_context.get("client_capabilities")
             )
         source_platform = _request_surface()
-
-        # External cwd (external workspace managers): explicit cwd wins.
-        ext_policy = ExternalCwdPolicy(get_config())
-        ext_cwd, ext_err = ext_policy.resolve(request_data)
-        if ext_err is not None:
-            return ext_err
-
-        # Resolve project → cwd BEFORE the merge, so an explicitly-named project
-        # arrives as a resolved path the spec can bind. A request that names NO
-        # project resolves to None here and INHERITS the session's cwd below.
-        # Inheriting is load-bearing: without it a follow-up silently lands in an
-        # empty per-session temp dir with no awareness of the previous state.
-        requested_cwd = ext_cwd
-        if requested_cwd is None:
-            try:
-                requested_cwd = _resolve_project_cwd(request_data)
-            except ValueError as exc:
-                return {"message": str(exc)}, 400
 
         mode = _parse_mode(request_data.get("mode"))
         # Skill activation: resolve from top-level "skill" field or context.skill.
@@ -5571,6 +5756,29 @@ class SessionQuery(Resource):
         # defaults — corrupting the binding every later turn reads. Load the spec
         # first and apply only the overrides it sanctions: absence inherits.
         spec = _session_specs.load(session_id)
+
+        # This gate needs the loaded binding to distinguish an echoed directory
+        # from a new host-path claim.
+        ext_policy = ExternalCwdPolicy(get_config(), catalog=_catalog)
+        ext_cwd, ext_err = ext_policy.resolve(request_data, bound_cwd=spec.cwd)
+        if ext_err is not None:
+            return ext_err
+
+        # A purpose-bound session cannot accept a project override. Merge owns
+        # that refusal, so resolving the raw request first is backwards: a client
+        # echoing an old invalid binding would 400 before the merge discarded it.
+        # An editable project still resolves before the merge, because the run
+        # needs its directory rather than only its catalog key.
+        requested_cwd = ext_cwd
+        requested_project = _requested_project(request_data)
+        if requested_cwd is None and (
+            requested_project is None or spec.field_editable("project")
+        ):
+            try:
+                requested_cwd = _resolve_project_cwd(request_data)
+            except ValueError as exc:
+                return {"message": str(exc)}, 400
+
         overrides = SessionSpecOverrides.from_request_context(
             request_context,
             cwd=requested_cwd,
@@ -5675,6 +5883,11 @@ class SessionQuery(Resource):
             hook_manager=_hook_manager,
             mode=run_spec.mode,
             allowed_tools=scope.allowed_tools,
+            # Persisted on ``context_payload`` above via ``run_spec.denied_tools``
+            # (``SessionSpec.to_context_payload``) — read it back the same way
+            # ``allowed_tools`` came off ``_derive_tool_grants``, so a client
+            # deny reaches the run.
+            denied_tools=_extract_denied_tools(context_payload),
             strict_tool_scope=scope.strict_tool_scope,
             capability_mode=scope.capability_mode,
             skill_instructions=run_spec.skill_instructions,
@@ -6284,6 +6497,7 @@ class SessionStream(Resource):
         idle_close_s: float = IDLE_CLOSE_S,
         after: str | None = None,
         _sub: Subscription | None = None,
+        executor: bool = False,
     ) -> Iterator[str]:
         """Yield SSE frames for a session: backlog once, then live + heartbeats.
 
@@ -6314,7 +6528,7 @@ class SessionStream(Resource):
         next heartbeat. Without the fast release the bound would be spent by
         idle viewers; with it, a held slot means a run genuinely in flight.
         """
-        sub = _sub if _sub is not None else bus.subscribe(session_id)
+        sub = _sub if _sub is not None else bus.subscribe(session_id, executor=executor)
         try:
             backlog = session_runtime.session_store.load_transcript(session_id)
             if after:
@@ -6482,7 +6696,17 @@ class SessionStream(Resource):
             LeasedStream(
                 stream_with_context(
                     self._stream_events(
-                        session_id, runtime, bus, after=request.args.get("after")
+                        session_id,
+                        runtime,
+                        bus,
+                        after=request.args.get("after"),
+                        # A stream is an EXECUTOR only when its client says it
+                        # can drive the device. The header rides every request
+                        # from Aura, including this one, so the claim is the
+                        # client's own rather than something inferred from the
+                        # transcript — and a viewer that never makes the claim
+                        # can never be mistaken for the phone.
+                        executor=_advertises_device_control(),
                     )
                 ),
                 self.capacity,
@@ -6494,6 +6718,19 @@ class SessionStream(Resource):
                 "Access-Control-Allow-Origin": _CORS_ORIGIN,
             },
         )
+
+
+def _advertises_device_control() -> bool:
+    """True when THIS request's client says it can service device tools.
+
+    Read from ``X-Mewbo-Capabilities`` — the same header the session's
+    capability set is parsed from, so a client that advertises the capability
+    on its queries necessarily advertises it on the stream it opens, with no
+    second contract to keep in step.
+    """
+    return DEVICE_CONTROL_CAPABILITY in parse_capability_header(
+        request.headers.get(CAPABILITY_HEADER, "")
+    )
 
 
 @ns.route("/sessions/<string:session_id>/message")
@@ -6977,11 +7214,25 @@ class SessionRecovery(Resource):
         # of — a poisoned prior write self-heals (drops device tools, keeps
         # going) instead of bricking the session (review, F6).
         allowed_tools, extra_session_tools = _derive_tool_grants_tolerant(session_id, last_context)
-        try:
-            project_cwd = _resolve_project_cwd({"context": last_context})
-        except ValueError as exc:
-            return {"message": str(exc)}, 400
-        model_name = model_override or str(last_context.get("model", "")) or None
+        # The typed binding is authoritative. A legacy purpose-bound app can
+        # carry a project key that was never catalog-valid; recovery must retain
+        # the ordinary session-temp fallback rather than make that historical
+        # value permanently unrecoverable.
+        project_cwd = spec.cwd
+        if project_cwd is None and not spec.purpose_bound:
+            try:
+                project_cwd = _resolve_project_cwd({"context": last_context})
+            except ValueError as exc:
+                return {"message": str(exc)}, 400
+        if project_cwd is None:
+            project_cwd = _resolve_session_cwd(session_id) or session_temp_dir(session_id)
+        # Same precedence as ``_deliver_user_turn``: an explicit override, then
+        # the typed binding, then the loose key for pre-mirror transcripts. The
+        # spec was already the source for ``fallback_models`` a few lines down,
+        # so reading the model itself off the newest context event meant a
+        # recovered run could come back on a DIFFERENT model than the ladder it
+        # was recovered with.
+        model_name = model_override or spec.model or str(last_context.get("model", "")) or None
         if model_override:
             # Choosing a model is a sanctioned override, so it updates the BINDING.
             # Persisting it as a model-only context event (the prior behaviour) made
@@ -7034,6 +7285,9 @@ class SessionRecovery(Resource):
             hook_manager=_hook_manager,
             mode=mode,
             allowed_tools=scope.allowed_tools,
+            # Same persisted-context source as ``_deliver_user_turn`` — a client
+            # deny must survive a recovery re-drive too.
+            denied_tools=_extract_denied_tools(last_context),
             # Re-apply persisted scope — see _deliver_user_turn.
             strict_tool_scope=scope.strict_tool_scope,
             capability_mode=scope.capability_mode,
@@ -7853,11 +8107,17 @@ def _resolve_session_cwd(session_id: str) -> str | None:
                 # The QUIET half of a mis-bound session: the run never fails, it
                 # just operates in an empty scratch directory forever. Log the
                 # refusal (the catalog's message names what IS resolvable) and
-                # keep returning None — several call sites depend on the
-                # documented fall-through to the session temp dir.
+                # keep returning None — every call site supplies its own
+                # fallback, which is why the message names NONE of them.
+                # It used to promise "falling back to the session temp
+                # directory", which this function does not decide and which is
+                # no longer even true for the app-pipeline caller (it falls back
+                # to the app's staging directory). A log that names another
+                # function's behaviour goes stale silently and misdirects
+                # exactly the debugging session that needed it.
                 logging.warning(
                     "Session {} names project {!r}, which does not resolve: {} "
-                    "Falling back to the session temp directory.",
+                    "No project cwd; the caller supplies its own fallback.",
                     session_id,
                     project_name,
                     exc,
@@ -8711,6 +8971,7 @@ class MewboQuery(Resource):
             permission_policy=scope.permission_policy,
             mode=mode,
             allowed_tools=scope.allowed_tools,
+            denied_tools=_extract_denied_tools(context_payload),
             strict_tool_scope=scope.strict_tool_scope,
             capability_mode=scope.capability_mode,
             cwd=project_cwd,
@@ -8893,49 +9154,50 @@ class ConfigResource(Resource):
 
 @ns.route("/plugins")
 class PluginList(Resource):
-    """List installed plugins and their components."""
+    """List available plugins and their components."""
 
     @api.doc(
         security="apikey",
         description=(
-            "List each installed plugin with its version, source marketplace, "
-            "scope, and component counts (skills, agents, commands, MCP servers, "
-            "hooks). Browse installable plugins via GET /api/plugins/marketplace."
+            "List each available built-in or installed plugin with its display name, "
+            "version, source marketplace, scope, enabled state, and component counts "
+            "(skills, agents, commands, MCP servers, hooks). Browse installable plugins "
+            "via GET /api/plugins/marketplace."
         ),
     )
-    @ns.response(200, "Installed plugin list.", plugins_list_model)
+    @ns.response(200, "Available plugin list.", plugins_list_model)
     @kit.auth_error()
     @guard.requires("plugins.read")
     def get(self) -> tuple[dict, int]:
-        """List installed plugins
+        """List available plugins
 
-        Returns each installed plugin with its version, source marketplace,
-        scope, and component counts: skills, agents, commands, MCP servers,
-        and hooks.
+        O(collection) in the configured plugin collection. Returns the same
+        built-in and enabled installed plugin components the session loader binds,
+        without reading the components of each listed plugin again.
         """
-        from mewbo_core.config import get_config
-        from mewbo_core.tooling.plugins import discover_installed_plugins
+        from mewbo_core.tooling.plugins import load_all_plugin_components
 
-        cfg = get_config().plugins
-        plugins = discover_installed_plugins(registry_paths=cfg.resolve_registry_paths())
-        return {
-            "plugins": [
-                {
-                    "name": pc.manifest.name if pc.manifest else "unknown",
-                    "description": pc.manifest.description if pc.manifest else "",
-                    "version": pc.manifest.version if pc.manifest else "",
-                    "marketplace": pc.manifest.marketplace if pc.manifest else "",
-                    "scope": pc.manifest.scope if pc.manifest else "user",
-                    "skills": len(pc.skill_dirs),
-                    "agents": len(pc.agent_files),
-                    "commands": len(pc.command_files),
-                    "mcp_servers": len(pc.mcp_config or {}),
-                    "has_hooks": pc.hooks_config is not None,
-                }
+        plugins = load_all_plugin_components().components
+        return PluginsListResponse(
+            plugins=[
+                PluginListItem(
+                    name=pc.manifest.name,
+                    display_name=pc.manifest.display_name or pc.manifest.name,
+                    description=pc.manifest.description,
+                    version=pc.manifest.version,
+                    marketplace=pc.manifest.marketplace,
+                    scope=pc.manifest.scope,
+                    enabled=True,
+                    skills=len(pc.skill_dirs),
+                    agents=len(pc.agent_files),
+                    commands=len(pc.command_files),
+                    mcp_servers=len(pc.mcp_config or {}),
+                    has_hooks=pc.hooks_config is not None,
+                )
                 for pc in plugins
                 if pc.manifest is not None
             ]
-        }, 200
+        ).response()
 
 
 @ns.route("/plugins/marketplace")

@@ -9,14 +9,15 @@
 // written against the FROZEN REST contract in §4A/§5 so the console works the
 // moment the API lands. No endpoints beyond the spec.
 
+// The console's app-rendering capability id comes from the ONE mirror of core's
+// registry. Sent alongside the session-scoping header so the create endpoint
+// knows this client can render an app.
+import { APPS_CAPABILITY_ID } from "./capabilities";
 import { API_BASE, API_KEY } from "./client";
 import { apiFetch } from "./httpBase";
 import type { TriggerDTO } from "./triggers";
 import type { AppFreshnessWire, AppReadToken, AppReadTokenScope, AppSpec, AppStatus, AppSummary, AppVersion, AppWorkspaceRef, PipelineRun } from "../types/apps";
 
-// The console's app-rendering capability id. Sent alongside the session-scoping
-// header so the create endpoint knows this client can render an app.
-const APPS_CAPABILITY_ID = "apps";
 
 function withBase(path: string): string {
   if (!API_BASE) return path;

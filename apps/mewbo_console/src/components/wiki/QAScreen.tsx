@@ -39,6 +39,8 @@ import type { ReactNode } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft, ChevronRight, Cpu, FileText, Route, Sparkles } from "lucide-react";
 
+import { CopyButton } from "@/components/CopyButton";
+import { SpeakButton } from "@/components/SpeakButton";
 import { cardSurface } from "@/components/ui/card-surface";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +55,68 @@ import { IndexedSnapshot } from "./indexedSnapshot";
 import { parseCitations, type Citation } from "./citations";
 import { buildHref } from "./router";
 import { useQaConversation, type RenderedTurn } from "./useQaConversation";
+
+/** Flatten one InlineNode to plain text — strips structured atoms but keeps strings. */
+function inlineToText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(inlineToText).join("");
+  if (node && typeof node === "object") {
+    if ("text" in node && typeof node.text === "string") return node.text;
+    if ("code" in node && typeof node.code === "string") return node.code;
+  }
+  return "";
+}
+
+/** Assemble raw Markdown from a Block[] for copy / speech. Pragmatic lossiness — perfect fidelity not required. */
+function assembleMarkdown(blocks: Array<{ kind: string } & Record<string, unknown>>): string {
+  const parts: string[] = [];
+
+  for (const b of blocks) {
+    switch (b.kind) {
+      case "p": {
+        const t = inlineToText(b.text);
+        if (t) parts.push(t);
+        break;
+      }
+      case "h2":
+        parts.push(`## ${String(b.text ?? "")}`);
+        break;
+      case "h3":
+        parts.push(`### ${String(b.text ?? "")}`);
+        break;
+      case "hr":
+        parts.push("---");
+        break;
+      case "ul": {
+        const items = Array.isArray(b.items) ? b.items : [];
+        for (const item of items) {
+          const text = inlineToText(item);
+          if (text) parts.push(`- ${text}`);
+        }
+        break;
+      }
+      case "table": {
+        const head = (b.head as string[]) ?? [];
+        const rows = (b.rows as Array<Array<unknown>>) ?? [];
+        if (head.length > 0) {
+          parts.push("| " + head.join(" | ") + " |");
+          parts.push("| " + head.map(() => "---").join(" | ") + " |");
+        }
+        for (const row of rows) {
+          if (Array.isArray(row)) {
+            parts.push("| " + row.map((cell) => inlineToText(cell)).join(" | ") + " |");
+          }
+        }
+        break;
+      }
+      // accordion / sources / diagram → skip
+      default:
+        break;
+    }
+  }
+
+  return parts.join("\n\n");
+}
 
 interface QAScreenProps {
   question: string;
@@ -85,6 +149,17 @@ export function QAScreen({ question, pageId, slug, model: urlModel, answerId }: 
     onAsk,
   } = useQaConversation({ question, pageId, slug, model: urlModel, answerId });
 
+  // Combined Markdown from every rendered turn — feeds conversation-level
+  // copy / speech controls below. Assembled once so all turns share the same string.
+  const fullMarkdown = useMemo(
+    () =>
+      renderedTurns.flatMap((t) => t.blocks).length > 0
+        ? assembleMarkdown(renderedTurns.flatMap((t) => t.blocks))
+        : "",
+    [renderedTurns],
+  );
+  const hasAnswerContent = fullMarkdown.length > 0;
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       <WikiTopBar repo={repoSlug} showBackToAll showSettings />
@@ -103,13 +178,23 @@ export function QAScreen({ question, pageId, slug, model: urlModel, answerId }: 
               <ArrowLeft className="h-3.5 w-3.5" />
               {repoSlug}
             </button>
-            {sessionId && (
-              <SessionJumpButton
-                sessionId={sessionId}
-                label="Watch the answering session"
-                title="Open the Mewbo session answering this question"
-              />
-            )}
+            <div className="flex items-center gap-1.5">
+              {sessionId && (
+                <SessionJumpButton
+                  sessionId={sessionId}
+                  label="Watch the answering session"
+                  title="Open the Mewbo session answering this question"
+                />
+              )}
+              <div className="hidden md:flex items-center gap-1">
+                {hasAnswerContent && (
+                  <>
+                    <CopyButton text={fullMarkdown} className="h-6 px-1.5 text-2xs" />
+                    <SpeakButton text={fullMarkdown} label="Read aloud" className="!h-6 !w-6" />
+                  </>
+                )}
+              </div>
+            </div>
           </div>
 
           {renderedTurns.map((turn, i) => (
@@ -186,6 +271,10 @@ function TurnView({
     return parseCitations([...(sourceBlock?.items ?? []), ...(summarySources ?? [])]);
   }, [blocks, summarySources]);
 
+  // Per-turn Markdown — assembled from this turn only for the footer controls.
+  const turnMarkdown = useMemo(() => assembleMarkdown(blocks), [blocks]);
+  const hasAnswerProse = done && !errorMessage && blocks.some((b) => b.kind !== "sources" && b.kind !== "accordion");
+
   return (
     <>
       {/* Left column */}
@@ -222,7 +311,12 @@ function TurnView({
           </div>
         )}
 
-        {/* Cited sources — the primary right-panel content. */}
+        {/* Retrieval details sits ABOVE the cited sources: it is one collapsed
+            row, while the source list is unbounded — below it, the reader has
+            to scroll past every card to reach it. */}
+        <RetrievalDetails accessedSources={accessedSources} modelsUsed={modelsUsed} />
+
+        {/* Cited sources — the primary left-rail content. */}
         {cards.length > 0 && (
           <div className="mt-5">
             <div className="inline-flex items-center gap-1.5 mb-2.5 text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
@@ -236,19 +330,27 @@ function TurnView({
             </div>
           </div>
         )}
-
-        <ProvenanceFooter accessedSources={accessedSources} modelsUsed={modelsUsed} />
       </div>
 
       {/* Right column — answer prose. Skeleton, answer, error, and the
           terminal empty-state all occupy the same slot. */}
       <div>
         {hasBlocks ? (
-          <article className="prose-wiki">
-            <SourceHrefProvider resolve={resolveSourceHref} platform={repoSnapshot?.source ?? null}>
-              <LiveBlocks blocks={blocks} onNavigatePage={onNavigatePage} />
-            </SourceHrefProvider>
-          </article>
+          <>
+            <article className="prose-wiki">
+              <SourceHrefProvider resolve={resolveSourceHref} platform={repoSnapshot?.source ?? null}>
+                <LiveBlocks blocks={blocks} onNavigatePage={onNavigatePage} />
+              </SourceHrefProvider>
+            </article>
+            <div className="mt-2 flex items-center justify-end gap-1">
+              {hasAnswerProse && (
+                <>
+                  <CopyButton text={turnMarkdown} className="h-6 px-1.5 text-2xs" />
+                  <SpeakButton text={turnMarkdown} label="Read aloud" className="!h-6 !w-6" />
+                </>
+              )}
+            </div>
+          </>
         ) : errorMessage ? (
           <div className="text-sm text-[hsl(var(--destructive-text))]">{errorMessage}</div>
         ) : done ? (
@@ -281,14 +383,15 @@ function SkeletonLine({ width }: { width: number }) {
 }
 
 /**
- * Secondary provenance / telemetry block, demoted BELOW the cited-source
- * cards. Shows the deterministic retrieval trail (``accessedSources``) and
- * the distinct models that ran (``modelsUsed``) — both from the answer
- * snapshot. A collapsed ``<details>`` (the wiki's established collapsible) so
- * it never competes with the answer or the source cards. Renders nothing
- * when both trails are empty.
+ * Secondary provenance / telemetry block. Shows the deterministic retrieval
+ * trail (``accessedSources``) and the distinct models that ran
+ * (``modelsUsed``) — both from the answer snapshot. A collapsed ``<details>``
+ * (the wiki's established collapsible), which is what lets it sit ABOVE the
+ * source cards without competing with them: it costs one row until opened,
+ * whereas below an unbounded card list it is unreachable without scrolling
+ * past every source. Renders nothing when both trails are empty.
  */
-export function ProvenanceFooter({
+export function RetrievalDetails({
   accessedSources,
   modelsUsed,
 }: {

@@ -3,6 +3,7 @@ package com.mewbo.aura.ui.navigation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,19 +36,26 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.mewbo.aura.data.model.SessionSummary
 import com.mewbo.aura.ui.chat.ChatIcons
+import com.mewbo.aura.ui.common.auraFocusRing
 import com.mewbo.aura.ui.sessions.RecentsFilter
 import com.mewbo.aura.ui.sessions.SessionGrouping
 import com.mewbo.aura.ui.sessions.SessionsUiState
@@ -68,12 +76,39 @@ import java.time.ZoneId
  *
  * The `surfaceSelected` pill tracks the CURRENT location (Rev E-6): [currentSessionId] `null` means
  * a fresh chat is open (New chat row selected), otherwise the matching recents row is selected.
- * [isOpen] drives a refresh-on-open (spec §6.7: "Refresh sessions when the drawer opens").
+ *
+ * **These rows serve BOTH navigation shells** — the handheld modal sheet and the television's
+ * permanent rail — because the row vocabulary is the same on either and only the frame differs.
+ * [host] carries every consequence of that frame — [NavigationHost.isActive],
+ * [NavigationHost.containsFocus] and [NavigationHost.walksRowsLinearly] — and this composable never
+ * asks what device it is on, because the shell already answered. `isActive` drives the refresh
+ * (spec §6.7: "Refresh sessions when the drawer opens").
+ *
+ * **Two things change under [NavigationHost.walksRowsLinearly], and both are about a remote's
+ * ONE-dimensional reach.** A finger touches Settings wherever it sits; a D-pad has to walk there,
+ * and everything between the first row and it is a corridor.
+ *
+ * - **Settings is hoisted into the top action group** and the footer's icon button drops, so exactly
+ *   one Settings affordance exists in either shape. In the footer it sat AFTER an unbounded
+ *   `LazyColumn`, which composes only what is visible — so two-dimensional focus search into
+ *   not-yet-composed recents rows overshot it entirely and Settings was not reachable at all.
+ * - **Recents is capped at [LinearRowsRecentsCap]**, because a corridor of N rows between the top
+ *   group and nothing else is still a corridor. The full list stays reachable through Search chats.
+ *
+ * Focus CONTAINMENT belongs to the modal sheet alone, and it must act in both directions.
+ * `ModalNavigationDrawer` composes its sheet while closed too, so an unconditional `exit = Cancel`
+ * would trap a remote inside an invisible drawer — strictly worse than an escaping one, and on a
+ * television unrecoverable (`ui/common/DpadFocusContainer`, which records why recovering after the
+ * fact cannot work). Open refuses to let focus leave; closed refuses to let it enter. A permanent
+ * rail is contained in neither direction: moving right into the transcript is how it is used.
  */
+// `FocusProperties.enter`/`exit` are still experimental. Opted in for the same reason
+// `DpadFocusContainer` does: they are the only API expressing "focus may not cross this boundary".
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AuraDrawerContent(
     currentSessionId: String?,
-    isOpen: Boolean,
+    host: NavigationHost,
     onNewChat: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSession: (String) -> Unit,
@@ -83,9 +118,35 @@ fun AuraDrawerContent(
     sessionsViewModel: SessionsViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(isOpen) {
-        if (isOpen) sessionsViewModel.refresh()
+    LaunchedEffect(host.isActive) {
+        if (host.isActive) sessionsViewModel.refresh()
     }
+    // First D-pad press must land somewhere: without an initial focus target the drawer opens
+    // with nothing focused, so the opening presses are silently swallowed. `runCatching` guards
+    // against requesting focus on a node this recomposition hasn't attached to layout yet.
+    //
+    // A permanent rail claims focus once, on first composition, and never again — it is always
+    // active, so re-requesting would yank focus back out of the transcript on every recomposition.
+    val firstRowFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(host.isActive) {
+        if (!host.isActive) return@LaunchedEffect
+        // RETRY ACROSS FRAMES, and the retry is the whole point rather than defensive padding.
+        // The first row lives in a `LazyColumn`, which places its children during layout — after
+        // this effect first runs. A single request therefore throws "not attached", `runCatching`
+        // swallows it, and the surface comes up with NOTHING focused: measured on a device at TV
+        // geometry, where the opening D-pad press was silently eaten and only the second one moved
+        // anything. Re-asking on each of the next few frames costs nothing once it lands, because
+        // the loop returns the moment the request succeeds.
+        repeat(InitialFocusAttempts) {
+            if (runCatching { firstRowFocusRequester.requestFocus() }.isSuccess) {
+                return@LaunchedEffect
+            }
+            withFrameNanos { }
+        }
+    }
+    // Read from the SHELL, never from the device: `ChatHomeDestination` already made that choice and
+    // a second read is a second chance to disagree with it.
+    val walksRowsLinearly = host.walksRowsLinearly
     val sessionsState by sessionsViewModel.uiState.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val recentsFilter by sessionsViewModel.filter.collectAsStateWithLifecycle()
@@ -97,14 +158,38 @@ fun AuraDrawerContent(
     // / Older. Both steps are pure + unit-tested (`RecentsFilter.matches`, `SessionGrouping`) and
     // recompute only when the fetched list or the active filter changes.
     val loaded = sessionsState as? SessionsUiState.Loaded
-    val sections = remember(loaded?.sessions, recentsFilter) {
+    val sections = remember(loaded?.sessions, recentsFilter, walksRowsLinearly) {
         loaded?.sessions
             ?.filter { recentsFilter.matches(it) }
+            // A pin is the user saying "keep this one in reach", so the television cap is applied to
+            // the unpinned remainder only — capping the raw list could hide the very row a pin exists
+            // to keep visible.
+            ?.let { rows ->
+                if (!walksRowsLinearly) {
+                    rows
+                } else {
+                    val (pinned, rest) = rows.partition { it.pinned }
+                    pinned + rest.take(LinearRowsRecentsCap)
+                }
+            }
             ?.let { SessionGrouping.group(it, Instant.now(), ZoneId.systemDefault()) }
             .orEmpty()
     }
 
-    Column(modifier = modifier.fillMaxSize().background(AuraColors.surfaceDrawer)) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .focusProperties {
+                // Closed refuses ENTRY, open refuses EXIT. Both halves are load-bearing: the sheet
+                // is composed either way, so one without the other just moves the trap.
+                val contained = host.containsFocus && host.isActive
+                enter = { if (host.containsFocus && !host.isActive) FocusRequester.Cancel else FocusRequester.Default }
+                exit = { if (contained) FocusRequester.Cancel else FocusRequester.Default }
+            }
+            .focusGroup()
+            .testTag(DrawerRootTag)
+            .background(AuraColors.surfaceDrawer),
+    ) {
         LazyColumn(modifier = Modifier.weight(1f)) {
             item {
                 Text(
@@ -121,6 +206,7 @@ fun AuraDrawerContent(
                     label = "New chat",
                     selected = currentSessionId == null,
                     onClick = onNewChat,
+                    modifier = Modifier.focusRequester(firstRowFocusRequester),
                     leading = { Icon(Icons.Default.Edit, contentDescription = null, tint = AuraColors.iconPrimary) },
                 )
             }
@@ -141,6 +227,19 @@ fun AuraDrawerContent(
                     onClick = onOpenApps,
                     leading = { Icon(Icons.Default.Apps, contentDescription = null, tint = AuraColors.iconPrimary) },
                 )
+            }
+            if (walksRowsLinearly) {
+                item {
+                    // Hoisted out of the footer, which sits AFTER the lazy recents list and is
+                    // therefore unreachable by focus search on a remote. Same `DrawerRow` and the
+                    // same Filled glyph the footer used — one row shape, one icon weight.
+                    DrawerRow(
+                        label = "Settings",
+                        selected = false,
+                        onClick = onOpenSettings,
+                        leading = { Icon(Icons.Default.Settings, contentDescription = null, tint = AuraColors.iconPrimary) },
+                    )
+                }
             }
             item {
                 // Subtle section divider (side-rail visual-polish task): separates the
@@ -189,14 +288,20 @@ fun AuraDrawerContent(
                 }
             }
         }
-        // Subtle divider above the pinned footer (side-rail visual-polish task) — the
-        // same hairline treatment as the action-rows/Recents divider above, closing the rail's
-        // third section (Recents list vs. the settings/user-icon/username area).
-        HorizontalDivider(
-            color = AuraColors.outlineHairline,
-            modifier = Modifier.padding(horizontal = AuraSpacing.screenGutter),
-        )
-        DrawerFooter(displayName = settingsState.displayName, onOpenSettings = onOpenSettings)
+        // On a television the footer keeps the account line — dropping it would lose information
+        // that has no other home in the rail — but not a second Settings affordance; it renders at
+        // all only while it still has something to show.
+        val footerSettings = onOpenSettings.takeUnless { walksRowsLinearly }
+        if (footerSettings != null || settingsState.displayName.isNotBlank()) {
+            // Subtle divider above the pinned footer (side-rail visual-polish task) — the
+            // same hairline treatment as the action-rows/Recents divider above, closing the rail's
+            // third section (Recents list vs. the settings/user-icon/username area).
+            HorizontalDivider(
+                color = AuraColors.outlineHairline,
+                modifier = Modifier.padding(horizontal = AuraSpacing.screenGutter),
+            )
+            DrawerFooter(displayName = settingsState.displayName, onOpenSettings = footerSettings)
+        }
     }
 
     actionTarget?.let { target ->
@@ -276,7 +381,7 @@ private fun RecentsHeader(
             modifier = Modifier.weight(1f).semantics { heading() },
         )
         Box {
-            IconButton(onClick = { menuOpen = true }) {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.auraFocusRing(shape = CircleShape)) {
                 Icon(Icons.Default.FilterAlt, contentDescription = "Filter sessions", tint = AuraColors.textSecondary)
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -356,6 +461,7 @@ private fun RecentSessionRow(
             .height(AuraSpacing.DrawerRow.recentRowHeight)
             .clip(AuraShape.radiusPill)
             .background(if (selected) AuraColors.surfaceSelected else Color.Transparent)
+            .auraFocusRing(shape = AuraShape.radiusPill)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = AuraSpacing.screenGutter / 2),
         verticalAlignment = Alignment.CenterVertically,
@@ -411,6 +517,7 @@ private fun DrawerRow(
             .height(AuraSpacing.DrawerRow.height)
             .clip(AuraShape.radiusPill)
             .background(if (selected) AuraColors.surfaceSelected else Color.Transparent)
+            .auraFocusRing(shape = AuraShape.radiusPill)
             .clickable(onClick = onClick)
             .padding(horizontal = AuraSpacing.screenGutter / 2),
         verticalAlignment = Alignment.CenterVertically,
@@ -437,8 +544,13 @@ private fun DrawerInlineNote(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * The pinned account line. [onOpenSettings] is nullable purely so the television shape can drop the
+ * icon button without a second footer composable — on a remote Settings is a top-group row instead,
+ * and rendering both would be two affordances for one destination.
+ */
 @Composable
-private fun DrawerFooter(displayName: String, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+private fun DrawerFooter(displayName: String, onOpenSettings: (() -> Unit)?, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -466,8 +578,10 @@ private fun DrawerFooter(displayName: String, onOpenSettings: () -> Unit, modifi
         } else {
             Spacer(Modifier.weight(1f))
         }
-        IconButton(onClick = onOpenSettings) {
-            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = AuraColors.iconPrimary)
+        if (onOpenSettings != null) {
+            IconButton(onClick = onOpenSettings, modifier = Modifier.auraFocusRing(shape = CircleShape)) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = AuraColors.iconPrimary)
+            }
         }
     }
 }
@@ -475,3 +589,20 @@ private fun DrawerFooter(displayName: String, onOpenSettings: () -> Unit, modifi
 /** No `AuraSpacing` token covers a recents-row inline marker glyph; same documented gap as
  * `SessionActionsSheet`'s `ConfirmSpinnerSize`. */
 private val PinnedMarkerSize = 14.dp
+
+/**
+ * How many UNPINNED recents a linearly-walked shell lists. Not a design number — a reach budget:
+ * every row here is one more D-pad press between the top action group and anything below the list,
+ * and the rail is not the only way to a chat. Whatever the cap hides is one row away through the
+ * Search chats row above it.
+ */
+private const val LinearRowsRecentsCap = 6
+
+/** Focus-containment probe anchor — the subtree an open drawer must not let focus leave. */
+internal const val DrawerRootTag = "aura-drawer-root"
+
+/** How many frames the first row's focus request may be re-tried for. A `LazyColumn` places its
+ * children a frame or two after composition, and a request made before that throws rather than
+ * queuing; four is comfortably past observed placement while still bounded, so a row that never
+ * arrives cannot spin. */
+private const val InitialFocusAttempts = 4

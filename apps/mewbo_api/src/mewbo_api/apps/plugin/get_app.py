@@ -66,7 +66,7 @@ from mewbo_api.apps.store import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from mewbo_core.classes import ActionStep
     from mewbo_core.contracts.types import Event
@@ -156,14 +156,15 @@ class GetAppTool:
         data_store: AppDataStoreBase | None = None,
         run_store: PipelineRunStoreBase | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        tags_reader: Callable[[str], Sequence[str]] | None = None,
     ) -> None:
-        """Bind the owning session + the three read stores + the clock.
+        """Bind the owning session + the three read stores + the clock + tag reader.
 
         Args:
-            session_id: The builder/maintainer session — the scope boundary. The
-                app is resolved as whichever one this session owns or maintains
-                (there is exactly one; this tool takes no ``app_id`` argument, so
-                it can't be pointed at a foreign app).
+            session_id: The bound session — the scope boundary. The app is
+                resolved as whichever one the SERVER bound this session to (there
+                is exactly one; this tool takes no ``app_id`` argument, so it
+                can't be pointed at a foreign app).
             event_logger: Accepted for the ``SessionToolRegistry`` manifest
                 constructor shape; unused (this tool emits no transcript event).
             app_store: Manifest read store. ``None`` (the plugin path) resolves
@@ -172,12 +173,19 @@ class GetAppTool:
             run_store: The provenance ledger (per-pipeline freshness for ``get``).
             now_fn: The clock freshness is computed against. ``None`` defaults to
                 UTC wall-clock; a test injects a fixed ``NOW``.
+            tags_reader: Reads this session's server-stamped tags — the second
+                binding tier. Injected rather than reached for, because the
+                default (``session_tags_for``) resolves a process-wide session
+                store: a test could otherwise never drive the tag tier THROUGH
+                this tool, which is why the tier could drift out of three of the
+                four app tools without a single test noticing.
         """
         self._session_id = session_id
         self._app_store = app_store
         self._data_store = data_store
         self._run_store = run_store
         self._now_fn = now_fn or self._utcnow
+        self._tags_reader = tags_reader or session_tags_for
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -350,13 +358,19 @@ class GetAppTool:
         opened against an app resolve it at all: such a session is on neither
         ``maintainer_session_id`` nor ``owner_session_id`` (re-pointing either
         would give the app two claimants and break the repair wake), so its
-        server-stamped ``app:<id>`` tag is its only binding. ``get_app`` is
-        deliberately the ONLY tool that reads the tag tier: ``app_data``,
-        ``run_pipeline`` and ``submit_app`` keep resolving by the id fields
-        alone, so such a session is READ-plus-STAGE only.
+        server-stamped ``app:<id>`` tag is its only binding.
+
+        ``get_app``, ``submit_app``, ``run_pipeline`` and ``app_data`` ALL read
+        that tier, through this one helper. They did not always: the tag tier
+        started here and in ``submit_app``, which left a tag-bound composer
+        session able to read the source and ship a new live version while
+        ``run_pipeline`` and ``app_data`` told it no app was bound — the two
+        diagnostic tools refused to the session already trusted with the
+        destructive one. One binding is one fact; a tool that re-derives it
+        narrower is a bug, not a safety tier.
         """
         return AppStagingArea(session_id=self._session_id).app_for_session(
-            app_store, session_tags=session_tags_for(self._session_id)
+            app_store, session_tags=self._tags_reader(self._session_id)
         )
 
     def _resolve_stores(

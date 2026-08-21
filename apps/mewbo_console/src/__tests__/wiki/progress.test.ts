@@ -127,6 +127,67 @@ describe("IndexingProgress.fromJob vs fromStream — agreement", () => {
   });
 });
 
+describe("IndexingProgress — progress ledger", () => {
+  const ledgerJob = (steps: IndexingJob["progress"] extends infer Ledger ? Ledger : never): IndexingJob => ({
+    ...baseJob,
+    status: "scanning",
+    progress: steps,
+  });
+
+  it("does not read a completed first step as 100% or ETA zero while later steps are pending", () => {
+    const v = IndexingProgress.fromJob(ledgerJob({
+      version: 1,
+      steps: [
+        { key: "scan.files", label: "Scanning files", group: "scan", unit: "files", weight: 1, state: "done", current: 10, total: 10, startedAt: new Date(Date.now() - 120_000).toISOString() },
+        { key: "graph.resolve", label: "Resolving Python symbols", group: "graph", weight: 3, state: "pending" },
+      ],
+    }));
+    expect(v.pct).toBe(25);
+    expect(v.etaSeconds).toBeGreaterThan(0);
+  });
+
+  it("renders an uncountable active step by its own label and elapsed time", () => {
+    const v = IndexingProgress.fromJob(ledgerJob({
+      version: 1,
+      steps: [
+        { key: "scan.files", label: "Scanning files", group: "scan", unit: "files", weight: 1, state: "done", current: 30, total: 30 },
+        { key: "graph.resolve", label: "Resolving Python symbols", group: "graph", weight: 3, state: "running", startedAt: new Date(Date.now() - 47 * 60_000).toISOString() },
+      ],
+    }));
+    expect(v.label).toBe("Resolving Python symbols");
+    expect(v.statusLine).toMatch(/^Resolving Python symbols · 47m$/);
+    expect(v.statusLine).not.toContain("30 of 30");
+  });
+
+  it("does not retreat across a counted step boundary and keeps ETA continuous", () => {
+    const startedAt = new Date(Date.now() - 120_000).toISOString();
+    const activeA = IndexingProgress.fromJob(ledgerJob({
+      version: 1,
+      steps: [
+        { key: "scan.files", label: "Scanning files", group: "scan", unit: "files", weight: 1, state: "running", current: 10, total: 10, startedAt },
+        { key: "graph.nodes", label: "Building nodes", group: "graph", unit: "nodes", weight: 3, state: "pending" },
+      ],
+    }));
+    const activeB = IndexingProgress.fromJob(ledgerJob({
+      version: 1,
+      steps: [
+        { key: "scan.files", label: "Scanning files", group: "scan", unit: "files", weight: 1, state: "done", current: 10, total: 10, startedAt },
+        { key: "graph.nodes", label: "Building nodes", group: "graph", unit: "nodes", weight: 3, state: "running", current: 1, total: 100, startedAt: new Date(Date.now() - 1_000).toISOString() },
+      ],
+    }));
+    expect(activeB.pct).toBeGreaterThanOrEqual(activeA.pct);
+    expect(activeA.etaSeconds).not.toBeNull();
+    expect(activeB.etaSeconds).not.toBeNull();
+    expect((activeB.etaSeconds ?? 0) / (activeA.etaSeconds ?? 1)).toBeLessThan(10);
+  });
+
+  it("uses the phase fallback unchanged when a job has no ledger", () => {
+    const v = IndexingProgress.fromJob({ ...baseJob, status: "scanning", phase: "graph", phaseProgressCurrent: 30, phaseProgressTotal: 60, phaseProgressUnit: "nodes" });
+    expect(v.pct).toBe(26);
+    expect(v.statusLine).toBe("30 of 60 nodes");
+  });
+});
+
 describe("IndexingProgress.formatEta", () => {
   it("returns '' for null / 0 / NaN / Infinity", () => {
     expect(IndexingProgress.formatEta(null)).toBe("");

@@ -58,6 +58,7 @@ import com.mewbo.aura.ui.aurora.EdgeGlowState
 import com.mewbo.aura.ui.common.ChatOverflowMenu
 import com.mewbo.aura.ui.common.OverflowMenuItem
 import com.mewbo.aura.ui.common.ProjectRowKind
+import com.mewbo.aura.ui.common.auraFocusRing
 import com.mewbo.aura.ui.composer.ComposerOptionsSheet
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraMotion
@@ -81,7 +82,7 @@ fun ChatScreen(
      * it into `com.mewbo.aura.voice.InputModality` itself (package layering: only the view model is
      * a legal `voice/` consumer). */
     handoffModality: String? = null,
-    onMenuTap: () -> Unit,
+    onMenuTap: (() -> Unit)?,
     onNewChat: () -> Unit,
     onNotice: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -133,7 +134,7 @@ fun ChatScreen(
     // nothing started - the system dialog itself handles rationale/"don't ask again".
     val context = LocalContext.current
     val recordAudioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) viewModel.startDictation()
+        if (granted) viewModel.startDictation(onNotice)
     }
 
     // Same derivation ChatSurface uses for the wash itself - kept independent rather than threaded
@@ -258,7 +259,7 @@ fun ChatScreen(
                 onRemoveAttachment = viewModel::removeStagedAttachment,
                 onMicTap = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        viewModel.startDictation()
+                        viewModel.startDictation(onNotice)
                     } else {
                         recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
@@ -459,7 +460,9 @@ private fun ChatTopBar(
     overWash: Boolean,
     modelDisplayName: String,
     pickerExpanded: Boolean,
-    onMenuTap: () -> Unit,
+    /** `null` where there is no drawer to open — the television shell keeps its navigation rail
+     * permanently on screen, so a button whose whole job is to reveal it would open nothing. */
+    onMenuTap: (() -> Unit)?,
     onNewChat: () -> Unit,
     onModelTap: () -> Unit,
     onCopyConversation: () -> Unit,
@@ -486,7 +489,9 @@ private fun ChatTopBar(
             .fillMaxWidth()
             .padding(horizontal = AuraSpacing.screenGutter, vertical = TopBarVerticalPadding),
     ) {
-        TopBarGlyphButton(icon = ChatIcons.TwoLineMenu, description = "Menu", overWash = overWash, onClick = onMenuTap)
+        if (onMenuTap != null) {
+            TopBarGlyphButton(icon = ChatIcons.TwoLineMenu, description = "Menu", overWash = overWash, onClick = onMenuTap)
+        }
 
         Column(modifier = Modifier.weight(1f)) {
             Row(
@@ -494,6 +499,7 @@ private fun ChatTopBar(
                 horizontalArrangement = Arrangement.spacedBy(TitleGap),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .auraFocusRing()
                     .clickable(onClick = onModelTap)
                     .padding(horizontal = AuraSpacing.Composer.gapTight),
             ) {
@@ -597,6 +603,7 @@ private fun TopBarGlyphButton(
         modifier = modifier
             .minimumInteractiveComponentSize()
             .background(scrimColor, CircleShape)
+            .auraFocusRing(shape = CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -638,6 +645,7 @@ private fun StopSpeakingControl(visible: Boolean, onClick: () -> Unit, modifier:
             modifier = Modifier
                 .size(AuraSpacing.ActionRow.cellSize)
                 .background(AuraColors.surfaceIconScrim, RoundedCornerShape(AuraShape.radiusThumb))
+                .auraFocusRing(shape = RoundedCornerShape(AuraShape.radiusThumb))
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {

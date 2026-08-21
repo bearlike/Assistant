@@ -273,6 +273,38 @@ def test_apps_tier_ignores_a_session_bound_to_no_app(monkeypatch, tmp_path, app_
     assert AppStagingMount().resolve(SESSION_ID, _runtime()) is None
 
 
+def test_apps_tier_mounts_a_session_opened_against_the_app_via_its_tag(
+    monkeypatch, tmp_path, app_store
+) -> None:
+    """A session that is neither owner nor maintainer, opened via
+    ``POST /apps/<id>/session {"new_session": true}``, resolves ONLY through
+    the server-stamped ``app:<id>:<session_id>`` tag — the exact regression
+    reproduced live: the tier used to call ``app_for_session`` with no
+    ``session_tags``, so an opened-against session always read as
+    "session has no project in context".
+    """
+    monkeypatch.setenv("MEWBO_APPS_ROOT", str(tmp_path / "staging"))
+    app = _app(maintainer="someone-else")
+    app_store.save(app)
+
+    runtime = _runtime(tags=[f"app:{app.app_id}:{SESSION_ID}"])
+    workspace = AppStagingMount().resolve(SESSION_ID, runtime)
+    assert workspace is not None
+    assert workspace.project_name == "Beacon Dashboard"
+    staged = tmp_path / "staging" / SESSION_ID / "app1"
+    assert workspace.project_path == str(staged)
+
+
+def test_apps_tier_ignores_an_app_tag_for_a_different_product(
+    monkeypatch, tmp_path, app_store
+) -> None:
+    """A tag that merely LOOKS like it names an app must not match by accident."""
+    monkeypatch.setenv("MEWBO_APPS_ROOT", str(tmp_path / "staging"))
+    app_store.save(_app(maintainer="someone-else"))
+    runtime = _runtime(tags=["wiki:maintain:git.example.com/acme/beacon"])
+    assert AppStagingMount().resolve(SESSION_ID, runtime) is None
+
+
 # ---------------------------------------------------------------------------
 # the resolver's tier ordering + failure isolation
 # ---------------------------------------------------------------------------

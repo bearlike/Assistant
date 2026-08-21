@@ -304,3 +304,146 @@ class TestExternalCwdReengagement:
         )
         assert msg_resp.status_code == 200
         assert captured.get("cwd") == valid_dir
+
+
+class TestServerKnownCwdWithExternalGateClosed:
+    """Server-known directories pass the external gate without weakening bindings."""
+
+    @staticmethod
+    def _configure_projects(monkeypatch, **paths):
+        """Point ``get_config().projects`` at *paths* with the flag still off."""
+        from mewbo_core.config import ProjectConfig, get_config
+
+        cfg = get_config()
+        projects = {name: ProjectConfig(path=str(path)) for name, path in paths.items()}
+        patched = cfg.model_copy(update={"projects": projects})
+        monkeypatch.setattr("mewbo_api.backend.get_config", lambda: patched)
+        return patched
+
+    @staticmethod
+    def _bind(session_id, **fields):
+        """Persist a binding through the production session-spec store."""
+        from mewbo_api.session_spec import SessionSpec
+
+        spec = SessionSpec(**fields)
+        backend._session_specs.save(session_id, spec)
+        return spec
+
+    def test_followup_echoing_the_sessions_own_cwd_is_not_a_claim(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Re-sending a value the server issued is an echo, not a new claim.
+
+        The reported defect rejected a follow-up merely for repeating the bound
+        directory the server had already resolved for that session.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        project_dir = tmp_path / "bound-repo"
+        project_dir.mkdir()
+        self._configure_projects(monkeypatch, Bound=project_dir)
+        create_resp = client.post(
+            "/api/sessions", headers=auth_headers, json={"project": "Bound"}
+        )
+        assert create_resp.status_code == 200
+        session_id = create_resp.get_json()["session_id"]
+        captured = {}
+
+        def fake_start_async(*args, **kwargs):
+            captured.update(kwargs)
+            return f"{session_id}:r0"
+
+        monkeypatch.setattr(backend.runtime, "start_async", fake_start_async)
+        resp = client.post(
+            f"/api/sessions/{session_id}/query",
+            headers=auth_headers,
+            json={"query": "continue", "cwd": str(project_dir)},
+        )
+
+        assert resp.status_code == 202
+        assert captured["cwd"] == str(project_dir)
+
+    def test_create_with_a_configured_projects_own_path_is_accepted(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A configured directory is reachable by project name, so accepting its path
+        closes an inconsistency rather than widening reach.
+        """
+        _reset_backend(tmp_path, monkeypatch)
+        project_dir = tmp_path / "configured-repo"
+        project_dir.mkdir()
+        self._configure_projects(monkeypatch, Configured=project_dir)
+
+        resp = client.post(
+            "/api/sessions", headers=auth_headers, json={"cwd": str(project_dir)}
+        )
+
+        assert resp.status_code == 200
+        session_id = resp.get_json()["session_id"]
+        context_events = [
+            event
+            for event in backend.session_store.load_transcript(session_id)
+            if event.get("type") == "context"
+        ]
+        assert context_events[-1].get("payload", {}).get("cwd") == str(project_dir)
+
+    def test_a_path_the_server_does_not_own_is_still_refused(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """An unconfigured directory remains an external claim, not a fail-open."""
+        _reset_backend(tmp_path, monkeypatch)
+        unowned_dir = tmp_path / "unowned-repo"
+        unowned_dir.mkdir()
+
+        create_resp = client.post(
+            "/api/sessions", headers=auth_headers, json={"cwd": str(unowned_dir)}
+        )
+        session_id = backend.session_store.create_session()
+        query_resp = client.post(
+            f"/api/sessions/{session_id}/query",
+            headers=auth_headers,
+            json={"query": "continue", "cwd": str(unowned_dir)},
+        )
+
+        assert create_resp.status_code == 403
+        assert "allow_external_cwd" in create_resp.get_json()["error"]["reason"]
+        assert query_resp.status_code == 403
+        assert "allow_external_cwd" in query_resp.get_json()["error"]["reason"]
+
+    def test_a_bound_session_refuses_a_different_server_known_path_at_the_merge(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """The gate and override tier answer different questions, so the gate must not
+        pre-empt the tier that keeps a purpose-bound session at its bound directory.
+        """
+        from mewbo_core.session.session_provenance import SessionOrigin
+
+        _reset_backend(tmp_path, monkeypatch)
+        bound_dir = tmp_path / "bound-repo"
+        bound_dir.mkdir()
+        other_dir = tmp_path / "other-repo"
+        other_dir.mkdir()
+        self._configure_projects(monkeypatch, Bound=bound_dir, Other=other_dir)
+        session_id = backend.session_store.create_session()
+        self._bind(
+            session_id,
+            origin=SessionOrigin.WIKI,
+            model="m",
+            project="Bound",
+            cwd=str(bound_dir),
+            capabilities=["wiki"],
+        )
+        captured = {}
+
+        def fake_start_async(*args, **kwargs):
+            captured.update(kwargs)
+            return f"{session_id}:r0"
+
+        monkeypatch.setattr(backend.runtime, "start_async", fake_start_async)
+        resp = client.post(
+            f"/api/sessions/{session_id}/query",
+            headers=auth_headers,
+            json={"query": "continue", "cwd": str(other_dir)},
+        )
+
+        assert resp.status_code == 202
+        assert captured["cwd"] == str(bound_dir)

@@ -101,6 +101,10 @@ class ProjectSettingsPatch(BaseModel):
     # that policy, while an omitted key leaves whatever is on file untouched
     # (:meth:`changes`).
     fallback_models: list[str] | None = Field(default=None, alias="fallbackModels")
+    # The model both builds and searches this project's vectors with. ``None``
+    # restores the deployment default; omitted leaves the project's current
+    # override alone (``changes`` reads ``model_fields_set`` for that distinction).
+    embedding_model: str | None = Field(default=None, alias="embeddingModel")
     # Operator-authored indexing guidance and the external MCP servers attached
     # to the next index. Same pinned cross-package contract as
     # ``fallback_models`` — identical name and type on ``WizardSubmission``,
@@ -122,7 +126,7 @@ class ProjectSettingsPatch(BaseModel):
     repo_url: str | None = Field(default=None, alias="repoUrl")
     platform: PlatformId | None = None
 
-    @field_validator("model", "language", "ref", "desc")
+    @field_validator("model", "embedding_model", "language", "ref", "desc")
     @classmethod
     def _strip(cls, v: str | None) -> str | None:
         """Strip surrounding whitespace; a whitespace-only value becomes ``None``.
@@ -203,6 +207,7 @@ class WikiProjectSettings:
             "repo_url",
             "platform",
             "fallback_models",
+            "embedding_model",
             "custom_instructions",
             "mcp_servers",
         }
@@ -217,6 +222,7 @@ class WikiProjectSettings:
         "graph_only": "graphOnly",
         "repo_url": "repoUrl",
         "fallback_models": "fallbackModels",
+        "embedding_model": "embeddingModel",
         "custom_instructions": "customInstructions",
         "mcp_servers": "mcpServers",
     }
@@ -275,6 +281,7 @@ class WikiProjectSettings:
             "files": list(settings.files),
             "graphOnly": settings.graph_only,
             "fallbackModels": settings.fallback_models,
+            "embeddingModel": settings.embedding_model,
             "customInstructions": settings.custom_instructions,
             # NAMES ONLY — never the entries. This route is gated on
             # ``wiki.read`` while the PATCH that sets the field is

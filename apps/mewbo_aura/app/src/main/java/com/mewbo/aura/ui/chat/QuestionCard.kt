@@ -41,6 +41,8 @@ import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.data.model.QuestionResolution
 import com.mewbo.aura.data.model.UiAnswer
 import com.mewbo.aura.data.model.UiQuestion
+import com.mewbo.aura.ui.common.dpadFocusEscape
+import com.mewbo.aura.ui.common.imeOnConfirmOnly
 import com.mewbo.aura.ui.theme.AuraColors
 import com.mewbo.aura.ui.theme.AuraShape
 import com.mewbo.aura.ui.theme.AuraSpacing
@@ -326,8 +328,13 @@ private fun OtherField(
             enabled = enabled,
             textStyle = AuraType.bodyMessage.copy(color = AuraColors.textPrimary),
             cursorBrush = SolidColor(AuraColors.accentPrimary),
+            // A remote must be able to traverse PAST an answer field it does not want to fill in:
+            // the escape lets the arrows out, the gate stops mere focus from raising the IME (which
+            // then eats BACK). No caret to consult here — the field's state is a plain String.
             modifier = Modifier
                 .fillMaxWidth()
+                .dpadFocusEscape()
+                .imeOnConfirmOnly()
                 .padding(horizontal = AuraSpacing.Composer.internalPadding, vertical = AuraSpacing.UserBubble.paddingVertical),
             decorationBox = { inner ->
                 if (value.isEmpty()) {

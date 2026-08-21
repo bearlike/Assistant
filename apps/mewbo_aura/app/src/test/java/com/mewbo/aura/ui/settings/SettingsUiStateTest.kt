@@ -1,5 +1,6 @@
 package com.mewbo.aura.ui.settings
 
+import com.mewbo.aura.data.model.ComposerScope
 import com.mewbo.aura.data.model.ModelCapabilities
 import com.mewbo.aura.data.model.ModelCatalog
 import com.mewbo.aura.data.model.ProjectSummary
@@ -52,6 +53,19 @@ class SettingsUiStateTest {
     fun `a managed project's contextKey resolves to its display name`() {
         val result = resolveProjectDisplayName(selectedProject = "managed:abc123", projects = listOf(configProject, managedProject))
         assertEquals("scratch-worktree", result)
+    }
+
+    @Test
+    fun `the auto sentinel resolves to Auto, never the raw stored key`() {
+        // It resolves against no catalog, so the lookup would print the raw "auto" — and the loop
+        // closes: the picker offers a row labelled "Auto", persists this key, and the settings row
+        // beneath it then disagrees with the picker that set it. Asserted with the catalog BOTH
+        // absent and present, because the sentinel must never depend on the catalog at all.
+        assertEquals("Auto", resolveProjectDisplayName(ComposerScope.AUTO_PROJECT_KEY, null))
+        assertEquals(
+            "Auto",
+            resolveProjectDisplayName(ComposerScope.AUTO_PROJECT_KEY, listOf(configProject, managedProject)),
+        )
     }
 
     @Test

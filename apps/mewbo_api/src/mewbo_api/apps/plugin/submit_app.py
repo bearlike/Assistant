@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from croniter import croniter  # type: ignore[import-untyped]  # no stubs published
 from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
@@ -130,6 +130,137 @@ class PipelineSchedule(BaseModel):
         return self
 
 
+class SubmitJsonResultArgs(BaseModel):
+    """A JSON response, optionally constrained by a JSON Schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media: Literal["json"] = Field(
+        default="json",
+        description="Return the pipeline output as application/json.",
+    )
+    json_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional JSON Schema the returned value must satisfy before it is sent.",
+    )
+
+
+class SubmitCsvResultArgs(BaseModel):
+    """A CSV response with an explicit column contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media: Literal["csv"] = Field(
+        default="csv",
+        description="Return the pipeline output as text/csv.",
+    )
+    columns: list[str] = Field(
+        description="Required CSV header columns, in their emitted order.",
+    )
+
+    @field_validator("columns")
+    @classmethod
+    def _columns_are_not_empty(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("CSV `columns` must not be empty — columns are the result contract")
+        return value
+
+
+class SubmitXmlResultArgs(BaseModel):
+    """An XML response with declared root and repeated-item element names."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media: Literal["xml"] = Field(
+        default="xml",
+        description="Return the pipeline output as application/xml.",
+    )
+    root: str = Field(
+        default="result",
+        description="Root element name for the XML response.",
+    )
+    item: str = Field(
+        default="item",
+        description="Repeated element name when the pipeline returns a list of rows.",
+    )
+
+
+class SubmitTextResultArgs(BaseModel):
+    """A plain-text response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media: Literal["text"] = Field(
+        default="text",
+        description="Return the pipeline output as text/plain.",
+    )
+
+
+SubmitResultArgs = Annotated[
+    SubmitJsonResultArgs | SubmitCsvResultArgs | SubmitXmlResultArgs | SubmitTextResultArgs,
+    Field(discriminator="media"),
+]
+
+
+class SubmitVerifierArgs(BaseModel):
+    """A post-response semantic check for a pipeline result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entrypoint: str = Field(
+        description=(
+            "Bundle-relative Python file defining `verify(result, ctx) -> None`; raise to "
+            "report an invalid result."
+        ),
+    )
+    timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=PIPELINE_TIMEOUT_CEILING_SECONDS,
+        description=(
+            "Maximum wall-clock seconds for one verifier run. Keep it below the "
+            f"platform ceiling of {PIPELINE_TIMEOUT_CEILING_SECONDS} seconds."
+        ),
+    )
+    consecutive_failures_to_invalidate: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive verifier failures that invalidate this pipeline's output.",
+    )
+
+
+class SubmitSampleArgs(BaseModel):
+    """One recorded invocation replayed during submit-time verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Parameters to replay against this pipeline during verification.",
+    )
+    label: str = Field(
+        default="",
+        description="Optional human-readable name for this verification sample.",
+    )
+
+
+class SubmitFailureBudgetArgs(BaseModel):
+    """The failure-rate threshold that governs automatic invalidation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    consecutive_failures: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive failures allowed before the pipeline is invalidated.",
+    )
+    window_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Seconds in which consecutive failures count toward invalidation.",
+    )
+
+
 class SubmitPipelineArgs(BaseModel):
     """One data pipeline: a wake prompt, and how it gets invoked.
 
@@ -146,6 +277,10 @@ class SubmitPipelineArgs(BaseModel):
     involved. Reserve `mode="agentic"` (the default, for backwards compatibility)
     for flows that genuinely need judgment; a deterministic pipeline running
     agentically burns a full LLM turn for work a function could do.
+
+    A `tier="render"` code pipeline returns a typed result live to its caller
+    instead of materializing collection documents. Declare its `result` contract
+    so every run's output shape is checked rather than trusted.
 
     Cron example (daily refresh, code pipeline):
         {"name": "morning-organize", "wake_prompt": "Ingest new emails.",
@@ -195,6 +330,42 @@ class SubmitPipelineArgs(BaseModel):
             "EXECUTES `entrypoint` directly, no LLM call. `agentic` (default): "
             "your maintainer session acts on `wake_prompt` when woken — reserve "
             "for flows that need judgment."
+        ),
+    )
+    tier: Literal["materialize", "render"] = Field(
+        default="materialize",
+        description=(
+            "`materialize` (default) writes collection documents. `render` is a "
+            "mode=code pipeline that returns its declared `result` live to a caller "
+            "without writing collections."
+        ),
+    )
+    result: SubmitResultArgs | None = Field(
+        default=None,
+        description=(
+            "`tier=render` only, REQUIRED: typed live-result contract. Choose JSON, "
+            "CSV, XML, or text by its `media` field."
+        ),
+    )
+    verifier: SubmitVerifierArgs | None = Field(
+        default=None,
+        description=(
+            "`mode=code` only (optional): post-response verifier for a rendered "
+            "result. Its failure reports invalid output without delaying the response."
+        ),
+    )
+    samples: list[SubmitSampleArgs] = Field(
+        default_factory=list,
+        description=(
+            "`mode=code` only: representative parameter sets replayed during "
+            "submit-time verification; use them for non-empty parameter contracts."
+        ),
+    )
+    failure_budget: SubmitFailureBudgetArgs = Field(
+        default_factory=SubmitFailureBudgetArgs,
+        description=(
+            "Failure-rate threshold for automatic invalidation. Defaults to three "
+            "consecutive failures within one hour."
         ),
     )
     entrypoint: str | None = Field(
@@ -332,6 +503,34 @@ class SubmitPipelineArgs(BaseModel):
             raise ValueError(
                 f"pipeline '{self.name}' sets `user_writable` but is not mode='code' — "
                 f"only a code pipeline can accept user-submitted params (set mode='code')"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_render_result_required(self) -> SubmitPipelineArgs:
+        if self.tier == "render" and self.result is None:
+            raise ValueError(
+                f"pipeline '{self.name}' sets tier='render' but no `result` — "
+                "declare the typed result contract"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_live_result_fields_require_code(self) -> SubmitPipelineArgs:
+        fields = [
+            name
+            for name, is_set in (
+                ("result", self.result is not None),
+                ("verifier", self.verifier is not None),
+                ("samples", bool(self.samples)),
+            )
+            if is_set
+        ]
+        if self.mode == "agentic" and fields:
+            rendered = ", ".join(f"`{name}`" for name in fields)
+            raise ValueError(
+                f"pipeline '{self.name}' sets {rendered} but is mode='agentic' — "
+                "those fields only apply to a code pipeline"
             )
         return self
 
@@ -777,5 +976,13 @@ __all__ = [
     "PipelineSchedule",
     "SubmitAppArgs",
     "SubmitAppTool",
+    "SubmitCsvResultArgs",
+    "SubmitFailureBudgetArgs",
+    "SubmitJsonResultArgs",
     "SubmitPipelineArgs",
+    "SubmitResultArgs",
+    "SubmitSampleArgs",
+    "SubmitTextResultArgs",
+    "SubmitVerifierArgs",
+    "SubmitXmlResultArgs",
 ]

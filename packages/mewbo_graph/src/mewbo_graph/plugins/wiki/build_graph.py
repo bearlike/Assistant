@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
@@ -11,11 +12,15 @@ from pydantic import BaseModel, ConfigDict
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
 from mewbo_graph.plugins.wiki._ctx import (
-    PhaseProgress,
+    ProgressReporter,
     WikiJobCtx,
     emit_log,
     emit_phase,
     resolve_runtime,
+)
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    GRAPH_STEPS,
+    planned_steps_for_slug,
 )
 
 if TYPE_CHECKING:
@@ -41,10 +46,11 @@ def _resolve_runtime() -> Any:
     return resolve_runtime()
 
 
-def _make_embedder() -> Any:
-    """Create an Embedder; isolated so tests can stub it."""
-    from mewbo_graph.wiki.embedder import make_embedder  # noqa: PLC0415
-    return make_embedder()
+def _make_embedder(store: Any, slug: str) -> Any:
+    """Create the Embedder for one project; isolated so tests can stub it."""
+    from mewbo_graph.wiki.embedder import make_embedder_for  # noqa: PLC0415
+
+    return make_embedder_for(store, slug)
 
 
 def _embeddings_enabled() -> bool:
@@ -168,6 +174,7 @@ class WikiBuildGraphTool(WikiSessionTool):
         # ResumePlan (DRY); this is the single-line short-circuit.
         rp = ctx.resume_plan
         if rp is not None and rp.should_skip("graph"):
+            ProgressReporter(ctx).skip_group("graph", note="reused on resume")
             emit_log(ctx, f"Graph already built ({rp.node_count} nodes) — skipped on resume")
             # A skip and a rebuild are the same ~6-minute-shaped step in the
             # trace unless the title says which one ran.
@@ -232,26 +239,30 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
     transitions). Returns the result summary dict the tool serialises.
     """
     repo_root = ctx.clone_dir
+    progress = ProgressReporter(ctx)
+    progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "graph"))
 
     # 1. Parse with GraphIndex.
     from mewbo_graph.wiki.graph import GraphIndex  # noqa: PLC0415
 
-    files = [p for p in repo_root.rglob("*") if p.is_file() and ".git" not in p.parts]
-    emit_log(ctx, f"Parsing {len(files)} files with tree-sitter…")
+    with progress.step("graph.discover_files"):
+        files = [
+            path for path in repo_root.rglob("*") if path.is_file() and ".git" not in path.parts
+        ]
+        emit_log(ctx, f"Parsing {len(files)} files with tree-sitter…")
     gi = GraphIndex()
-    # The parse loop is minutes long on a real repository, so it reports
-    # progress rather than going silent between its start and its end — see
-    # ``PhaseProgress``, which owns the throttle so this stays one injected
-    # callback.
-    progress = PhaseProgress(ctx, label="Parsing", unit="files")
-    parsed = gi.parse_repo(
-        slug=ctx.slug,
-        repo_root=repo_root,
-        files=files,
-        on_progress=lambda done, total, path: progress.advance(
-            done, total, detail=path, force=done == total
-        ),
-    )
+    with progress.step("graph.parse", total=len(files)) as step:
+        def on_progress(done: int, total: int, path: str) -> None:
+            """Advance the active parse step and retain its timeline detail."""
+            step.advance(done, total, path)
+            emit_log(ctx, f"Parsing {done}/{total}: {path}")
+
+        parsed = gi.parse_repo(
+            slug=ctx.slug,
+            repo_root=repo_root,
+            files=files,
+            on_progress=on_progress,
+        )
     # Replace tree-sitter's name-matched PYTHON relationship edges with the
     # faithful resolver's exact edges when scip-python is available. No-op (the
     # parse passes straight through) when the resolver can't run — but never a
@@ -268,14 +279,48 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
         nonlocal resolution
         resolution = outcome
 
-    parsed = _apply_resolver(
-        ctx.slug,
-        repo_root,
-        parsed,
-        on_report=lambda message: emit_log(ctx, message),
-        on_outcome=_capture,
-    )
-    emit_log(ctx, f"Built graph: {len(parsed.nodes)} nodes, {len(parsed.edges)} edges")
+    resolver_step_keys = {
+        "index": "graph.resolve_scip_index",
+        "read": "graph.read_scip_index",
+        "definitions": "graph.index_definitions",
+        "occurrences": "graph.resolve_occurrences",
+    }
+    active_key = "graph.resolve_scip_index"
+    active_step = progress.step(active_key)
+    active_step.__enter__()
+    reached = {active_key}
+
+    def on_resolver_progress(stage: str, current: int, total: int) -> None:
+        """Advance the plugin-owned resolver step the injected callback names."""
+        nonlocal active_key, active_step
+        key = resolver_step_keys[stage]
+        if key != active_key:
+            active_step.__exit__(None, None, None)
+            active_key = key
+            active_step = progress.step(key, total=total)
+            active_step.__enter__()
+            reached.add(key)
+        active_step.advance(current, total)
+
+    error: tuple[Any, Any, Any] = (None, None, None)
+    try:
+        parsed = _apply_resolver(
+            ctx.slug,
+            repo_root,
+            parsed,
+            on_report=lambda message: emit_log(ctx, message),
+            on_outcome=_capture,
+            on_progress=on_resolver_progress,
+        )
+        emit_log(ctx, f"Built graph: {len(parsed.nodes)} nodes, {len(parsed.edges)} edges")
+    except BaseException:
+        error = sys.exc_info()
+        raise
+    finally:
+        active_step.__exit__(*error)
+        for key in resolver_step_keys.values():
+            if key not in reached:
+                progress.skip(key, note="not reached")
 
     # 1b. Validate the whole graph ONCE at ingest (schema v2): node-id
     # uniqueness + referential integrity + CPG endpoint rules. A malformed graph
@@ -284,12 +329,13 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
 
     from mewbo_graph.wiki.types import CodeGraph, IndexFingerprint  # noqa: PLC0415
 
-    try:
-        code_graph = CodeGraph(nodes=parsed.nodes, edges=parsed.edges)
-    except ValidationError as exc:
-        raise ValueError(
-            f"graph schema validation failed for {ctx.slug}: {exc}"
-        ) from exc
+    with progress.step("graph.validate"):
+        try:
+            code_graph = CodeGraph(nodes=parsed.nodes, edges=parsed.edges)
+        except ValidationError as exc:
+            raise ValueError(
+                f"graph schema validation failed for {ctx.slug}: {exc}"
+            ) from exc
 
     # 2. Persist the validated graph, attributed to the commit this job indexed.
     # The commit is read from the job record (written by clone) rather than a ctx
@@ -302,12 +348,22 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
     commit_sha = (job.commit_sha if job is not None else None) or getattr(
         ctx, "commit_sha", None
     )
-    ctx.store.upsert_nodes(
-        ctx.slug, code_graph.nodes, commit_sha=commit_sha, job_id=ctx.job_id
-    )
-    ctx.store.upsert_edges(
-        ctx.slug, code_graph.edges, commit_sha=commit_sha, job_id=ctx.job_id
-    )
+    with progress.step("graph.persist_nodes") as step:
+        ctx.store.upsert_nodes(
+            ctx.slug,
+            code_graph.nodes,
+            commit_sha=commit_sha,
+            job_id=ctx.job_id,
+            on_progress=step.advance,
+        )
+    with progress.step("graph.persist_edges") as step:
+        ctx.store.upsert_edges(
+            ctx.slug,
+            code_graph.edges,
+            commit_sha=commit_sha,
+            job_id=ctx.job_id,
+            on_progress=step.advance,
+        )
 
     # 3. Embed nodes if enabled. Embedding failures are non-fatal — retrieval
     # falls back to BM25 + 1-hop graph traversal, which is still useful. This
@@ -322,36 +378,48 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
     # records what happened, never a config fallback for "what would have run".
     embedding_model: str | None = None
     if _embeddings_enabled() and parsed.nodes:
-        try:
-            embedder = _make_embedder()
-            items = [(n.node_id, n.embedding_text) for n in parsed.nodes]
-            emit_log(ctx, f"Embedding {len(items)} nodes via {embedder.model}…")
-            embeddings = _embed_with_progress(ctx, embedder, items)
-        except Exception as exc:  # noqa: BLE001 — degrade gracefully
-            embedding_error = str(exc)
-            logging.warning(
-                "wiki_build_graph: embeddings unavailable; falling back to "
-                "BM25-only retrieval. Reason: {}",
-                embedding_error,
-            )
-            embeddings = []
-            emit_log(
-                ctx,
-                f"Embeddings unavailable ({embedding_error}); falling back to BM25",
-                level="warn",
-            )
-        if embeddings:
-            ctx.store.upsert_embeddings(
-                ctx.slug, embeddings, commit_sha=commit_sha, job_id=ctx.job_id
-            )
-            embedded_count = len(embeddings)
-            embedding_model = embedder.model
-            emit_log(
-                ctx,
-                f"Embedded {embedded_count} nodes (dim={embeddings[0].dim})",
-            )
-    elif not _embeddings_enabled():
-        emit_log(ctx, "Embeddings disabled (wiki.embedding.enabled=false)", level="warn")
+        with progress.step("graph.embed", total=len(parsed.nodes)) as step:
+            try:
+                embedder = _make_embedder(ctx.store, ctx.slug)
+                items = [(n.node_id, n.embedding_text) for n in parsed.nodes]
+                emit_log(ctx, f"Embedding {len(items)} nodes via {embedder.model}…")
+                embeddings = _embed_with_progress(ctx, embedder, items, step)
+            except Exception as exc:  # noqa: BLE001 — degrade gracefully
+                embedding_error = str(exc)
+                logging.warning(
+                    "wiki_build_graph: embeddings unavailable; falling back to "
+                    "BM25-only retrieval. Reason: {}",
+                    embedding_error,
+                )
+                embeddings = []
+                emit_log(
+                    ctx,
+                    f"Embeddings unavailable ({embedding_error}); falling back to BM25",
+                    level="warn",
+                )
+        # Declared UNCONDITIONALLY — a store with nothing to persist (every
+        # embed call returned empty, or a fully-degraded pass) is a real
+        # terminal state for this step, not an absent one; leaving it pending
+        # is the same "no closing scope" shape the enrich fan-out had.
+        with progress.step("graph.persist_embeddings"):
+            if embeddings:
+                ctx.store.upsert_embeddings(
+                    ctx.slug, embeddings, commit_sha=commit_sha, job_id=ctx.job_id
+                )
+                embedded_count = len(embeddings)
+                embedding_model = embedder.model
+                emit_log(
+                    ctx,
+                    f"Embedded {embedded_count} nodes (dim={embeddings[0].dim})",
+                )
+    else:
+        with progress.step("graph.embed"):
+            if not _embeddings_enabled():
+                emit_log(ctx, "Embeddings disabled (wiki.embedding.enabled=false)", level="warn")
+            else:
+                emit_log(ctx, "No nodes to embed")
+        with progress.step("graph.persist_embeddings"):
+            pass
 
     # 4. Stamp this run's index fingerprint onto the job — the non-content
     # inputs that can later invalidate a hash-identical reuse decision.
@@ -371,24 +439,25 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
     # ``FingerprintDecision(reason="unknown")``, which forces a full rebuild
     # rather than silently permitting reuse of artifacts nothing actually
     # fingerprinted. Do not "optimise" a missing value into an assumed match.
-    try:
-        fingerprint = IndexFingerprint(
-            embedding_model=embedding_model,
-            graph_schema_version=code_graph.schema_version,
-            grammar_pack_version=_tree_sitter_pack_version(),
-            # ``_apply_resolver`` above already probed this once but doesn't
-            # return the answer to its caller; the probe is cheap and
-            # stateless (``shutil.which``), so a second call costs nothing.
-            resolver_available=_resolver_available(),
-        )
-        ctx.store.update_job(
-            ctx.job_id, fingerprint=fingerprint, resolution=resolution
-        )
-    except Exception as exc:  # pragma: no cover — best-effort, see comment above
-        logging.warning(
-            "wiki_build_graph: failed to stamp index fingerprint for {} ({})",
-            ctx.slug, exc,
-        )
+    with progress.step("graph.record_fingerprint"):
+        try:
+            fingerprint = IndexFingerprint(
+                embedding_model=embedding_model,
+                graph_schema_version=code_graph.schema_version,
+                grammar_pack_version=_tree_sitter_pack_version(),
+                # ``_apply_resolver`` above already probed this once but doesn't
+                # return the answer to its caller; the probe is cheap and
+                # stateless (``shutil.which``), so a second call costs nothing.
+                resolver_available=_resolver_available(),
+            )
+            ctx.store.update_job(
+                ctx.job_id, fingerprint=fingerprint, resolution=resolution
+            )
+        except Exception as exc:  # pragma: no cover — best-effort, see comment above
+            logging.warning(
+                "wiki_build_graph: failed to stamp index fingerprint for {} ({})",
+                ctx.slug, exc,
+            )
 
     # 4b. Put the same resolution outcome on the PROJECT row, which is what a
     # reader consults to ask "are this wiki's cross-file edges exact?" without
@@ -430,7 +499,9 @@ def build_graph_core(ctx: Any) -> dict[str, object]:
 _EMBED_SLICE = 500
 
 
-def _embed_with_progress(ctx: Any, embedder: Any, items: list[tuple[str, str]]) -> list[Any]:
+def _embed_with_progress(
+    ctx: Any, embedder: Any, items: list[tuple[str, str]], step: Any
+) -> list[Any]:
     """Embed *items* slice by slice so the graph phase reports while it embeds.
 
     Fixing only the parse loop left a smaller copy of the same blackout in the
@@ -444,13 +515,12 @@ def _embed_with_progress(ctx: Any, embedder: Any, items: list[tuple[str, str]]) 
     nothing downstream would ever finish, and retrieval would silently rank
     against a fraction of the graph.
     """
-    progress = PhaseProgress(ctx, label="Embedding", unit="nodes")
     out: list[Any] = []
     total = len(items)
     for start in range(0, total, _EMBED_SLICE):
         out.extend(embedder.embed_nodes(items[start : start + _EMBED_SLICE], slug=ctx.slug))
         done = min(start + _EMBED_SLICE, total)
-        progress.advance(done, total, force=done == total)
+        step.advance(done, total)
     return out
 
 
@@ -506,6 +576,7 @@ def _apply_resolver(
     *,
     on_report: Callable[[str], None] | None = None,
     on_outcome: Callable[[GraphResolution], None] | None = None,
+    on_progress: Callable[[str, int, int], None] | None = None,
 ) -> GraphParseResult:
     """Swap tree-sitter's name-matched Python edges for the resolver's exact ones.
 
@@ -567,7 +638,11 @@ def _apply_resolver(
         )
         record(GraphResolution(available=False))
         return result
-    res = _make_resolver(slug).resolve(repo_root, result.nodes)
+    resolver = _make_resolver(slug)
+    if on_progress is None:
+        res = resolver.resolve(repo_root, result.nodes)
+    else:
+        res = resolver.resolve(repo_root, result.nodes, on_progress=on_progress)
     resolution = GraphResolution(
         available=True,
         rootsDiscovered=res.stats.project_roots,

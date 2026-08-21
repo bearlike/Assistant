@@ -196,13 +196,12 @@ class CatalogIngestor:
     def _embed_nodes(self, slug: str, items: list[tuple[str, str]]) -> bool:
         """Embed *items*; return True iff vectors were written (else BM25-only).
 
-        Resolves an embedder lazily (the same ``make_embedder_or_none`` path the
-        insight ingestor uses) when none was injected, then guards the call so a
-        proxy with no embedding model never fails the ingest.
+        Resolves a slug-bound embedder lazily when none was injected, then guards
+        the call so a proxy with no embedding model never fails the ingest.
         """
         if not items:
             return False
-        embedder = self._resolve_embedder()
+        embedder = self._resolve_embedder(slug)
         if embedder is None:
             logging.warning(
                 "catalog ingest: no embedder available; grounding catalog {} "
@@ -225,14 +224,14 @@ class CatalogIngestor:
         self._store.upsert_embeddings(slug, embeddings)
         return True
 
-    def _resolve_embedder(self) -> EmbedderProtocol | None:
-        """Return the injected embedder, or try to build one (None ⇒ BM25-only)."""
+    def _resolve_embedder(self, slug: str) -> EmbedderProtocol | None:
+        """Return the injected embedder, or one bound to *slug* (None ⇒ BM25-only)."""
         if self._embedder is not None:
             return self._embedder
         try:
-            from .embedder import make_embedder_or_none  # noqa: PLC0415
+            from .embedder import make_embedder_for_or_none  # noqa: PLC0415
 
-            return make_embedder_or_none()
+            return make_embedder_for_or_none(self._store, slug)
         except Exception:  # pragma: no cover — import-guard for a graph-less install
             return None
 

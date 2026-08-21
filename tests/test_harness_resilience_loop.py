@@ -546,7 +546,11 @@ class TestSessionToolResultSizing:
             loop, [_tool_call("tiny", {}), AIMessage(content="done")], [_spec()]
         )
         delivered = _tool_messages(seen[-1])[0]
-        assert "[truncated]" in delivered
+        # The marker is the WINDOWING one, not a bare ``[truncated]``: a string
+        # result keeps both ends now, so the omission is stated in the middle
+        # with its size. A cut that says only "truncated" cannot tell a reader
+        # which part it is missing.
+        assert "characters omitted" in delivered
         assert len(delivered) < 200
 
     def test_a_truncated_dict_result_stays_parseable_json(self):
@@ -722,7 +726,11 @@ class TestToolResultTruth:
         payload = [e for e in events if e["type"] == "tool_result"][0]["payload"]
         assert payload["result_truncated"] is True
         assert len(payload["result_seen"]) < len(payload["result"])
-        assert payload["result_seen"].endswith("[truncated]")
+        # A windowed cut ends at the result's own TAIL, not at a marker — the
+        # marker sits in the middle, where the omission is. Asserting the tail is
+        # what proves ``result_seen`` is the windowed string and not a head cut.
+        assert "characters omitted" in payload["result_seen"]
+        assert payload["result_seen"].endswith("y")
         assert len(payload["result"]) == 9000
 
     def test_an_untruncated_result_carries_no_redundant_copy(self):

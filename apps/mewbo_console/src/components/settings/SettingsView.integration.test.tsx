@@ -207,35 +207,45 @@ describe("SettingsView against the real backend schema", () => {
   // nav-button-existence check against this shell's own now-removed facet
   // nav; the NavRail's Settings zone has the equivalent "does every facet get
   // a row" coverage in its own test file).
-  test("renders every schema-driven facet's own heading when selected via ?facet=", async () => {
-    const facets: Array<[id: string, title: string]> = [
-      ["models", "Models & Inference"],
-      ["agent", "Agent & Tools"],
-      // Automation facet — TriggersConfig carries `x-group: automation`, so the
-      // facet renders from the real schema. If `facets.ts` ever loses the
-      // "automation" id, SettingsModel silently buckets Triggers into "Other"
-      // and the fallback facet's heading would render instead, failing this.
-      ["automation", "Automation"],
-      ["integrations", "Integrations"],
-      ["interface", "Interface"],
-      ["server", "Server & Storage"],
-      ["security", "Security & Access"],
-      // Workspace facet (projects + wiki) — sections come from the schema, so it
-      // renders even though the fixture config seeds no projects/wiki values.
-      ["workspace", "Workspace"],
-    ];
-    for (const [facetId, title] of facets) {
+  const SCHEMA_FACETS: Array<[id: string, title: string]> = [
+    ["models", "Models & Inference"],
+    ["agent", "Agent & Tools"],
+    // Automation facet — TriggersConfig carries `x-group: automation`, so the
+    // facet renders from the real schema. If `facets.ts` ever loses the
+    // "automation" id, SettingsModel silently buckets Triggers into "Other"
+    // and the fallback facet's heading would render instead, failing this.
+    ["automation", "Automation"],
+    ["integrations", "Integrations"],
+    ["interface", "Interface"],
+    ["server", "Server & Storage"],
+    ["security", "Security & Access"],
+    // Workspace facet (projects + wiki) — sections come from the schema, so it
+    // renders even though the fixture config seeds no projects/wiki values.
+    ["workspace", "Workspace"],
+  ];
+
+  // ONE CASE PER FACET, not one case looping over all eight — and the reason is
+  // a failure mode, not tidiness. Eight full renders of this shell against the
+  // REAL schema do not fit one default 5 s budget on a loaded runner, and the
+  // timeout did not fail alone: the aborted loop resumed afterwards and ran its
+  // in-loop `cleanup()` after the NEXT test had already rendered, unmounting
+  // that test's tree so it failed against an empty `<body />` — a cascade that
+  // reads as two unrelated defects. Per-case gives each facet its own budget,
+  // names the offending facet when one regresses, and leaves teardown to
+  // `afterEach(cleanup)`, which an aborted case cannot outlive.
+  test.each(SCHEMA_FACETS)(
+    "renders the %s facet's own heading when selected via ?facet=",
+    async (facetId, title) => {
       await renderOnFacet(facetId);
-      // `getAllByRole` rather than `getBy*`: a facet whose pane's own card
+      // `findAllByRole` rather than `findBy*`: a facet whose pane's own card
       // shares its title (Plugins does this, tested separately below) would
       // otherwise match two headings and throw. Any match proves the facet
       // resolved to itself instead of the fallback.
       expect(
         (await screen.findAllByRole("heading", { name: title })).length
       ).toBeGreaterThan(0);
-      cleanup();
     }
-  });
+  );
 
   // 2 — the default facet renders section cards: a section heading + a real
   // form control, proving RJSF rendered the sliced section without throwing.

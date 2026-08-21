@@ -24,11 +24,11 @@ behaviour rather than re-implementing them next to its own tail.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from mewbo_core.common import get_logger
 
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase
+from mewbo_graph.plugins.wiki._ctx import ProgressReporter, emit_log, emit_phase
 from mewbo_graph.plugins.wiki.clone import _git_rev_parse, clone_with_fallback
 from mewbo_graph.plugins.wiki.scan import WikiScanArgs, _collect_files
 
@@ -142,6 +142,11 @@ class JoblessIndexRunner:
         note = f" ({self._CLONE_NOTE})" if self._CLONE_NOTE else ""
         emit_log(ctx, f"Cloning {url}{note}…")
 
+        def on_log(
+            text: str, *, level: Literal["info", "warn", "error"] = "info"
+        ) -> None:
+            emit_log(ctx, text, level=level)
+
         outcome = clone_with_fallback(
             url,
             clone_dir,
@@ -149,7 +154,7 @@ class JoblessIndexRunner:
             store=ctx.store,
             slug=ctx.slug,
             arg_token=sub.token,
-            on_log=lambda text, *, level="info": emit_log(ctx, text, level=level),
+            on_log=on_log,
         )
         if not outcome.ok:
             raise JoblessPhaseError("repo_access", outcome.stderr)
@@ -188,25 +193,30 @@ class JoblessIndexRunner:
             raise JoblessPhaseError("internal", f"clone dir missing: {clone_dir}")
 
         emit_phase(ctx, "scan")
+        progress = ProgressReporter(ctx)
         args = WikiScanArgs(
             filter_mode=self._submission.filter_mode,
             dirs=list(self._submission.dirs),
             files=list(self._submission.files),
         )
-        files = _collect_files(clone_dir, args)
-        self._files = files
-        total = len(files)
-        emit_log(ctx, f"Scanning {total} files in {clone_dir.name}…")
-        for idx, rel in enumerate(files):
-            file_str = str(rel)
-            ctx.store.append_job_event(ctx.job_id, {
-                "type": "scanning", "file": file_str, "index": idx, "totalCount": total,
-            })
-            ctx.store.append_job_event(ctx.job_id, {
-                "type": "scanned", "file": file_str, "index": idx, "totalCount": total,
-            })
-            ctx.store.update_job(ctx.job_id, current_file=file_str, scanned_count=idx + 1)
-        emit_log(ctx, f"Scanned {total} files")
+        with progress.step("scan.discover") as step:
+            files = _collect_files(clone_dir, args)
+            self._files = files
+            total = len(files)
+            step.log(f"Scanning {total} files in {clone_dir.name}…")
+        with progress.step("scan.inspect_files", total=total) as step:
+            for idx, rel in enumerate(files):
+                file_str = str(rel)
+                ctx.store.append_job_event(ctx.job_id, {
+                    "type": "scanning", "file": file_str, "index": idx, "totalCount": total,
+                })
+                ctx.store.append_job_event(ctx.job_id, {
+                    "type": "scanned", "file": file_str, "index": idx, "totalCount": total,
+                })
+                ctx.store.update_job(ctx.job_id, current_file=file_str, scanned_count=idx + 1)
+                step.advance(idx + 1, total, file_str)
+        with progress.step("scan.persist_manifest") as step:
+            step.log(f"Scanned {total} files")
 
     # ── helpers ─────────────────────────────────────────────────────────
 

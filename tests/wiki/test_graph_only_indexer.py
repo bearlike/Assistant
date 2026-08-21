@@ -65,7 +65,7 @@ def setup(tmp_path, monkeypatch):
     # override → platform fetch → previous record) that finalize also uses.
     monkeypatch.setattr(graph_only_mod, "_resolve_project_desc", lambda *a, **k: "")
     # No embedder hits the proxy.
-    monkeypatch.setattr(build_graph_mod, "_make_embedder", lambda: MagicMock(
+    monkeypatch.setattr(build_graph_mod, "_make_embedder", lambda *_args: MagicMock(
         model="stub", embed_nodes=MagicMock(return_value=[])
     ))
     return store, slug
@@ -191,7 +191,7 @@ def test_graph_only_cancel_mid_run_stops_indexer(setup, monkeypatch):
         store.cancel_job("j1")  # ← out-of-band cancel, mid graph-phase
         return []
 
-    monkeypatch.setattr(build_graph_mod, "_make_embedder", lambda: SimpleNamespace(
+    monkeypatch.setattr(build_graph_mod, "_make_embedder", lambda *_args: SimpleNamespace(
         model="stub", embed_nodes=_cancel_during_embed
     ))
     ctx = build_graph_only_ctx(job_id="j1", slug=slug, store=store)

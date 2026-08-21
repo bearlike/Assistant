@@ -332,6 +332,7 @@ class SessionToolRegistry:
         session_id: str,
         event_logger: EventLogger | None,
         session_capabilities: tuple[str, ...] = (),
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
     ) -> list[SessionTool]:
@@ -381,6 +382,15 @@ class SessionToolRegistry:
         ``execute``/``all`` admit every tier. It cannot resurrect a tool the
         gates dropped (it only removes more).
 
+        **Deny wins over everything above, *denied_tools* included the
+        unconditional and capability auto-surfaces and even a NAMED
+        ``allowed_tools`` entry.** Applied to the FINAL selected set, after
+        *capability_mode* — the one subtractive-only gate with no ceiling of
+        its own to be capped by. Deliberately NOT three-state like
+        ``allowed_tools``: deny is purely subtractive, so ``None`` and ``[]``
+        are the same "nothing denied" set, and every existing caller that never
+        passes it sees byte-identical behaviour.
+
         Returns an empty list when no gate selects anything. A factory that
         raises during instantiation (e.g. a plugin tool whose ``__init__``
         signature is wrong) is logged and skipped — a broken plugin must never
@@ -390,6 +400,7 @@ class SessionToolRegistry:
         for tid in self.ids_for(
             allowed_tools,
             session_capabilities=session_capabilities,
+            denied_tools=denied_tools,
             strict_tool_scope=strict_tool_scope,
             capability_mode=capability_mode,
         ):
@@ -407,6 +418,7 @@ class SessionToolRegistry:
         allowed_tools: list[str] | None,
         *,
         session_capabilities: tuple[str, ...] = (),
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
     ) -> list[str]:
@@ -419,10 +431,13 @@ class SessionToolRegistry:
         to NAME an agent's session tools (the operator-facing
         ``InstructionContext.tools``, which must not lie about what the agent
         holds) can never drift from the set that actually gets built — so callers
-        of BOTH must pass the SAME *strict_tool_scope* AND *capability_mode*.
+        of BOTH must pass the SAME *strict_tool_scope*, *capability_mode* AND
+        *denied_tools*.
 
         *capability_mode* is the delegation privilege ceiling applied over
         the selected set (see :meth:`build_for`); ``all`` (the default) is a no-op.
+        *denied_tools* is the last gate applied and beats every other one —
+        see :meth:`build_for` for the full contract.
 
         Pure lookup, no I/O, no side effects — safe to call before the tools
         exist.
@@ -493,6 +508,9 @@ class SessionToolRegistry:
                     capability_mode, self._factories[tid].capability_tier()
                 )
             ]
+        denied = set(denied_tools or [])
+        if denied:
+            selected = [tid for tid in selected if tid not in denied]
         return selected
 
     def capabilities_for(self, tool_ids: Iterable[str]) -> tuple[str, ...]:

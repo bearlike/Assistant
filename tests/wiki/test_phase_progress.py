@@ -333,7 +333,7 @@ def test_the_enrich_phase_reports_progress_while_it_mints(
     store = _store(tmp_path)
     _job(store)
     monkeypatch.setattr(mint_mod, "_ctx_for", lambda tool: _ctx(store))
-    monkeypatch.setattr(mint_mod, "_make_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(mint_mod, "_make_embedder", lambda *_args: _FakeEmbedder())
 
     tool = mint_mod.MintEntityTool(session_id="sess-1")
     asyncio.run(tool.handle(ActionStep(

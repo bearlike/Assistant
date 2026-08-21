@@ -124,6 +124,8 @@ def test_get_settings_returns_the_editable_contract(client, store, dev_mode_off)
     assert body["depth"] == "concise"
     assert body["dirs"] == ["src"]
     assert body["graphOnly"] is False
+    assert body["embeddingModel"] is None
+    assert body["editable"]["embeddingModel"] is True
     # ``editable`` is camelCase like the rest of the DTO — a snake_case key here is
     # one the console literally cannot look up.
     assert body["editable"]["model"] is True
@@ -287,6 +289,37 @@ def test_patch_explicit_null_ref_clears_the_pinned_branch(client, store, dev_mod
 
     assert body["ref"] is None
     assert st.get_project_settings(SLUG).ref is None
+
+
+def test_patch_embedding_model_set_omit_and_clear_are_distinct(client, store, dev_mode_off) -> None:
+    """One project can select a vector model without a partial PATCH clearing it.
+
+    A project needs a full rebuild when its embedding model changes, so an
+    accidental clear would make a later refresh use the deployment default and
+    rebuild the wrong vectors. Omission must preserve the selected override;
+    explicit null is the intentional way to return to that default.
+    """
+    c, st = client
+    _seed_git_project(st)
+
+    set_body = c.patch(
+        f"/v1/wiki/projects/{SLUG}",
+        json={"embeddingModel": "openai/text-embedding-3-large"},
+        headers=_headers(),
+    ).get_json()
+    assert set_body["embeddingModel"] == "openai/text-embedding-3-large"
+    assert st.get_project_settings(SLUG).embedding_model == "openai/text-embedding-3-large"
+
+    c.patch(f"/v1/wiki/projects/{SLUG}", json={"ref": "develop"}, headers=_headers())
+    assert st.get_project_settings(SLUG).embedding_model == "openai/text-embedding-3-large"
+
+    cleared = c.patch(
+        f"/v1/wiki/projects/{SLUG}",
+        json={"embeddingModel": None},
+        headers=_headers(),
+    ).get_json()
+    assert cleared["embeddingModel"] is None
+    assert st.get_project_settings(SLUG).embedding_model is None
 
 
 def test_patch_desc_applies_immediately_and_survives_reindex(

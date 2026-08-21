@@ -23,7 +23,7 @@ import mewbo_api.backend as backend
 import pytest
 from mewbo_api.apps import routes as apps_routes
 from mewbo_api.apps.lifecycle import AppLifecycle
-from mewbo_api.apps.models import CronSchedule, PipelineRun, PipelineSpec
+from mewbo_api.apps.models import CronSchedule, CsvResult, PipelineRun, PipelineSpec, TextResult
 from mewbo_api.apps.routes import AppsRoutesController
 from mewbo_api.apps.store import (
     JsonAppDataStore,
@@ -524,6 +524,24 @@ class TestInvokePipelineLedger:
         assert body["cache"] == "hit"
         assert controller.run_store.list_runs(app_id) == []
 
+    def test_fresh_render_result_ledgers_without_an_integrity_violation(self, tmp_path):
+        runner = _EchoRunner()
+        controller = _make(tmp_path, runner=runner)
+        self._wire_tracker(controller, runner)
+        app_id = _create_live_app_with_code_pipeline(controller, params_schema=None)
+        app = controller.app_store.get(app_id)
+        pipeline = app.pipelines[0].model_copy(
+            update={"tier": "render", "result": TextResult()}
+        )
+        controller.app_store.save(app.model_copy(update={"pipelines": [pipeline]}))
+
+        _, status = controller.invoke_pipeline(app_id, "report", raw_query_params={})
+
+        assert status == 200
+        runs = controller.run_store.list_runs(app_id)
+        assert len(runs) == 1 and runs[0].status == "succeeded"
+
+
     def test_failed_invoke_ledgers_without_dispatching_repair(self, tmp_path):
         # record_code_run only catches PipelineExecutionError internally (that's
         # what makes it write the `failed` row) — a bare exception would just
@@ -548,6 +566,67 @@ class TestInvokePipelineLedger:
         # ...but dispatch_failure=False means a user-triggered failure must NOT
         # auto-repair/pause the app (only an autonomous scheduled fire does that).
         assert spy.calls == []
+
+
+class TestRenderedPipelineResult:
+    @staticmethod
+    def _render_controller(tmp_path, result_spec, *, output):
+        class _ResultRunner(_EchoRunner):
+            def execute(self, app, pipeline, params, *, now, dry_run=False):  # noqa: ANN001, ANN201
+                self.calls.append((app.app_id, pipeline.name, dict(params)))
+                return _FakeResult(output=output, evaluated_at=now)
+
+        controller = _make(tmp_path, runner=_ResultRunner())
+        app_id = _create_live_app_with_code_pipeline(controller, params_schema=None)
+        app = controller.app_store.get(app_id)
+        pipeline = app.pipelines[0].model_copy(update={"tier": "render", "result": result_spec})
+        controller.app_store.save(app.model_copy(update={"pipelines": [pipeline]}))
+        return controller, app_id
+
+    @pytest.mark.parametrize(
+        ("result_spec", "output", "body", "content_type"),
+        [
+            (TextResult(), "ready", "ready", "text/plain"),
+            (
+                CsvResult(columns=["title"]),
+                [{"title": "Digest"}],
+                "title\r\nDigest\r\n",
+                "text/csv",
+            ),
+        ],
+    )
+    def test_result_route_renders_declared_content_type(
+        self, tmp_path, result_spec, output, body, content_type
+    ):
+        controller, app_id = self._render_controller(tmp_path, result_spec, output=output)
+
+        rendered = controller.render_pipeline_result(app_id, "report", raw_query_params={})
+
+        assert rendered.body == body
+        assert rendered.content_type == content_type
+
+    def test_result_route_refuses_pipeline_without_a_result(self, tmp_path):
+        controller = _make(tmp_path, runner=_EchoRunner())
+        app_id = _create_live_app_with_code_pipeline(controller, params_schema=None)
+
+        body, status = controller.render_pipeline_result(app_id, "report", raw_query_params={})
+
+        assert status == 409
+        assert "no result renderer" in body["message"]
+
+    def test_result_route_refuses_when_its_execution_slot_is_held(self, tmp_path):
+        from threading import BoundedSemaphore
+
+        controller, app_id = self._render_controller(tmp_path, TextResult(), output="ready")
+        controller.apps_max_concurrent_pipelines = 1
+        controller.pipeline_execution_gate = BoundedSemaphore(1)
+        assert controller.pipeline_execution_gate.acquire(blocking=False)
+
+        body, status = controller.render_pipeline_result(app_id, "report", raw_query_params={})
+
+        assert status == 429
+        assert "capacity exhausted" in body["message"]
+        controller.pipeline_execution_gate.release()
 
 
 def _create_live_scheduled_app(controller: AppsRoutesController, *, name: str = "ingest") -> str:

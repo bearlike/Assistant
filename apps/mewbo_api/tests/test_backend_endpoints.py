@@ -535,12 +535,95 @@ class TestVirtualProjects:
 # ---------------------------------------------------------------------------
 
 
+def _fake_plugin_fanout_with_builtin_and_disabled():
+    """A synthetic fan-out: one built-in, one enabled installed, one disabled.
+
+    ``load_all_plugin_components`` never returns a disabled installed plugin in
+    the first place (``discover_installed_plugins(enabled=cfg.enabled_plugins)``
+    already filters it out), so this stand-in mirrors that contract rather than
+    the pre-fix handler's own separate ``discover_installed_plugins`` call.
+    """
+    from mewbo_core.tooling.plugins import PluginComponents, PluginFanOut, PluginManifest
+
+    components = [
+        PluginComponents(
+            manifest=PluginManifest(
+                name="generative-ui",
+                display_name="Inline Panels",
+                description="present_ui panels.",
+                version="0.1.0",
+                marketplace="built-in",
+                scope="built-in",
+                requires_capabilities=("generative_ui",),
+                install_path="/fake/builtin/generative-ui",
+            ),
+            session_tool_entries=[{"tool_id": "present_ui", "module": "x", "class": "Y"}],
+        ),
+        PluginComponents(
+            manifest=PluginManifest(
+                name="code-review",
+                display_name="Code Review",
+                description="Multi-agent code review.",
+                version="1.2.0",
+                marketplace="official",
+                scope="user",
+                install_path="/fake/installed/code-review",
+            ),
+        ),
+        # A disabled plugin is excluded upstream by
+        # ``discover_installed_plugins(enabled=...)`` — never included here.
+    ]
+    return PluginFanOut(
+        components=components,
+        skill_dirs=[],
+        command_files=[],
+        agent_files=[],
+        mcp_servers={},
+        hooks_configs=[],
+    )
+
+
 class TestPlugins:
     def test_plugins_list(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)
         resp = client.get("/api/plugins", headers=auth_headers)
         assert resp.status_code == 200
         assert "plugins" in resp.get_json()
+
+    def test_plugins_list_includes_builtins_with_scope_and_enabled(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """Built-ins appear, `scope` reads `built-in`, `display_name` is forwarded."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.tooling.plugins.load_all_plugin_components",
+            _fake_plugin_fanout_with_builtin_and_disabled,
+        )
+        resp = client.get("/api/plugins", headers=auth_headers)
+        assert resp.status_code == 200
+        by_name = {p["name"]: p for p in resp.get_json()["plugins"]}
+
+        assert by_name["generative-ui"]["scope"] == "built-in"
+        assert by_name["generative-ui"]["display_name"] == "Inline Panels"
+        assert by_name["generative-ui"]["enabled"] is True
+
+        assert by_name["code-review"]["scope"] == "user"
+        assert by_name["code-review"]["enabled"] is True
+
+    def test_plugins_list_disabled_plugin_absent_or_marked_disabled(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A plugin excluded by config is never listed as `enabled: true`."""
+        _reset_backend(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "mewbo_core.tooling.plugins.load_all_plugin_components",
+            _fake_plugin_fanout_with_builtin_and_disabled,
+        )
+        resp = client.get("/api/plugins", headers=auth_headers)
+        assert resp.status_code == 200
+        names = {p["name"]: p for p in resp.get_json()["plugins"]}
+        disabled = names.get("disabled-plugin")
+        assert disabled is None or disabled["enabled"] is False
 
     def test_plugins_marketplace_list(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)

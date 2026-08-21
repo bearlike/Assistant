@@ -5,9 +5,10 @@ import { AttachmentCards } from './AttachmentCards';
 import { WidgetCard } from './WidgetCard';
 import { GenerativeUICard } from './GenerativeUICard';
 import { CopyButton } from './CopyButton';
+import { SpeakButton } from './SpeakButton';
 import { ScrollToBottom } from './ScrollToBottom';
 import { TurnScroller } from './TurnScroller';
-import { CompactionMeta, DiffFile, QuestionAnswerItemPayload, RecoveryMeta, SafetyPlaneMeta, SessionUsage, TimelineEntry, TurnMeta } from '../types';
+import { CompactionMeta, DiffFile, EventRecord, QuestionAnswerItemPayload, RecoveryMeta, SafetyPlaneMeta, SessionUsage, TimelineEntry, TurnMeta } from '../types';
 import type { AnswerQuestionResult } from '../api/contracts';
 import { FileList } from './FileList';
 import { PlanCard } from './PlanCard';
@@ -19,10 +20,12 @@ import { SessionTerminatedDivider, TriggerTranscriptRow } from './triggers/Trigg
 import { coalesceAdjacentTriggers } from './triggers/coalesceTriggers';
 import { SummaryBlock } from './SummaryBlock';
 import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useElapsed } from '../hooks/useElapsed';
 import { ModelLabel } from './ModelLabel';
 import { Button } from './ui/button';
 import { ContextWindowBar } from './ContextWindowBar';
 import { formatTokens } from '../utils/time';
+import { readBool, readNumber } from '../utils/payload';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -96,6 +99,16 @@ interface ConversationTimelineProps {
   /** Live assistant text streamed from the in-flight turn. */
   streamingText?: string;
   onShowActiveTrace?: () => void;
+  /**
+   * Live per-step chip on the active row, sourced from the SAME
+   * `useThroughput` estimator `RunTelemetry` renders (`SessionDetailView`
+   * threads it down here too) — no second estimator. `activePhase`/
+   * `activeTokPerSec` gate whether the `≈ N tok/s` reading is shown;
+   * `activeStepStartTs` is the elapsed clock's start.
+   */
+  activePhase?: string;
+  activeTokPerSec?: number;
+  activeStepStartTs?: string;
   onApprovePlan?: (approved: boolean) => void;
   onAnswerQuestion?: (
     callId: string,
@@ -159,17 +172,55 @@ function TracePill({ onClick }: { onClick: () => void }) {
 }
 
 /**
+ * Live "how long has this step been running" chip for the active row, plus
+ * an honest `≈ N tok/s` reading while text is actually streaming. `elapsed`
+ * ticks off the shared `useElapsed` clock (same cadence as every other
+ * live timer in the console) against `stepStartTs` — see
+ * `useThroughput.Throughput.stepStartTs` for why that timestamp spans the
+ * whole step (call + any tool dispatch) rather than resetting at the call's
+ * `llm_call_end`. The rate is gated to `phase === 'Streaming'`: Reasoning has
+ * no text yet to estimate from, and a tool call produces none either, so
+ * showing a rate there would read as more precise than the estimator is.
+ */
+function ActiveStepChip({
+  stepStartTs,
+  phase,
+  tokPerSec,
+}: {
+  stepStartTs?: string;
+  phase?: string;
+  tokPerSec?: number;
+}) {
+  const elapsed = useElapsed(stepStartTs, true);
+  if (!elapsed) return null;
+  const showRate = phase === 'Streaming' && (tokPerSec ?? 0) > 0;
+  const label = showRate ? `${elapsed} · ≈ ${formatTokens(tokPerSec)} tok/s` : elapsed;
+  return <span className="tabular-nums">{label}</span>;
+}
+
+/**
  * Inline beat shown immediately after a user row while the agent has
  * accepted the turn but hasn't streamed a single token yet. Replaces the
  * old bordered "Working… / Open trace" pill — visually one continuous
  * beat with the user bubble, not a separate card.
  */
-function PendingAssistantRow({ onShowTrace }: { onShowTrace?: () => void }) {
+function PendingAssistantRow({
+  onShowTrace,
+  stepStartTs,
+  phase,
+  tokPerSec,
+}: {
+  onShowTrace?: () => void;
+  stepStartTs?: string;
+  phase?: string;
+  tokPerSec?: number;
+}) {
   return (
     <div className="pt-1">
       <div className="pending-line" role="status" aria-live="polite">
         <span className="pending-dot" aria-hidden />
         <span className="pending-label">Working</span>
+        <ActiveStepChip stepStartTs={stepStartTs} phase={phase} tokPerSec={tokPerSec} />
         {onShowTrace && <TracePill onClick={onShowTrace} />}
       </div>
     </div>
@@ -212,9 +263,15 @@ function StartingRunRow() {
 function StreamingAssistantRow({
   text,
   onShowTrace,
+  stepStartTs,
+  phase,
+  tokPerSec,
 }: {
   text: string;
   onShowTrace?: () => void;
+  stepStartTs?: string;
+  phase?: string;
+  tokPerSec?: number;
 }) {
   return (
     <div className="pt-1.5" role="status" aria-live="polite" aria-busy="true">
@@ -225,9 +282,10 @@ function StreamingAssistantRow({
           className="inline-block w-[2px] h-[1em] align-text-bottom -mb-px ml-px bg-[hsl(var(--primary))] animate-[wiki-caret_900ms_steps(2)_infinite]"
         />
       </div>
-      {onShowTrace && (
+      {(onShowTrace || stepStartTs) && (
         <div className="pending-line mt-1">
-          <TracePill onClick={onShowTrace} />
+          <ActiveStepChip stepStartTs={stepStartTs} phase={phase} tokPerSec={tokPerSec} />
+          {onShowTrace && <TracePill onClick={onShowTrace} />}
         </div>
       )}
     </div>
@@ -406,17 +464,54 @@ function SmartCollapse({
 }
 
 /**
+ * Average output-generation throughput for a settled turn: Σ `output_tokens`
+ * ÷ Σ `duration_ms` across the turn's root (depth 0) SUCCESSFUL
+ * `llm_call_end` events, in tokens/sec. Deliberately footer-local rather than
+ * folded into `computeTurnTokenUsage` (`utils/timeline.ts`) — that shape is
+ * parity-gated against the Python transcript assembler via the corpus
+ * fixture, and `duration_ms` is a display-only stat with no wire meaning
+ * there. Only events carrying BOTH a positive `duration_ms` and an
+ * `output_tokens` count are summed into either side of the ratio — an event
+ * with no `duration_ms` (an older session, before the field shipped) has an
+ * unknown time contribution, so folding its tokens into the numerator alone
+ * would skew the average rather than just omit an unmeasured sample. Returns
+ * undefined when no qualifying event exists (old sessions, a turn resolved
+ * entirely by failed calls, or a call reporting `duration_ms: 0`).
+ */
+function computeTurnAvgTokPerSec(events: EventRecord[]): number | undefined {
+  let totalOutput = 0;
+  let totalMs = 0;
+  for (const e of events) {
+    if (e.type !== 'llm_call_end') continue;
+    if ((readNumber(e.payload, 'depth') ?? 0) !== 0) continue;
+    if (readBool(e.payload, 'success') !== true) continue;
+    const durationMs = readNumber(e.payload, 'duration_ms') ?? 0;
+    if (durationMs <= 0) continue;
+    totalOutput += readNumber(e.payload, 'output_tokens') ?? 0;
+    totalMs += durationMs;
+  }
+  return totalMs > 0 ? (totalOutput / totalMs) * 1000 : undefined;
+}
+
+/**
  * Per-turn footer for assistant messages — ONE strip, nothing else beneath the
  * message. Strict two-sided layout:
- *   LEFT  (read-only info): model · when generated · duration · tokens · context
- *   RIGHT (interactive):    CopyButton · "Trace" · "⋯" overflow
+ *   LEFT  (read-only info): model · when generated · duration · tokens · avg
+ *                            tok/s (successful calls only) · context
+ *   RIGHT (interactive):    CopyButton · SpeakButton · "Trace" · "⋯" overflow
+ * `SpeakButton` renders nothing when the server advertises no speech, so the
+ * cluster is Copy/Trace/⋯ on a deployment without a speech gateway.
  * The whole strip (copy included) idles at `opacity-0` and reveals only on
  * `group-hover/turn` or `group-focus-within/turn` (the a11y law — keyboard
  * users get it via focus). No always-on `isLatest` case: the latest turn hides
  * its footer too. Copy lives ONLY here now; the bubble's own copy is suppressed
  * via `MessageBubble showCopy={false}` when this footer renders.
+ *
+ * Exported for tests only — same reason `CompactionMarkerRow` is: mounting the
+ * whole `ConversationTimeline` pulls in `TurnScroller`'s `IntersectionObserver`,
+ * which this suite's jsdom does not polyfill.
  */
-function AssistantTurnFooter({
+export function AssistantTurnFooter({
   turn,
   model,
   sessionUsage,
@@ -457,6 +552,7 @@ function AssistantTurnFooter({
     }
     return events[events.length - 1]?.ts;
   }, [turn.events]);
+  const avgTokPerSec = useMemo(() => computeTurnAvgTokPerSec(turn.events), [turn.events]);
 
   return (
     <div className="mt-4 pt-2 flex items-center justify-between gap-3 text-xs text-[hsl(var(--muted-foreground))] opacity-0 transition-opacity duration-150 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100">
@@ -485,6 +581,17 @@ function AssistantTurnFooter({
             </span>
           </>
         )}
+        {avgTokPerSec !== undefined && (
+          <>
+            <span className="opacity-40">·</span>
+            <span
+              className="opacity-70"
+              title="Average output tokens/sec across this turn's successful model calls"
+            >
+              {avgTokPerSec.toFixed(1)} tok/s
+            </span>
+          </>
+        )}
         {sessionUsage && sessionUsage.root_max_input_tokens > 0 && (
           <>
             <span className="opacity-40">·</span>
@@ -492,9 +599,10 @@ function AssistantTurnFooter({
           </>
         )}
       </div>
-      {/* RIGHT — interactive controls: copy · Trace · overflow */}
+      {/* RIGHT — interactive controls: copy · read aloud · Trace · overflow */}
       <div className="flex items-center gap-1 shrink-0">
         <CopyButton text={responseText} label="Copy response" className="h-7 w-7 rounded-md" />
+        <SpeakButton text={responseText} label="Read response aloud" className="h-7 w-7 rounded-md" />
         <Button
           variant="ghost"
           size="sm"
@@ -553,6 +661,9 @@ export function ConversationTimeline({
   isStarting = false,
   streamingText,
   onShowActiveTrace,
+  activePhase,
+  activeTokPerSec,
+  activeStepStartTs,
   onApprovePlan,
   onAnswerQuestion,
   onRetryFrom,
@@ -880,9 +991,17 @@ export function ConversationTimeline({
                   <StreamingAssistantRow
                     text={streamingText}
                     onShowTrace={onShowActiveTrace}
+                    stepStartTs={activeStepStartTs}
+                    phase={activePhase}
+                    tokPerSec={activeTokPerSec}
                   />
                 ) : (
-                  <PendingAssistantRow onShowTrace={onShowActiveTrace} />
+                  <PendingAssistantRow
+                    onShowTrace={onShowActiveTrace}
+                    stepStartTs={activeStepStartTs}
+                    phase={activePhase}
+                    tokPerSec={activeTokPerSec}
+                  />
                 ))}
               </Fragment>
             );

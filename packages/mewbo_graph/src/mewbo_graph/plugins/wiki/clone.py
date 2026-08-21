@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlparse, urlunparse
 
 from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
@@ -15,7 +15,11 @@ from mewbo_core.workspaces.workspace import shell_preexec_scope
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase, resolve_runtime
+from mewbo_graph.plugins.wiki._ctx import ProgressReporter, emit_log, emit_phase, resolve_runtime
+from mewbo_graph.plugins.wiki.step_plans import (  # noqa: F401 — compatibility export
+    CLONE_STEPS,
+    planned_steps_for_slug,
+)
 from mewbo_graph.wiki.credentials import (
     CredentialCandidate,
     CredentialScope,
@@ -193,6 +197,8 @@ class WikiCloneRepoTool(WikiSessionTool):
         clone_dir = ctx.clone_dir
 
         emit_phase(ctx, "clone")
+        progress = ProgressReporter(ctx)
+        progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "clone"))
 
         # 4. Reuse a checkout that is already at the pinned commit. A resume
         # re-entered this tool on every turn and each entry wiped and re-fetched
@@ -203,9 +209,12 @@ class WikiCloneRepoTool(WikiSessionTool):
         reused = False
         if pinned_sha is not None and _head_of(clone_dir) == pinned_sha:
             reused = True
-            emit_log(ctx, f"Reusing existing clone at {pinned_sha[:7]}")
+            with progress.step("clone.resolve_credentials"):
+                emit_log(ctx, f"Reusing existing clone at {pinned_sha[:7]}")
+            progress.skip("clone.git", note="checkout already matches pinned commit")
         else:
-            outcome = self._acquire(ctx, args, pinned_sha=pinned_sha)
+            with progress.step("clone.resolve_credentials"), progress.step("clone.git"):
+                outcome = self._acquire(ctx, args, pinned_sha=pinned_sha, progress=progress)
             if not outcome.ok:
                 # ``outcome.stderr`` is already redacted of every candidate secret.
                 ctx.store.append_job_event(ctx.job_id, {
@@ -216,11 +225,12 @@ class WikiCloneRepoTool(WikiSessionTool):
                 return _err_result("repo_access", outcome.stderr)
 
         # 5. Count files (skip .git internals).
-        total = sum(
-            1
-            for p in clone_dir.rglob("*")
-            if p.is_file() and ".git" not in p.parts
-        )
+        with progress.step("clone.count_files"):
+            total = sum(
+                1
+                for p in clone_dir.rglob("*")
+                if p.is_file() and ".git" not in p.parts
+            )
 
         # 6. Resolve HEAD commit SHA + current branch. With ``--depth=1``
         # the working tree is a normal branch checkout (not detached), so
@@ -262,17 +272,18 @@ class WikiCloneRepoTool(WikiSessionTool):
             fields["commit_sha"] = head or None
         elif branch:
             fields["branch"] = branch
-        ctx.store.update_job(ctx.job_id, **fields)
-        ctx.store.append_job_event(ctx.job_id, {
-            "type": "queued",
-            "jobId": ctx.job_id,
-            "slug": ctx.slug,
-            "totalCount": total,
-        })
-        emit_log(
-            ctx,
-            f"{'Reused' if reused else 'Cloned'} {total} files in {clone_dir.name}",
-        )
+        with progress.step("clone.record_checkout"):
+            ctx.store.update_job(ctx.job_id, **fields)
+            ctx.store.append_job_event(ctx.job_id, {
+                "type": "queued",
+                "jobId": ctx.job_id,
+                "slug": ctx.slug,
+                "totalCount": total,
+            })
+            emit_log(
+                ctx,
+                f"{'Reused' if reused else 'Cloned'} {total} files in {clone_dir.name}",
+            )
 
         # Whether this turn hit the network is the ONE thing a reader of the
         # trace needs from this tool, and the payload buries it: ``reused`` is
@@ -297,7 +308,7 @@ class WikiCloneRepoTool(WikiSessionTool):
 
     @staticmethod
     def _acquire(
-        ctx: Any, args: WikiCloneArgs, *, pinned_sha: str | None
+        ctx: Any, args: WikiCloneArgs, *, pinned_sha: str | None, progress: ProgressReporter
     ) -> CloneOutcome:
         """Fetch this job's source through the durable credential chain.
 
@@ -308,12 +319,18 @@ class WikiCloneRepoTool(WikiSessionTool):
         default HEAD. Both routes end up in :func:`run_git_with_chain`, which owns
         credential precedence (arg → durable repo/host store → ambient git
         credential → anonymous), the helper-disable + ``GIT_TERMINAL_PROMPT=0``
-        env, and secret redaction, and emits via ``on_log`` which source
-        authenticated plus a warning per stored scope the remote rejected.
+        env, and secret redaction, and emits via injected callbacks so the tool
+        can keep credential resolution and each git subprocess separately visible.
         """
 
-        def on_log(text: str, *, level: str = "info") -> None:
+        def on_log(
+            text: str, *, level: Literal["info", "warn", "error"] = "info"
+        ) -> None:
             emit_log(ctx, text, level=level)
+
+        def on_progress(stage: str, current: int, total: int | None) -> None:
+            key = f"clone.{stage}"
+            progress.report(key, current, total)
 
         if pinned_sha is not None:
             emit_log(ctx, f"Cloning {args.url} at pinned commit {pinned_sha[:7]}…")
@@ -325,6 +342,7 @@ class WikiCloneRepoTool(WikiSessionTool):
                 slug=ctx.slug,
                 arg_token=args.token,
                 on_log=on_log,
+                on_progress=on_progress,
             )
         emit_log(ctx, f"Cloning {args.url}{f' @ {args.ref}' if args.ref else ''}…")
         return clone_with_fallback(
@@ -335,6 +353,7 @@ class WikiCloneRepoTool(WikiSessionTool):
             slug=ctx.slug,
             arg_token=args.token,
             on_log=on_log,
+            on_progress=on_progress,
         )
 
 
@@ -414,6 +433,7 @@ def run_git_with_chain(
     arg_token: str | None = None,
     timeout: int,
     on_log: Callable[..., None] | None = None,
+    on_progress: Callable[[str, int, int | None], None] | None = None,
     reset_dir: Path | None = None,
     active_root: Path | str | None = None,
 ) -> GitChainOutcome:
@@ -451,11 +471,16 @@ def run_git_with_chain(
         if on_log is not None:
             on_log(text, level=level)
 
+    def _progress(stage: str, current: int, total: int | None) -> None:
+        if on_progress is not None:
+            on_progress(stage, current, total)
+
     secrets: list[str] = []
     last_stderr = "git command failed"
     scope = CredentialScope.coerce(slug)
 
-    for candidate in resolve_chain(store, slug, arg_token=arg_token):
+    for current, candidate in enumerate(resolve_chain(store, slug, arg_token=arg_token), start=1):
+        _progress("resolve_credentials", current, None)
         if candidate.credential is not None:
             # Accumulate incrementally: a given attempt's stderr can only echo
             # the credential injected for THAT attempt, so redacting against the
@@ -491,6 +516,7 @@ def run_git_with_chain(
             if key_path is not None:
                 key_path.unlink(missing_ok=True)
 
+        _progress("git", current, None)
         if proc.returncode == 0:
             _log(_SOURCE_LOG.get(candidate.source, "Authenticated"))
             stdout = (proc.stdout or b"").decode(errors="ignore")
@@ -508,7 +534,7 @@ def run_git_with_chain(
                 _log(
                     f"Stored credential for {rejected} was rejected by the remote — "
                     "update it in Settings → Git Credentials",
-                    level="warning",
+                    level="warn",
                 )
             continue  # auth-class failure — try the next credential
         # Non-auth failure (network / bad ref) — don't iterate over the chain.
@@ -527,6 +553,7 @@ def clone_with_fallback(
     slug: str,
     arg_token: str | None = None,
     on_log: Callable[..., None] | None = None,
+    on_progress: Callable[[str, int, int | None], None] | None = None,
 ) -> CloneOutcome:
     """Clone *url* into *clone_dir* through the shared credential-chain executor.
 
@@ -547,6 +574,7 @@ def clone_with_fallback(
         arg_token=arg_token,
         timeout=300,
         on_log=on_log,
+        on_progress=on_progress,
         reset_dir=target,
         active_root=target,
     )
@@ -562,6 +590,7 @@ def clone_at_sha(
     slug: str,
     arg_token: str | None = None,
     on_log: Callable[..., None] | None = None,
+    on_progress: Callable[[str, int, int | None], None] | None = None,
 ) -> CloneOutcome:
     """Check out ONE commit *sha* of *url* into *clone_dir*.
 
@@ -601,6 +630,7 @@ def clone_at_sha(
         arg_token=arg_token,
         timeout=300,
         on_log=on_log,
+        on_progress=on_progress,
         active_root=target,
     )
     if not outcome.ok:

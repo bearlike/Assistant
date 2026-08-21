@@ -12,6 +12,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -21,8 +22,10 @@ import androidx.lifecycle.lifecycleScope
 import com.mewbo.aura.data.settings.SettingsStore
 import com.mewbo.aura.mock.MockBackendFlags
 import com.mewbo.aura.notify.RunNotificationLauncher
+import com.mewbo.aura.data.device.DeviceShape
+import com.mewbo.aura.data.device.TelevisionChecker
+import com.mewbo.aura.ui.common.LocalDeviceShape
 import com.mewbo.aura.ui.navigation.AuraNavHost
-import com.mewbo.aura.ui.navigation.IS_DEBUG_BUILD
 import com.mewbo.aura.ui.theme.AuraTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -33,6 +36,10 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsStore: SettingsStore
     @Inject lateinit var mockBackendFlags: MockBackendFlags
+
+    /** Resolved into a [com.mewbo.aura.data.device.DeviceShape] and published to the whole Compose
+     * tree as [LocalDeviceShape] — the ONE platform detection in the UI. */
+    @Inject lateinit var televisionChecker: TelevisionChecker
 
     /** Emits when a run starts (see [RunNotificationLauncher.runStarted]) so the POST_NOTIFICATIONS
      * request can fire at first relevance — the first query send — rather than on cold launch. */
@@ -49,6 +56,32 @@ class MainActivity : ComponentActivity() {
 
     /** One-shot guard so the notification permission is requested at most once per process. */
     private var askedForNotifications = false
+
+    /**
+     * The shape the tree renders for, resolved once — a device does not stop being a television.
+     *
+     * **Debug builds accept an override, because the primary dev container cannot be one.** The
+     * redroid image ships no `android.software.leanback` (its `/system` is read-only, so the
+     * feature cannot be added) and its `UiModeManager` has no `television` command, so the
+     * television shell is unreachable there by any honest route — leaving the whole rail, its focus
+     * order and its keyboard rule witnessable only by a physical Fire TV. Same shape and the same
+     * debug-only gate as the `seedBaseUrl` / `mockBackend` extras above:
+     *
+     * ```
+     * adb shell am start -n com.mewbo.aura/.MainActivity -e deviceShape television
+     * ```
+     *
+     * It cannot fabricate a television — it only chooses which composition to render, so what it
+     * verifies is layout and focus order, never anything gated on the real platform feature.
+     */
+    private val resolvedDeviceShape: DeviceShape by lazy {
+        val forced = if (IS_DEBUG_BUILD) intent.getStringExtra(EXTRA_DEVICE_SHAPE) else null
+        when (forced?.lowercase()) {
+            "television", "tv" -> DeviceShape.Television
+            "handheld", "phone" -> DeviceShape.Handheld
+            else -> DeviceShape.of(televisionChecker)
+        }
+    }
 
     /**
      * Flips once the first real reduced-motion value loads from DataStore. Read by the pre-draw
@@ -168,18 +201,22 @@ class MainActivity : ComponentActivity() {
             if (loadedReducedMotion != null) {
                 SideEffect { settingsLoaded = true }
                 AuraTheme(reducedMotion = loadedReducedMotion) {
-                    AuraNavHost(
-                        pendingHandoffSessionId = pendingHandoffSessionId,
-                        pendingHandoffModality = pendingHandoffModality,
-                        pendingHandoffDraft = pendingHandoffDraft,
-                        pendingHandoffNewChat = pendingHandoffNewChat,
-                        onHandoffConsumed = {
-                            pendingHandoffSessionId = null
-                            pendingHandoffModality = null
-                            pendingHandoffDraft = null
-                            pendingHandoffNewChat = false
-                        },
-                    )
+                    // Resolved once per process — a device does not stop being a television — and
+                    // published here so no composable re-derives it from the platform.
+                    CompositionLocalProvider(LocalDeviceShape provides resolvedDeviceShape) {
+                        AuraNavHost(
+                            pendingHandoffSessionId = pendingHandoffSessionId,
+                            pendingHandoffModality = pendingHandoffModality,
+                            pendingHandoffDraft = pendingHandoffDraft,
+                            pendingHandoffNewChat = pendingHandoffNewChat,
+                            onHandoffConsumed = {
+                                pendingHandoffSessionId = null
+                                pendingHandoffModality = null
+                                pendingHandoffDraft = null
+                                pendingHandoffNewChat = false
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -213,5 +250,9 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_HANDOFF_MODALITY = "com.mewbo.aura.EXTRA_HANDOFF_MODALITY"
         const val EXTRA_HANDOFF_DRAFT = "com.mewbo.aura.EXTRA_HANDOFF_DRAFT"
         const val EXTRA_HANDOFF_NEW_CHAT = "com.mewbo.aura.EXTRA_HANDOFF_NEW_CHAT"
+
+        /** Debug-only device-shape override; see [resolvedDeviceShape]. A plain name, not a
+         * namespaced one, because it is typed by hand into an `adb` command. */
+        const val EXTRA_DEVICE_SHAPE = "deviceShape"
     }
 }

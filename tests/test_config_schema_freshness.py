@@ -138,9 +138,13 @@ class TestTheCommittedReferencePageMatchesTheSchema:
 
     def test_the_page_is_still_the_generated_one(self):
         # The control: equality proves nothing about staleness if the file were
-        # hand-authored, so pin the marker the renderer writes.
-        head = DOCS_PATH.read_text(encoding="utf-8").lstrip().splitlines()[0]
-        assert "AUTO-GENERATED from configs/app.schema.json" in head
+        # hand-authored, so pin the marker the renderer writes. The marker sits
+        # a few lines into the masthead, not on line 1 — the theme only lifts a
+        # leading H1 into the page title when it is the file's literal first
+        # block, so the renderer emits the H1 before the marker on purpose.
+        # Check the masthead block rather than assuming a fixed line index.
+        head_block = "\n".join(DOCS_PATH.read_text(encoding="utf-8").lstrip().splitlines()[:6])
+        assert "AUTO-GENERATED from configs/app.schema.json" in head_block
 
 
 def test_the_two_artifacts_are_actually_tracked():

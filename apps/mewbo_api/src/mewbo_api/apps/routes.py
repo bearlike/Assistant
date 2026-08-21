@@ -62,11 +62,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import BoundedSemaphore
 from typing import TYPE_CHECKING, Any, Protocol
 
 import jsonschema
-from flask import request
+from flask import Response, request
 from flask_restx import Namespace, Resource, fields
 from mewbo_core.common import get_logger
 from mewbo_core.triggers.spec import TriggerSpec
@@ -225,6 +227,36 @@ class AppTokenMintRequest(BaseModel):
     scope: AppReadTokenScope = "read"
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutedPipeline:
+    """A pipeline that ran, paired with what it produced.
+
+    Named for the same reason as :class:`RenderedResult`: the alternative this
+    surface's execution seam returns is an ``(payload, status)`` error tuple,
+    which is also a two-element tuple. A named type is what lets a caller — and a
+    typechecker — tell "it ran" from "it refused" without inspecting an element.
+    """
+
+    pipeline: PipelineSpec
+    result: PipelineResult
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedResult:
+    """A pipeline result already rendered into its declared media.
+
+    A distinct type rather than a bare ``(body, content_type)`` pair because the
+    alternative the renderer can also return — this surface's ``(payload, status)``
+    error tuple — is ALSO a two-element tuple of which the first element is the
+    interesting one. Discriminating those by inspecting an element's runtime type
+    reads as correct and narrows for nobody: a reader cannot tell the two apart at
+    a call site, and neither can a typechecker.
+    """
+
+    body: str
+    content_type: str
+
+
 # ---------------------------------------------------------------------------
 # Controller — atomic class owning collaborators + every domain helper
 # ---------------------------------------------------------------------------
@@ -274,6 +306,7 @@ class AppsRoutesController:
         sdk_files: dict[str, str] | None = None,
         runner: PipelineRunner | None = None,
         tracker: AppPipelineRunTracker | None = None,
+        apps_max_concurrent_pipelines: int = 4,
     ) -> None:
         """Capture the injected collaborators as instance state.
 
@@ -304,6 +337,11 @@ class AppsRoutesController:
         calling :attr:`runner` directly with no ledger write at all, so this
         controller degrades gracefully before the tracker is wired (and every
         existing fake-runner-only route test keeps working unchanged).
+
+        *apps_max_concurrent_pipelines* caps synchronous pipeline execution across
+        this controller. Zero disables the gate; every other value creates a
+        non-blocking semaphore so excess callers receive a diagnosable refusal
+        instead of occupying request threads while they wait.
         """
         self.lifecycle = lifecycle
         self.app_store = app_store
@@ -318,6 +356,12 @@ class AppsRoutesController:
         self.sdk_files = sdk_files or {}
         self.runner = runner
         self.tracker = tracker
+        self.apps_max_concurrent_pipelines = max(0, apps_max_concurrent_pipelines)
+        self.pipeline_execution_gate = (
+            BoundedSemaphore(self.apps_max_concurrent_pipelines)
+            if self.apps_max_concurrent_pipelines > 0
+            else None
+        )
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -790,6 +834,7 @@ class AppsRoutesController:
             {
                 "name": p.name,
                 "mode": self._pipeline_mode(p),
+                "tier": getattr(p, "tier", "materialize"),
                 "on_demand": p.on_demand,
                 "schedule": p.schedule.model_dump(mode="json") if p.schedule is not None else None,
                 "armed": p.trigger_ref is not None and p.trigger_ref in armed_ids,
@@ -889,43 +934,27 @@ class AppsRoutesController:
             return f"invalid params: {exc.message}"
         return None
 
-    def invoke_pipeline(
+    def execute_pipeline(
         self,
         app_id: str,
         name: str,
         *,
         raw_query_params: Mapping[str, str] | None = None,
         json_body: Any = None,
-    ) -> tuple[dict, int]:
-        """Invoke a ``mode="code"`` pipeline.
+        require_result: bool = False,
+    ) -> ExecutedPipeline | tuple[dict, int]:
+        """Validate and synchronously execute one ``mode="code"`` pipeline.
 
-        Shared by the GET (query params, read-auth) and POST (JSON body,
-        write-auth) verbs; exactly one of *raw_query_params* / *json_body* is
-        passed by the caller.
+        Shared by GET invoke, POST invoke, and rendered-result GET. Exactly one
+        of *raw_query_params* / *json_body* is passed by the caller. When
+        *require_result* is true, a pipeline without a declared renderer is
+        refused before execution rather than returning an ambiguous media type.
 
-        A ``mode="agentic"`` pipeline (the default when a pipeline declares no
-        mode — see :meth:`_pipeline_mode`) 409s: it runs on its own schedule
-        or via its maintainer, never synchronously. An unwired :attr:`runner`
-        (``None``) 503s. A runner/tracker exception surfaces as a clean 502 with
-        ``{message}`` — never a traceback body. A TRACKED failure (the tracker is
-        wired and the runner raised) maps to 502 from ``run.error`` instead.
-
-        **Per-pipeline write gate (POST only).** The POST/form path (*json_body*)
-        additionally requires the TARGET pipeline itself declare ``user_writable``
-        — the write-scoped token is app-scoped, so this is the per-pipeline
-        least-privilege line: a write credential invokes a form pipeline, never an
-        arbitrary effectful one on the same app. It also collapses the stale-token
-        risk without extra bookkeeping: a pipeline despec'd to ``user_writable:
-        false`` now 403s here (removed entirely already 404'd above). The GET path
-        (*raw_query_params*) stays open to ANY code pipeline including effectful
-        ones — a served app refreshing itself is deliberate.
-
-        When :attr:`tracker` is wired, execution routes through
-        ``record_code_run(kind="on_request", dispatch_failure=False,
-        require_effect=True)``: a run that wrote
-        data or genuinely failed is ledgered; a cache hit or a no-write success
-        mints no row. :attr:`runner` alone (no tracker) still works — no ledger,
-        matching every existing fake-runner-only test.
+        Cost class: ``O(pipeline execution)``. At most
+        :attr:`apps_max_concurrent_pipelines` synchronous executions hold slots
+        when the bound is nonzero; the next caller receives 429 rather than
+        queueing behind the API's request threads. The gate encloses execution
+        only, so validation and response serialization never spend a slot.
         """
         app = self._load_app(app_id)
         if app is None:
@@ -937,6 +966,11 @@ class AppsRoutesController:
             return self._error(
                 "agentic pipeline — runs on its schedule or via its maintainer; "
                 "not invocable synchronously",
+                409,
+            )
+        if require_result and pipeline.result is None:
+            return self._error(
+                f"pipeline {name!r} declares no result renderer; no media type can be returned",
                 409,
             )
         # POST/form path: the pipeline itself must be user_writable (the write token
@@ -963,6 +997,13 @@ class AppsRoutesController:
             return self._error(error, 400)
         if self.runner is None:
             return self._error("pipeline execution not configured", 503)
+        gate = self.pipeline_execution_gate
+        if gate is not None and not gate.acquire(blocking=False):
+            return self._error(
+                "pipeline execution capacity exhausted "
+                f"(limit {self.apps_max_concurrent_pipelines}); retry later",
+                429,
+            )
         try:
             if self.tracker is not None:
                 # kind="on_request": this IS the on-demand invoke seam.
@@ -986,6 +1027,34 @@ class AppsRoutesController:
                 result = self.runner.execute(app, pipeline, params, now=self.now_fn())
         except Exception as exc:  # noqa: BLE001 - runner failures surface as a clean 502, never a traceback
             return self._error(str(exc), 502)
+        finally:
+            if gate is not None:
+                gate.release()
+        return ExecutedPipeline(pipeline, result)
+
+    def invoke_pipeline(
+        self,
+        app_id: str,
+        name: str,
+        *,
+        raw_query_params: Mapping[str, str] | None = None,
+        json_body: Any = None,
+    ) -> tuple[dict, int]:
+        """Invoke a ``mode="code"`` pipeline in the existing JSON envelope.
+
+        Cost class: ``O(pipeline execution)``. When the configured concurrency
+        bound is nonzero, the next caller beyond it receives 429 instead of
+        waiting behind a request thread.
+        """
+        outcome = self.execute_pipeline(
+            app_id,
+            name,
+            raw_query_params=raw_query_params,
+            json_body=json_body,
+        )
+        if not isinstance(outcome, ExecutedPipeline):
+            return outcome
+        result = outcome.result
         return {
             "output": result.output,
             "evaluated_at": self._iso(result.evaluated_at),
@@ -993,6 +1062,35 @@ class AppsRoutesController:
             "docs_written": dict(result.docs_written),
             "pipeline": name,
         }, 200
+
+    def render_pipeline_result(
+        self,
+        app_id: str,
+        name: str,
+        *,
+        raw_query_params: Mapping[str, str],
+    ) -> RenderedResult | tuple[dict, int]:
+        """Execute one pipeline and render its declared result media.
+
+        Cost class: ``O(pipeline execution)``. When the configured concurrency
+        bound is nonzero, the next caller beyond it receives 429 instead of
+        waiting behind a request thread.
+        """
+        outcome = self.execute_pipeline(
+            app_id,
+            name,
+            raw_query_params=raw_query_params,
+            require_result=True,
+        )
+        if not isinstance(outcome, ExecutedPipeline):
+            return outcome
+        result_spec = outcome.pipeline.result
+        if result_spec is None:  # guarded before execution; keeps the renderer contract explicit.
+            return self._error("pipeline declares no result renderer", 409)
+        try:
+            return RenderedResult(*result_spec.render(outcome.result.output))
+        except Exception as exc:  # noqa: BLE001 - renderer failures keep the Apps error envelope
+            return self._error(str(exc), 502)
 
     def fire_pipeline(self, app_id: str, name: str) -> tuple[dict, int]:
         """On-demand refresh of a pipeline — BOTH modes (``POST .../pipelines/<name>/fire``).
@@ -1013,6 +1111,11 @@ class AppsRoutesController:
         Unknown app/pipeline → 404. An unwired fire seam (no tracker, or the mode's
         collaborator isn't wired) → 503. The refusal→status map is
         :attr:`_FIRE_REFUSAL_STATUS`.
+
+        Cost class: ``O(pipeline execution)`` for ``mode="code"`` and ``O(1)``
+        for ``mode="agentic"``. A nonzero execution bound admits only that many
+        synchronous code fires; the next caller receives 429 rather than waiting
+        behind a request thread.
         """
         app = self._load_app(app_id)
         if app is None:
@@ -1022,7 +1125,18 @@ class AppsRoutesController:
             return self._error(f"pipeline {name!r} not found", 404)
         if self.tracker is None:
             return self._error("pipeline fire not configured", 503)
-        outcome = self.tracker.fire_pipeline(app, pipeline, now=self.now_fn())
+        gate = self.pipeline_execution_gate if self._pipeline_mode(pipeline) == "code" else None
+        if gate is not None and not gate.acquire(blocking=False):
+            return self._error(
+                "pipeline execution capacity exhausted "
+                f"(limit {self.apps_max_concurrent_pipelines}); retry later",
+                429,
+            )
+        try:
+            outcome = self.tracker.fire_pipeline(app, pipeline, now=self.now_fn())
+        finally:
+            if gate is not None:
+                gate.release()
         if not outcome.ok:
             status = self._FIRE_REFUSAL_STATUS.get(outcome.refusal or "", 502)
             body: dict[str, Any] = {"message": outcome.message or "pipeline fire failed"}
@@ -1398,6 +1512,10 @@ app_pipeline_surface_row_model = apps_ns.model(
         "mode": fields.String(
             example="code",
             description="'agentic' (not synchronously invocable) or 'code' (materialized).",
+        ),
+        "tier": fields.String(
+            example="materialize",
+            description="'materialize' writes durable data; 'render' produces a declared response.",
         ),
         "on_demand": fields.Boolean(example=True),
         "schedule": fields.Raw(
@@ -1847,11 +1965,13 @@ class AppPipelineInvoke(_ControllerResource):
         403,
         404,
         409,
+        429,
         502,
         503,
         shape="message",
         descriptions={
             409: "The pipeline is mode='agentic' — not invocable synchronously.",
+            429: "Every synchronous pipeline execution slot is occupied.",
             502: "The runner raised while executing the pipeline.",
             503: "No pipeline runner is configured on this deployment.",
         },
@@ -1862,7 +1982,12 @@ class AppPipelineInvoke(_ControllerResource):
         enforced_by="AppsRoutesController.authorize_read",
     )
     def get(self, app_id: str, name: str) -> tuple[dict, int]:
-        """Invoke a pipeline read-only: query params become ``params``."""
+        """Invoke a pipeline read-only: query params become ``params``.
+
+        Cost class: ``O(pipeline execution)``. A nonzero execution bound permits
+        only that many synchronous pipeline calls; the next caller gets 429
+        rather than waiting behind a request thread.
+        """
         auth = self._read_auth(app_id, "apps.use")
         if auth:
             return auth
@@ -1879,11 +2004,13 @@ class AppPipelineInvoke(_ControllerResource):
         403,
         404,
         409,
+        429,
         502,
         503,
         shape="message",
         descriptions={
             409: "The pipeline is mode='agentic' — not invocable synchronously.",
+            429: "Every synchronous pipeline execution slot is occupied.",
             502: "The runner raised while executing the pipeline.",
             503: "No pipeline runner is configured on this deployment.",
         },
@@ -1894,13 +2021,64 @@ class AppPipelineInvoke(_ControllerResource):
         enforced_by="AppsRoutesController.authorize_write",
     )
     def post(self, app_id: str, name: str) -> tuple[dict, int]:
-        """Invoke a pipeline: params in the JSON body. Requires a WRITE-scoped token."""
+        """Invoke a pipeline: params in the JSON body. Requires a WRITE-scoped token.
+
+        Cost class: ``O(pipeline execution)``. A nonzero execution bound permits
+        only that many synchronous pipeline calls; the next caller gets 429
+        rather than waiting behind a request thread.
+        """
         auth = self._write_auth(app_id, "apps.submit")
         if auth:
             return auth
         return self.controller.invoke_pipeline(
             app_id, name, json_body=request.get_json(silent=True)
         )
+
+
+class AppPipelineResult(_ControllerResource):
+    """Render one ``mode="code"`` pipeline's declared result media."""
+
+    @apps_ns.doc(security="apikey")
+    @apps_ns.produces(["application/json", "text/csv", "application/xml", "text/plain"])
+    @apps_ns.response(200, "The pipeline output rendered in its declared media type.")
+    @kit.errors(
+        400,
+        401,
+        403,
+        404,
+        409,
+        429,
+        502,
+        503,
+        shape="message",
+        descriptions={
+            409: "The pipeline is agentic or declares no result renderer.",
+            429: "Every synchronous pipeline execution slot is occupied.",
+            502: "The pipeline or its declared renderer failed.",
+            503: "No pipeline runner is configured on this deployment.",
+        },
+    )
+    @guard.dual_channel(
+        "apps.use",
+        channel="app_token",
+        enforced_by="AppsRoutesController.authorize_read",
+    )
+    def get(self, app_id: str, name: str) -> Response | tuple[dict, int]:
+        """Render a pipeline result in its declared media type.
+
+        Cost class: ``O(pipeline execution)``. A nonzero execution bound permits
+        only that many synchronous pipeline calls; the next caller gets 429
+        rather than waiting behind a request thread.
+        """
+        auth = self._read_auth(app_id, "apps.use")
+        if auth:
+            return auth
+        outcome = self.controller.render_pipeline_result(
+            app_id, name, raw_query_params=request.args.to_dict(flat=True)
+        )
+        if not isinstance(outcome, RenderedResult):
+            return outcome
+        return Response(outcome.body, status=200, content_type=outcome.content_type)
 
 
 class AppPipelineFire(_ControllerResource):
@@ -2042,6 +2220,7 @@ def init_apps_routes(api: Any, controller: AppsRoutesController) -> None:
         (AppToken, "/apps/<string:app_id>/token"),
         (AppPipelines, "/apps/<string:app_id>/pipelines"),
         (AppPipelineInvoke, "/apps/<string:app_id>/pipelines/<string:name>"),
+        (AppPipelineResult, "/apps/<string:app_id>/pipelines/<string:name>/result"),
         (AppPipelineFire, "/apps/<string:app_id>/pipelines/<string:name>/fire"),
         (AppTriggers, "/apps/<string:app_id>/triggers"),
         (AppPause, "/apps/<string:app_id>/pause"),

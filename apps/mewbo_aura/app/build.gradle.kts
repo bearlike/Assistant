@@ -10,23 +10,64 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// The app version, named once. The release-asset file name below is derived from it, so a version
+// bump renames the artifact automatically rather than by hand at release time.
+val auraVersionName = "0.0.24.1"
+
+// Where the in-app updater looks for releases, baked per distribution flavor (see the flavors
+// below). The running app never decides this — it reads the constant its own build stamped in.
+//
+// `public` carries a tracked default because api.github.com is a public fact. The ENTERPRISE root
+// names a private forge, so it may never appear in a tracked file (this repo is mirrored to a
+// public GitHub); it arrives as an argument exactly the way the enterprise CA does, and resolves to
+// empty when no source is available. Empty is not a silent fallback: `requireEnterpriseUpdateApiRoot`
+// below fails an enterprise BUILD on it, and the app treats an empty root as "updates are not
+// configured for this build" rather than as "up to date".
+val publicUpdateApiRoot = "https://api.github.com/"
+val enterpriseUpdateApiRootSource =
+    (findProperty("mewbo.updateApiRoot") as String?)
+        ?: System.getenv("AURA_UPDATE_API_ROOT")
+        ?: file("${System.getProperty("user.home")}/temp_folder/aura-update-api-root.txt")
+            .takeIf { it.isFile }?.readText()
+val enterpriseUpdateApiRoot = enterpriseUpdateApiRootSource?.trim().orEmpty()
+
+// Owner/repo are public slugs on both forges and are the same on each, so one tracked default
+// serves both flavors. Overridable for a fork without touching the tree.
+val updateRepoSlug = (findProperty("mewbo.updateRepo") as String?) ?: "bearlike/Assistant"
+val updateRepoOwner = updateRepoSlug.substringBefore('/')
+val updateRepoName = updateRepoSlug.substringAfter('/')
+
 android {
     namespace = "com.mewbo.aura"
     compileSdk = 37
 
     defaultConfig {
         applicationId = "com.mewbo.aura"
-        minSdk = 33
+        minSdk = 30
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.0.13"
+        versionCode = 35
+        versionName = auraVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "UPDATE_REPO_OWNER", "\"$updateRepoOwner\"")
+        buildConfigField("String", "UPDATE_REPO_NAME", "\"$updateRepoName\"")
     }
 
-    // Release signing: a configured keystore (AURA_KEYSTORE_B64 + friends) wins;
-    // otherwise fall back to the auto-generated debug keystore so
-    // `assembleRelease` always yields an installable APK with zero setup.
+    // Signing for BOTH build types: a configured keystore (AURA_KEYSTORE_B64 +
+    // friends) wins; otherwise fall back to the auto-generated debug keystore so
+    // an assemble always yields an installable APK with zero setup.
+    //
+    // The name says "release" for the build type it started on, but a PUBLISHED
+    // Aura artifact is `enterpriseDebug` — so the debug build type has to reach
+    // the same config or a keystore configured for release signs nothing that
+    // ever ships. Android refuses to update an app across a signature change,
+    // and the only way out of one is an uninstall that erases the user's data;
+    // that made "which machine cut the release" a property of every install.
+    // With the keystore configured, a build cut anywhere chains onto a build cut
+    // anywhere else. With it unset the fallback below IS the same keystore,
+    // alias and password AGP's built-in debug config uses, so a developer build
+    // with no secrets is byte-for-byte what it was.
     signingConfigs {
         create("release") {
             val keystoreB64 = System.getenv("AURA_KEYSTORE_B64")
@@ -73,6 +114,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -89,10 +131,12 @@ android {
         create("public") {
             dimension = "distribution"
             isDefault = true
+            buildConfigField("String", "UPDATE_API_ROOT", "\"$publicUpdateApiRoot\"")
         }
         create("enterprise") {
             dimension = "distribution"
             versionNameSuffix = "-enterprise"
+            buildConfigField("String", "UPDATE_API_ROOT", "\"$enterpriseUpdateApiRoot\"")
         }
     }
 
@@ -103,11 +147,28 @@ android {
 
     buildFeatures {
         compose = true
+        aidl = true // the UserService binder interface
+        // The in-app updater's per-flavor release source. It is a BUILD fact, not a runtime one:
+        // an APK must not be able to be pointed at a different forge after it ships, and baking the
+        // value is also what keeps a private forge's hostname out of the tree. `FLAVOR`/`BUILD_TYPE`
+        // come free with this flag and are what the release-asset matcher compares against.
+        buildConfig = true
     }
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric reads the merged manifest + resources through the
+            // `com/android/tools/test_config.properties` this flag emits; without it a
+            // Robolectric test loads a default manifest and no app resources, so anything
+            // touching `R.` (AuraType's font family, for one) fails at runtime rather than
+            // at compile time. Every OTHER suite in this module is plain-JVM and ignores it.
+            isIncludeAndroidResources = true
         }
     }
 }
@@ -150,8 +211,32 @@ val seedEnterpriseCa by tasks.registering {
         }
     }
 }
+// The enterprise update root, guarded the same way and for the same reason as the CA above: a
+// value that cannot live in the tree must fail the build that needs it rather than resolve to
+// nothing. It is a separate task from seedEnterpriseCa because it materialises nothing — the value
+// is already baked into BuildConfig at configuration time; this only refuses to let an enterprise
+// APK ship with an empty one. The check CANNOT be a `throw` at configuration time: Gradle
+// configures every variant, so an enterprise-only failure raised there would break
+// `assemblePublicDebug` too.
+val requireEnterpriseUpdateApiRoot by tasks.registering {
+    group = "build setup"
+    description = "Refuse an enterprise build with no in-app update API root."
+    val resolved = enterpriseUpdateApiRoot
+    doLast {
+        if (resolved.isBlank()) {
+            throw GradleException(
+                "in-app update API root not found — the `enterprise` flavor needs the release API root of its " +
+                    "private forge. Provide it via one of:\n" +
+                    "  • ~/temp_folder/aura-update-api-root.txt (default source), or\n" +
+                    "  • -Pmewbo.updateApiRoot=<url>, or env AURA_UPDATE_API_ROOT=<url>.\n" +
+                    "It is the API ROOT with a trailing slash (…/api/v1/ for Gitea/Forgejo), not a repository URL.\n" +
+                    "(`public` builds don't need this — they default to api.github.com.)",
+            )
+        }
+    }
+}
 tasks.matching { it.name.startsWith("merge") && it.name.contains("Enterprise") && it.name.endsWith("Resources") }
-    .configureEach { dependsOn(seedEnterpriseCa) }
+    .configureEach { dependsOn(seedEnterpriseCa, requireEnterpriseUpdateApiRoot) }
 
 // Widget-host assets: the offline stlite widget renderer is a self-contained web
 // bundle the CONSOLE builds (apps/mewbo_console/dist/widget-host/ — a relocatable base:'./' build,
@@ -224,6 +309,22 @@ androidComponents {
             // outputDir is wired + located by AGP's addGeneratedSourceDirectory below (under build/, gitignored).
         }
         variant.sources.assets?.addGeneratedSourceDirectory(syncTask) { it.outputDir }
+
+        // Deterministic release-asset name: `aura-<version>-<flavor>-<buildType>.apk`.
+        //
+        // The old name was `app-<flavor>-<buildType>.apk` — it carried no version and nothing
+        // saying which product it belonged to, on a forge whose releases also carry the server's
+        // own artifacts. The in-app updater has to pick the ONE asset that fits this device out of
+        // a release's asset list, and it matches on the `-<flavor>-<buildType>.apk` SUFFIX, which
+        // both the old and the new name satisfy — so already-published releases stay visible while
+        // new ones also say what they are on disk. `data/update/CLAUDE.md` owns the scheme; keep
+        // the two in step.
+        //
+        // Derived from `auraVersionName` rather than the variant's own versionName, because the
+        // enterprise flavor appends `-enterprise` to that and the flavor is already its own segment.
+        variant.outputs.forEach { output ->
+            output.outputFileName.set("aura-$auraVersionName-${variant.flavorName}-${variant.buildType}.apk")
+        }
     }
 }
 
@@ -270,6 +371,10 @@ dependencies {
     // Settings / storage
     implementation(libs.datastore.preferences)
 
+    // Device control at shell UID
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
     // WebView asset loading — the offline stlite widget host
     implementation(libs.androidx.webkit)
 
@@ -281,4 +386,20 @@ dependencies {
     // (no Robolectric in this module) - mockito-core mocks it instead, needed by
     // StagedAttachmentsReducerTest.
     testImplementation("org.mockito:mockito-core:5.14.2")
+    // The one dependency with a WindowManager behind it. Kept to the overlay-lifecycle suite on
+    // purpose: a Robolectric class pays a real per-class setup cost, so the plain-JVM idioms in
+    // src/test/.../CLAUDE.md stay the default and this is the exception for code whose whole
+    // behaviour IS adding and removing a window.
+    testImplementation(libs.robolectric)
+    // Compose semantics assertions on the JVM, under the same Robolectric runner. Version-less:
+    // both come from the compose BOM, which has to be applied to these configurations too - the
+    // `implementation(platform(...))` above constrains only its own configuration, so without
+    // these two lines the artifacts resolve with no version at all.
+    testImplementation(platform(libs.compose.bom))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    // Adds the `ComponentActivity` entry that `createComposeRule()` launches into. It is a
+    // MANIFEST contribution, not a classpath one, which is why it is `debugImplementation` and not
+    // `testImplementation` - the unit test runs against the debug variant's merged manifest.
+    debugImplementation(platform(libs.compose.bom))
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

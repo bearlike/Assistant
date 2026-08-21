@@ -66,6 +66,7 @@ vi.mock("@/hooks/useRepositories", () => ({
 const listPlatforms = vi.mocked(wikiClient.listPlatforms);
 const listLanguages = vi.mocked(wikiClient.listLanguages);
 const getWikiDefaults = vi.mocked(wikiClient.getWikiDefaults);
+const submitWizard = vi.mocked(wikiClient.submitWizard);
 const listBranches = vi.mocked(wikiClient.listBranches);
 
 const PLATFORMS: Platform[] = [
@@ -145,6 +146,7 @@ beforeEach(() => {
   listPlatforms.mockResolvedValue(PLATFORMS);
   listLanguages.mockResolvedValue([{ id: "en", label: "English" }]);
   getWikiDefaults.mockResolvedValue({});
+  submitWizard.mockResolvedValue({ jobId: "job-1" } as never);
   listBranches.mockResolvedValue({ branches: [], defaultBranch: null });
   useRepositoryMock.mockReturnValue({ repository: undefined, loading: false, error: null });
 });
@@ -182,6 +184,27 @@ describe("useWizardMachine — registered-repository seed", () => {
     // no ref, so the backend always clones the git host's CURRENT default.
     expect(result.current.state.ref).toBe("");
     expect(useRepositoryMock).toHaveBeenCalledWith("gitea.example.com/acme/beacon");
+  });
+
+  it("omits an untouched embedding model and submits a selected override", async () => {
+    const wrapper = makeWrapper();
+    const { result } = renderHook(
+      () => useWizardMachine({ initialUrl: "https://github.com/acme/beacon" }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.state.model).toBe(""));
+    act(() => result.current.set({ model: "anthropic/claude-sonnet-5" }));
+    act(() => result.current.onSubmit());
+    await waitFor(() => expect(submitWizard).toHaveBeenCalledTimes(1));
+    expect(submitWizard.mock.calls[0][0]).not.toHaveProperty("embeddingModel");
+
+    act(() => result.current.set({ embeddingModel: "text-embedding-3-large" }));
+    act(() => result.current.onSubmit());
+    await waitFor(() => expect(submitWizard).toHaveBeenCalledTimes(2));
+    expect(submitWizard.mock.calls[1][0]).toMatchObject({
+      embeddingModel: "text-embedding-3-large",
+    });
   });
 
   it("an explicit ?url= wins outright over the repo seed", async () => {

@@ -491,6 +491,58 @@ class _UsageNormalizingLiteLLM:
             yield self._normalize(chunk, names)
 
 
+# Keyed by the ``ChatLiteLLM`` base a call resolved, so a test that swaps the
+# library gets its own subclass instead of one built over a stale base.
+_OBSERVABILITY_SUBCLASS_BY_BASE: dict[type[Any], type[Any]] = {}
+
+
+def _observability_chat_litellm_class() -> type[Any]:
+    """Return a ``ChatLiteLLM`` subclass that reports a bare model id to tracing.
+
+    ``ChatLiteLLM._get_ls_params`` sets ``ls_model_name`` to ``self.model`` —
+    the exact string LiteLLM dispatches on, gateway prefix included (e.g.
+    ``openai/claude-opus-5``, or ``openai/z-ai/glm-5.2`` behind a nested
+    routing alias). Langfuse's LangChain integration reads that same
+    ``ls_model_name`` off the callback metadata to price a generation,
+    matching it against a Model Definition's ``match_pattern`` regex — a
+    gateway-prefixed name matches no default pattern, so Langfuse computes
+    cost 0 rather than raising. The miss is silent by construction.
+
+    Overriding ONLY ``_get_ls_params`` keeps ``self.model``/``self.model_name``
+    untouched, so ``_default_params``/``_identifying_params`` — what actually
+    gets sent to ``litellm.acompletion`` — still carry the full routing
+    string. This is a tracing-facing rename, not a routing change.
+
+    Cached BY BASE CLASS, not as a module-level singleton. Building the
+    subclass is Pydantic metaclass work — measured at 9.4 ms, which a caller
+    would otherwise pay on every model build — but a plain singleton would pin
+    whichever ``ChatLiteLLM`` was imported first, and anything swapping
+    ``sys.modules["langchain_litellm"]`` (every test that fakes the library)
+    would then silently get a subclass of the wrong base. Keying on the class
+    object itself keeps both properties: one build per distinct base, and a
+    swapped base gets its own. The map is bounded by how many distinct
+    ``ChatLiteLLM`` classes a process ever imports — one, outside tests.
+    """
+    from langchain_litellm import ChatLiteLLM
+
+    cached = _OBSERVABILITY_SUBCLASS_BY_BASE.get(ChatLiteLLM)
+    if cached is not None:
+        return cached
+
+    class _ObservabilityChatLiteLLM(ChatLiteLLM):
+        def _get_ls_params(  # type: ignore[override]
+            self, stop: list[str] | None = None, **kwargs: Any
+        ) -> dict[str, Any]:
+            params = super()._get_ls_params(stop=stop, **kwargs)
+            reported = params.get("ls_model_name")
+            if isinstance(reported, str):
+                params["ls_model_name"] = _strip_provider(reported) or reported
+            return params
+
+    _OBSERVABILITY_SUBCLASS_BY_BASE[ChatLiteLLM] = _ObservabilityChatLiteLLM
+    return _ObservabilityChatLiteLLM
+
+
 def build_chat_model(
     model_name: str,
     *,
@@ -504,7 +556,7 @@ def build_chat_model(
     to override the configured values (e.g. tests, multi-tenant routing).
     """
     try:
-        from langchain_litellm import ChatLiteLLM
+        ChatLiteLLM = _observability_chat_litellm_class()
     except ImportError as exc:  # pragma: no cover - dependency guard
         raise ImportError("langchain-litellm is required to build ChatLiteLLM") from exc
 
@@ -598,6 +650,46 @@ def build_chat_model(
     return cast(ChatModel, chat)
 
 
+def response_text(response: Any) -> str:
+    """Visible assistant text from an LLM response, whatever shape it arrives in.
+
+    A cross-model normalization, which is why it lives at this seam rather than
+    at each caller (see this package's CLAUDE.md: format differences are fixed
+    here, never detected upstream). Three shapes reach us:
+
+    * a plain ``str`` — most models;
+    * a list of ``{"type": "text", "text": ...}`` blocks — Anthropic-style;
+    * a list mixing ``thinking``/``reasoning`` blocks with the answer as a BARE
+      STRING element — what a reasoning model returns through the proxy.
+
+    Callers used to take the FIRST ``type == "text"`` dict, which yields ``""``
+    for that third shape. The failure is silent — no exception, no log, just an
+    empty answer — so a session title and a compaction summary each simply
+    stopped being produced the moment a reasoning model became the default.
+    Reasoning blocks are deliberately dropped: they are the model's scratchpad,
+    not its answer.
+    """
+    raw = response.content if hasattr(response, "content") else response
+    if isinstance(raw, str):
+        return raw
+    if not isinstance(raw, list):
+        return str(raw)
+    parts: list[str] = []
+    for block in raw:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+#: Upper bounds a grammar-constrained backend expands into literal repetition.
+#: Dropped from every tool schema — see :func:`sanitize_tool_schema`.
+_UNBOUNDED_KEYWORDS = ("maxLength", "maxItems", "maxProperties")
+
+
 def sanitize_tool_schema(schema: Any) -> Any:
     """Recursively fix JSON Schema issues that strict LLM providers reject.
 
@@ -607,12 +699,40 @@ def sanitize_tool_schema(schema: Any) -> Any:
 
     Current fixes:
     - ``array`` without ``items`` → add ``"items": {}`` (required by OpenAI).
+    - drop ``maxLength`` / ``maxItems`` / ``maxProperties``, which make a
+      grammar-constrained backend fail to start.
+
+    WHY THE UPPER BOUNDS GO. A backend that constrains decoding with a grammar
+    (llama.cpp/Ollama, and anything else compiling JSON Schema to GBNF) expands
+    an upper bound into that many literal repetitions, and inlines every
+    ``$ref`` while doing it. In a RECURSIVE schema the two multiply. Measured:
+    ``present_ui`` — whose ``Card.children`` is a ``oneOf`` over
+    eleven component types including ``Card`` itself — made Ollama answer
+    ``400 Failed to initialize samplers: failed to parse grammar`` for the whole
+    17-tool request. Dropping these three keywords fixed it; dropping
+    ``minLength``, ``pattern``, ``const``, ``default``, ``discriminator``,
+    ``anyOf`` or ``additionalProperties`` did not.
+
+    Magnitude is what bites, not presence: the same schema compiled with
+    ``maxLength`` forced to 8, and failed again with ``maxItems`` raised to
+    2000. **A size threshold would still be unsound**, because the blow-up
+    scales with nesting depth as well as with the bound, so a limit that is
+    safe at one depth is fatal one level down. Dropping unconditionally is the
+    only rule that does not need to know the shape of the schema.
+
+    Dropping is strictly PERMISSIVE and cannot truncate or reject a valid
+    argument — it only stops advertising a ceiling. Lower bounds stay: they are
+    small in practice and carry real intent. Callers that need the ceiling
+    enforced still get it, because tool arguments are validated against the
+    original schema on our side (``EmitStructuredResponseTool.handle``).
     """
     if not isinstance(schema, dict):
         return schema
 
     result: dict[str, Any] = {}
     for key, value in schema.items():
+        if key in _UNBOUNDED_KEYWORDS:
+            continue
         if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
             result[key] = {k: sanitize_tool_schema(v) for k, v in value.items()}
         elif key in ("additionalProperties", "items") and isinstance(value, dict):
@@ -672,6 +792,7 @@ __all__ = [
     "register_proxy_model_capabilities",
     "model_supports_reasoning_effort",
     "resolve_reasoning_effort",
+    "response_text",
     "sanitize_tool_schema",
     "specs_to_langchain_tools",
 ]

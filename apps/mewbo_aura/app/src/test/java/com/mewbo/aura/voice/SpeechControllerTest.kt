@@ -1,5 +1,6 @@
 package com.mewbo.aura.voice
 
+import com.mewbo.aura.data.device.DeviceShape
 import com.mewbo.aura.data.model.ChatItem
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -54,9 +55,9 @@ class SpeechControllerTest {
     // ---- onAssistantMessage: modality/mute gating ("text turns stay completely silent") ----
 
     @Test
-    fun `a Text-modality turn never enqueues an utterance`() = runTest {
+    fun `a Text-modality turn never enqueues an utterance on a handheld`() = runTest {
         val synth = RecordingSynthesizer()
-        val controller = SpeechController(synth, backgroundScope)
+        val controller = SpeechController(synth, backgroundScope, DeviceShape.Handheld)
 
         controller.onAssistantMessage(message("assistant:1", "Hello there. ", isStreaming = true), InputModality.Text, muted = false)
         controller.onAssistantMessage(message("assistant:1", "Hello there.", isStreaming = false), InputModality.Text, muted = false)
@@ -73,6 +74,62 @@ class SpeechControllerTest {
         controller.onAssistantMessage(message("assistant:1", "Hello there.", isStreaming = false), InputModality.Voice, muted = true)
 
         assertTrue(synth.spoken.isEmpty())
+    }
+
+    // ---- narratesTurn: the television shape narrates TYPED turns ----
+    //
+    // A television has no voice entry point at all, so under the handheld modality rule every turn
+    // on that shape is silent while the user's own read-aloud switch reads as ON. These four pin
+    // both halves of the seam: the shape decides whether a typed turn speaks, and `muted` still
+    // decides whether ANY turn does.
+
+    @Test
+    fun `a typed turn on a television speaks, and only the newly-arrived suffix`() = runTest {
+        val synth = RecordingSynthesizer()
+        val controller = SpeechController(synth, backgroundScope, DeviceShape.Television)
+
+        controller.onAssistantMessage(message("assistant:1", "Hello world. ", isStreaming = true), InputModality.Text, muted = false)
+        controller.onAssistantMessage(message("assistant:1", "Hello world. How are", isStreaming = true), InputModality.Text, muted = false)
+        controller.onAssistantMessage(
+            message("assistant:1", "Hello world. How are you? Almost done", isStreaming = false),
+            InputModality.Text,
+            muted = false,
+        )
+
+        // "Hello world." appears exactly once despite being present in all three folds - the
+        // chunker's consumed cursor, not a second de-dup mechanism.
+        assertEquals(
+            listOf(
+                "assistant:1:0" to "Hello world.",
+                "assistant:1:1" to "How are you?",
+                "assistant:1:2" to "Almost done",
+            ),
+            synth.spoken,
+        )
+    }
+
+    @Test
+    fun `a muted typed turn on a television stays silent`() = runTest {
+        val synth = RecordingSynthesizer()
+        val controller = SpeechController(synth, backgroundScope, DeviceShape.Television)
+
+        // `muted` carries the user's own "Speak responses" switch (ChatViewModel.publish), so the
+        // shape must never be able to talk over it.
+        controller.onAssistantMessage(message("assistant:1", "Hello there.", isStreaming = false), InputModality.Text, muted = true)
+
+        assertTrue(synth.spoken.isEmpty())
+        assertNull(controller.speakingKey.value)
+    }
+
+    @Test
+    fun `narratesTurn answers by modality on a handheld and yes on a television`() = runTest {
+        val handheld = SpeechController(RecordingSynthesizer(), backgroundScope, DeviceShape.Handheld)
+        val television = SpeechController(RecordingSynthesizer(), backgroundScope, DeviceShape.Television)
+
+        assertTrue(handheld.narratesTurn(InputModality.Voice))
+        assertFalse(handheld.narratesTurn(InputModality.Text))
+        assertTrue(television.narratesTurn(InputModality.Voice))
+        assertTrue(television.narratesTurn(InputModality.Text))
     }
 
     // ---- onAssistantMessage: ordering + reconciliation ----
@@ -251,9 +308,9 @@ class SpeechControllerTest {
     }
 
     @Test
-    fun `priming is a no-op for a Text-modality binding - matches onAssistantMessage's own gate`() = runTest {
+    fun `priming is a no-op for a Text-modality binding on a handheld - matches onAssistantMessage's own gate`() = runTest {
         val synth = RecordingSynthesizer()
-        val controller = SpeechController(synth, backgroundScope)
+        val controller = SpeechController(synth, backgroundScope, DeviceShape.Handheld)
 
         controller.primeAlreadySpoken(message("assistant:1", "Hello world.", isStreaming = false), InputModality.Text)
         // If priming had wrongly closed/opened anything, a genuine Voice fold afterward would
@@ -261,6 +318,33 @@ class SpeechControllerTest {
         controller.onAssistantMessage(message("assistant:1", "Hello world.", isStreaming = false), InputModality.Voice, muted = false)
 
         assertEquals(listOf("assistant:1:0" to "Hello world."), synth.spoken)
+    }
+
+    @Test
+    fun `priming covers a typed turn on a television - a rebind never re-speaks what was already said`() = runTest {
+        val synth = RecordingSynthesizer()
+        val controller = SpeechController(synth, backgroundScope, DeviceShape.Television)
+
+        // The gate that decides whether a turn SPEAKS has to be the same gate that decides whether
+        // it PRIMES. Left on the modality alone, priming would silently stop covering the very
+        // turns this shape now narrates, and a rebind onto a still-running session would replay the
+        // whole reply from word one over the top of what the user already heard.
+        controller.primeAlreadySpoken(message("assistant:1", "Hello world. How are", isStreaming = true), InputModality.Text)
+        assertTrue("priming must never itself speak", synth.spoken.isEmpty())
+
+        controller.onAssistantMessage(
+            message("assistant:1", "Hello world. How are you? Almost done", isStreaming = false),
+            InputModality.Text,
+            muted = false,
+        )
+
+        assertEquals(
+            listOf(
+                "assistant:1:1" to "How are you?",
+                "assistant:1:2" to "Almost done",
+            ),
+            synth.spoken,
+        )
     }
 
     @Test

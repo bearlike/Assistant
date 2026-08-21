@@ -930,6 +930,159 @@ class TestBuildForCapabilityMode:
         assert [t.tool_id for t in built] == ["b"]
 
 
+# ---------------------------------------------------------------------------
+# denied_tools — the deny gate. Purely subtractive, applied to the FINAL
+# selection after every other gate, so it wins over the unconditional
+# auto-surface, the capability auto-surface, and even a named allowlist
+# entry. `present_ui`-shaped: an unconditional, capability-gated built-in
+# that a client had no way to switch off before this gate existed.
+# ---------------------------------------------------------------------------
+
+
+class TestBuildForDeniedTools:
+    @staticmethod
+    def _build(tool_id: str):
+        """A builder whose instance reports *tool_id* (not the fake class attr)."""
+
+        def _factory(sid: str, el) -> _FakeSessionTool:
+            tool = _FakeSessionTool(session_id=sid, event_logger=el)
+            tool.tool_id = tool_id  # type: ignore[misc]
+            return tool
+
+        return _factory
+
+    def _unconditional_registry(self) -> SessionToolRegistry:
+        """A bare unconditional factory (the schedule_trigger shape)."""
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="schedule_trigger",
+                build=self._build("schedule_trigger"),
+                unconditional=True,
+            )
+        )
+        return reg
+
+    def _present_ui_shaped_registry(self) -> SessionToolRegistry:
+        """Unconditional AND capability-gated — the present_ui shape."""
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="present_ui",
+                build=self._build("present_ui"),
+                unconditional=True,
+                requires_capabilities=("generative_ui",),
+            )
+        )
+        return reg
+
+    def _wiki_registry(self) -> SessionToolRegistry:
+        """A capability-gated (non-unconditional) factory — the runtime-grant shape."""
+        reg = SessionToolRegistry()
+        reg.register(
+            SessionToolFactory(
+                tool_id="wiki_read_page",
+                build=self._build("wiki_read_page"),
+                requires_capabilities=("wiki",),
+            )
+        )
+        return reg
+
+    def _named_allowlist_registry(self) -> SessionToolRegistry:
+        reg = SessionToolRegistry()
+        reg.register(SessionToolFactory(tool_id="a", build=self._build("a")))
+        reg.register(SessionToolFactory(tool_id="b", build=self._build("b")))
+        return reg
+
+    def test_deny_beats_unconditional_auto_surface(self):
+        """A bare unconditional factory (schedule_trigger's shape) is switched off."""
+        reg = self._unconditional_registry()
+        # Sanity: without the deny it surfaces on a plain, permissive root.
+        assert reg.ids_for(None) == ["schedule_trigger"]
+        assert reg.ids_for(None, denied_tools=["schedule_trigger"]) == []
+
+    def test_deny_beats_unconditional_plus_capability_auto_surface(self):
+        """present_ui's actual shape: unconditional AND capability-gated.
+
+        This is the defect the deny gate exists to close — before it, there was
+        no request a client could send that unbound this tool once the session
+        advertised ``generative_ui``.
+        """
+        reg = self._present_ui_shaped_registry()
+        # Sanity: a permissive console root with the capability gets it.
+        assert reg.ids_for([], session_capabilities=("generative_ui",)) == ["present_ui"]
+        assert (
+            reg.ids_for(
+                [],
+                session_capabilities=("generative_ui",),
+                denied_tools=["present_ui"],
+            )
+            == []
+        )
+
+    def test_deny_beats_capability_auto_surface(self):
+        """A plain (non-unconditional) capability-gated factory — the runtime-grant shape."""
+        reg = self._wiki_registry()
+        # Sanity: no allowlist, session holds the capability -> auto-surfaces.
+        assert reg.ids_for(None, session_capabilities=("wiki",)) == ["wiki_read_page"]
+        assert (
+            reg.ids_for(
+                None, session_capabilities=("wiki",), denied_tools=["wiki_read_page"]
+            )
+            == []
+        )
+
+    def test_deny_beats_named_allowlist_entry(self):
+        """The allowlist gate (gate 1, always wins otherwise) still loses to deny."""
+        reg = self._named_allowlist_registry()
+        assert reg.ids_for(["a", "b"], denied_tools=["a"]) == ["b"]
+
+    def test_deny_beats_strict_scope_named_entry(self):
+        """Deny wins even under STRICT scope, where the allowlist is authoritative."""
+        reg = self._named_allowlist_registry()
+        assert reg.ids_for(
+            ["a", "b"], strict_tool_scope=True, denied_tools=["a"]
+        ) == ["b"]
+
+    def test_absent_denied_tools_changes_nothing(self):
+        """Regression guard: every existing call site never passes the kwarg at all."""
+        reg = self._present_ui_shaped_registry()
+        base = reg.ids_for([], session_capabilities=("generative_ui",))
+        assert reg.ids_for([], session_capabilities=("generative_ui",)) == base
+
+    def test_empty_denied_tools_changes_nothing(self):
+        """Deny is NOT three-state: ``[]`` and ``None`` are the same 'nothing denied' set."""
+        reg = self._present_ui_shaped_registry()
+        base = reg.ids_for([], session_capabilities=("generative_ui",))
+        assert (
+            reg.ids_for([], session_capabilities=("generative_ui",), denied_tools=[])
+            == base
+        )
+
+    def test_build_for_matches_ids_for_under_deny(self):
+        """``ids_for`` (the operator-facing catalog) agrees with the real build."""
+        reg = self._present_ui_shaped_registry()
+        ids = reg.ids_for(
+            [], session_capabilities=("generative_ui",), denied_tools=["present_ui"]
+        )
+        built = reg.build_for(
+            [],
+            session_id="s1",
+            event_logger=None,
+            session_capabilities=("generative_ui",),
+            denied_tools=["present_ui"],
+        )
+        assert ids == []
+        assert built == []
+
+    def test_deny_of_an_unrelated_id_changes_nothing(self):
+        """A deny naming an id this registry never held is a no-op, not an error."""
+        reg = self._unconditional_registry()
+        assert reg.ids_for(None, denied_tools=["not_a_real_tool"]) == [
+            "schedule_trigger"
+        ]
+
+
 class TestRealScheduleTriggerUnderTheComposedGate:
     """The composed gate against the ONE unconditional factory that ships.
 

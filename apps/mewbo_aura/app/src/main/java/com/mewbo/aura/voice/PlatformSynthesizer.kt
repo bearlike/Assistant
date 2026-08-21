@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 @Singleton
 class PlatformSynthesizer @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val boost: SpeechVolumeBoost,
 ) : Synthesizer {
 
     private val _isAvailable = MutableStateFlow(false)
@@ -50,7 +52,7 @@ class PlatformSynthesizer @Inject constructor(
             !initResolved -> pending += PendingUtterance(utteranceId, text)
             _isAvailable.value -> {
                 requestAudioFocus()
-                engine.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
+                engine.speak(text, TextToSpeech.QUEUE_ADD, boostParams(), utteranceId)
             }
             else -> _events.tryEmit(SynthEvent.Error(utteranceId))
         }
@@ -61,6 +63,27 @@ class PlatformSynthesizer @Inject constructor(
         pending.clear()
         tts?.stop()
         abandonAudioFocus()
+        boost.release()
+    }
+
+    /**
+     * The params Bundle [TextToSpeech.speak] gets — carrying only an audio session id, and only
+     * while the volume boost is on.
+     *
+     * `null` when it is off, which is byte-for-byte the call this made before the boost existed.
+     * [TextToSpeech.Engine.KEY_PARAM_VOLUME] is NOT the mechanism and cannot be: it is documented
+     * as *"a float ranging from 0 to 1 where 0 is silence, and 1 is the maximum volume (the default
+     * behavior)"*, and the framework carries it to `AudioTrack.setVolume`, which hard-clamps at
+     * `GAIN_MAX = 1.0f`. Amplification happens in the effect [SpeechVolumeBoost] attaches to this
+     * session.
+     *
+     * **Whether it is audible is engine-dependent, and nothing here can tell.** AOSP's own
+     * `BlockingAudioTrack` constructs its `AudioTrack` with this session id, so any engine
+     * returning audio through `SynthesisCallback` is boosted; an engine that plays its own audio
+     * out of band never sees this bundle. That is why Settings makes no "supported" claim.
+     */
+    private fun boostParams(): Bundle? = boost.sessionId()?.let { session ->
+        Bundle().apply { putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, session) }
     }
 
     private fun ensureInitialized(): TextToSpeech =
@@ -82,7 +105,11 @@ class PlatformSynthesizer @Inject constructor(
         pending.clear()
         if (langOk) {
             requestAudioFocus()
-            queued.forEach { engine.speak(it.text, TextToSpeech.QUEUE_ADD, null, it.id) }
+            // Resolved ONCE for the whole flush, not per utterance: these are the sentences of one
+            // reply that outran engine init, and asking again mid-loop could split them across two
+            // sessions if the setting changed in between.
+            val params = boostParams()
+            queued.forEach { engine.speak(it.text, TextToSpeech.QUEUE_ADD, params, it.id) }
         } else {
             queued.forEach { _events.tryEmit(SynthEvent.Error(it.id)) }
         }

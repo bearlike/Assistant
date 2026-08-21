@@ -1,6 +1,8 @@
 package com.mewbo.aura.ui.aurora
 
 import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -14,7 +16,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.graphicsLayer
+import com.mewbo.aura.ui.orb.AuraShaders
 import com.mewbo.aura.ui.orb.GlslNoise
 import com.mewbo.aura.ui.orb.rememberShaderTimeSeconds
 import com.mewbo.aura.ui.theme.AuraColors
@@ -113,6 +121,19 @@ fun AuroraWashTop(state: AuroraState, modifier: Modifier = Modifier) {
 
     if (!shouldRender) return
 
+    if (!AuraShaders.supported) {
+        ShaderFreeWashTop(modifier = modifier, intensity = intensity)
+        return
+    }
+
+    ShaderWashTop(state = state, modifier = modifier, intensity = intensity)
+}
+
+/** The live AGSL wash — what [AuroraWashTop] resolves to once [AuraShaders] confirms `RuntimeShader`. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@Composable
+private fun ShaderWashTop(state: AuroraState, modifier: Modifier, intensity: State<Float>) {
+    val extras = LocalAssistantExtras.current
     val shader = remember { RuntimeShader(AURORA_WASH_SHADER_SRC) }
     val timeSeconds = rememberShaderTimeSeconds()
     val driftHz = if (extras.reducedMotion) 0f else AuroraWashUniformMath.driftHz(state)
@@ -133,6 +154,41 @@ fun AuroraWashTop(state: AuroraState, modifier: Modifier = Modifier) {
                     shader.setFloatUniform("iColorGold", gold.red, gold.green, gold.blue)
                     shader.setFloatUniform("iColorGreen", green.red, green.green, green.blue)
                     drawRect(brush = brush)
+                }
+            },
+    )
+}
+
+/**
+ * Shader-free fallback for API 30-32 ([AuraShaders]): the same gold-to-green top wash, drawn as a
+ * horizontal Compose gradient masked to nothing by
+ * [AuraColors.auroraWashTopFadeHeightFraction] of the height.
+ *
+ * The vertical fade is a `DstIn` alpha mask over an offscreen layer rather than a second colour
+ * ramp - a linear gradient cannot carry the horizontal blend and the vertical falloff at once, and
+ * painting the canvas colour back over the top would only work against one background. Dropped
+ * against the shader: the drift (this is a static frame) and the dither, so the falloff bands at
+ * 8 bits. Acceptable for a debug-showcase-only surface on a television.
+ */
+@Composable
+private fun ShaderFreeWashTop(modifier: Modifier, intensity: State<Float>) {
+    val gold = AuraColors.auroraWashTop[0].color
+    val green = AuraColors.auroraWashTop[1].color
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithCache {
+                val wash = Brush.horizontalGradient(colors = listOf(gold, green))
+                val fadeMask = Brush.verticalGradient(
+                    colors = listOf(Color.Black, Color.Transparent),
+                    startY = 0f,
+                    endY = size.height * AuraColors.auroraWashTopFadeHeightFraction,
+                )
+                onDrawBehind {
+                    drawRect(brush = wash, alpha = intensity.value.coerceIn(0f, 1f))
+                    drawRect(brush = fadeMask, blendMode = BlendMode.DstIn)
                 }
             },
     )

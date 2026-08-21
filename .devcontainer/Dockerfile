@@ -76,6 +76,36 @@ RUN groupadd --gid $USER_GID $USERNAME \
 # monorepo root.
 RUN pip install --no-cache-dir uv
 
+# ---------- Simple Secrets Manager (ssm / ssm-cli) ----------
+# The workspace agent is launched through `ssm run`, so an image without it on
+# PATH boots the agent straight into exit 127. Installed here (Tier 0) rather
+# than init.d because it is toolchain, not project state.
+#
+# All three UV_* paths are load-bearing, because this installs as root while
+# the agent runs as $USERNAME:
+#   BIN_DIR     — uv's default (~/.local/bin) is NOT on a non-login shell's
+#                 PATH, and the agent pane runs `sh -c`, so a default install
+#                 is present and still unfindable (exit 127).
+#   TOOL_DIR    — the shim is a symlink INTO the tool venv; left at the default
+#                 it points inside /root and the agent gets exit 126.
+#   PYTHON_...  — the venv's interpreter is likewise fetched under /root by
+#                 default, so the venv resolves to an unreadable python.
+# `a+rX` then grants traverse/read without marking data files executable. The
+# python dir is only created when uv had to FETCH an interpreter; this image
+# already ships one it can reuse, so the loop skips what does not exist rather
+# than failing the build on it.
+#
+# The null keyring backend is required at RUNTIME, not just here: a container
+# has no secret service, and keyring's search for one hangs a headless client.
+# The CLI reads SSM_BASE_URL/SSM_TOKEN from the environment, which the
+# workspace supervisor already injects — so no credential file is baked in.
+ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+RUN UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_TOOL_DIR=/opt/uv-tools \
+    UV_TOOL_BIN_DIR=/usr/local/bin \
+    uv tool install git+https://github.com/bearlike/Simple-Secrets-Manager.git \
+    && for d in /opt/uv-python /opt/uv-tools; do [ -d "$d" ] && chmod -R a+rX "$d"; done
+
 # ---------- Shared cache mount points ----------
 # Named volumes are mounted here by devcontainer.json. Create and chown them at
 # build time: a volume is created empty and root-owned on first use, and the

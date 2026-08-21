@@ -38,7 +38,12 @@ from typing import TYPE_CHECKING, Any
 
 from mewbo_core.common import get_logger
 
-from mewbo_graph.plugins.wiki._ctx import emit_log, emit_phase, emit_scope_preview
+from mewbo_graph.plugins.wiki._ctx import (
+    ProgressReporter,
+    emit_log,
+    emit_phase,
+    emit_scope_preview,
+)
 from mewbo_graph.plugins.wiki._jobless import JoblessIndexRunner, JoblessPhaseError
 from mewbo_graph.plugins.wiki.finalize import _graph_is_populated, _supersede_stale_jobs
 from mewbo_graph.wiki.refresh import RefreshOrchestrator
@@ -120,7 +125,7 @@ class ScopedRefreshRunner(JoblessIndexRunner):
         # the exact silence that let a total cross-file resolution outage run
         # unnoticed on the full-index path.
         report = RefreshOrchestrator.from_store(
-            ctx.store, on_report=lambda message: emit_log(ctx, message)
+            ctx.store, slug=ctx.slug, on_report=lambda message: emit_log(ctx, message)
         ).refresh(
             ctx.slug,
             ctx.clone_dir,
@@ -360,6 +365,19 @@ class ScopedRefreshRunner(JoblessIndexRunner):
             "pageCount": project.pages,
         })
 
+        # A scoped refresh's declared plan carries the FULL seven-phase
+        # pipeline (the reporter declares it once, uniformly, for every run
+        # shape), but this runner's own work never touches ``graph``/``enrich``/
+        # ``plan`` through the ledger — the delta pass runs under the ``graph``
+        # PHASE NAME but reports no ``graph.*`` steps, and ``enrich``/``plan``
+        # never apply to an incremental pass at all. Left alone those groups
+        # stay ``pending`` on every completed scoped refresh forever. Settling
+        # here is what makes the group genuinely inapplicable read as
+        # ``skipped`` rather than as unfinished work.
+        # ``settle`` emits its own timeline warning for a step left unreported
+        # beside a completed sibling, so this call site does not repeat it.
+        ProgressReporter(ctx).settle()
+
     # ── helpers ─────────────────────────────────────────────────────────
 
     @staticmethod
@@ -535,7 +553,7 @@ class ScopedRefreshRunner(JoblessIndexRunner):
                 "NOT rewritten: "
                 + ", ".join(missing[:8])
                 + ("…" if len(missing) > 8 else ""),
-                level="warning",
+                level="warn",
             )
             return
         emit_log(ctx, f"Regenerated all {len(page_ids)} scored page(s)")
@@ -547,7 +565,7 @@ class ScopedRefreshRunner(JoblessIndexRunner):
             f"{len(page_ids)} page(s) need regenerating, but {because} available "
             "on this deployment — they stay as they were and the scope preview's "
             "counts stand",
-            level="warning",
+            level="warn",
         )
 
     def _save_act(
@@ -623,7 +641,7 @@ class ScopedRefreshRunner(JoblessIndexRunner):
         )
 
 
-def current_index_fingerprint() -> IndexFingerprint:
+def current_index_fingerprint(store: Any, slug: str) -> IndexFingerprint:
     """What an index started right now would be built with.
 
     The PREDICTION side of the fingerprint comparison, and its asymmetry with
@@ -638,16 +656,16 @@ def current_index_fingerprint() -> IndexFingerprint:
 
     ``embedding_model`` is ``None`` when embedding is switched off, which is
     what makes the comparison catch the case worth catching: an index built
-    WITH vectors read against a deployment that would now build none is
-    genuinely stale, and collapsing that to a match would leave half the store
-    unsearchable with nothing to show for it. It resolves the model NAME from
-    config only — no embedding call, no network, no proxy round-trip — because
-    this runs on the HTTP request path where a refresh is being decided.
+    WITH vectors read against a project that would now build none is genuinely
+    stale, and collapsing that to a match would leave half the store
+    unsearchable with nothing to show for it. It resolves *this slug*'s model
+    from its settings (or the deployment default) without an embedding call or
+    network round-trip, which keeps this request-path probe cheap.
 
-    ``O(1)``: config reads, one installed-package metadata lookup, and a
-    ``shutil.which`` per resolver binary. Reuses ``build_graph``'s probes
-    rather than re-deriving them, so the two sides of every comparison are
-    computed by the same code.
+    ``O(one record)``: one slug-keyed settings read, config reads, one installed
+    package metadata lookup, and a ``shutil.which`` per resolver binary. Reuses
+    ``build_graph``'s probes rather than re-deriving them, so both comparison
+    sides agree on every non-project input.
     """
     from mewbo_graph.plugins.wiki.build_graph import (  # noqa: PLC0415
         _embeddings_enabled,
@@ -658,16 +676,12 @@ def current_index_fingerprint() -> IndexFingerprint:
 
     embedding_model: str | None = None
     if _embeddings_enabled():
-        from mewbo_graph.wiki.embedder import make_embedder_or_none  # noqa: PLC0415
+        from mewbo_graph.wiki.embedder import make_embedder_for  # noqa: PLC0415
 
-        # Constructing the Embedder is what NORMALISES the configured name (the
-        # proxy prefix rule lives on that class), so reading the raw config
-        # value instead would compare an un-normalised string against a
-        # normalised one and report a mismatch on every single refresh. It
-        # makes no request; a backend that cannot even be constructed reads as
-        # "this deployment would embed nothing", which is the same answer the
-        # stamped side records for a run whose embed pass produced no vectors.
-        embedder = make_embedder_or_none()
+        # Constructing the Embedder normalises the selected model name (the proxy
+        # prefix rule lives on that class), so the comparison exactly matches what
+        # the write path stamps. It makes no network request.
+        embedder = make_embedder_for(store, slug)
         embedding_model = embedder.model if embedder is not None else None
 
     return IndexFingerprint(

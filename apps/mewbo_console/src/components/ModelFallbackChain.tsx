@@ -21,6 +21,47 @@ type ModelFallbackChainProps = {
 };
 
 /**
+ * One row of the ordered fallback chain: priority ordinal, brand icon, name,
+ * remove button. Exported so `ModelSelector`'s tabbed "Fallback" tab renders
+ * the SAME row shape instead of forking the markup — the chain's visual
+ * identity (the ordinal, specifically) must read identically everywhere the
+ * chain appears.
+ */
+export function FallbackChainRow({
+  model,
+  index,
+  onRemove,
+}: {
+  model: string;
+  index: number;
+  onRemove: (model: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-[hsl(var(--foreground))]">
+      {/* `tabular-nums`, not mono: this is a decorative list ordinal, and the
+          only thing it needs is for the period to land at the same x on
+          every row. `w-4` fixes the box but not the glyph advance, so
+          proportional digits still wobble. Size is inherited from the row —
+          the fewer places that restate type, the fewer places it can
+          drift. */}
+      <span className="tabular-nums text-[hsl(var(--muted-foreground))] w-4 shrink-0">
+        {index + 1}.
+      </span>
+      <ModelBrandIcon modelId={model} size={12} />
+      <span className="truncate flex-1">{formatModelName(model)}</span>
+      <button
+        type="button"
+        onClick={() => onRemove(model)}
+        aria-label={`Remove ${formatModelName(model)} from fallback chain`}
+        className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
+
+/**
  * The opt-in cross-model fallback ladder: a `Switch` plus an ordered
  * add/remove chain. Extracted from `ModelSelector` so every surface that
  * starts a run — the Tasks composer, the wiki configure wizard, wiki project
@@ -79,31 +120,7 @@ export function ModelFallbackChain({
           {value.length > 0 && (
             <div className="px-3 py-1 flex flex-col gap-1">
               {value.map((model, i) => (
-                <div
-                  key={model}
-                  className="flex items-center gap-1.5 text-xs text-[hsl(var(--foreground))]"
-                >
-                  {/* `tabular-nums`, not mono: this is a decorative list
-                      ordinal, and the only thing it needs is for the period
-                      to land at the same x on every row. `w-4` fixes the
-                      box but not the glyph advance, so proportional digits
-                      still wobble. Size is inherited from the row — the
-                      fewer places that restate type, the fewer places it
-                      can drift. */}
-                  <span className="tabular-nums text-[hsl(var(--muted-foreground))] w-4 shrink-0">
-                    {i + 1}.
-                  </span>
-                  <ModelBrandIcon modelId={model} size={12} />
-                  <span className="truncate flex-1">{formatModelName(model)}</span>
-                  <button
-                    type="button"
-                    onClick={() => toggle(model)}
-                    aria-label={`Remove ${formatModelName(model)} from fallback chain`}
-                    className="p-0.5 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
+                <FallbackChainRow key={model} model={model} index={i} onRemove={toggle} />
               ))}
             </div>
           )}

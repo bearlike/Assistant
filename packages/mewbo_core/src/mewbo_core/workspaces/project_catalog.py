@@ -234,13 +234,11 @@ class ProjectCatalog:
             repositories = self.repository_store.list()
         except Exception:  # noqa: BLE001 - degrade this section, never the list
             return []
-        by_path = {
-            self._same_dir_key(e.path): e for e in workspaces if e.path
-        }
+        by_path = {self.same_dir_key(e.path): e for e in workspaces if e.path}
         out: list[ProjectEntry] = []
         for repo in repositories:
             path = self._locate_checkout(repo)
-            listed = by_path.get(self._same_dir_key(path)) if path else None
+            listed = by_path.get(self.same_dir_key(path)) if path else None
             if listed is not None:
                 listed.repo = repo.slug
                 continue
@@ -258,12 +256,15 @@ class ProjectCatalog:
         return out
 
     @staticmethod
-    def _same_dir_key(path: str | None) -> str:
+    def same_dir_key(path: str | None) -> str:
         """Normalize a path so two spellings of one directory compare equal.
 
         ``realpath`` rather than ``abspath``: a managed project reached through
         a symlinked projects root and a checkout recorded by its physical path
         are the same workspace, and only resolving links makes them compare so.
+        This is public because ``ExternalCwdPolicy`` in the API app compares a
+        caller-supplied path against a session's bound directory through this
+        same normalizer: one normalizer, not two.
         """
         if not path:
             return ""
@@ -291,6 +292,26 @@ class ProjectCatalog:
             if entry.key == cleaned:
                 return entry
         return None
+
+    def owns_path(self, path: str | None) -> bool:
+        """Whether *path* is a directory the server minted or was configured with.
+
+        This distinguishes a server-known directory from a path a caller
+        invented. **Cost: O(collection).** It walks :meth:`entries`, the
+        configured map plus every managed project and registered repository,
+        with an ``os.path.isdir`` per row, so callers reach it only on a path
+        that would otherwise be refused, never on a hot happy path.
+
+        This does not check availability: a listed-but-missing directory remains
+        server-known; existence is the caller's validation step, and answering
+        both here would make one refusal wear two meanings.
+        """
+        if not path or not path.strip():
+            return False
+        key = self.same_dir_key(path)
+        return any(
+            entry.path and self.same_dir_key(entry.path) == key for entry in self.entries()
+        )
 
     def resolve(self, key: str) -> str:
         """Turn a project key into an absolute directory, or refuse with a reason.

@@ -1,5 +1,6 @@
 {
   "name": "mewbo-apps-builder",
+  "display_name": "App Builder",
   "description": "app-builder + app-repair agents and the submit_app / app_data session tools for the Mewbo Apps sub-product.",
   "version": "0.1.0",
   "author": "Mewbo",

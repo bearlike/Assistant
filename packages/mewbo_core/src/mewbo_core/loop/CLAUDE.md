@@ -116,7 +116,36 @@ one of those paths silently loses its half of the pair.
   from INSIDE the running tool — the only assertion that can tell "before the
   await" from "before the result".
 
-### The safe turn boundary
+### A tool result may carry IMAGES, and they bypass the text machinery entirely
+
+`ToolCallResult.content` stays `str`. Images ride on an additive `images` field (mirrored on
+`MockSpeaker`), so every existing reader, the cap, the ANSI strip and the event snapshot are
+unchanged, and a result with no image serialises byte-identically to before — which is what keeps an
+ordinary conversation's cache prefix intact.
+
+**They bypass truncation rather than teaching truncation about them.** A base64 data URI has no
+meaningful character count, `_windowed` on it yields a corrupt image, and reaching `event_str` would
+persist every screenshot into the store and replay it on each transcript read. `multimodal.py` owns
+the split; the only place images rejoin the text is `_tool_message_content`, building the
+`ToolMessage` content list that LiteLLM turns into a native `tool_result` image block.
+
+Three traps, each already closed:
+
+- **Images ship on the SUCCESS path only.** The provider rejects a `tool_result` carrying a non-text
+  block while flagged as an error, which fails the whole request rather than the one call. A failed
+  capture must degrade to text.
+- **`_compact_messages` renders message bodies into a PROMPT.** A bare `str(m.content)` on a
+  multipart body inlines the whole data URI into the summarizer's input, then cuts it at 2000 chars.
+  `_text_of_parts` keeps the text and drops the image.
+- **Stripping images is COMPACTION's job, not a turn interval's.** An interval strip mutates the
+  list on an otherwise-stable turn and pays a cache invalidation to save context; compaction has
+  already voided that prefix, so the same saving costs nothing. `ImageHistoryStrip` keeps the newest
+  (a run driving a screen that loses sight of it must spend a turn re-observing) and replaces the
+  rest with a re-request hint — for a screenshot, asking again is the only honest recovery once the
+  screen has moved on. Converged with `opencode`, `kilocode` and `codex`, all of which strip at
+  compaction/normalization and REPLACE rather than delete so turn structure survives.
+
+## The safe turn boundary
 
 **Every context mutation that re-renders `messages[0]` happens at the TOP of the
 next iteration, never mid-turn.** Three do: a `model_control` model switch, a

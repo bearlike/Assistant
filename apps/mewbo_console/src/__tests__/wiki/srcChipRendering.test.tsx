@@ -46,8 +46,9 @@ describe("inline src: citations through react-markdown", () => {
   it("renders a badge (not a bare anchor) for a scheme-prefixed citation", () => {
     renderBody("[pyproject.toml L63-76](src:pyproject.toml#L63-76)");
 
-    // The badge splits path and range into its two cells — the raw markdown
-    // label is replaced, which is how we know the chip branch was reached.
+    // The badge splits path and range into its two cells. This label merely
+    // restates the citation, so it collapses to the chip alone — `getByText`
+    // would throw on a duplicate if the label were also printed beside it.
     expect(screen.getByText("pyproject.toml")).toBeInTheDocument();
     expect(screen.getByText("L63–76")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Gitea" })).toBeInTheDocument();
@@ -104,5 +105,69 @@ describe("inline src: citations through react-markdown", () => {
       "https://example.com/a",
     );
     expect(wikiUrlTransform("src:a/b.py#L1-2", "href", NODE)).toBe("src:a/b.py#L1-2");
+  });
+});
+
+/**
+ * The prompt asks the model for a path-shaped label; it routinely writes prose
+ * there instead and attaches the citation to a clause or a whole sentence.
+ * Rendering the chip in place of that label deleted the answer's own words —
+ * silently, with no other copy of them anywhere on the page.
+ *
+ * Every body below is copied VERBATIM out of a persisted answer
+ * (`GET /v1/wiki/qa/<id>`), not hand-written, so these pin what the model
+ * really emits rather than what the prompt asks for.
+ */
+describe("a citation annotates the sentence, it does not replace it", () => {
+  it("keeps a one-word label that opens the sentence", () => {
+    renderBody(
+      "[Mewbo](src:README.md#L1-L165) is an open, model-agnostic stack for long-running agents.",
+    );
+
+    // The badge sits inline directly after the phrase it cites, so the two
+    // halves of the sentence are asserted either side of it — both surviving
+    // is what "no words were destroyed" means here.
+    const para = screen.getByText(/Mewbo/);
+    expect(para).toHaveTextContent("Mewbo");
+    expect(para).toHaveTextContent(
+      "is an open, model-agnostic stack for long-running agents.",
+    );
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("L1–165")).toBeInTheDocument();
+  });
+
+  it("keeps a whole clause the citation is attached to", () => {
+    renderBody(
+      "[Every run is bounded before it starts:](src:README.md#L29-L34) it receives a fixed tool surface.",
+    );
+
+    expect(screen.getByText(/Every run is bounded before it starts:/)).toBeInTheDocument();
+    expect(screen.getByText(/it receives a fixed tool surface\./)).toBeInTheDocument();
+  });
+
+  it("keeps a whole sentence that is the entire paragraph", () => {
+    const sentence =
+      "Listings never read their children; detail surfaces never gate on collection queries.";
+    renderBody(`[${sentence}](src:CLAUDE.md#L157-L189)`);
+
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.getByText("CLAUDE.md")).toBeInTheDocument();
+  });
+
+  it("keeps prose when the citation has no line range", () => {
+    renderBody("[Check CLAUDE.md](src:CLAUDE.md) at every layer.");
+
+    expect(screen.getByText(/Check CLAUDE\.md at every layer\./)).toBeInTheDocument();
+    // Path cell only — no range cell to print.
+    expect(screen.queryByText(/^L\d/)).not.toBeInTheDocument();
+  });
+
+  it("drops a label that only restates the path, in each spelling", () => {
+    // `getByText` throws on a duplicate match, so a surviving label fails here.
+    for (const label of ["a/b.py", "b.py", "a/b.py:63", "b.py L63-76", "a/b.py#L63-L76"]) {
+      renderBody(`[${label}](src:a/b.py#L63-76)`);
+      expect(screen.getByText("a/b.py")).toBeInTheDocument();
+      cleanup();
+    }
   });
 });

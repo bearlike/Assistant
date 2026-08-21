@@ -419,7 +419,7 @@ def test_full_dispatch_round_trip_via_result_route(client):
     from mewbo_core.session.session_event_bus import get_session_event_bus
 
     session_id = rt.resolve_session()
-    get_session_event_bus().subscribe(session_id)  # a client is "attached" (F10)
+    get_session_event_bus().subscribe(session_id, executor=True)  # the DEVICE client
     dispatcher = ApiDeviceToolDispatcher(runtime=rt)
 
     result_box: dict = {}
@@ -501,7 +501,7 @@ def test_dispatch_timeout_surfaces_device_timeout_error(client, monkeypatch):
 
     monkeypatch.setattr(device_tools_mod, "DEVICE_TOOL_TIMEOUT_S", 0.2)
     session_id = rt.resolve_session()
-    get_session_event_bus().subscribe(session_id)  # a client is "attached" (F10)
+    get_session_event_bus().subscribe(session_id, executor=True)  # the DEVICE client
     dispatcher = ApiDeviceToolDispatcher(runtime=rt)
 
     result = asyncio.run(dispatcher.dispatch(session_id, "device_send_sms", {}))

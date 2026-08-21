@@ -26,10 +26,11 @@ def _resolve_runtime() -> Any:
     return resolve_runtime()
 
 
-def _make_embedder() -> Any:
-    """Construct and return an Embedder instance. Module-level for test stubbing."""
-    from mewbo_graph.wiki.embedder import Embedder  # noqa: PLC0415
-    return Embedder()
+def _make_embedder(store: Any, slug: str) -> Any:
+    """Construct an Embedder for one project. Module-level for test stubbing."""
+    from mewbo_graph.wiki.embedder import make_embedder_for  # noqa: PLC0415
+
+    return make_embedder_for(store, slug)
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ class WikiSearchPagesTool(WikiSessionTool):
         # 3. Run hybrid search over pages.
         try:
             from mewbo_graph.wiki.retriever import HybridRetriever  # noqa: PLC0415
-            embedder = _make_embedder()
+            embedder = _make_embedder(ctx.store, ctx.slug)
             retriever = HybridRetriever(store=ctx.store, embedder=embedder)
             hits = retriever.search(ctx.slug, args.query, k=args.k, sources="pages")
         except Exception as exc:  # noqa: BLE001

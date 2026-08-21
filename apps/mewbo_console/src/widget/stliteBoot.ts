@@ -176,6 +176,35 @@ const APP_REM_BASIS_PX = 12.5;
 const APP_TEXT_PX = 13;
 
 /**
+ * Vertical rhythm between sidebar elements, in px, and it must be ABSOLUTE for
+ * the same reason reading text is: it is the only spacing a sidebar has left.
+ *
+ * facade zeroes every margin and padding it can reach
+ * (`div[data-testid="stElementContainer"]`, `... > div`,
+ * `div[data-testid="stVerticalBlock"] > div`) and then re-expresses ALL
+ * separation as one flex `gap` — `0.125rem` on the sidebar's vertical block.
+ * That is 2px against the 16px root it was authored for, already tight, and it
+ * works for facade's own case: a sidebar holding a short nav list.
+ *
+ * Then `APP_REM_BASIS_PX` shrinks the root to 12.5px and that gap computes to
+ * 1.56px. Measured on a real app's filter sidebar: a section label ("IDENTITY",
+ * "LICENSING") renders as a 5px-tall box sitting 1.56px above the 55px widget
+ * below it, so the label reads as colliding with the control it names, and the
+ * whole panel reads as broken text rather than as a dense one. The same sidebar
+ * on a page where this CSS does not run keeps Streamlit's native 8.8px and
+ * looks correct — which is what made the defect look like a per-page bug rather
+ * than an arithmetic one.
+ *
+ * 8px is Streamlit's own rhythm (0.55rem at its 16px root = 8.8px) rounded to
+ * the console's 4px spacing grid. Restoring it here rather than raising the rem
+ * basis keeps the density win intact: controls stay at 31px, only the space
+ * BETWEEN them comes back. Two rem-derived values multiplying into an unusable
+ * one is the trap — when a vendor's rem spacing has to survive a basis change,
+ * pin it in px.
+ */
+const APP_SIDEBAR_GAP_PX = 8;
+
+/**
  * Compact-density override, injected as a plain `st.markdown(unsafe_allow_html=True)`
  * `<style>` tag AFTER facade applies its theme.
  *
@@ -238,6 +267,61 @@ const COMPACT_DENSITY_CSS = `<style>
     div[data-testid="stElementContainer"] > div[data-testid="stMetric"] {
         padding: 1rem 1.25rem !important;
     }
+
+    /* Sidebar vertical rhythm, restored in absolute px — see APP_SIDEBAR_GAP_PX
+       for why facade's 0.125rem cannot survive the basis shrink. This must
+       match facade's OWN selector to win on equal specificity, which it does
+       because this stylesheet is injected AFTER facade's. */
+    [data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+        gap: ${APP_SIDEBAR_GAP_PX}px !important;
+    }
+</style>`;
+
+/**
+ * `[data-testid="stSidebarNav"]` — the multipage page-link list Streamlit
+ * auto-generates from a `pages/` directory — is the one sidebar element
+ * `streamlit-facade`'s own CSS never targets (`facade/theme.py` styles
+ * `stSidebar` and everything authored inside it, but has no rule for this
+ * native chrome widget at all). Worse, unlike everything facade DOES cover,
+ * this widget's color does not come from an injected `<style>` at all: it is
+ * painted from Streamlit's OWN theme state at the moment it first mounts,
+ * which on a cold kernel boot happens before `.streamlit/config.toml` (seeded
+ * further down) is honored. The result, verified live: landing straight on
+ * the app's root page shows this list in Streamlit's stock light theme (white
+ * box, black text) sitting directly above the correctly dark-themed filter
+ * panel below it — the one navigation step that never gets a facade rule AND
+ * loses the boot-order race. Navigating to any other page forces Streamlit to
+ * remount this chrome, which by then reads the correct theme, so the mismatch
+ * silently self-heals — masking the defect on every page except the first one
+ * a session ever lands on. A plain `st.markdown(unsafe_allow_html=True)` rule
+ * sidesteps the race entirely: like `COMPACT_DENSITY_CSS`, it edits the DOM
+ * directly rather than waiting on Streamlit's theme engine, so it's correct
+ * from the very first paint. Colors reuse the SAME `--chrome-*` custom
+ * properties facade's own `apply()` sets on `:root` (this block runs right
+ * after that call, in the same wrapper), and the active/hover tints mirror
+ * facade's own idiom for `stSidebar` buttons and `Sidebar()`'s active-page
+ * highlight (`rgba(255,255,255,0.08)` / `0.12)`), so a themed nav list reads
+ * as one system with the rest of the sidebar rather than a second palette.
+ */
+const SIDEBAR_NAV_CSS = `<style>
+    [data-testid="stSidebarNav"] {
+        background-color: var(--chrome-background) !important;
+    }
+    [data-testid="stSidebarNavLink"] span,
+    [data-testid="stSidebarNavLink"] p {
+        color: var(--chrome-foreground) !important;
+        font-family: var(--font-sans) !important;
+    }
+    [data-testid="stSidebarNavLink"]:hover {
+        background-color: rgba(255,255,255,0.08) !important;
+    }
+    [data-testid="stSidebarNavLink"][aria-current="page"] {
+        background-color: rgba(255,255,255,0.12) !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stSidebarNavSeparator"] {
+        background-color: var(--chrome-border) !important;
+    }
 </style>`;
 
 /**
@@ -280,7 +364,7 @@ if _mewbo_facade_theme is not None:
         radius=${JSON.stringify(t.radius)},
     )
 import streamlit as _mewbo_st
-_mewbo_st.markdown(${JSON.stringify(COMPACT_DENSITY_CSS)}, unsafe_allow_html=True)
+_mewbo_st.markdown(${JSON.stringify(COMPACT_DENSITY_CSS + SIDEBAR_NAV_CSS)}, unsafe_allow_html=True)
 import runpy
 runpy.run_path(${JSON.stringify(entrypoint)}, run_name="__main__")
 `;

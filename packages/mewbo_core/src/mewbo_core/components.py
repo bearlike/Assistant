@@ -9,7 +9,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from mewbo_core.common import get_logger
@@ -29,6 +29,33 @@ logging = get_logger(name="core.components")
 # slice the tool-use loop already applies at its own exhaustion seam, so the two
 # writers can never disagree about how much of a provider error a trace keeps.
 _SPAN_STATUS_MESSAGE_MAX = 500
+
+# The observation types the Langfuse SDK renders differently. Kept as a closed
+# ``Literal`` rather than an enum because every caller and the SDK itself want
+# the bare string, and a typo in one is otherwise only visible in the UI.
+ObservationKind = Literal[
+    "span",
+    "generation",
+    "agent",
+    "tool",
+    "chain",
+    "retriever",
+    "evaluator",
+    "embedding",
+    "guardrail",
+]
+
+# What the user axis carries when no principal reached this seam. Copying the
+# session id there instead makes the two axes identical, which reads in the UI
+# as "every session is its own user" — an honest unknown is the lesser loss.
+ANONYMOUS_USER_ID = "anonymous"
+
+# Names the OTel resource so exported spans stop arriving as ``unknown_service``.
+_OTEL_SERVICE_NAME = "mewbo"
+
+# Langfuse accepts a lowercase ``[a-z0-9_-]`` environment slug and reserves the
+# ``langfuse`` prefix for itself; anything else is rejected at ingest.
+_ENVIRONMENT_DISALLOWED = re.compile(r"[^a-z0-9_-]+")
 
 _LANGFUSE_TRACE_CONTEXT: ContextVar[TraceContext | None] = ContextVar(
     "langfuse_trace_context",
@@ -163,32 +190,33 @@ def _build_langfuse_trace_context(
     session_id: str | None,
     invocation_id: str | None = None,
 ) -> TraceContext | None:
-    """Build a Langfuse trace context.
+    """Pin the trace id for an invocation, or ``None`` to let OTel decide.
 
-    When *invocation_id* is given, each invocation gets its own trace
-    (prevents user idle-time between messages from bloating trace
-    duration).  ``session_id`` is propagated separately via
-    ``propagate_attributes`` so Langfuse still groups traces into
-    sessions.
+    An *invocation_id* pins one trace per invocation, so user idle time between
+    messages never bloats a trace's duration; ``session_id`` is propagated
+    separately via ``propagate_attributes``, which is what still groups those
+    traces into one session.
+
+    **Without an invocation id this returns ``None``, and that is the correct
+    answer rather than a degradation.** ``None`` means "no explicit context":
+    an enclosing span, if there is one, becomes the real OTel parent, and with
+    nothing ambient the SDK starts a fresh trace — one per invocation, which is
+    the goal.
+
+    **A trace id must never be derived from the session id, by any route.** Two
+    ways of doing that collapsed every run of a session onto one trace, and the
+    less obvious one is what actually fired: hashing the session as a seed is
+    identical on every call, but so is handing the session straight through when
+    it already looks like a trace id — and a session id is minted as
+    ``uuid4().hex``, which is exactly the 32-hex shape that test accepts. So the
+    passthrough matched first and every run of a session shared one trace, with
+    ``trace_id == session_id`` byte for byte. *session_id* is accepted only to
+    keep the call sites honest about what they hold; it never names the trace.
     """
     if invocation_id:
         tid = invocation_id if _is_hex_trace_id(invocation_id) else uuid4().hex
         return cast(TraceContext, {"trace_id": tid})
-    if not session_id:
-        return None
-    if _is_hex_trace_id(session_id):
-        return cast(TraceContext, {"trace_id": session_id})
-    try:
-        from langfuse import Langfuse
-    except Exception:  # pragma: no cover - defensive
-        return None
-    try:
-        trace_id = Langfuse.create_trace_id(seed=session_id)
-    except Exception:  # pragma: no cover - defensive
-        return None
-    if not trace_id or not _is_hex_trace_id(trace_id):
-        return None
-    return cast(TraceContext, {"trace_id": trace_id})
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,11 +364,19 @@ def langfuse_propagate(
     metadata: dict[str, str] | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    trace_name: str | None = None,
+    version: str | None = None,
 ) -> Iterator[None]:
     """Propagate Langfuse attributes to all child observations.
 
     Thin wrapper around ``langfuse.propagate_attributes`` that gracefully
     degrades when Langfuse is disabled or unavailable.
+
+    *trace_name* is the ONE channel that names a trace from outside an
+    observation: a trace otherwise inherits the name of whatever runnable opened
+    its root span, which is why an untouched export is a wall of identically
+    named traces. *version* rides along for the same reason — both are
+    first-class trace fields, never tags.
     """
     status = resolve_langfuse_status()
     if not status.enabled:
@@ -360,6 +396,10 @@ def langfuse_propagate(
         kwargs["session_id"] = session_id
     if user_id:
         kwargs["user_id"] = user_id
+    if trace_name:
+        kwargs["trace_name"] = trace_name
+    if version:
+        kwargs["version"] = version
     if not kwargs:
         yield
         return
@@ -377,6 +417,7 @@ def langfuse_session_context(
     user_id: str | None = None,
     invocation_id: str | None = None,
     source_platform: str | None = None,
+    trace_name: str | None = None,
     tags: list[str] | None = None,
     metadata: dict[str, str] | None = None,
 ) -> Iterator[None]:
@@ -384,6 +425,10 @@ def langfuse_session_context(
 
     Each call gets a **unique trace** (via *invocation_id*) while
     Langfuse groups traces under the same *session_id*.
+
+    *trace_name* names that trace. Omitting it does not leave the trace unnamed:
+    it leaves it named after whichever LangChain runnable happened to open the
+    root span, which is a property of the client library rather than of the work.
 
     *tags* / *metadata* carry pre-derived trace provenance
     (see ``session_provenance.TraceProvenance``) and are merged into the
@@ -398,7 +443,7 @@ def langfuse_session_context(
     trace_context = _build_langfuse_trace_context(session_id, invocation_id)
     token_ctx = _LANGFUSE_TRACE_CONTEXT.set(trace_context)
     token_session = _LANGFUSE_SESSION_ID.set(session_id)
-    resolved_user = user_id or session_id
+    resolved_user = user_id or ANONYMOUS_USER_ID
     token_user = _LANGFUSE_USER_ID.set(resolved_user)
 
     # Use propagate_attributes so session_id, user_id, and baseline
@@ -414,6 +459,8 @@ def langfuse_session_context(
     propagate_cm = langfuse_propagate(
         session_id=session_id,
         user_id=resolved_user,
+        trace_name=trace_name,
+        version=get_version(),
         tags=base_tags,
         metadata=base_metadata,
     )
@@ -434,15 +481,21 @@ def langfuse_session_context(
 def langfuse_trace_span(
     name: str,
     *,
+    as_type: ObservationKind = "span",
     metadata: dict[str, str] | None = None,
     input_data: Any = None,
     level: str | None = None,
+    attributes: dict[str, str] | None = None,
 ) -> Iterator[object | None]:
-    """Open a Langfuse span bound to the current session trace context.
+    """Open a Langfuse observation bound to the current session trace context.
 
-    *metadata* is attached to the span for filtering in the Langfuse UI.
-    *input_data* is set as the span's input.  *level* sets the log level
-    (e.g. ``"ERROR"``).
+    *as_type* selects how Langfuse renders the observation — an agent, a tool
+    call and a plain span are the same OTel span with different types, and a
+    trace built entirely of untyped spans loses the one axis the UI groups by.
+    *metadata* is attached for filtering. *input_data* is set as the input.
+    *level* sets the log level (e.g. ``"ERROR"``). *attributes* are raw OTel
+    span attributes, stamped as early as the SDK allows (see
+    :func:`_stamp_span_attributes`).
     """
     status = resolve_langfuse_status()
     if not status.enabled:
@@ -468,12 +521,16 @@ def langfuse_trace_span(
         # real. Passing a context unconditionally is what parented every span to
         # a freshly-minted id that was never exported.
         cm = langfuse.start_as_current_observation(
-            as_type="span",
+            # ``as_type`` is overloaded per literal in the SDK's stubs, so a
+            # variable of the union type has to be widened for the call to
+            # resolve; the SDK validates the value itself.
+            as_type=cast(Any, as_type),
             name=name,
             trace_context=link.trace_context_for_new_span(),
         )
         span = cm.__enter__()
         if span is not None:
+            _stamp_span_attributes(span, attributes)
             update_kwargs: dict[str, Any] = {}
             if metadata:
                 update_kwargs["metadata"] = metadata
@@ -507,6 +564,27 @@ def langfuse_trace_span(
                 cm.__exit__(None, None, None)
             except Exception:  # pragma: no cover - defensive
                 pass
+
+
+def _stamp_span_attributes(span: object, attributes: dict[str, str] | None) -> None:
+    """Set raw OTel attributes on a freshly-opened *span*, best-effort.
+
+    ``start_as_current_observation`` takes no attribute mapping — it accepts only
+    the Langfuse observation fields — so the earliest a caller can set one is
+    immediately after entering the observation, before any child work opens a
+    span of its own. That ordering is the point: an attribute a sampler or a span
+    processor reads has to exist while the span is being created, and one set at
+    exit influences neither.
+    """
+    if not attributes:
+        return
+    otel = getattr(span, "_otel_span", None)
+    if otel is None:
+        return
+    try:
+        otel.set_attributes({str(k): str(v) for k, v in attributes.items()})
+    except Exception:  # pragma: no cover - never disrupt the run
+        logging.debug("Langfuse span attribute stamp failed.", exc_info=True)
 
 
 def _span_status_message(exc) -> str:
@@ -552,6 +630,22 @@ def record_span_exception(span, exc=None, *, message=None, attributes=None):
         logging.debug("Langfuse record_exception failed.", exc_info=True)
 
 
+def _langfuse_environment() -> str | None:
+    """The deployment label, slugified into what Langfuse accepts.
+
+    The operator writes free text (``runtime.envmode``), and Langfuse rejects an
+    environment that is not lowercase ``[a-z0-9_-]`` — a rejection that costs the
+    whole ingest, so a label like ``Not Specified`` is worth slugifying rather
+    than passing through and losing the traces with it.
+    """
+    raw = str(get_config_value("runtime", "envmode", default="") or "").strip().lower()
+    slug = _ENVIRONMENT_DISALLOWED.sub("-", raw).strip("-")
+    if not slug:
+        return None
+    # The ``langfuse`` prefix is reserved for the platform's own environments.
+    return f"env-{slug}" if slug.startswith("langfuse") else slug
+
+
 def _ensure_langfuse_client(config) -> None:
     if config is None:
         return
@@ -564,18 +658,42 @@ def _ensure_langfuse_client(config) -> None:
         os.environ.setdefault("LANGFUSE_BASE_URL", config.host)
         os.environ.setdefault("LANGFUSE_HOST", config.host)
 
+    environment = _langfuse_environment()
+    release = get_version() or None
+    # The OTel resource is built ONCE, by whichever client first installs a
+    # TracerProvider, and resource attributes are read from the environment at
+    # that moment — so the service name has to be in place before the constructor
+    # below runs. Set later it is simply ignored, which is how every exported span
+    # ended up attributed to ``unknown_service``. ``setdefault`` throughout, so an
+    # operator who exports these keeps ownership of them.
+    os.environ.setdefault("OTEL_SERVICE_NAME", _OTEL_SERVICE_NAME)
+    if environment:
+        os.environ.setdefault("LANGFUSE_TRACING_ENVIRONMENT", environment)
+    if release:
+        os.environ.setdefault("LANGFUSE_RELEASE", release)
+
     try:
         from langfuse import Langfuse
     except Exception as exc:  # pragma: no cover - defensive
         logging.debug("Langfuse client unavailable: {}", exc)
         return
 
+    base_kwargs: dict[str, Any] = {
+        "public_key": config.public_key,
+        "secret_key": config.secret_key,
+        "base_url": config.host or None,
+    }
     try:
-        Langfuse(
-            public_key=config.public_key,
-            secret_key=config.secret_key,
-            base_url=config.host or None,
-        )
+        Langfuse(**base_kwargs, environment=environment, release=release)
+    except TypeError as exc:
+        # An SDK that renamed or dropped either kwarg would otherwise cost the
+        # client entirely — losing all tracing to gain two fields. The env vars
+        # set above still carry both.
+        logging.debug("Langfuse client rejected a trace-field kwarg: {}", exc)
+        try:
+            Langfuse(**base_kwargs)
+        except Exception as retry_exc:  # pragma: no cover - defensive
+            logging.debug("Langfuse client init failed: {}", retry_exc)
     except Exception as exc:  # pragma: no cover - defensive
         logging.debug("Langfuse client init failed: {}", exc)
 
@@ -589,27 +707,36 @@ def _attach_langfuse_metadata(
     version: str,
     release: str,
 ) -> None:
+    """Stamp the trace fields the LangChain handler reads off its metadata.
+
+    The handler recognises exactly three keys — ``langfuse_user_id``,
+    ``langfuse_session_id``, ``langfuse_trace_name`` — and forwards them to
+    ``propagate_attributes`` when it opens the ROOT of a chain. A name pushed
+    into ``langfuse_tags`` instead is not a name: it is unfilterable free text
+    beside a trace still called after whichever runnable opened the root span.
+
+    *version* and *release* are deliberately unused here. Both are client-level
+    fields now (:func:`_ensure_langfuse_client`), set once per process rather
+    than restated as a tag on every observation; the parameters stay so call
+    sites that pass them keep working.
+    """
+    del version, release
     metadata: dict[str, object] = {}
     if user_id:
         metadata["langfuse_user_id"] = user_id
     if session_id:
         metadata["langfuse_session_id"] = session_id
-    tags: list[str] = []
     if trace_name:
-        tags.append(trace_name)
-    if version:
-        tags.append(f"version:{version}")
-    if release:
-        tags.append(f"release:{release}")
-    if tags:
-        metadata["langfuse_tags"] = tags
+        metadata["langfuse_trace_name"] = trace_name
     if metadata:
         setattr(handler, "langfuse_metadata", metadata)
 
 
 __all__ = [
+    "ANONYMOUS_USER_ID",
     "ComponentStatus",
     "LangfuseTraceLink",
+    "ObservationKind",
     "build_langfuse_handler",
     "langfuse_child_task_link",
     "format_component_status",

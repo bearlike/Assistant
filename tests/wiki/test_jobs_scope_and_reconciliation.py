@@ -140,7 +140,7 @@ def test_hook_returns_assertion_when_failed_job_had_a_clean_session(tmp_path) ->
     updated = store.get_job(job_id)
     assert updated is not None and updated.status == "failed", "job status must stay failed"
     events = store.load_job_events(job_id)
-    logs = [e for e in events if e.get("type") == "log" and e.get("level") == "warning"]
+    logs = [e for e in events if e.get("type") == "log" and e.get("level") == "warn"]
     assert logs, "expected an outcome-assertion mismatch log entry"
     assert "outcome-assertion mismatch" in logs[0]["text"]
 

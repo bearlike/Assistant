@@ -594,12 +594,14 @@ class TestOrchestratorWiring:
         gating the CLAMP on "not completed" let a raw provider page escape
         through a SUCCESSFUL run.
 
-        The payload keys are NOT gated on that condition. Such a gate silences
-        overwhelmingly the LAUNDERED runs — a halt or an unmet outcome
-        presenting as success — and withholding the one field able to
-        contradict the status is what makes a wrong status unfalsifiable. Both
-        the clamp and the emission are asserted here; what must never regress is
-        that either one lets an unbounded provider page through.
+        The RECORD is not gated on that condition either. Withholding every key
+        would silence overwhelmingly the LAUNDERED runs — a halt or an unmet
+        outcome presenting as success — and dropping the one field able to
+        contradict the status is what makes a wrong status unfalsifiable. Only
+        ``error`` is withheld from a completed run, because that key alone is
+        what a client renders as an error card. Both the clamp and the carried
+        record are asserted here; what must never regress is that either one
+        lets an unbounded provider page through.
         """
         store = SessionStore(root_dir=str(tmp_path))
         orch = Orchestrator(session_store=store)
@@ -634,10 +636,13 @@ class TestOrchestratorWiring:
         )
         payload = completion["payload"]
         assert payload["done_reason"] == "completed"
-        assert len(payload["error"]) <= 500
-        assert "<html" not in payload["error"]
-        assert "git.example.com" not in payload["error"]
-        assert payload["last_error"] == payload["error"]
+        # ``error`` is the client's error-card trigger and is withheld from a
+        # completed run; the record rides ``last_error`` instead, under the SAME
+        # bound — which is what this test exists to protect.
+        assert "error" not in payload
+        assert len(payload["last_error"]) <= 500
+        assert "<html" not in payload["last_error"]
+        assert "git.example.com" not in payload["last_error"]
         # The structured record keeps the full diagnostic behind its own cap and
         # classifies from the exception type, never from the HTML body.
         assert payload["error_detail"]["kind"] == "upstream_bad_gateway"

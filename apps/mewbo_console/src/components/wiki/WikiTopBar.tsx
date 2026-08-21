@@ -57,6 +57,7 @@ import { cn } from "@/lib/utils";
 
 import { PlatformIcon } from "./configure-wizard/PlatformIcon";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+import { SpeakButton } from "@/components/SpeakButton";
 import { RepoLink } from "./RepoLink";
 import { WikiBadge } from "./badge";
 import { buildHref, type PlatformId } from "./router";
@@ -83,6 +84,8 @@ interface WikiTopBarProps {
    *  every settled in-project screen; off where there is no project to edit yet
    *  (Configure) or one is mid-flight (Indexing). */
   showSettings?: boolean;
+  /** Markdown body of the wiki page — used by the Listen affordance. Absent → no listen button. */
+  body?: string;
 }
 
 export function WikiTopBar({
@@ -95,6 +98,7 @@ export function WikiTopBar({
   badgePageId,
   showSettings,
   onRefresh,
+  body,
 }: WikiTopBarProps) {
   const [, navigate] = useLocation();
   const [copied, setCopied] = useState(false);
@@ -206,6 +210,8 @@ export function WikiTopBar({
                 </PopoverContent>
               </Popover>
             )}
+
+            {body && <SpeakButton text={body} label="Listen" className="!h-6 !px-1.5 !text-xs" />}
 
             {outlineHref && (
               <Button

@@ -1,0 +1,132 @@
+name: Demo Screenshots
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# The demo compose project and generated files are shared within a runner checkout.
+concurrency:
+  group: demo-screenshots
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    name: Regenerate screenshots & open PR
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SERVER_URL: ${{ github.server_url }}
+      API_URL: ${{ github.api_url }}
+      REPOSITORY: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REFRESH_BRANCH: chore/demo-screenshot-refresh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Resolve Docker daemon
+        if: github.server_url != 'https://github.com'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gateway=$(python3 - <<'PY'
+          import socket
+          import struct
+
+          with open("/proc/net/route", encoding="utf-8") as routes:
+              next(routes)
+              for row in routes:
+                  fields = row.split()
+                  if fields[1] == "00000000":
+                      print(socket.inet_ntoa(struct.pack("<L", int(fields[2], 16))))
+                      break
+          PY
+          )
+          test -n "$gateway" || { echo "runner gateway could not be resolved" >&2; exit 1; }
+          echo "DOCKER_HOST=tcp://$gateway:2375" >> "$GITHUB_ENV"
+
+      - name: Regenerate screenshots
+        run: make demo
+
+      - name: Tear down demo stack
+        if: always()
+        run: make demo-down
+
+      - name: Create or update pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain --untracked-files=all -- docs/assets/img-src docs/assets/img)" ]; then
+            echo "Demo screenshots are already current."
+            exit 0
+          fi
+
+          git config user.name "mewbo-ai[bot]"
+          git config user.email "mewbo-ai@mewbo.com"
+          remote_branch=$(git ls-remote --heads origin "$REFRESH_BRANCH")
+          lease_oid=$(cut -f1 <<<"$remote_branch")
+          git switch -C "$REFRESH_BRANCH"
+          git add docs/assets/img-src docs/assets/img
+          git commit -m "📸 chore(demo): regenerate screenshots"
+          git push \
+            --force-with-lease="refs/heads/$REFRESH_BRANCH:$lease_oid" \
+            origin "$REFRESH_BRANCH"
+
+          api="$API_URL"
+          if [ -z "$api" ]; then
+            if [ "$SERVER_URL" = "https://github.com" ]; then
+              api="https://api.github.com"
+            else
+              api="${SERVER_URL%/}/api/v1"
+            fi
+          fi
+
+          # A self-hosted forge behind a private CA is invisible to curl's system
+          # trust store: the runner exports that CA for node and for git, and
+          # nothing else. Trust the CA narrowly rather than disabling
+          # verification, so public HTTPS in this step stays verified.
+          auth=(-H "Authorization: token $GH_TOKEN")
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            auth+=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
+
+          owner="${REPOSITORY%%/*}"
+          if [ "$SERVER_URL" = "https://github.com" ]; then
+            existing=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
+              "$api/repos/$REPOSITORY/pulls?state=open&head=$owner:$REFRESH_BRANCH&base=$DEFAULT_BRANCH")
+            number=$(jq -r '.[0].number // empty' <<<"$existing")
+          else
+            existing=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
+              "$api/repos/$REPOSITORY/pulls?state=open&base_branch=$DEFAULT_BRANCH&limit=50")
+            number=$(jq -r --arg head "$REFRESH_BRANCH" --arg base "$DEFAULT_BRANCH" \
+              '[.[] | select(.head.ref == $head and .base.ref == $base)][0].number // empty' \
+              <<<"$existing")
+          fi
+
+          payload=$(jq -n \
+            --arg title "📸 chore(demo): regenerate screenshots" \
+            --arg head "$REFRESH_BRANCH" \
+            --arg base "$DEFAULT_BRANCH" \
+            --arg body $'Regenerates every screenshot managed by the demo-as-code pipeline.\n\nThe workflow runs `make demo`, which seeds the isolated stack, captures the browser surfaces, and frames the published artifacts.' \
+            '{title: $title, head: $head, base: $base, body: $body}')
+
+          if [ -n "$number" ]; then
+            curl --fail-with-body --silent --show-error "${auth[@]}" \
+              -H "Content-Type: application/json" \
+              -X PATCH --data "$payload" \
+              "$api/repos/$REPOSITORY/pulls/$number" >/dev/null
+            echo "Updated pull request #$number."
+          else
+            created=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
+              -H "Content-Type: application/json" \
+              -X POST --data "$payload" \
+              "$api/repos/$REPOSITORY/pulls")
+            jq -r '"Created pull request #\(.number): \(.html_url)"' <<<"$created"
+          fi

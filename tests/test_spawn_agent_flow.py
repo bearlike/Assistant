@@ -664,19 +664,32 @@ class TestAdmissionControl:
             ctx, tool = await _register_root(hv)
 
             gate = asyncio.Event()
+            parents_at_gate = asyncio.Event()
+            parent_calls = 0
 
             async def gated(*_a, **_k):
+                nonlocal parent_calls
+                parent_calls += 1
+                if parent_calls == 2:
+                    parents_at_gate.set()
                 await gate.wait()
                 return _text_response("child done")
 
             bound = MagicMock()
             bound.ainvoke = AsyncMock(side_effect=gated)
+            parent_model = MagicMock()
+            parent_model.bind_tools.return_value = bound
 
             with patch("mewbo_core.loop.tool_use_loop.build_chat_model") as mb:
-                mb.return_value = MagicMock()
-                mb.return_value.bind_tools.return_value = bound
-
+                # The lifecycle managers construct their loops after the batch
+                # call returns. Hold the factory on the parent model until BOTH
+                # have bound and reached their gate; changing a shared mock's
+                # ``bind_tools.return_value`` first would let a slow parent bind
+                # the grandchild's response and release its slot before the
+                # assertion.
+                mb.return_value = parent_model
                 await tool.run_batch_async(_batch_step({"task": "a"}, {"task": "b"}))
+                await asyncio.wait_for(parents_at_gate.wait(), timeout=5.0)
                 assert hv.free_slots == 0
 
                 # A depth-1 agent now delegates a grandchild. Under the old
@@ -687,7 +700,9 @@ class TestAdmissionControl:
 
                 deep = MagicMock()
                 deep.ainvoke = AsyncMock(return_value=_text_response("grandchild done"))
-                mb.return_value.bind_tools.return_value = deep
+                grandchild_model = MagicMock()
+                grandchild_model.bind_tools.return_value = deep
+                mb.return_value = grandchild_model
 
                 result = await asyncio.wait_for(
                     child_tool.run_async(_step("grandchild work")), timeout=5.0

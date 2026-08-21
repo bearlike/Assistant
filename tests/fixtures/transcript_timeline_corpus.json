@@ -723,6 +723,85 @@
       ]
     },
     {
+      "name": "generative_ui_model_authored_readable_id_upserts",
+      "why": "ui_id is model-authorable and READABLE, not gui-hex: both assemblers key the upsert on the id as an opaque string, so a readable id ('team-directory') replaces in place exactly like a generated one. Pinned here because the server relaxed its id pattern and neither assembler may start second-guessing the shape.",
+      "events": [
+        {
+          "type": "user",
+          "ts": "t0",
+          "payload": {
+            "text": "show the team"
+          }
+        },
+        {
+          "type": "generative_ui",
+          "ts": "t1",
+          "payload": {
+            "ui_id": "team-directory",
+            "session_id": "s1",
+            "spec": {
+              "root": [
+                {
+                  "component": "Divider",
+                  "props": {}
+                }
+              ]
+            },
+            "alt_text": "first",
+            "summary": "team directory"
+          }
+        },
+        {
+          "type": "generative_ui",
+          "ts": "t2",
+          "payload": {
+            "ui_id": "team-directory",
+            "session_id": "s1",
+            "spec": {
+              "root": [
+                {
+                  "component": "Divider",
+                  "props": {}
+                }
+              ]
+            },
+            "alt_text": "grown by append",
+            "summary": "team directory"
+          }
+        },
+        {
+          "type": "assistant",
+          "ts": "t3",
+          "payload": {
+            "text": "done"
+          }
+        }
+      ],
+      "expected": [
+        {
+          "id": "user-1",
+          "role": "user",
+          "turnId": "turn-1",
+          "content": "show the team",
+          "ts": "t0"
+        },
+        {
+          "id": "genui-team-directory",
+          "role": "generative_ui",
+          "turnId": "turn-1",
+          "content": "",
+          "ts": "t1"
+        },
+        {
+          "id": "assistant-1",
+          "role": "assistant",
+          "turnId": "turn-1",
+          "content": "done",
+          "ts": null
+        }
+      ]
+    },
+    {
       "name": "project_switch_is_conversation_not_trace",
       "why": "A completed switch_project is CONVERSATION: every tool call and sub-agent after it ran in a different directory, so a reader without the row silently attributes the rest of the turn to the first project. A REFUSED switch (success=false, the shared error envelope) must produce nothing \u2014 nothing moved \u2014 and a result naming no project is unreadable and must also produce nothing. Every other tool_result stays trace-only.",
       "events": [

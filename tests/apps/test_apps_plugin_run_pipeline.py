@@ -25,7 +25,13 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
-from mewbo_api.apps.models import AppFrontend, AppSpec, PipelineSpec, WorkspaceRef
+from mewbo_api.apps.models import (
+    AppFrontend,
+    AppSpec,
+    CollectionSpec,
+    PipelineSpec,
+    WorkspaceRef,
+)
 from mewbo_api.apps.plugin import runtime as runtime_mod
 from mewbo_api.apps.plugin.run_pipeline import RunPipelineArgs, RunPipelineTool
 from mewbo_api.apps.plugin.runtime import register_pipeline_runner
@@ -38,7 +44,11 @@ NOW = datetime(2026, 7, 18, 9, 0, 0, tzinfo=timezone.utc)
 
 
 def _app(
-    *, owner: str | None = None, maintainer: str | None = None, pipelines: list | None = None
+    *,
+    owner: str | None = None,
+    maintainer: str | None = None,
+    pipelines: list | None = None,
+    collections: list | None = None,
 ) -> AppSpec:
     return AppSpec(
         app_id=APP_ID,
@@ -47,11 +57,14 @@ def _app(
         maintainer_session_id=maintainer,
         workspace_ref=WorkspaceRef(kind="own", key="k"),
         frontend=AppFrontend(files={"app.py": "import streamlit as st"}),
+        collections=collections or [],
         pipelines=pipelines or [],
     )
 
 
-def _code_pipeline(name: str = "ingest", *, cache_ttl_seconds: int = 0) -> PipelineSpec:
+def _code_pipeline(
+    name: str = "ingest", *, cache_ttl_seconds: int = 0, writes: tuple[str, ...] = ()
+) -> PipelineSpec:
     return PipelineSpec(
         name=name,
         wake_prompt="parse csvs",
@@ -59,6 +72,7 @@ def _code_pipeline(name: str = "ingest", *, cache_ttl_seconds: int = 0) -> Pipel
         entrypoint=f"pipelines/{name}.py",
         cache_ttl_seconds=cache_ttl_seconds,
         on_demand=True,
+        writes=writes,
     )
 
 
@@ -290,6 +304,123 @@ def test_happy_path_executes_and_reports_outcome():
     assert payload["cache"] == {"hit": True, "ttl_seconds": 300}
     assert payload["dry_run"] is False
     assert payload["output_truncated"] is False
+
+
+def test_every_glob_matching_nothing_names_the_bundle_versus_workspace_trap():
+    """The failure that actually shipped: globs resolved against the wrong directory.
+
+    A pipeline's data files were stored in the app BUNDLE, while `ctx.glob`
+    resolves under the WORKSPACE. Every pattern matched zero files, the pipeline
+    wrote nothing, and the run reported success — while an offline replay against
+    the staged bundle reproduced perfectly, because there the files existed. Two
+    directories both meaning "the app's files", and nothing named the difference,
+    so the divergence was invisible in the pipeline source.
+
+    The envelope has to say it, since no amount of reading the code reveals which
+    directory was actually searched.
+    """
+    pipeline = _code_pipeline(writes=("gateway",))
+    app = _app(
+        maintainer=SESSION_ID,
+        pipelines=[pipeline],
+        collections=[CollectionSpec(name="gateway", json_schema={"type": "object"})],
+    )
+    runner = FakeRunner(outcome={
+        "output": {},
+        "evaluated_at": NOW,
+        "docs_written": {},
+        "evidence": {
+            "globs": [
+                {"pattern": "modelsnap/gateway.lzw", "match_count": 0, "paths": []},
+                {"pattern": "modelsnap/providers*.json", "match_count": 0, "paths": []},
+            ],
+            "read_paths": [],
+            "truncated": False,
+            "workspace": "/tmp/mewbo/sessions/abc123",
+        },
+        "cache_hit": False,
+    })
+
+    payload = _payload(_run(_tool(FakeAppStore(app), runner), {
+        "pipeline": "ingest", "dry_run": True,
+    }))
+
+    assert payload["attention"]["all_globs_matched_nothing"] is True
+    assert payload["attention"]["workspace"] == "/tmp/mewbo/sessions/abc123"
+    assert "not the app bundle" in payload["attention"]["next_step"].lower()
+    assert payload["evidence"]["workspace"] == "/tmp/mewbo/sessions/abc123"
+
+
+def test_one_matching_glob_is_not_flagged_as_the_workspace_trap():
+    """The control: a partial match is a filter problem, not a wrong-directory one."""
+    pipeline = _code_pipeline(writes=("gateway",))
+    app = _app(
+        maintainer=SESSION_ID,
+        pipelines=[pipeline],
+        collections=[CollectionSpec(name="gateway", json_schema={"type": "object"})],
+    )
+    runner = FakeRunner(outcome={
+        "output": {},
+        "evaluated_at": NOW,
+        "docs_written": {},
+        "evidence": {
+            "globs": [
+                {"pattern": "a/*.json", "match_count": 0, "paths": []},
+                {"pattern": "b/*.json", "match_count": 2, "paths": ["b/x.json", "b/y.json"]},
+            ],
+            "read_paths": [],
+            "truncated": False,
+            "workspace": "/tmp/ws",
+        },
+        "cache_hit": False,
+    })
+
+    payload = _payload(_run(_tool(FakeAppStore(app), runner), {
+        "pipeline": "ingest", "dry_run": True,
+    }))
+
+    assert "all_globs_matched_nothing" not in payload["attention"]
+    # The declared-writes miss is still reported — this control narrows the
+    # workspace claim only, it does not silence the contract violation.
+    assert payload["attention"]["missing_expected_writes"] == ["gateway"]
+
+
+def test_zero_write_materialization_surfaces_evidence_and_next_step():
+    pipeline = _code_pipeline(writes=("gateway",))
+    app = _app(
+        maintainer=SESSION_ID,
+        pipelines=[pipeline],
+        collections=[
+            CollectionSpec(name="gateway", json_schema={"type": "object"}),
+            CollectionSpec(name="models", json_schema={"type": "object"}),
+        ],
+    )
+    runner = FakeRunner(outcome={
+        "output": {"gateway_rows": 0},
+        "evaluated_at": NOW,
+        "docs_written": {},
+        "evidence": {
+            "globs": [
+                {"pattern": "modelsnap/gateway.lzw", "match_count": 0, "paths": []}
+            ],
+            "read_paths": [],
+            "truncated": False,
+        },
+        "cache_hit": False,
+    })
+
+    payload = _payload(_run(_tool(FakeAppStore(app), runner), {
+        "pipeline": "ingest", "dry_run": True,
+    }))
+
+    assert payload["evidence"]["globs"] == [
+        {"pattern": "modelsnap/gateway.lzw", "match_count": 0, "paths": []}
+    ]
+    assert payload["unwritten_collections"] == ["gateway", "models"]
+    assert payload["attention"]["missing_expected_writes"] == ["gateway"]
+    # This fixture's only glob matched nothing, so the envelope ALSO raises the
+    # wrong-directory case — the more specific diagnosis wins the next step.
+    assert payload["attention"]["all_globs_matched_nothing"] is True
 
 
 def test_dry_run_passes_through_to_the_runner():

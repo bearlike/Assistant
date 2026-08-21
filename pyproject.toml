@@ -1,6 +1,6 @@
 [project]
 name = "mewbo-workspace"
-version = "0.0.13"
+version = "0.0.14"
 description = "Workspace package for the Mewbo monorepo."
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
@@ -47,6 +47,11 @@ dev = [
   # paths import-guard themselves out and the run reports green having tested
   # nothing.
   "mewbo-iam[ldap,oidc,saml]",
+  # Same reason as the line above: the speech substrate's network leg lives
+  # behind its `gateway` extra, and the suite exercises the DEFAULT transport
+  # against a loopback listener. Without the extra installed that leg
+  # import-guards itself out and the run reports green having tested nothing.
+  "mewbo-speech[gateway]",
   "mongomock==4.3.0",
   "mypy==1.19.1",
   "pandas>=2.3.3",
@@ -109,6 +114,26 @@ members = [
 ]
 
 [tool.uv]
+# Empty on purpose, and it is NOT uv's default (`["dev"]`) — it is what makes a
+# bare `uv sync` mean the LEAN install that `docs/getting-started.md` publishes
+# as the quick start (`uv sync --extra api`). Restore uv's default here and that
+# published command silently drags ruff, mypy, pytest, streamlit and pandas into
+# an end user's environment.
+#
+# ⚠️ The cost lands on a bare `uv sync`, which is EXACT by default: against this
+# setting it reads "no group requested" as "remove the dev group", and takes 97
+# packages out of a shared `.venv` — pytest's own plugins among them. Re-sync
+# with the full `--all-extras --all-groups`, never a narrower form.
+#
+# `uv run` is NOT affected and never was: it is INEXACT by default, installing
+# what is missing and removing nothing, which is why `uv run --exact` exists as
+# an opt-in. Do not add `--no-sync` to call sites to guard against a hazard they
+# do not have.
+#
+# Flipping this value would break the published lean install and would not even
+# work: uv has `default-groups` but no `default-extras`, so a lean sync still
+# drops every extra and takes the wiki, SCG and MCP test subtrees with it. See
+# root CLAUDE.md → "Running, testing, linting".
 default-groups = []
 
 [tool.uv.sources]
@@ -116,6 +141,7 @@ mewbo-core = { workspace = true }
 mewbo-tools = { workspace = true }
 mewbo-graph = { workspace = true }
 mewbo-iam = { workspace = true }
+mewbo-speech = { workspace = true }
 mewbo-cli = { workspace = true }
 mewbo-api = { workspace = true }
 mewbo-mcp = { workspace = true }
@@ -158,6 +184,7 @@ files = [
   "packages/mewbo_tools/src/mewbo_tools/**/*.py",
   "packages/mewbo_graph/src/mewbo_graph/**/*.py",
   "packages/mewbo_iam/src/mewbo_iam/**/*.py",
+  "packages/mewbo_speech/src/mewbo_speech/**/*.py",
   "apps/mewbo_api/src/mewbo_api/**/*.py",
   "apps/mewbo_mcp/src/mewbo_mcp/**/*.py",
   "apps/mewbo_cli/src/mewbo_cli/**/*.py",

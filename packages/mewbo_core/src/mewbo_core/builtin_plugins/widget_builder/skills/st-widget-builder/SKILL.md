@@ -9,6 +9,8 @@ requires-capabilities: [stlite]
 
 `st-widget-builder` is a sub-agent — delegate to it via `spawn_agent`. Do not write widgets yourself.
 
+For a static, no-code panel, read `generative-ui`; use this skill when the result needs code or interactivity.
+
 ## How to invoke
 
 ```python

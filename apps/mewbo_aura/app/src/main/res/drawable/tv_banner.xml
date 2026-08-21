@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV banner (android:banner on <application>). Required size 320x180dp exactly.
+     Background + mark colors are literal hex here (a drawable can't reference Compose tokens)
+     but MUST match ui/theme/Color.kt verbatim per theme discipline - see the per-path comments
+     below for which AuraColors/AuraOrbColors constant each hex was copied from. Mark path data
+     reused verbatim from res/drawable/ic_launcher_foreground.xml (the clay-flower brand mark,
+     itself sourced from apps/mewbo_console/public/logo-icon.svg) rather than inventing new
+     geometry. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- Background: AuraColors.surfaceCanvas (#FF000000) - the app's canvas fill. -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M0,0h320v180h-320z" />
+    <!-- Clay-flower brand mark, path data copied from ic_launcher_foreground.xml (a 480x480 box —
+         the launcher renders it at scale 0.075 into a 108 canvas). Here scale 0.2 makes it 96x96
+         centred on x=160 above the accent bar. The earlier scale 0.025 rendered a 12x12 speck in
+         the top-left — recompute the translate if you change the scale. -->
+    <group
+        android:scaleX="0.2"
+        android:scaleY="0.2"
+        android:translateX="112"
+        android:translateY="24">
+        <!-- Mark fill: AuraColors.accentOnAccent (#FFFFFFFF) for contrast against the black
+             background banner (the launcher icon variant instead uses AuraOrbColors.clayCore
+             (#FFC15F3C) as its background, which is why that mark is off-white there too). -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M480,240c0,-29.1 -20.7,-55.8 -55.2,-76.5c9.7,-39.1 5.5,-72.6 -15,-93.2c-20.7,-20.6 -54.2,-24.8 -93.3,-15.1C295.8,20.7 269.1,0 240,0s-55.8,20.7 -76.5,55.2c-39.1,-9.7 -72.6,-5.5 -93.2,15s-24.8,54.2 -15.1,93.2C20.7,184.3 0,211 0,240s20.7,55.8 55.2,76.5c-9.7,39.1 -5.5,72.6 15,93.2c20.7,20.6 54.2,24.8 93.2,15.1C184.2,459.3 211,480 240,480s55.8,-20.7 76.5,-55.2c39.1,9.7 72.6,5.5 93.2,-15s24.8,-54.2 15,-93.2C459.4,295.8 480,269 480,240ZM240,300a60,60 0 1,1 0,-120a60,60 0 0,1 0,120Z" />
+    </group>
+    <!-- Wordmark accent bar under the mark: AuraColors.accentPrimary (#FF4C6EF5), the app's
+         brand accent, used elsewhere for selection/brand emphasis. -->
+    <path
+        android:fillColor="#FF4C6EF5"
+        android:pathData="M130,146h60v6h-60z" />
+</vector>

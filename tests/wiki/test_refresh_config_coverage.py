@@ -102,7 +102,7 @@ def test_every_declared_refresh_field_reaches_a_stage(store, restore_config) -> 
 
     set_config_override({"wiki": {"refresh": dict(sentinels)}})
     orch = RefreshOrchestrator.from_store(
-        store, parser=FakeParser({}), embedder=FakeEmbedder()
+        store, slug="acme/repo", parser=FakeParser({}), embedder=FakeEmbedder()
     )
 
     landed = _values_on_stages(orch)
@@ -141,7 +141,7 @@ def test_the_tripwire_fails_when_a_field_goes_unwired(store, restore_config) -> 
     """
     set_config_override({"wiki": {"refresh": {"drift_keep": 0.101}}})
     orch = RefreshOrchestrator.from_store(
-        store, parser=FakeParser({}), embedder=FakeEmbedder()
+        store, slug="acme/repo", parser=FakeParser({}), embedder=FakeEmbedder()
     )
 
     landed = _values_on_stages(orch)

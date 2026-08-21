@@ -340,7 +340,9 @@ class WikiIndexingJob:
         # no member for "the probe itself failed", so a fallback here could only
         # report a reason that is not the true one.
         decision = RefreshDecision.decide(
-            mode=mode, project=project, current=_current_index_fingerprint()
+            mode=mode,
+            project=project,
+            current=_current_index_fingerprint(store, slug)
         )
         logging.info(
             "wiki refresh slug={} mode={} path={} reason={}",
@@ -1061,22 +1063,29 @@ def _create_job_record(
     )
     store.create_job(job)
 
-    # Persist the submission MINUS the token (token only crosses the
-    # wire to the clone tool, never the store).
+    # Seed/refresh the SLUG-keyed settings record — the durable edit target.
+    # The job-keyed sidecar is immutable history of what THIS job ran with, and
+    # must be written only after the project-level override below has been
+    # resolved; otherwise a correct settings record and an incorrect job history
+    # disagree about the vector space a run actually used.
+    #
+    # ``desc`` and ``embedding_model`` are carried forward: a newly submitted
+    # index says nothing about an existing project-level override, so letting an
+    # omitted field overwrite either one would silently discard an operator's
+    # edit.
+    existing_settings = store.get_project_settings(submission.slug)
+    if existing_settings is not None and submission.embedding_model is None:
+        submission = submission.model_copy(
+            update={"embedding_model": existing_settings.embedding_model}
+        )
+
+    # Persist the submission MINUS the token (token only crosses the wire to
+    # the clone tool, never the store). This goes after the merge above so it
+    # truthfully records the model the indexing session will use.
     sub_dict = submission.model_dump(mode="json", by_alias=True, exclude_none=True)
     sub_dict.pop("token", None)
     store.save_job_submission(job_id, sub_dict)
 
-    # Seed/refresh the SLUG-keyed settings record — the durable edit target.
-    # The job-keyed sidecar above is immutable history of what THIS job ran
-    # with, and stays that way. This one is what the
-    # project is CONFIGURED with, so it is what ``refresh`` replays and what
-    # ``PATCH /v1/wiki/projects/<slug>`` writes. An existing ``desc`` override
-    # is carried forward — a refresh re-enters this prologue with a
-    # reconstructed submission (which has no desc), so rebuilding the record
-    # from the submission alone would silently drop the user's edited
-    # description.
-    existing_settings = store.get_project_settings(submission.slug)
     store.save_project_settings(
         submission.slug,
         ProjectSettings.from_submission(
@@ -1087,8 +1096,8 @@ def _create_job_record(
     return job
 
 
-def _current_index_fingerprint() -> IndexFingerprint:
-    """Probe what a refresh started right now would build with.
+def _current_index_fingerprint(store: WikiStoreBase, slug: str) -> IndexFingerprint:
+    """Probe what a refresh of *slug* would build with.
 
     A one-line seam around the down-layer probe for the same reason
     :func:`_start_graph_only_index` imports its engine locally: the plugin suite
@@ -1101,7 +1110,7 @@ def _current_index_fingerprint() -> IndexFingerprint:
         current_index_fingerprint,
     )
 
-    return current_index_fingerprint()
+    return current_index_fingerprint(store, slug)
 
 
 def _start_indexer_session(

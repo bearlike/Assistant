@@ -1237,6 +1237,7 @@ class RefreshOrchestrator:
         cls,
         store: WikiStoreBase,
         *,
+        slug: str,
         parser: _Parser | None = None,
         embedder: EmbedderProtocol | None = None,
         resolver: ScopedEdgeResolver | None = None,
@@ -1295,14 +1296,14 @@ class RefreshOrchestrator:
         degradation is never silent; a caller with a job log should pass its own
         emitter so the answer lives beside the refresh it describes.
         """
-        from mewbo_graph.wiki.embedder import Embedder, make_embedder_or_none
+        from mewbo_graph.wiki.embedder import Embedder, make_embedder_for_or_none
 
         if parser is None:
             from mewbo_graph.wiki.graph import GraphIndex
 
             parser = GraphIndex()
         if embedder is None and Embedder.enabled():
-            embedder = make_embedder_or_none()
+            embedder = make_embedder_for_or_none(store, slug)
         if resolver is None:
             resolver = ScopedEdgeResolver.default(on_report=on_report)
         return cls(

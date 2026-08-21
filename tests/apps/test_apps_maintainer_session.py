@@ -338,13 +338,22 @@ class TestFreshSessionResolvesItsApp:
             is None
         )
 
-    def test_a_fresh_session_cannot_write_the_data_plane(self, tmp_path):
-        """READ-plus-STAGE: ``app_data`` still gates on ``maintainer_session_id``.
+    def test_a_fresh_session_reaches_the_data_plane(self, tmp_path):
+        """A tag-bound session resolves in ``app_data`` exactly as it does in ``get_app``.
 
-        The tag tier is deliberately confined to ``get_app``; the tools that
-        MUTATE keep resolving by the id fields alone, so a fresh session reads
-        the uniform ``not_found`` — driven through the real tool, not asserted
-        against a copy of its rule.
+        This asserted the opposite until the tag tier reached every tool, and the
+        inversion is the same correction ``test_a_session_with_no_tag_for_the_app_
+        cannot_overwrite_it`` below already records for ``submit``: confining the
+        tier to ``get_app`` did not make the composer's session read-only, it made
+        the suite INCOHERENT. That session could stage the bundle and ship a new
+        live version while ``app_data`` and ``run_pipeline`` told it no app was
+        bound — the destructive operation permitted and the two diagnostic ones
+        refused, so a maintainer could push a guess but never dry-run it.
+
+        Driven through the real tool, not asserted against a copy of its rule.
+        The scope gate is what is under test, so clearing it and failing LATER (on
+        the collection name) is the pass condition — same shape as the maintainer
+        control below.
         """
         import asyncio
 
@@ -352,7 +361,7 @@ class TestFreshSessionResolvesItsApp:
         from mewbo_api.apps.store import JsonAppDataStore, JsonPipelineRunStore
         from mewbo_core.classes import ActionStep
 
-        app_store, app_id, fresh, _ = self._fresh(tmp_path)
+        app_store, app_id, fresh, sessions = self._fresh(tmp_path)
         maintainer = app_store.get(app_id).maintainer_session_id
         step = ActionStep(
             tool_id="app_data",
@@ -372,15 +381,113 @@ class TestFreshSessionResolvesItsApp:
                 app_store=app_store,
                 data_store=JsonAppDataStore(root_dir=tmp_path / "apps"),
                 run_store=JsonPipelineRunStore(root_dir=tmp_path / "apps"),
+                tags_reader=sessions.tags_for_session,
             )
             return asyncio.run(tool.handle(step)).content
 
-        assert "not_found" in _run(fresh)
-        # The positive control that makes the refusal above non-vacuous: the
-        # MAINTAINER clears the scope gate and fails later, on the collection.
+        fresh_result = _run(fresh)
+        assert "not_found" not in fresh_result
+        assert "unknown collection" in fresh_result
+        # The control that makes the assertion above non-vacuous: the MAINTAINER
+        # clears the same gate and fails at the same later point.
         maintainer_result = _run(maintainer)
         assert "not_found" not in maintainer_result
         assert "unknown collection" in maintainer_result
+
+    def test_every_app_tool_agrees_on_the_binding(self, tmp_path):
+        """One session, one binding — asserted ACROSS the tools, not within one.
+
+        The gap this closes is why the tier could drift: every existing test
+        pinned ONE tool against its OWN rule, so three tools disagreeing was
+        unobservable. The reported symptom was exactly that disagreement —
+        ``get_app`` resolved an app that ``run_pipeline`` and ``app_data``
+        simultaneously reported unbound, in consecutive calls on one session.
+
+        Asserts the AGREEMENT rather than any single verdict, so it fails the
+        moment a fourth tool starts resolving the binding privately again.
+        """
+        from mewbo_api.apps.plugin.app_data import AppDataTool
+        from mewbo_api.apps.plugin.get_app import GetAppTool
+        from mewbo_api.apps.plugin.run_pipeline import RunPipelineTool
+        from mewbo_api.apps.store import JsonAppDataStore, JsonPipelineRunStore
+
+        app_store, app_id, fresh, sessions = self._fresh(tmp_path)
+        data_store = JsonAppDataStore(root_dir=tmp_path / "apps")
+        run_store = JsonPipelineRunStore(root_dir=tmp_path / "apps")
+
+        def _resolved_app_id(tool) -> str | None:
+            app = tool._resolve_app(app_store)  # noqa: SLF001 — the binding IS the subject
+            return None if app is None else app.app_id
+
+        get_app = GetAppTool(
+            session_id=fresh, app_store=app_store, data_store=data_store,
+            run_store=run_store, tags_reader=sessions.tags_for_session,
+        )
+        run_pipeline = RunPipelineTool(
+            session_id=fresh, app_store=app_store,
+            tags_reader=sessions.tags_for_session,
+        )
+        app_data = AppDataTool(
+            session_id=fresh, app_store=app_store, data_store=data_store,
+            run_store=run_store, tags_reader=sessions.tags_for_session,
+        )
+
+        assert _resolved_app_id(get_app) == app_id
+        assert _resolved_app_id(run_pipeline) == app_id
+        assert app_data._resolve_app(app_store, app_id).app_id == app_id  # noqa: SLF001
+
+        # And the refusal agrees too: an UNBOUND session resolves nothing
+        # anywhere, so the agreement above is not "everything always passes".
+        unbound = "session-bound-to-nothing"
+        assert _resolved_app_id(
+            GetAppTool(session_id=unbound, app_store=app_store, data_store=data_store,
+                       run_store=run_store, tags_reader=sessions.tags_for_session)
+        ) is None
+        assert _resolved_app_id(
+            RunPipelineTool(session_id=unbound, app_store=app_store,
+                            tags_reader=sessions.tags_for_session)
+        ) is None
+        assert AppDataTool(
+            session_id=unbound, app_store=app_store, data_store=data_store,
+            run_store=run_store, tags_reader=sessions.tags_for_session,
+        )._resolve_app(app_store, app_id) is None  # noqa: SLF001
+
+    def test_a_tag_bound_session_cannot_reach_a_DIFFERENT_app(self, tmp_path):
+        """The tag scopes to exactly ONE app — widening the tier did not widen that.
+
+        ``app_data`` takes an ``app_id`` argument, so it is the one tool that can
+        be POINTED at a foreign app. Naming one the session's tag does not cover
+        stays a uniform ``not_found``.
+        """
+        import asyncio
+
+        from mewbo_api.apps.plugin.app_data import AppDataTool
+        from mewbo_api.apps.store import JsonAppDataStore, JsonPipelineRunStore
+        from mewbo_core.classes import ActionStep
+
+        app_store, app_id, fresh, sessions = self._fresh(tmp_path)
+        # A SECOND live app in the same store, which this session's tag does not name.
+        lifecycle, _ = _make_lifecycle(tmp_path, sessions)
+        other_id = "app-other000001"
+        _draft(app_store, app_id=other_id, owner_session_id=sessions.create_session())
+        other_draft = app_store.get(other_id)
+        assert other_draft is not None
+        lifecycle.submit(other_draft, builder_session_id=other_draft.owner_session_id)
+
+        tool = AppDataTool(
+            session_id=fresh,
+            app_store=app_store,
+            data_store=JsonAppDataStore(root_dir=tmp_path / "apps"),
+            run_store=JsonPipelineRunStore(root_dir=tmp_path / "apps"),
+            tags_reader=sessions.tags_for_session,
+        )
+        step = ActionStep(
+            tool_id="app_data",
+            operation="query",
+            tool_input={"operation": "query", "app_id": other_id, "collection": "items"},
+        )
+
+        assert "not_found" in asyncio.run(tool.handle(step)).content
 
     def test_a_session_with_no_tag_for_the_app_cannot_overwrite_it(self, tmp_path):
         """``submit``'s live-overwrite guard refuses every UNBOUND session.

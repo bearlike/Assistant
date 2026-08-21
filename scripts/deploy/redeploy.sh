@@ -92,6 +92,23 @@ fi
 # back to the repo-relative `./` defaults instead of the resolved sources).
 compose() { ssm run -- docker compose "$@"; }
 
+case "${MEWBO_DEPLOY_MODE:-build}" in
+  build) ;;
+  pull) ;;
+  *)
+    echo "MEWBO_DEPLOY_MODE must be build or pull." >&2
+    exit 2
+    ;;
+esac
+
+if [ "${MEWBO_DEPLOY_MODE:-build}" = "pull" ]; then
+  export MEWBO_PULL_POLICY=always
+  compose pull
+  compose up -d --force-recreate
+  echo "✅ full stack redeployed"
+  exit 0
+fi
+
 # The console container doesn't rebuild from a Dockerfile — nginx serves the
 # bind-mounted apps/mewbo_console/dist directly, and runtime-config.js is
 # written into that same directory by docker/console-entrypoint.sh at
@@ -114,8 +131,8 @@ done
 test -f apps/mewbo_console/dist/runtime-config.js
 echo "✅ console rebuilt, runtime-config.js present"
 
-# mewbo-base FIRST. api and mewbo-mcp build FROM ghcr.io/bearlike/mewbo-base
-# (passed as their BASE_IMAGE build-arg), and it is not a compose service, so
+# mewbo-base FIRST. api and mewbo-mcp build FROM the image selected by
+# their BASE_IMAGE build-arg, and it is not a compose service, so
 # `docker compose build` never rebuilds it — it just consumes whatever carries
 # that tag locally. Skipping this step is how a redeploy silently produced
 # containers on a months-old base: the api/mewbo-mcp layers were new, the OS
@@ -126,7 +143,7 @@ echo "✅ console rebuilt, runtime-config.js present"
 # Chromium, so --no-cache would add many minutes to every redeploy. When
 # Dockerfile.base is unchanged this is a fast no-op; when it changes, the cache
 # misses exactly the layers that changed.
-docker build -f docker/Dockerfile.base -t ghcr.io/bearlike/mewbo-base:latest .
+docker build -f docker/Dockerfile.base -t "${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-base:${MEWBO_TAG:-latest}" .
 echo "✅ mewbo-base rebuilt"
 
 compose build --no-cache api mewbo-mcp

@@ -518,7 +518,7 @@ def test_stored_token_rejected_falls_back_to_ambient(
 
     # A WARNING log names the rejected STORE scope (the Settings-UI story).
     warnings = [
-        e for e in events if e["type"] == "log" and e.get("level") == "warning"
+        e for e in events if e["type"] == "log" and e.get("level") == "warn"
     ]
     assert any(
         "git.home/org/repo" in w["text"] and "rejected" in w["text"].lower()

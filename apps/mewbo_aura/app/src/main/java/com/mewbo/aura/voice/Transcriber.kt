@@ -19,10 +19,26 @@ sealed interface TranscriberEvent {
     data class Error(val code: TranscriberError) : TranscriberEvent
 }
 
-/** Maps [android.speech.SpeechRecognizer] error codes. NoMatch/Timeout are quiet-cancels. */
+/**
+ * Maps [android.speech.SpeechRecognizer] error codes, plus the one failure only a REMOTE engine
+ * can have. NoMatch/Timeout are quiet-cancels; [ServiceFailed] deliberately is not.
+ */
 enum class TranscriberError {
     NoMatch,
     Timeout,
     Unavailable,
     Other,
+
+    /**
+     * A server-backed engine was selected and the server refused or could not be reached — the
+     * audio was captured and then thrown away.
+     *
+     * **Separate from [Other] because it is the one error that must NOT be silent.** Every other
+     * code here describes something the user can see for themselves: they said nothing, they
+     * paused too long, the device has no recognizer. This one describes a recording they DID make
+     * being lost to a failure with no visible cause, and the remedy is a setting they chose — so a
+     * quiet revert to idle reads as the microphone button simply not working. Only
+     * [RemoteTranscriber] ever emits it; the platform recognizer has no notion of a service.
+     */
+    ServiceFailed,
 }

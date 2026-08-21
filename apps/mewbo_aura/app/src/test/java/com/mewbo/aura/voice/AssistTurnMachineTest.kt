@@ -353,6 +353,39 @@ class AssistTurnMachineTest {
     }
 
     @Test
+    fun `a materialized stream_error ends the turn as an error, never a wedged streaming card`() = runTest {
+        // `RunRepository.live()` turns an upstream failure into a StreamError VALUE
+        // (`.catch { emit(...) }`) so every follower can see it — so it never THROWS, the machine's
+        // own `catch` cannot fire, and the SharedFlow never completes so the post-collect fallback
+        // cannot either. Treated as non-terminal it left `done` false forever: the overlay composer
+        // stayed disarmed and TalkBack went on announcing "Responding" with nothing ever arriving
+        // to correct it. This asserts the ERROR state rather than merely `done` — a lost connection
+        // is not a turn that finished, and settling it would say it was.
+        val haptics = RecordingHaptics()
+        val machine = machine(
+            transcriber = ScriptedTranscriber(emptyList()),
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            liveEvents = {
+                flow {
+                    emit(SessionEvent.AgentMessageDelta(ts = "t1", payload = AgentMessageDeltaPayload(text = "Par", agentId = "root", depth = 0)))
+                    emit(SessionEvent.StreamError(message = "Lost connection to the run"))
+                    awaitCancellation() // shareIn's SharedFlow never completes - the fallback is dead
+                }
+            },
+            haptics = haptics,
+        )
+
+        machine.sendText("hello")
+        advanceUntilIdle()
+
+        val state = machine.state.value
+        assertTrue("a materialized stream_error must leave the Streaming state", state is AssistUiState.Error)
+        assertEquals("Lost connection to the run", (state as AssistUiState.Error).reason)
+        assertTrue("a lost stream is an error, not a settle", haptics.calls.contains("error"))
+    }
+
+    @Test
     fun `a non-terminal event between completion and stream_end keeps done sticky - settle fires once`() = runTest {
         val haptics = RecordingHaptics()
         val machine = machine(
@@ -992,6 +1025,55 @@ class AssistTurnMachineTest {
 
         assertEquals(listOf("listeningEnded"), haptics.calls)
         assertTrue(machine.state.value is AssistUiState.Ready)
+    }
+
+    @Test
+    fun `a failed speech SERVICE surfaces an error instead of returning quietly`() = runTest {
+        // The one error that is not a quiet-cancel. On this voice-first surface there is no
+        // transcript to look at, so a silent return to Ready is indistinguishable from the
+        // assistant having ignored a sentence the user just finished speaking — and the cause
+        // (a server engine they selected in Settings) is invisible from here.
+        val haptics = RecordingHaptics()
+        val transcriber = ScriptedTranscriber(
+            listOf(10L to TranscriberEvent.Error(code = TranscriberError.ServiceFailed)),
+        )
+        val machine = machine(
+            transcriber = transcriber,
+            synthesizer = RecordingSynthesizer(),
+            scope = machineScope(),
+            haptics = haptics,
+        )
+
+        machine.startListening()
+        advanceUntilIdle()
+
+        val state = machine.state.value
+        assertTrue("expected an Error state, got $state", state is AssistUiState.Error)
+        assertTrue((state as AssistUiState.Error).reason.contains("Settings"))
+        // Nothing to resend — the audio is gone and this surface cannot re-submit a recording.
+        assertEquals("", state.retryText)
+        assertEquals(listOf("error"), haptics.calls)
+    }
+
+    @Test
+    fun `every other recognizer error stays a quiet cancel`() = runTest {
+        // Guards the split from the other side: widening the loud branch to any error would put a
+        // red card in front of a user who simply said nothing.
+        for (code in listOf(TranscriberError.NoMatch, TranscriberError.Timeout, TranscriberError.Unavailable, TranscriberError.Other)) {
+            val haptics = RecordingHaptics()
+            val machine = machine(
+                transcriber = ScriptedTranscriber(listOf(10L to TranscriberEvent.Error(code = code))),
+                synthesizer = RecordingSynthesizer(),
+                scope = machineScope(),
+                haptics = haptics,
+            )
+
+            machine.startListening()
+            advanceUntilIdle()
+
+            assertTrue("$code should return quietly", machine.state.value is AssistUiState.Ready)
+            assertEquals("$code should not fire the error haptic", listOf("listeningEnded"), haptics.calls)
+        }
     }
 
     @Test

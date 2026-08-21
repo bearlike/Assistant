@@ -4,7 +4,9 @@
 # stack: default bridge network (not host), no named data volumes (a clean
 # `mongo` on every `up` is what makes seeded fixtures + captured screenshots
 # reproducible), and image tags suffixed `:demo` so a build here never
-# clobbers the `ghcr.io/bearlike/*:latest` tags the deployed stack runs.
+# clobbers the `ghcr.io/bearlike/*:latest` tags the deployed stack runs. The
+# api's base image is built locally as `mewbo-base:demo`, so regeneration never
+# depends on registry access to the published runtime images.
 # Never point this file at the deployed stack's ports (5125/3001/27018 are
 # taken by it) or its network.
 name: mewbo-demo
@@ -33,12 +35,12 @@ services:
 
   api:
     image: mewbo-api:demo
-    pull_policy: missing
+    pull_policy: never
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
       args:
-        BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+        BASE_IMAGE: mewbo-base:demo
         WIKI_EXTRAS: "1"
         SCIP_EXTRAS: "0"
     restart: "no"
@@ -53,7 +55,12 @@ services:
       # before the first search request).
       - MEWBO_AGENTIC_SEARCH_SEED=1
     volumes:
-      - ./configs:/app/configs:ro
+      - type: volume
+        source: demo-repo
+        target: /app/configs
+        read_only: true
+        volume:
+          subpath: demo/configs
       # A fixture plugin install cache, shaped exactly like the one
       # `install_plugin` writes: an `installed_plugins.json` registry whose
       # entries point at `cache/<marketplace>/<name>/<version>/` directories,
@@ -64,12 +71,22 @@ services:
       # installs or uninstalls, and nothing here is fetched (the registry and
       # the catalog are both plain file reads; `plugins.marketplaces` stays
       # empty, which is what suppresses the clone-on-read).
-      - ./plugins:/app/data/plugins:ro
+      - type: volume
+        source: demo-repo
+        target: /app/data/plugins
+        read_only: true
+        volume:
+          subpath: demo/plugins
       # Makes the seeded `shipment-router` project a real git repository with a
       # real worktree, so the Workspace capture stops showing a pane that
       # promises worktrees above four cards saying they are unavailable. Only
       # that one project; the rest keep the honest line. See the script header.
-      - ./init-git-fixture.sh:/app/docker/init.d/21-git-fixture.sh:ro
+      - type: volume
+        source: demo-repo
+        target: /app/docker/init.d/21-git-fixture.sh
+        read_only: true
+        volume:
+          subpath: demo/init-git-fixture.sh
     depends_on:
       mongo:
         condition: service_healthy
@@ -103,7 +120,7 @@ services:
 
   console:
     image: mewbo-console:demo
-    pull_policy: missing
+    pull_policy: never
     build:
       context: ..
       dockerfile: docker/Dockerfile.console
@@ -118,7 +135,12 @@ services:
     volumes:
       # Override ONLY the proxy_pass targets (127.0.0.1:5125 -> api:5125) —
       # the image's baked-in docker/nginx-console.conf assumes host networking.
-      - ./nginx-console.demo.conf:/etc/nginx/conf.d/default.conf:ro
+      - type: volume
+        source: demo-repo
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        volume:
+          subpath: demo/nginx-console.demo.conf
     ports:
       - "127.0.0.1:${DEMO_CONSOLE_PORT:-3210}:3001"
     depends_on:
@@ -137,7 +159,7 @@ services:
   # (see root Makefile `demo-seed`) — never started by a bare `up`.
   seed:
     image: mewbo-api:demo
-    pull_policy: missing
+    pull_policy: never
     profiles: ["seed"]
     # mewbo_demo_seeder is written straight through the store contracts
     # (SessionStoreBase et al.), not raw Mongo documents — see demo/seeder/
@@ -177,7 +199,12 @@ services:
       # stores this process builds resolve to the SAME demo database the api
       # reads from (demo/configs/app.json → mongodb://mongo:27017 / mewbo_demo).
       - ./configs:/app/configs:ro
-      - ./seeder:/demo/seeder:ro
+      - type: volume
+        source: demo-repo
+        target: /demo/seeder
+        read_only: true
+        volume:
+          subpath: demo/seeder
     depends_on:
       mongo:
         condition: service_healthy
@@ -199,12 +226,18 @@ services:
   # matches the test runner's protocol expectations.
   # Fresh named volumes are created root-owned, but `shots` runs as the host
   # user so screenshots land host-owned — this root one-shot hands the npm
-  # cache volume to that user before any npm process touches it.
+  # cache volume to that user before any npm process touches it. The defaults
+  # match an ordinary local checkout; CI passes the runner's uid/gid instead.
   shots-cache-init:
     image: mcr.microsoft.com/playwright:v1.60.0-noble
     profiles: ["shots"]
     user: "0:0"
-    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /cache"]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "chown ${DEMO_HOST_UID:-1000}:${DEMO_HOST_GID:-1000} /cache",
+      ]
     volumes:
       - npm-cache:/cache
     deploy:
@@ -216,7 +249,7 @@ services:
   shots:
     image: mcr.microsoft.com/playwright:v1.60.0-noble
     profiles: ["shots"]
-    user: "1000:1000"
+    user: "${DEMO_HOST_UID:-1000}:${DEMO_HOST_GID:-1000}"
     environment:
       - HOME=/tmp
       - npm_config_cache=/tmp/npm-cache
@@ -224,9 +257,8 @@ services:
       - DEMO_CONSOLE_URL=http://console:3001
       - CI=1
     volumes:
-      # rw: captured screenshots/recordings land under docs/assets/img in the
-      # checked-out tree.
-      - ..:/work
+      # rw: captured screenshots/recordings land in the staged repository tree.
+      - demo-repo:/work
       - npm-cache:/tmp/npm-cache
     working_dir: /work/apps/mewbo_console
     command: >
@@ -248,4 +280,7 @@ services:
           cpus: "0.5"
 
 volumes:
+  demo-repo:
+    external: true
+    name: ${DEMO_REPO_VOLUME:-mewbo-demo-repo}
   npm-cache:

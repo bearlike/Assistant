@@ -170,6 +170,7 @@ Read the deepest file that applies before editing. Every child carries `> ↑ pa
 | MewboWiki indexing job lifecycle (engine: phases, resume, progress) | `packages/mewbo_graph/src/mewbo_graph/wiki/CLAUDE.md` |
 | SCG plugin tools (map + search) | `packages/mewbo_graph/src/mewbo_graph/plugins/scg/CLAUDE.md` |
 | Identity kernel: principals, authenticators, roles, teams, grants, audit | `packages/mewbo_iam/CLAUDE.md` |
+| Speech: gateway-backed synthesis and transcription, model capability discovery | `packages/mewbo_speech/CLAUDE.md` |
 | HTTP API server (routes, channels, Web IDE) | `apps/mewbo_api/CLAUDE.md` |
 | MewboWiki — API side | `apps/mewbo_api/src/mewbo_api/wiki/CLAUDE.md` |
 | Agentic Search — API side | `apps/mewbo_api/src/mewbo_api/agentic_search/CLAUDE.md` |
@@ -210,8 +211,13 @@ Full methodology: `apps/mewbo_api/CLAUDE.md` → "Debugging session errors". Ori
 
 ## Running, testing, linting
 
-- Tests: bare `pytest` from the repo root. That is the canonical invocation and the one CI runs — it honours every entry in `testpaths` (`tests/`, the three app suites, both demo suites). **Naming a path OVERRIDES `testpaths`**, so `pytest tests/` silently runs one subtree and reports green for suites it never collected; that is how an entire app suite stayed out of the usual run. Pass a path only when you mean to narrow the run.
-- Install: `uv sync` (core) or `uv sync --all-extras --all-groups` (dev).
+- Tests: **`.venv/bin/python -m pytest` from the repo root** — the canonical invocation, honouring every entry in `testpaths` (`tests/`, the three app suites, both demo suites). Two ways to get a meaningless green, and both look like a passing run:
+  - **`pytest` bare may not be this project's pytest.** Where a version manager puts a shim first on `PATH`, it loads the wrong plugin set, dies with `Marks cannot be applied to fixtures` — and **exits 0 having collected NOTHING**. A zero exit that proves nothing is worse than a failure. Confirm the count: a real run collects ~11,500 tests, so a summary naming far fewer, or none, is the shim rather than a clean tree.
+  - **Naming a path OVERRIDES `testpaths`**, so `pytest tests/` runs one subtree and reports green for suites it never collected; that is how an entire app suite stayed out of the usual run. Pass a path only when you mean to narrow.
+- **⚠️ A bare `uv sync` STRIPS the shared `.venv` down to the lean install — 97 packages, pytest's plugins, ruff and mypy among them.** `[tool.uv] default-groups = []` means a sync with no flags installs no dependency group at all, and **`uv sync` is EXACT by default**, so "not requested" reads as "remove". That leanness is intentional and stays: `uv sync --extra api` is the published quick start and must not drag a dev toolchain in. Re-sync with the full `uv sync --all-extras --all-groups`, never a narrower form, on a checkout anyone else is using.
+  - **`uv run` does NOT do this, and the difference is a default, not a detail.** `uv run` is INEXACT by default — it installs what is missing and removes nothing — which is why `uv run --exact` exists as an opt-in and `uv sync --inexact` as the opposite opt-out. Each flag's existence is the proof of the other's default. Verified against a throwaway workspace built in this project's shape: a bare `uv run`, and `uv run --package <member>`, both leave the dev group and every extra in place, while a bare `uv sync` in the same fixture removes them. So `uv run …` is safe to use; `uv run --exact` is the one to never type here.
+  - **Do not "fix" this by putting `dev` back in `default-groups`.** It would break the published lean install, and it would not even work: uv has `default-groups` but no `default-extras`, so a lean sync still drops `mewbo_graph` and the tree-sitter stack, `mewbo_mcp` and `mewbo_ha_conversation`, taking whole test subtrees with them.
+- Install: `uv sync` (core) or `uv sync --all-extras --all-groups` (dev). The dev form is what the shared `.venv` is built from, so any narrower sync run against it is a downgrade, not a no-op.
 - Run: `uv run mewbo` / `uv run mewbo-api` from repo root, or `npm run dev` in `apps/mewbo_console`.
 - Config chain: `CWD/configs/` → `$MEWBO_HOME/` → `~/.mewbo/`. `$MEWBO_CONFIG_DIR` pins the directory ahead of the CWD walk — the walk itself can't be redirected for a spawned child, since it re-runs from that child's own CWD. Override with `--config`. Run `/init` to scaffold.
 - Lint: `ruff check .` (auto-fix: `ruff check --fix .`). Types: `mypy`. Helpers: `make lint`, `make lint-fix`, `make typecheck`, `make precommit-install`.

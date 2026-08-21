@@ -207,7 +207,23 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: "jsdom",
       setupFiles: "./src/setupTests.ts",
-      exclude: ["tests/**", "node_modules/**"]
+      exclude: ["tests/**", "node_modules/**"],
+      // Budgets sized for the CI runner, not for a quiet laptop. The same suite
+      // takes ~120 s locally and ~250 s on the shared runner, and at that ratio
+      // vitest's stock 5 s / 10 s budgets stop measuring the code and start
+      // measuring the box: whichever files happened to land on a busy worker
+      // failed, and a different set failed on the next run. That is the shape to
+      // recognise — a red suite whose membership CHANGES between runs of the
+      // same tree is load, not a regression.
+      //
+      // This is NOT a substitute for the pre-warm in
+      // `SettingsView.integration.test.tsx`: pre-warming is what stops a lazy
+      // chunk's COLD TRANSFORM racing an assertion, and it stays. What this
+      // covers is the honest remainder — a `beforeAll` that deliberately
+      // transforms ten lazy pane modules is long-running BY DESIGN, and
+      // vitest's own timeout message says to give such a hook a real budget.
+      testTimeout: 20_000,
+      hookTimeout: 45_000
     }
   };
 });

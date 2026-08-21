@@ -10,9 +10,29 @@
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import { ConversationTimeline } from "../ConversationTimeline";
 import type { TimelineEntry } from "../../types";
+
+// The footer's read-aloud button probes the server for speech support, so the
+// strip now needs a query client in scope. Answering "no speech" is what keeps
+// these tests pinned to their own subject: the footer then renders exactly the
+// copy/Trace/⋯ cluster they were written against, and a speaker button appearing
+// or not cannot change their result.
+vi.mock("../../api/speech", () => ({
+  fetchSpeechCapability: vi.fn().mockResolvedValue({ synthesis: false, transcription: false, maxAudioBytes: null, maxTextChars: null }),
+  synthesizeSpeech: vi.fn(),
+}));
+
+/** A fresh client per render, so no probe result leaks between tests. */
+function queryWrapper() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
 
 // jsdom lacks IntersectionObserver — TurnScroller observes rows on mount.
 class IntersectionObserverStub {
@@ -80,6 +100,7 @@ function renderTimeline(timeline: TimelineEntry[] = completedTurn()) {
       onForkFrom={vi.fn()}
       onForkSession={vi.fn()}
     />,
+    { wrapper: queryWrapper() },
   );
 }
 

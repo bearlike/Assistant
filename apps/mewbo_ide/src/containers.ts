@@ -113,6 +113,10 @@ export interface DockerClientLike {
   listContainers(options: DockerListOptions): Promise<DockerListItem[]>;
   getContainer(id: string): DockerContainerHandle;
   createContainer(spec: ContainerSpec): Promise<DockerContainerHandle>;
+  /** Whether `image` already has a local layer, without pulling it. */
+  imageExists(image: string): Promise<boolean>;
+  /** Pull `image`, resolving only once the pull has actually finished. */
+  pullImage(image: string): Promise<void>;
 }
 
 export interface BrokerLogger {
@@ -270,11 +274,13 @@ export class IdeContainers {
    * deterministic: a lingering exited container would 409 the create on a name
    * conflict, which is precisely the state a re-open needs to recover from.
    *
-   * Cost: O(1) — three daemon round trips, independent of how many containers
-   * exist.
+   * Cost: normally O(1) — four daemon round trips, independent of how many
+   * containers exist. The exception is a cold image: `ensureImage` then pays
+   * a real network pull, once, until the layer is cached locally.
    */
   async create(inputs: SpecInputs): Promise<string> {
     await this.remove(inputs.sessionId);
+    await this.ensureImage();
     const spec = this.buildSpec(inputs);
     const container = await this.call(`create ${spec.name}`, () =>
       this.docker.createContainer(spec),
@@ -289,6 +295,32 @@ export class IdeContainers {
     }
     this.log.info(`ide-broker: started ${spec.name} until ${inputs.expiresAt.toISOString()}`);
     return spec.name;
+  }
+
+  /**
+   * Pull `config.image` if the daemon does not already have it.
+   *
+   * `docker.createContainer` — unlike the `docker run` CLI — never pulls a
+   * missing image implicitly; the daemon just answers `create` with a 404
+   * "No such image". A host that has never run this image (a fresh
+   * deployment, or an operator who bumped `MEWBO_IDE_IMAGE`) failed every
+   * launch that way until something happened to `docker pull` it by hand.
+   * Checked first so the common case — the image already cached — costs one
+   * cheap inspect rather than a registry round trip on every launch.
+   * Idempotent and safe to call from both `create` (self-heals if the image
+   * was pruned after boot) and the broker's own startup, alongside `sweep`.
+   */
+  async ensureImage(): Promise<void> {
+    const image = this.config.image;
+    const present = await this.call(`inspect image ${image}`, () =>
+      this.docker.imageExists(image),
+    );
+    if (present) {
+      return;
+    }
+    this.log.info(`ide-broker: pulling missing image ${image}`);
+    await this.call(`pull ${image}`, () => this.docker.pullImage(image));
+    this.log.info(`ide-broker: pulled ${image}`);
   }
 
   /** Cost: O(1). */

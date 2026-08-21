@@ -5,7 +5,7 @@
 
 import { BookOpen, ChevronDown, GitBranch, Globe, Network, Zap } from "lucide-react";
 
-import { ModelFallbackChain } from "@/components/ModelFallbackChain";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -18,17 +18,15 @@ export function StepGeneration({
   state,
   set,
   languages,
-  models,
   branches,
   defaultBranch,
   branchesLoading,
   developerMode,
+  embeddingDefault,
 }: {
   state: WizardState;
   set: (patch: Partial<WizardState>) => void;
   languages: Array<{ id: string; label: string; subtle?: string }>;
-  /** Every advertised model — the ladder's candidate pool. */
-  models: string[];
   /** Remote branches for the branch picker (empty until loaded / on error). */
   branches: string[];
   /** Repo default branch, when known — labels the "Default" option. */
@@ -37,6 +35,8 @@ export function StepGeneration({
   branchesLoading: boolean;
   /** Gated developer-mode features (graph-only indexing). */
   developerMode: boolean;
+  /** Server fallback shown when the project leaves this model unset. */
+  embeddingDefault?: string;
 }) {
   return (
     <div className="space-y-4">
@@ -91,22 +91,32 @@ export function StepGeneration({
           </div>
         </Field>
 
-        <Field label="Model" required hint="Used to author every page">
-          <ModelPicker value={state.model} onChange={(v) => set({ model: v })} variant="full" />
+        <Field
+          label="Model"
+          required
+          hint="Used to author every page; add fallbacks for ones to retry if it keeps failing"
+        >
+          <ModelPicker
+            value={state.model}
+            onChange={(v) => set({ model: v })}
+            variant="full"
+            fallbackEnabled={state.fallbackEnabled}
+            fallbackModels={state.fallbackModels}
+            onFallbackEnabledChange={(on) => set({ fallbackEnabled: on })}
+            onFallbackModelsChange={(next) => set({ fallbackModels: next })}
+          />
         </Field>
       </div>
 
       <Field
-        label="Fallback"
-        hint="Models to try if the one above keeps failing mid-index"
+        label="Embedding model"
+        hint="optional · leave blank to inherit the deployment default"
       >
-        <ModelFallbackChain
-          models={models}
-          value={state.fallbackModels}
-          onChange={(next) => set({ fallbackModels: next })}
-          enabled={state.fallbackEnabled}
-          onEnabledChange={(on) => set({ fallbackEnabled: on })}
-          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]"
+        <Input
+          aria-label="Embedding model"
+          value={state.embeddingModel}
+          onChange={(e) => set({ embeddingModel: e.target.value })}
+          placeholder={embeddingDefault ?? "Deployment default"}
         />
       </Field>
 

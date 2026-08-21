@@ -739,6 +739,59 @@ class TestSanitizeToolSchema:
         assert sanitize_tool_schema(42) == 42
         assert sanitize_tool_schema(None) is None
 
+    def test_upper_bounds_dropped(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "href": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "children": {"type": "array", "items": {}, "maxItems": 200},
+            },
+            "maxProperties": 10,
+        }
+        result = sanitize_tool_schema(schema)
+        assert result["properties"]["href"] == {"type": "string", "minLength": 1}
+        assert result["properties"]["children"] == {"type": "array", "items": {}}
+        assert "maxProperties" not in result
+
+    def test_lower_bounds_kept(self):
+        """Only UPPER bounds blow up a grammar; lower ones carry real intent."""
+        schema = {"type": "object", "properties": {"s": {"type": "string", "minLength": 3}}}
+        result = sanitize_tool_schema(schema)
+        assert result["properties"]["s"] == {"type": "string", "minLength": 3}
+
+    def test_upper_bounds_dropped_through_recursive_refs(self):
+        """The real failure: a self-referencing tree whose leaves carry maxLength.
+
+        Inlining the ``$ref`` multiplies the bound's expansion, which is what
+        made Ollama refuse the whole request.
+        """
+        schema = {
+            "type": "object",
+            "$defs": {
+                "Card": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "maxLength": 200},
+                        "children": {
+                            "type": "array",
+                            "maxItems": 200,
+                            "items": {"oneOf": [{"$ref": "#/$defs/Card"}]},
+                        },
+                    },
+                }
+            },
+            "properties": {"root": {"$ref": "#/$defs/Card"}},
+        }
+        card = sanitize_tool_schema(schema)["$defs"]["Card"]
+        assert card["properties"]["title"] == {"type": "string"}
+        assert "maxItems" not in card["properties"]["children"]
+
+    def test_property_literally_named_max_length_survives(self):
+        """``maxLength`` as a PROPERTY NAME is data, not a constraint."""
+        schema = {"type": "object", "properties": {"maxLength": {"type": "integer"}}}
+        result = sanitize_tool_schema(schema)
+        assert result["properties"]["maxLength"] == {"type": "integer"}
+
     def test_no_mutation_of_input(self):
         """Sanitizer must not mutate the original schema dict."""
         original = {"type": "object", "properties": {"x": {"type": "array"}}}

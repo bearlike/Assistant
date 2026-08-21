@@ -1,4 +1,13 @@
-"""Tests for X-Mewbo-Capabilities header parsing in the API."""
+"""Tests for X-Mewbo-Capabilities header parsing in the API.
+
+The persisted list is NORMALISED — sorted and deduped — not stored in the order
+the client happened to send. That is `mewbo_core.capabilities.parse_capability_header`,
+the one wire seam, matching its siblings `parse_capabilities` (manifests) and
+`augment_session_capabilities`, both of which already sorted. Capabilities are
+consumed with SET semantics everywhere (`filter_by_capabilities`, `issubset`,
+membership), so header order carries no meaning, and normalising it means two
+clients advertising the same set persist the same payload.
+"""
 
 # mypy: ignore-errors
 from mewbo_api import backend
@@ -42,7 +51,10 @@ def test_session_create_stores_client_capabilities(monkeypatch, tmp_path):
         ),
         None,
     )
-    assert caps == ["stlite", "foo"]
+    # Sorted, not header order — see the module docstring. `foo` is unknown to the
+    # first-party registry and is deliberately KEPT: a third-party plugin's
+    # capability must survive the parse or its gate silently stops working.
+    assert caps == ["foo", "stlite"]
 
 
 def test_session_create_without_header_stores_no_capabilities(monkeypatch, tmp_path):
@@ -90,4 +102,5 @@ def test_session_create_strips_whitespace_from_capabilities(monkeypatch, tmp_pat
         ),
         None,
     )
-    assert caps == ["stlite", "other-feature"]
+    # Whitespace stripped, then sorted — see the module docstring.
+    assert caps == ["other-feature", "stlite"]

@@ -20,6 +20,10 @@
             android:name=".ui.overlay.AssistOverlayPreviewActivity"
             android:exported="true"
             android:theme="@style/Theme.Aura" />
+        <activity
+            android:name=".ui.speech.SpeechBenchActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Aura" />
     </application>
 
 </manifest>

@@ -1,8 +1,8 @@
 [project]
 name = "mewbo-iam"
-version = "0.0.13"
+version = "0.0.14"
 description = "Identity kernel for Mewbo — principals, authenticators, permissions/roles, teams, ownership grants, group→role/team mappings, user records, and an auth audit trail. Pure data-owned models plus JSON/Mongo stores; depends only on mewbo-core. Consumed by apps, never imports one."
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.10,<4.0"
 authors = [
   { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },

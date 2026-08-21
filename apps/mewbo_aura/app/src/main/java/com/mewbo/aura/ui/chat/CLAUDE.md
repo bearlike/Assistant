@@ -127,6 +127,54 @@ drawable.
   disables the composer and drops any Retry (a terminated session 410s every retry). No error residue
   (DESIGN.md).
 
+## Read-aloud: `ChatViewModel` is the ONE instance that narrates a typed turn
+
+`ChatViewModel` injects `DeviceShape` for exactly one question and hands it to its `SpeechController`
+— whether a TYPED turn is read aloud (`SpeechController.narratesTurn`,
+[`voice/CLAUDE.md`](../../voice/CLAUDE.md)). Two things about that seam bite:
+
+- **The user's switch stays where it is.** `SettingsStore.speakResponses` folds into `publish()`'s
+  `muted` argument and nothing else; the shape decides whether a typed turn is ELIGIBLE, the switch
+  decides whether an eligible one speaks. A second gate here would give one decision two owners.
+- **The shape arrives from Hilt, so `MainActivity`'s debug `-e deviceShape television` override does
+  NOT reach it** — that extra only feeds `LocalDeviceShape` for the Compose tree. Read-aloud on a
+  handheld dev device follows the real platform answer; use a television target to exercise it.
+
+## Did the run fail? `error` alone — `last_error` is NEVER a failure
+
+The completion payload carries two error fields and they mean different things. `error` is set solely
+on the orchestrator's terminal-failure path. `last_error` is a **sticky diagnostic** recording the last
+tool failure inside the run, and it survives the model recovering from that tool call and going on to
+answer — so a fully successful run routinely carries `last_error` residue while `error` stays null.
+**Keying failure on `last_error` surfaces an internal tool/MCP error as a session-level failure**, under
+a complete and correct reply.
+
+One decision, spelled in THREE places, and all three must agree — a card without a phase, or a phase
+without a card, is one surface disagreeing with itself about whether the turn worked:
+
+| Site | Decides |
+|---|---|
+| `completionPhaseFor` (`ChatViewModel.kt`, top-level `internal`) | `RunPhase.Done` vs `RunPhase.Error` — the composer + spark |
+| `TranscriptReducer.foldCompletion` ([`data/model/`](../../data/model/CLAUDE.md)) | whether a `ChatItem.ErrorCard` is spawned |
+| `RunNotificationController.completionNotice` ([`notify/`](../../notify/CLAUDE.md)) | `Done` vs `Failed` on the notification |
+
+**This has already drifted once:** `completionPhaseFor` read `error != null || lastError != null` while
+the other two read `error` alone, so a recovered tool call flipped an otherwise-successful chat into
+`RunPhase.Error`. `ChatCompletionPhaseTest` is the symmetric mirror of
+`RunNotificationControllerTest`'s `completionNotice` suite, and additionally composes the phase
+decision with the REAL reducer so the card and the phase are asserted together. When `error` IS
+present the reducer's rendered MESSAGE still falls back to `last_error` — that fallback is about which
+string to show, never about whether the run failed.
+
+**A `stream_error` is not a run failure either — it means "you are no longer seeing this run."** The
+client detaches; the run continues server-side and re-opening the session replays it to completion.
+A transient drop never reaches here at all: `SessionStreamClient` swallows `IOException` and reconnects
+with `?after=` ([`data/sse/`](../../data/sse/CLAUDE.md)). Note the assist overlay additionally guards
+its `StreamError` branch on `!alreadyDone` (`AssistTurnMachine`) so a late transport failure cannot
+un-finalize an already-completed turn; `ChatViewModel.subscribeLive` has no such guard. **Unverified:**
+no reachable sequence was found that materializes a `StreamError` after a `completion` — do not "fix"
+this without a repro.
+
 Promoted tool cards → [`toolcards/CLAUDE.md`](toolcards/CLAUDE.md); the Streamlit widget card →
 [`widget/CLAUDE.md`](widget/CLAUDE.md). `ChatIcons` is the FROZEN legacy hand-rolled glyph set — reuse
 existing glyphs, but new glyphs pull from `material-icons-extended` first (app-root CLAUDE.md § Iconography).

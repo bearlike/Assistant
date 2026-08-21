@@ -1,22 +1,32 @@
 package com.mewbo.aura.ui.navigation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -25,6 +35,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.mewbo.aura.IS_DEBUG_BUILD
 import com.mewbo.aura.ui.apps.AppCreateScreen
 import com.mewbo.aura.ui.apps.AppDetailScreen
 import com.mewbo.aura.ui.apps.AppDetailViewModel
@@ -32,6 +43,9 @@ import com.mewbo.aura.ui.apps.AppsGalleryScreen
 import com.mewbo.aura.ui.aurora.LivenessShowcase
 import com.mewbo.aura.ui.chat.ChatScreen
 import com.mewbo.aura.ui.chat.ChatViewModel
+import com.mewbo.aura.data.device.DeviceShape
+import com.mewbo.aura.ui.common.DpadFocusContainer
+import com.mewbo.aura.ui.common.LocalDeviceShape
 import com.mewbo.aura.ui.common.LocalNoticeController
 import com.mewbo.aura.ui.common.NoticeController
 import com.mewbo.aura.ui.common.NoticeHost
@@ -147,6 +161,9 @@ fun AuraNavHost(
     }
 
     CompositionLocalProvider(LocalNoticeController provides noticeController) {
+        // Wraps EVERY route, because focus can be stranded on any of them and a remote has no
+        // gesture that grants focus back. See [DpadFocusContainer].
+        DpadFocusContainer {
         Box(modifier = modifier.fillMaxSize()) {
             NavHost(navController = navController, startDestination = AuraRoutes.CHAT, modifier = Modifier.fillMaxSize()) {
                 composable(
@@ -256,6 +273,7 @@ fun AuraNavHost(
             }
             NoticeHost(controller = noticeController, modifier = Modifier.align(Alignment.BottomCenter))
         }
+        }
     }
 }
 
@@ -276,8 +294,118 @@ private fun ChatHomeDestination(
     onOpenSession: (String) -> Unit,
     onNewChat: () -> Unit,
 ) {
+    // The ONE exhaustive `when` on the device shape. It picks between two whole navigation
+    // compositions rather than asking a boolean at each control, which is the case `DeviceShape`'s
+    // KDoc blesses: a third shape would fail to compile here instead of rendering half a design.
+    when (LocalDeviceShape.current) {
+        DeviceShape.Handheld -> HandheldChatHome(
+            sessionId = sessionId,
+            handoffModality = handoffModality,
+            onOpenSearch = onOpenSearch,
+            onOpenSettings = onOpenSettings,
+            onOpenApps = onOpenApps,
+            onOpenSession = onOpenSession,
+            onNewChat = onNewChat,
+        )
+        DeviceShape.Television -> TelevisionChatHome(
+            sessionId = sessionId,
+            handoffModality = handoffModality,
+            onOpenSearch = onOpenSearch,
+            onOpenSettings = onOpenSettings,
+            onOpenApps = onOpenApps,
+            onOpenSession = onOpenSession,
+            onNewChat = onNewChat,
+        )
+    }
+}
+
+/**
+ * A permanent navigation rail beside the transcript — the television shell.
+ *
+ * **A modal drawer is the wrong shape for a remote, and hoisting rows inside one only moved the
+ * problem.** It has to be summoned, it lands over the content behind a scrim, and every press then
+ * happens inside a container focus must be prevented from leaking out of. None of that buys anything
+ * at 960dp of width, where the rail simply fits. Keeping it on screen removes the open/close state,
+ * the scrim, the summoning button and the containment question outright: focus moves left into
+ * navigation and right into the transcript, which is what a remote user already expects, and the
+ * reported "I can never reach Settings" cannot occur because Settings is never off screen.
+ *
+ * The rows are [AuraDrawerContent] verbatim — the same composable the handheld sheet mounts. Only
+ * the frame differs, which is the whole point of [NavigationHost].
+ */
+@Composable
+private fun TelevisionChatHome(
+    sessionId: String?,
+    handoffModality: String?,
+    onOpenSearch: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenApps: () -> Unit,
+    onOpenSession: (String) -> Unit,
+    onNewChat: () -> Unit,
+) {
+    val noticeController = LocalNoticeController.current
+    Row(Modifier.fillMaxSize().background(AuraColors.surfaceCanvas)) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .width(AuraSpacing.NavigationRail.width)
+                .background(AuraColors.surfaceDrawer),
+        ) {
+            AuraDrawerContent(
+                currentSessionId = sessionId,
+                // Nothing to close: the rail is the chrome, not something laid over it. Every
+                // callback is therefore the bare navigation action the handheld shell wraps.
+                host = NavigationHost.PersistentRail,
+                onNewChat = onNewChat,
+                onOpenSearch = onOpenSearch,
+                onOpenSession = onOpenSession,
+                onOpenSettings = onOpenSettings,
+                onOpenApps = onOpenApps,
+            )
+        }
+        VerticalDivider(color = AuraColors.outlineHairline)
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            ChatScreen(
+                sessionId = sessionId,
+                handoffModality = handoffModality,
+                // No drawer to reveal, so no button that would reveal it.
+                onMenuTap = null,
+                onNewChat = onNewChat,
+                onNotice = noticeController::show,
+                onOpenSession = onOpenSession,
+            )
+        }
+    }
+}
+
+/** The handheld shell: navigation revealed on demand over the content, unchanged. */
+@Composable
+private fun HandheldChatHome(
+    sessionId: String?,
+    handoffModality: String?,
+    onOpenSearch: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenApps: () -> Unit,
+    onOpenSession: (String) -> Unit,
+    onNewChat: () -> Unit,
+) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // Closing the drawer strands focus: the row that was focused is now behind a closed sheet that
+    // refuses re-entry, and a remote has no gesture that grants focus anywhere (see
+    // [DpadFocusContainer] — recovering once focus is gone is impossible, so it must never be lost).
+    // Only a close that FOLLOWS an open hands focus back, so a cold launch keeps whatever initial
+    // focus the chat surface sets for itself.
+    val contentFocusRequester = remember { FocusRequester() }
+    var drawerHasOpened by remember { mutableStateOf(false) }
+    LaunchedEffect(drawerState.currentValue) {
+        if (drawerState.currentValue == DrawerValue.Open) {
+            drawerHasOpened = true
+        } else if (drawerHasOpened) {
+            runCatching { contentFocusRequester.requestFocus() }
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -296,7 +424,7 @@ private fun ChatHomeDestination(
             ) {
                 AuraDrawerContent(
                     currentSessionId = sessionId,
-                    isOpen = drawerState.currentValue == DrawerValue.Open,
+                    host = NavigationHost.ModalSheet(isOpen = drawerState.currentValue == DrawerValue.Open),
                     onNewChat = {
                         scope.launch { drawerState.close() }
                         onNewChat()
@@ -322,7 +450,10 @@ private fun ChatHomeDestination(
         },
     ) {
         val noticeController = LocalNoticeController.current
-        Box(Modifier.fillMaxSize()) {
+        // `focusGroup` rather than `focusable`: the landing target must be a child of the chat
+        // surface, not this Box itself — a full-screen focusable ancestor would hold focus with no
+        // visible ring and turn every subsequent arrow into a two-dimensional search out of it.
+        Box(Modifier.fillMaxSize().focusRequester(contentFocusRequester).focusGroup()) {
             ChatScreen(
                 sessionId = sessionId,
                 handoffModality = handoffModality,

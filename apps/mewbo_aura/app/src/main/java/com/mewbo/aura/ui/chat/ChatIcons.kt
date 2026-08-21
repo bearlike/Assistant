@@ -1,6 +1,7 @@
 package com.mewbo.aura.ui.chat
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Folder
@@ -15,7 +16,7 @@ import com.mewbo.aura.ui.theme.VectorGlyphFill
  * FROZEN LEGACY hand-rolled glyph set. These vectors predate `material-icons-extended`, which was
  * added to the dependency catalog (apps/mewbo_aura/CLAUDE.md § Iconography). They cover
  * glyphs the app's original `material-icons-core`-only floor lacked (composer: mic, stop, waveform,
- * stop-tile, up-arrow; chat chrome: two-line menu, content-copy, volume-up; tool cards: clock) plus a
+ * stop-tile, up-arrow; chat chrome: two-line menu, content-copy; tool cards: clock) plus a
  * few with no Material analog at all (StopTile/TwoLineMenu/ContentCopy - see their own docs). The set
  * is FROZEN: existing reuses stay (a reused hand-rolled glyph is not a "new hand-roll"), but NEW
  * glyphs pull from `material-icons-extended` first - do not add a hand-rolled path here. Path data
@@ -53,6 +54,25 @@ object ChatIcons {
     /** The "tools" scope prefix (composer scope row) — a wrench (`build`). Tinted
      * [com.mewbo.aura.ui.theme.AuraColors.scopeTool]. */
     val ToolScope: ImageVector get() = Icons.Filled.Build
+
+    /**
+     * Read-aloud (`volume_up`), shared by the chat action row's trailing speaker and the assist
+     * overlay's `ResponseCard` speaker badge.
+     *
+     * **This replaced a hand-rolled path, and the reason is measurable ink.** That path mirrored
+     * Material's speaker cone but kept only ONE of the two sound-wave arcs, which truncated the
+     * glyph's ink at x=16.5 of the 24-unit viewport: 13.5 units wide against 18 for
+     * [ContentCopy] and 22 for `Icons.Filled.ThumbUp`, its neighbours in the same row. Dropping
+     * the outer arc also moved the remaining ink's centre to x=9.75 while every other glyph in
+     * that row centres on 12, so it rendered both smaller AND visibly off-centre in its cell. Its
+     * own doc justified the simplification as "legible at 24dp" — but `ActionRow.iconSize` was
+     * later cut to 20dp (ui/theme/Spacing.kt), and at that scale the shortfall reads as a missing
+     * button rather than a lighter one. The off-the-shelf glyph restores 18 units of ink centred
+     * on 12, matching its neighbours exactly; `ActionRowGlyphTest` pins that.
+     *
+     * Auto-mirrored: the speaker cone points along the reading direction, so it flips under RTL.
+     */
+    val VolumeUp: ImageVector get() = Icons.AutoMirrored.Filled.VolumeUp
 
     val Mic: ImageVector by lazy {
         ImageVector.Builder(name = "Mic", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
@@ -308,31 +328,6 @@ object ChatIcons {
                 lineToRelative(5.25f, 3.15f)
                 lineToRelative(0.75f, -1.23f)
                 lineToRelative(-4.5f, -2.67f)
-                close()
-            }
-            .build()
-    }
-
-    /** Action row's pinned read-aloud glyph (spec §6.5 🔊), mirroring Material "volume_up"'s
-     * speaker-cone subpath verbatim plus one (of its two) sound-wave arcs - simplified to one arc,
-     * legible at 24dp without over-detailing. */
-    val VolumeUp: ImageVector by lazy {
-        ImageVector.Builder(name = "VolumeUp", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-            .path(fill = SolidColor(VectorGlyphFill)) {
-                moveTo(3f, 9f)
-                verticalLineToRelative(6f)
-                horizontalLineToRelative(4f)
-                lineToRelative(5f, 5f)
-                verticalLineTo(4f)
-                lineTo(7f, 9f)
-                horizontalLineTo(3f)
-                close()
-            }
-            .path(fill = SolidColor(VectorGlyphFill)) {
-                moveTo(16.5f, 12f)
-                curveToRelative(0f, -1.77f, -1.02f, -3.29f, -2.5f, -4.03f)
-                verticalLineToRelative(8.05f)
-                curveToRelative(1.48f, -0.73f, 2.5f, -2.25f, 2.5f, -4.02f)
                 close()
             }
             .build()

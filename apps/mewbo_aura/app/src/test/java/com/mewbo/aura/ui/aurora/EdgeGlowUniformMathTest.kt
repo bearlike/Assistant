@@ -176,6 +176,139 @@ class EdgeGlowUniformMathTest {
         assertEquals(4, EdgeGlowUniformMath.transitionKey(EdgeGlowState.Resting))
     }
 
+    // ---- The border profile (`perimeterBias`) ----
+    // The whole design rests on one claim: at bias 0 every derived term is an EXACT identity, so
+    // chat and the assist overlay render the same bytes they did before the knob existed. "Close
+    // enough" is not the claim and a delta would not be testing it — these assert exact equality,
+    // which the arithmetic supports (`1 + (k - 1) * 0` is `1` in IEEE, and `x * 1` is exact).
+
+    @Test
+    fun `at zero bias every derived term is exactly its unbiased value`() {
+        assertEquals(0f, EdgeGlowUniformMath.borderAmount(0f))
+        assertEquals(1f, EdgeGlowUniformMath.bottomWeight(0f))
+        assertEquals(1f, EdgeGlowUniformMath.reachFraction(0f))
+        assertEquals(1f, EdgeGlowUniformMath.perimeterGain(0f))
+    }
+
+    @Test
+    fun `at zero bias the center weight is the state's own strength, untouched`() {
+        for (state in ALL_STATES) {
+            assertEquals(
+                "centerWeight($state) must be byte-identical at bias 0",
+                EdgeGlowUniformMath.centerWeightStrength(state),
+                EdgeGlowUniformMath.centerWeight(state, override = null, perimeterBias = 0f),
+            )
+        }
+        // The in-app chat passes a near-zero override rather than the state default; the identity
+        // has to hold for the value the caller actually supplies, not just for the default path.
+        assertEquals(
+            0.02f,
+            EdgeGlowUniformMath.centerWeight(EdgeGlowState.Thinking, override = 0.02f, perimeterBias = 0f),
+        )
+    }
+
+    @Test
+    fun `full bias levels the bottom, gains the perimeter, contracts the reach and flattens the center`() {
+        assertEquals(1f, EdgeGlowUniformMath.borderAmount(1f))
+        assertTrue(
+            "the bottom-anchored term must never be BRIGHTENED past the bottom-anchored balance — " +
+                "that is the bottom wash again, louder",
+            EdgeGlowUniformMath.bottomWeight(1f) <= 1f,
+        )
+        assertTrue(
+            "the perimeter floor must be gained UP — damping the bottom alone just dims the surface",
+            EdgeGlowUniformMath.perimeterGain(1f) > 1f,
+        )
+        assertTrue(
+            "the reach must contract — a border at a haze's decay length is a haze",
+            EdgeGlowUniformMath.reachFraction(1f) < 1f,
+        )
+        // A border's bottom edge is EVEN; a center-weighted one dips between its bright centre and
+        // its bright corners. Flattened to exactly 0 whatever the state or the caller's override.
+        for (state in ALL_STATES) {
+            assertEquals(0f, EdgeGlowUniformMath.centerWeight(state, override = null, perimeterBias = 1f))
+        }
+        assertEquals(
+            0f,
+            EdgeGlowUniformMath.centerWeight(EdgeGlowState.Thinking, override = 0.9f, perimeterBias = 1f),
+        )
+    }
+
+    /**
+     * The identity that makes the border EVEN rather than a bottom wash with brighter edges: the
+     * biased bottom weight IS the biased rail peak, so both peak at the same value the whole way
+     * round. Retuning the gain without carrying the bottom weight with it is what this catches.
+     */
+    @Test
+    fun `at full bias the bottom edge and the side rails peak at the same value`() {
+        val railPeak = EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Listening(0f)) *
+            EdgeGlowUniformMath.perimeterGain(1f)
+
+        assertEquals(railPeak, EdgeGlowUniformMath.bottomWeight(1f), 1e-6f)
+    }
+
+    /**
+     * The device report this round answers: the border read "practically invisible" because the
+     * rails were gained to 0.70 of the shader's glow term and the bottom was pulled DOWN to match,
+     * so evenness was bought at 70% luminance. The parity level is the surface's whole brightness
+     * and the rest of the chain (`iIntensity`, `peakAlpha`, the window's obscuring cap) only takes
+     * away from it — so this asserts the border spends all of the one factor it owns.
+     *
+     * Deliberately an EXACT equality: `0.35f * (1f / 0.35f)` is exactly 1.0 in float32, so a
+     * tolerance here would quietly accept a re-lowered gain that lands nearby.
+     */
+    @Test
+    fun `at full bias the rails reach the glow term's full strength`() {
+        val railPeak = EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Listening(0f)) *
+            EdgeGlowUniformMath.perimeterGain(1f)
+
+        assertEquals(1f, railPeak)
+    }
+
+    /**
+     * One clamp, applied in [EdgeGlowUniformMath.borderAmount], so the shader's own `iPerimeterBias`
+     * and every CPU-side term derived from it can never disagree about the domain — a caller passing
+     * 1.5 must not push the bottom weight below its biased floor while the shader saturates at 1.
+     */
+    @Test
+    fun `the bias domain is clamped once, and every derived term follows it`() {
+        assertEquals(0f, EdgeGlowUniformMath.borderAmount(-0.5f))
+        assertEquals(1f, EdgeGlowUniformMath.borderAmount(1.5f))
+        assertEquals(0.4f, EdgeGlowUniformMath.borderAmount(0.4f))
+
+        assertEquals(EdgeGlowUniformMath.bottomWeight(0f), EdgeGlowUniformMath.bottomWeight(-0.5f))
+        assertEquals(EdgeGlowUniformMath.reachFraction(0f), EdgeGlowUniformMath.reachFraction(-0.5f))
+        assertEquals(EdgeGlowUniformMath.perimeterGain(0f), EdgeGlowUniformMath.perimeterGain(-0.5f))
+        assertEquals(EdgeGlowUniformMath.bottomWeight(1f), EdgeGlowUniformMath.bottomWeight(1.5f))
+        assertEquals(EdgeGlowUniformMath.reachFraction(1f), EdgeGlowUniformMath.reachFraction(1.5f))
+        assertEquals(EdgeGlowUniformMath.perimeterGain(1f), EdgeGlowUniformMath.perimeterGain(1.5f))
+    }
+
+    /**
+     * The bias is a continuous rebalance, not a two-state switch — every term has to move
+     * monotonically between its endpoints or a caller part-way along gets a shape neither profile
+     * describes. A constant-returning stub passes each endpoint test above in isolation; nothing
+     * passes both those and this.
+     *
+     * **`bottomWeight` is asserted NON-INCREASING, not strictly falling, and that is a statement
+     * about the design rather than a weakened assertion.** At the current parity of 1.0 the bottom
+     * term is level with the rails, so the damping sits at its identity and the function IS
+     * constant — no test can distinguish it from a stub while that holds. What keeps the bottom
+     * from swallowing the lower third at full bias is the reach contraction, asserted strictly
+     * below. Restore the strict form the moment parity drops under 1.
+     */
+    @Test
+    fun `every term moves monotonically between the two profiles`() {
+        val biases = (0..10).map { it / 10f }
+        val bottom = biases.map { EdgeGlowUniformMath.bottomWeight(it) }
+        val reach = biases.map { EdgeGlowUniformMath.reachFraction(it) }
+        val gain = biases.map { EdgeGlowUniformMath.perimeterGain(it) }
+
+        assertTrue("bottom weight must never RISE with the bias", bottom.zipWithNext().all { it.first >= it.second })
+        assertTrue("reach must contract monotonically", reach.zipWithNext().all { it.first > it.second })
+        assertTrue("perimeter gain must rise monotonically", gain.zipWithNext().all { it.first < it.second })
+    }
+
     @Test
     fun `perimeter floor is edge-lit in every live state and zero when hidden`() {
         assertEquals(0f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Hidden))
@@ -183,5 +316,18 @@ class EdgeGlowUniformMathTest {
         assertEquals(0.30f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Resting))
         assertEquals(0.15f, EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Thinking))
         assertTrue(EdgeGlowUniformMath.perimeterFloor(EdgeGlowState.Igniting(0.5f)) > 0f)
+    }
+
+    private companion object {
+        /** Every arm of the state union, so a bias identity is asserted over all of them rather
+         * than over the one a test author happened to pick. Adding a state without extending this
+         * leaves its identity unasserted, which the `when`s themselves will not catch. */
+        val ALL_STATES = listOf(
+            EdgeGlowState.Hidden,
+            EdgeGlowState.Igniting(0.5f),
+            EdgeGlowState.Listening(5f),
+            EdgeGlowState.Thinking,
+            EdgeGlowState.Resting,
+        )
     }
 }

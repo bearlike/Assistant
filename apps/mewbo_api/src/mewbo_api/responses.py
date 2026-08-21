@@ -75,6 +75,11 @@ _ERROR_CATALOG: dict[int, tuple[str, str, bool]] = {
         "a structured run is already active for this session",
         True,
     ),
+    413: (
+        "The uploaded payload exceeds the limit the endpoint publishes.",
+        "Audio upload exceeds the 10485760 byte limit (received 12000000 bytes).",
+        False,
+    ),
     422: (
         "Understood but unprocessable — the request could not be carried out.",
         "the run could not be started",
@@ -206,7 +211,7 @@ class ApiResponseKit:
 
         def decorator(func: Callable) -> Callable:
             for code in sorted(codes, reverse=True):
-                desc = overrides.get(code) or _ERROR_CATALOG[code][0]
+                desc = overrides.get(code) or self._catalog_entry(code)[0]
                 model = self._model_for(shape, code)
                 func = self.r.response(code, desc, model)(func)
             return func
@@ -218,6 +223,30 @@ class ApiResponseKit:
         return self.errors(code, shape="message")
 
     # ── internals ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _catalog_entry(code: int) -> tuple[str, str, bool]:
+        """The catalog row for *code*, or a failure that NAMES what is missing.
+
+        This lookup runs at DECORATION — module scope, which in this app is boot
+        — so a miss does not fail one request, it makes ``mewbo_api.backend``
+        unimportable and takes the whole API down. Failing fast is right (a route
+        documenting a status the reference cannot describe is a contract hole),
+        but a bare ``KeyError: 413`` names neither the file to edit nor the fact
+        that a ROUTE caused it. Measured: that exact traceback is what a new
+        namespace declaring an undocumented status produces, and it reads as a
+        dict bug rather than as a missing catalog row.
+        """
+        try:
+            return _ERROR_CATALOG[code]
+        except KeyError:
+            known = ", ".join(str(c) for c in sorted(_ERROR_CATALOG))
+            raise KeyError(
+                f"HTTP {code} has no _ERROR_CATALOG entry in "
+                f"mewbo_api/responses.py, so a route declaring it cannot be "
+                f"documented and the app fails to IMPORT. Add a row for {code} "
+                f"(description, example reason, retryable). Known: {known}."
+            ) from None
+
     def _model_for(self, shape: str, code: int) -> Any:
         key = (shape, code)
         if key in self._cache:
@@ -227,13 +256,13 @@ class ApiResponseKit:
                 f"{self.prefix}MessageError{code}",
                 {
                     "message": fields.String(
-                        example=_ERROR_CATALOG[code][1],
+                        example=self._catalog_entry(code)[1],
                         description="Human-readable failure reason.",
                     )
                 },
             )
         else:
-            _, reason, retryable = _ERROR_CATALOG[code]
+            _, reason, retryable = self._catalog_entry(code)
             body = self.r.model(
                 f"{self.prefix}ErrorBody{code}",
                 {

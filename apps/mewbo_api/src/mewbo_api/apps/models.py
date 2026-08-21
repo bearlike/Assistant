@@ -55,9 +55,13 @@ elsewhere.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
@@ -72,7 +76,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 AppStatus = Literal["draft", "building", "live", "paused", "broken", "archived"]
 WorkspaceRefKind = Literal["own", "shared"]
-PipelineFailurePolicy = Literal["repair", "pause", "notify"]
+PipelineFailurePolicy = Literal["repair", "pause", "notify", "invalidate"]
 PipelineRunStatus = Literal["running", "succeeded", "failed"]
 AppVersionAuthor = Literal["builder", "repair", "user"]
 AppReadTokenScope = Literal["read", "write"]
@@ -102,9 +106,18 @@ _ARCHIVED: AppStatus = "archived"
 # starts/ends alphanumeric, `-`/`_` allowed in the middle.
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 
-# The vetted binaries a ``mode="code"`` pipeline may declare in `allow_exec`.
-# Extending this set is a deliberate, reviewed platform change, not a per-app
-# choice — a pipeline cannot smuggle in an unvetted binary via any spelling.
+# The evidence crosses into a model's context via ``run_pipeline``. These are
+# response bounds, not source-cache bounds: the ctx keeps its complete recorded
+# file set for a correct fingerprint while this diagnostic projection stays
+# predictably small.
+_MAX_PIPELINE_EVIDENCE_GLOBS = 12
+_MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB = 8
+_MAX_PIPELINE_EVIDENCE_READ_PATHS = 24
+_MAX_PIPELINE_EVIDENCE_CHARS = 4_000
+
+# The default binaries a ``mode="code"`` pipeline may declare in `allow_exec`.
+# A deployment may narrow or extend this set at its submit/execution boundaries;
+# it is no longer the model's immutable ceiling.
 #
 # NOT a security boundary, and the distinction matters: the runner does not
 # interpret subcommand semantics (no `push`-vs-`log` distinction, exactly like
@@ -383,6 +396,170 @@ class AtSchedule(_PipelineSchedule):
 PipelineSchedule = Annotated[CronSchedule | AtSchedule, Field(discriminator="kind")]
 
 
+class _ResultSpec(_AppsModel):
+    """Base for the declared-result discriminated union (strategy-on-model)."""
+
+    media: str
+
+    def validate_output(self, output: Any) -> None:
+        """Refuse an output that cannot satisfy this result contract."""
+        raise NotImplementedError  # pragma: no cover - concrete kinds override
+
+    def render(self, output: Any) -> tuple[str, str]:
+        """Render a validated output as ``(body_text, content_type)``."""
+        raise NotImplementedError  # pragma: no cover - concrete kinds override
+
+
+class JsonResult(_ResultSpec):
+    """A JSON response, optionally constrained by a JSON Schema."""
+
+    media: Literal["json"] = "json"
+    json_schema: dict[str, Any] | None = None
+
+    def validate_output(self, output: Any) -> None:
+        """Validate against the optional declared JSON Schema."""
+        if self.json_schema is None:
+            return
+        try:
+            jsonschema.validate(instance=output, schema=self.json_schema)
+        except jsonschema.ValidationError as exc:
+            raise ValueError(f"JSON result does not match json_schema: {exc.message}") from exc
+
+    def render(self, output: Any) -> tuple[str, str]:
+        """Render the value as JSON for an HTTP response."""
+        return json.dumps(output, default=str), "application/json"
+
+
+class CsvResult(_ResultSpec):
+    """A column-declared CSV response."""
+
+    media: Literal["csv"] = "csv"
+    columns: list[str]
+
+    @field_validator("columns")
+    @classmethod
+    def _validate_columns(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("columns must not be empty for a CSV result")
+        return value
+
+    def validate_output(self, output: Any) -> None:
+        """Require rows that contain every declared CSV column."""
+        if not isinstance(output, list):
+            raise ValueError("CSV result output must be a list of mappings")
+        for index, row in enumerate(output):
+            if not isinstance(row, Mapping):
+                raise ValueError(f"CSV result row {index} must be a mapping")
+            for column in self.columns:
+                if column not in row:
+                    raise ValueError(f"CSV result row {index} is missing column {column!r}")
+
+    def render(self, output: Any) -> tuple[str, str]:
+        """Render validated rows with their declared header order."""
+        stream = io.StringIO()
+        writer = csv.DictWriter(stream, fieldnames=self.columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(output)
+        return stream.getvalue(), "text/csv"
+
+
+class XmlResult(_ResultSpec):
+    """An XML response with declared root and repeated-item element names."""
+
+    media: Literal["xml"] = "xml"
+    root: str = "result"
+    item: str = "item"
+
+    @field_validator("root", "item")
+    @classmethod
+    def _validate_element_name(cls, value: str) -> str:
+        if not re.match(r"^[A-Za-z_][\w.-]*$", value):
+            raise ValueError(f"XML element names must be NCName-safe, got {value!r}")
+        return value
+
+    def validate_output(self, output: Any) -> None:
+        """Require one mapping or a list of mappings for XML elements."""
+        if isinstance(output, Mapping):
+            return
+        if isinstance(output, list) and all(isinstance(row, Mapping) for row in output):
+            return
+        raise ValueError("XML result output must be a mapping or a list of mappings")
+
+    def render(self, output: Any) -> tuple[str, str]:
+        """Render the mapping shape as a shallow XML document."""
+        root = ET.Element(self.root)
+        rows = output if isinstance(output, list) else [output]
+        for row in rows:
+            parent = ET.SubElement(root, self.item) if isinstance(output, list) else root
+            for key, value in row.items():
+                if value is not None:
+                    ET.SubElement(parent, str(key)).text = str(value)
+        return ET.tostring(root, encoding="unicode"), "application/xml"
+
+
+class TextResult(_ResultSpec):
+    """A plain-text response."""
+
+    media: Literal["text"] = "text"
+
+    def validate_output(self, output: Any) -> None:
+        """Require a text value without coercing structured outputs."""
+        if not isinstance(output, str):
+            raise ValueError("text result output must be a string")
+
+    def render(self, output: Any) -> tuple[str, str]:
+        """Return the text body with its plain-text media type."""
+        return output, "text/plain"
+
+
+ResultSpec = Annotated[
+    JsonResult | CsvResult | XmlResult | TextResult,
+    Field(discriminator="media"),
+]
+
+
+class VerifierSpec(_AppsModel):
+    """A post-response semantic check for a pipeline result.
+
+    It runs after the result returns to the caller, out of band, and never
+    delays that response. Its ``verify(result, ctx) -> None`` entrypoint fails
+    only by raising.
+    """
+
+    entrypoint: str
+    timeout_seconds: int = Field(default=30, ge=1, le=600)
+    consecutive_failures_to_invalidate: int = Field(default=3, ge=1)
+
+
+class PipelineSample(_AppsModel):
+    """A recorded invocation the submit-time verifier replays.
+
+    Replaying these samples instead of the vacuous ``params={}`` prevents a
+    completely broken write path from shipping green.
+    """
+
+    params: dict[str, Any] = Field(default_factory=dict)
+    label: str = ""
+
+
+class FailureBudget(_AppsModel):
+    """The edge-triggered rate gate for auto-repair.
+
+    Gating on who invoked a run leaves an all-on-demand app unhealable; the
+    failure rate is the correct gate, not the caller.
+
+    The default of ONE is deliberate and is what keeps this from being a
+    regression: a scheduled pipeline still dispatches on its first failure,
+    exactly as it did when only a scheduled fire could dispatch at all. Raising
+    it is for a pipeline invoked often enough that a single transient failure is
+    not yet evidence — a daily job would wait days to heal under a higher value,
+    which is the opposite of what auto-repair is for.
+    """
+
+    consecutive_failures: int = Field(default=1, ge=1)
+    window_seconds: int = Field(default=3600, ge=60)
+
+
 class PipelineSpec(_AppsModel):
     """One agent-authored data pipeline: a DECLARED wake + tool scope.
 
@@ -413,6 +590,29 @@ class PipelineSpec(_AppsModel):
     # maintainer LLM session; ``code`` runs a deterministic ``entrypoint`` file
     # through ``AppPipelineRunner`` — NO LLM call — at fire time and on demand.
     mode: Literal["agentic", "code"] = "agentic"
+    # ``materialize`` writes durable collection documents; ``render`` computes a
+    # declared response for the caller, so an empty ``docs_written`` is correct.
+    tier: Literal["materialize", "render"] = "materialize"
+    result: ResultSpec | None = None
+    verifier: VerifierSpec | None = None
+    samples: list[PipelineSample] = Field(default_factory=list)
+    failure_budget: FailureBudget = Field(default_factory=FailureBudget)
+    # The named data contract for a materializing pipeline: collections the run
+    # is expected to produce. The runner derives literal ``ctx.collection("…")``
+    # writes at submit when this is empty, so authors normally do not need to
+    # state it. Explicit names cover computed collection handles the static scan
+    # cannot prove. This stays empty by default: historical snapshots must keep
+    # parsing, while a new/edited app gets the submit-boundary collection check.
+    writes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Collections this materializing pipeline is expected to produce. "
+            "When omitted, submit derives literal ctx.collection(...).upsert/delete "
+            "calls from its source when possible; declare names explicitly for "
+            "computed collection handles. A successful run that misses one is "
+            "reported as an integrity issue without changing its execution status."
+        ),
+    )
     # A bundle-relative key into ``AppSpec.frontend.files`` naming the pipeline's
     # Python file (``def run(params, ctx) -> Any``). REQUIRED iff ``mode=="code"``
     # (the iff enforced below); the lifecycle additionally checks it resolves to a
@@ -506,13 +706,25 @@ class PipelineSpec(_AppsModel):
     @field_validator("allow_exec")
     @classmethod
     def _validate_allow_exec(cls, value: list[str]) -> list[str]:
-        """Every declared binary must be in the platform's vetted set (see module top)."""
-        unknown = sorted(set(value) - PIPELINE_ALLOWED_EXEC)
-        if unknown:
-            raise ValueError(
-                f"allow_exec contains unvetted binaries {unknown} — only "
-                f"{sorted(PIPELINE_ALLOWED_EXEC)} may be declared"
-            )
+        """Keep declarations executable-shaped; submit owns operator policy.
+
+        Membership cannot be a parse-time floor: this append-only store must
+        keep parsing a snapshot after an operator changes the allowed set, the
+        same reason :meth:`AppSpec.ensure_unique_pipeline_names` is a
+        submit-boundary method.
+        """
+        for binary in value:
+            if (
+                not isinstance(binary, str)
+                or not binary
+                or "/" in binary
+                or "\\" in binary
+                or any(char.isspace() for char in binary)
+            ):
+                raise ValueError(
+                    "allow_exec entries must be non-empty bare binary names with no "
+                    f"path separators or whitespace, got {binary!r}"
+                )
         return value
 
     @field_validator("allow_egress")
@@ -547,18 +759,16 @@ class PipelineSpec(_AppsModel):
                 hosts.add(scp.group("host").lower())
         return hosts
 
-    def check_exec_allowed(self, argv: Sequence[str]) -> None:
-        """Refuse *argv* unless this pipeline declared its binary AND every host it reaches.
+    def check_exec_allowed(
+        self, argv: Sequence[str], *, allowed_binaries: frozenset[str]
+    ) -> None:
+        """Refuse *argv* unless this pipeline and deployment both permit it.
 
         The ONE authorization rule for ``ctx.exec``, living on the model that
         DECLARES ``allow_exec``/``allow_egress`` rather than in the runner that
         spawns — argv arrives as a method ARG, so the rule never reaches for a
         process or a clock (the ``TriggerSpec`` discipline). Raises
         :class:`ValueError`; the runner maps it onto its own error envelope.
-
-        No re-check against :data:`PIPELINE_ALLOWED_EXEC` here: the field
-        validator already made an unvetted entry unrepresentable, and a second
-        copy of that rule is one that can drift.
         """
         # A bare ``str`` IS a ``Sequence[str]``, so `exec("git log")` would otherwise
         # sail past the element check and read ``argv[0]`` as the letter "g".
@@ -571,6 +781,11 @@ class PipelineSpec(_AppsModel):
             raise ValueError(
                 f"pipeline {self.name!r} did not declare {binary!r} in `allow_exec` "
                 f"(declared: {sorted(self.allow_exec) or 'none'})"
+            )
+        if binary not in allowed_binaries:
+            raise ValueError(
+                f"this deployment does not permit {binary!r} for pipeline execution "
+                f"(permitted: {sorted(allowed_binaries) or 'none'})"
             )
         undeclared = sorted(self.hosts_in_argv(argv) - set(self.allow_egress))
         if undeclared:
@@ -610,6 +825,21 @@ class PipelineSpec(_AppsModel):
                 f"git subcommand {subcommand!r} is not permitted from a pipeline "
                 f"(permitted: {sorted(_GIT_SUBCOMMANDS)})"
             )
+
+    @field_validator("writes")
+    @classmethod
+    def _validate_writes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep the declared output contract unambiguous before app-wide validation.
+
+        ``AppSpec`` validates that names are declared collections because only it
+        holds that list. This field-level half owns what it can know: a collection
+        name is a slug, and repeating it adds no contract while obscuring a diff.
+        """
+        names = tuple(cls._validate_slug(name, field="writes") for name in value)
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"writes contains duplicate collection name(s): {duplicates}")
+        return names
 
     @field_validator("name")
     @classmethod
@@ -711,6 +941,41 @@ class PipelineSpec(_AppsModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_render_tier(self) -> PipelineSpec:
+        """Keep live response contracts reachable and explicit.
+
+        HISTORY-SAFE: every field this validates is new with a default that old
+        snapshots receive, so parsing historical append-only rows cannot trip it.
+        """
+        if self.tier == "render" and self.mode != "code":
+            raise ValueError(
+                f"pipeline {self.name!r} sets tier='render' but is not mode='code' — "
+                "only code pipelines compute live results"
+            )
+        if self.tier == "render" and self.result is None:
+            raise ValueError(
+                f"pipeline {self.name!r} sets tier='render' but declares no `result` — "
+                "a render pipeline needs an output contract"
+            )
+        if self.mode == "agentic" and (
+            self.result is not None or self.verifier is not None or self.samples
+        ):
+            raise ValueError(
+                f"pipeline {self.name!r} declares render-only settings but is mode='agentic' "
+                "— only code pipelines can expose or verify live results"
+            )
+        return self
+
+    def expects_writes(self) -> bool:
+        """Whether a successful run is expected to materialize collection documents."""
+        return self.tier == "materialize"
+
+    def validate_result(self, output: Any) -> None:
+        """Validate a live result when this pipeline declares an output contract."""
+        if self.result is not None:
+            self.result.validate_output(output)
+
     def ensure_wakeable(self) -> None:
         """Refuse the silent-unscheduled state — at the SUBMIT boundary, not parse.
 
@@ -737,7 +1002,11 @@ class PipelineSpec(_AppsModel):
 
 
 class AppPolicies(_AppsModel):
-    """Declarative reactions wired onto existing seams — no new hook engine."""
+    """Declarative reactions wired onto existing seams — no new hook engine.
+
+    ``invalidate`` transitions the app to ``broken`` and emits ``app_issue``:
+    the strongest arm, for output that can no longer be trusted at all.
+    """
 
     on_pipeline_failure: PipelineFailurePolicy = "notify"
     retention_days: int | None = Field(default=None, gt=0)
@@ -825,6 +1094,26 @@ class AppSpec(_AppsModel):
     @classmethod
     def _validate_timestamps(cls, value: datetime) -> datetime:
         return cls._require_aware(value)
+
+    @model_validator(mode="after")
+    def _validate_pipeline_writes(self) -> AppSpec:
+        """Refuse an output contract naming a collection this app does not declare.
+
+        ``PipelineSpec`` cannot validate this relationship because it owns one
+        pipeline while ``AppSpec`` owns the collection namespace. It is a normal
+        parse-time invariant: ``writes`` is new and defaults empty, so historical
+        snapshots omit it and continue to parse; a new non-empty declaration can
+        be rejected before a pipeline claims to maintain an unreachable collection.
+        """
+        declared = {collection.name for collection in self.collections}
+        for pipeline in self.pipelines:
+            unknown = sorted(set(pipeline.writes) - declared)
+            if unknown:
+                raise ValueError(
+                    f"pipeline {pipeline.name!r} declares writes to unknown collection(s): "
+                    f"{unknown}; declared: {sorted(declared)}"
+                )
+        return self
 
     def transition(self, to: AppStatus, *, now: datetime) -> None:
         """Move to status *to*, guarding illegal transitions.
@@ -915,6 +1204,21 @@ class AppSpec(_AppsModel):
                 f"duplicate pipeline name(s): {', '.join(sorted(dupes))} — each "
                 "pipeline needs a unique name"
             )
+
+    def ensure_exec_binaries_allowed(self, allowed: frozenset[str]) -> None:
+        """Refuse submitted declarations this deployment does not permit.
+
+        This is deliberately a submit-boundary method, never a validator: an
+        append-only snapshot naming a binary an operator later removes must
+        still parse for reads, exactly like :meth:`ensure_unique_pipeline_names`.
+        """
+        for pipeline in self.pipelines:
+            disallowed = sorted(set(pipeline.allow_exec) - allowed)
+            if disallowed:
+                raise ValueError(
+                    f"pipeline {pipeline.name!r} declares binary/binaries not permitted "
+                    f"by this deployment: {disallowed}"
+                )
 
     def ensure_pipeline_timeouts_fit(self) -> None:
         """Refuse a pipeline declaring more than the real ceiling — at the SUBMIT boundary.
@@ -1227,32 +1531,42 @@ class PipelineRun(_AppsModel):
         return sorted(name for name in declared_collections if not self.docs_written.get(name))
 
     def new_integrity_violations(
-        self, declared_collections: Sequence[str], *, prior_runs: Sequence[PipelineRun]
+        self,
+        declared_collections: Sequence[str],
+        *,
+        prior_runs: Sequence[PipelineRun],
+        expected_writes: Sequence[str] = (),
     ) -> list[str]:
-        """Collections this run REGRESSED, that the run before it did not already report.
+        """Collections this run REGRESSED or missed from its declared output contract.
 
         :meth:`unwritten_collections` is the honest LEVEL signal — "this run missed
         these declared collections" — and is right for ``/system`` and a log line.
         It is the wrong trigger for an automated reaction, for two reasons this
         method fixes:
 
-        **1. It cannot tell "regressed" from "never populated".** An app whose
+        **1. It cannot infer "expected" from "never populated".** An app whose
         upstream genuinely has no rows yet writes nothing forever, legitimately;
         a pipeline that filled a collection on earlier runs and now writes zero
-        is a real break. The discriminator is this pipeline's OWN ledger history: a
-        collection only counts as watched once some earlier succeeded run of THIS
-        pipeline actually wrote to it (*prior_runs* is that history). So a
-        first-ever run has an empty baseline and reports nothing, and a
-        never-written collection never enters the baseline at all.
+        is a real break. The ledger history remains one pipeline-attributed
+        baseline: a collection enters it once some earlier succeeded run of THIS
+        pipeline actually wrote to it (*prior_runs* is that history).
+
+        An explicit *expected_writes* declaration adds the fact history cannot
+        supply: this pipeline SHOULD produce that collection even if its first run
+        has not yet done so. It joins the watched set immediately, so a first-ever
+        successful run that writes nothing to a declared output is visible and
+        repairable. A pipeline with no declaration preserves the historical
+        behavior — a never-written collection does not become an accusation — so
+        an empty upstream remains legitimate rather than causing a repair storm.
 
         Deliberately NOT derived from the app's live data store, which would look
         like the more direct question ("does this collection hold documents?").
         Collections are declared APP-wide while runs are per-PIPELINE, so a store
         read cannot attribute a collection to the pipeline that feeds it: in a
         two-pipeline app every run of pipeline A would report pipeline B's
-        collection as regressed, forever. The ledger baseline is
-        pipeline-attributed by construction, needs no I/O, and answers the
-        narrower question correctly.
+        collection as regressed, forever. The ledger baseline plus the declared
+        output contract are pipeline-attributed by construction, need no I/O, and
+        answer the narrower question correctly.
 
         **2. A level signal re-fires every cycle.** Once a collection is broken it
         stays unwritten on every subsequent run, so reacting to the level alone
@@ -1275,11 +1589,13 @@ class PipelineRun(_AppsModel):
             for run in prior_runs
             if run.run_key != self.run_key and run.status == "succeeded" and run.cache != "hit"
         ]
+        declared = set(declared_collections)
         watched = {
             name
-            for name in declared_collections
+            for name in declared
             if any(run.docs_written.get(name) for run in history)
         }
+        watched.update(name for name in expected_writes if name in declared)
         regressed = {name for name in watched if not self.docs_written.get(name)}
         if not regressed:
             return []
@@ -1287,6 +1603,33 @@ class PipelineRun(_AppsModel):
         if previous is not None:
             regressed -= {name for name in watched if not previous.docs_written.get(name)}
         return sorted(regressed)
+
+    @classmethod
+    def should_dispatch_failure(
+        cls, history: Sequence[PipelineRun], budget: FailureBudget, *, now: datetime
+    ) -> bool:
+        """Whether newest-first *history* has reached a failure-budget edge.
+
+        ``history`` MUST be newest-first. Counts only failed runs at its head
+        whose ``started_at`` falls within the budget window; a succeeding head
+        therefore resets the count to zero. Equality is deliberate: one break
+        dispatches once, while continued client calls against it do not spawn a
+        repair per failure.
+        """
+        if any(
+            earlier.started_at < later.started_at
+            for earlier, later in zip(history, history[1:], strict=False)
+        ):
+            raise ValueError("failure history must be newest-first by started_at")
+        failures = 0
+        for run in history:
+            age = now - run.started_at
+            if run.status != "failed" or age < timedelta() or age > timedelta(
+                seconds=budget.window_seconds
+            ):
+                break
+            failures += 1
+        return failures == budget.consecutive_failures
 
     @classmethod
     def freshness(cls, runs: Sequence[PipelineRun], *, now: datetime) -> timedelta | None:
@@ -1328,15 +1671,16 @@ class PipelineRun(_AppsModel):
 class PipelineIssue(_AppsModel):
     """Why an app needs attention — the ONE input to the ``on_pipeline_failure`` dispatch.
 
-    Two reasons reach the same dispatch, which is why this is a model and not a
-    bare ``error: str | None``: the run raised, and a run that SUCCEEDED and
-    still stopped filling a collection it had been filling. The second is not a
-    failure and must never be recorded as one — the run genuinely succeeded, and
-    restating it as ``failed`` would corrupt
-    ``stale``/``last_success_at``/freshness. So the run STATUS keeps telling the
-    truth and this carries the orthogonal "needs attention" axis alongside it.
+    Three reasons reach the same dispatch, which is why this is a model and not
+    a bare ``error: str | None``: the run raised, a run that SUCCEEDED stopped
+    filling a collection it had been filling, or a returned result failed its
+    post-response semantic verifier. The latter two are not run failures and
+    must never be recorded as one — the run genuinely succeeded, and restating
+    either as ``failed`` would corrupt ``stale``/``last_success_at``/freshness.
+    So the run STATUS keeps telling the truth and this carries the orthogonal
+    "needs attention" axis alongside it.
 
-    Two shapes rather than a bare string because the reaction has to be actionable:
+    Three shapes rather than a bare string because the reaction has to be actionable:
     a repair agent told only "something went wrong" hunts for an exception that
     never happened. Each member therefore owns its own prose (:meth:`describe`,
     :meth:`repair_brief`) instead of the lifecycle branching on a code — the
@@ -1344,7 +1688,7 @@ class PipelineIssue(_AppsModel):
     ``app_issue`` transcript event), so it is a strict model, not a dataclass.
     """
 
-    kind: Literal["run_failed", "unwritten_collections"]
+    kind: Literal["run_failed", "unwritten_collections", "verifier_failed"]
     pipeline_name: str
     error: str | None = None
     collections: list[str] = Field(default_factory=list)
@@ -1353,6 +1697,11 @@ class PipelineIssue(_AppsModel):
     def run_failed(cls, pipeline_name: str, error: str | None) -> PipelineIssue:
         """The run raised and closed ``failed``."""
         return cls(kind="run_failed", pipeline_name=pipeline_name, error=error)
+
+    @classmethod
+    def verifier_failed(cls, pipeline_name: str, error: str) -> PipelineIssue:
+        """The post-response verifier rejected an otherwise returned result."""
+        return cls(kind="verifier_failed", pipeline_name=pipeline_name, error=error)
 
     @classmethod
     def unwritten(cls, pipeline_name: str, collections: Sequence[str]) -> PipelineIssue:
@@ -1380,12 +1729,17 @@ class PipelineIssue(_AppsModel):
         kind's only push signal, so it is emitted on top of whatever the policy
         does rather than instead of it.
         """
-        return self.kind == "unwritten_collections"
+        return self.kind in {"unwritten_collections", "verifier_failed"}
 
     def describe(self) -> str:
         """One line naming what happened — the ``app_issue`` payload's ``error``."""
         if self.kind == "run_failed":
             return self.error or "the last run ended without success"
+        if self.kind == "verifier_failed":
+            return (
+                f"pipeline {self.pipeline_name!r} returned a result that failed semantic "
+                f"verification: {self.error or 'the verifier raised without a message'}"
+            )
         names = ", ".join(self.collections)
         return (
             f"pipeline {self.pipeline_name!r} succeeded but wrote no documents to "
@@ -1408,6 +1762,14 @@ class PipelineIssue(_AppsModel):
                 f"Pipeline {self.pipeline_name!r} FAILED and needs repair.\n\n"
                 f"Failure: {self.describe()}"
             )
+        if self.kind == "verifier_failed":
+            return (
+                f"Pipeline {self.pipeline_name!r} SUCCEEDED and its RESULT was returned, "
+                "but it needs repair.\n\n"
+                "The defect is semantic in what the pipeline computed, not an exception "
+                "to hunt for. Verifier failure: "
+                f"{self.error or 'the verifier raised without a message'}"
+            )
         names = ", ".join(self.collections)
         return (
             f"Pipeline {self.pipeline_name!r} is silently writing no data and needs "
@@ -1417,6 +1779,189 @@ class PipelineIssue(_AppsModel):
             f"any document to these declared collection(s): {names}. Earlier runs of "
             "this same pipeline DID write to them, so this is a regression, not an app "
             "that has never had data."
+        )
+
+
+class PipelineGlobEvidence(_AppsModel):
+    """The bounded observation from ONE ``ctx.glob`` call in a pipeline run.
+
+    ``match_count`` is the full count; ``paths`` is only a diagnostic sample.
+    Keeping them separate means the caller can distinguish "nothing matched" from
+    "more matched than were shown" without a response growing with the workspace.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pattern: str
+    match_count: int = Field(ge=0)
+    paths: tuple[str, ...] = ()
+
+
+class PipelineEvidence(_AppsModel):
+    """Bounded workspace observations from ONE completed pipeline execution.
+
+    A pipeline's ``ctx`` already records paths for source-cache fingerprinting.
+    This model preserves a capped projection of that same evidence for the agent
+    that must diagnose a dry run: it needs to see whether a glob matched nothing,
+    not reconstruct a second, subtly different ``ctx`` locally. ``truncated`` is
+    explicit because a hidden cap would turn partial evidence into a confident
+    wrong diagnosis.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    globs: tuple[PipelineGlobEvidence, ...] = ()
+    read_paths: tuple[str, ...] = ()
+    truncated: bool = False
+    # The directory ``ctx.glob``/``ctx.read_file`` actually resolved against, or
+    # ``None`` for an app whose workspace could not be resolved at all (the runner
+    # then treats it as empty). Reported because it is the single fact that
+    # separates "the file is missing" from "this looked somewhere else": an app's
+    # BUNDLE files (what ``get_app``/``stage`` writes to disk, and what a pipeline
+    # author is normally looking at) are NOT this directory. A glob for a bundle
+    # path therefore matches nothing here while matching perfectly in a local
+    # replay, which is a divergence no amount of reading the pipeline source can
+    # explain.
+    workspace: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _enforce_ceiling(cls, data: Any) -> Any:
+        """Cap the ITEM counts on every construction path, and say so when cutting.
+
+        :meth:`from_observations` already projects a bounded view, so this is
+        normally a no-op. It exists because that is not the only door: the runner
+        Protocol hands ``run_pipeline`` a plain MAPPING, which is re-validated
+        into this model before it reaches an agent — and a validator is the only
+        place a bound holds for a caller that did not come through the
+        classmethod. Without it, ``model_validate`` accepted an unbounded mapping
+        and reported ``truncated: False``, so the one field a reader would trust
+        to detect a cut actively denied one had happened.
+
+        The character budget stays in :meth:`from_observations`: it needs the
+        FULL match set to decide what to sample, which is information a validator
+        never has. This is the structural floor under it, not a second copy.
+
+        Cost: ``O(one record)`` — bounded by the caps below, never by the
+        workspace.
+        """
+        if not isinstance(data, dict):
+            return data
+        globs = data.get("globs") or ()
+        reads = data.get("read_paths") or ()
+        if (
+            len(globs) <= _MAX_PIPELINE_EVIDENCE_GLOBS
+            and len(reads) <= _MAX_PIPELINE_EVIDENCE_READ_PATHS
+            and all(
+                len(cls._glob_paths(g)) <= _MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB for g in globs
+            )
+        ):
+            return data
+        capped = []
+        for glob in list(globs)[:_MAX_PIPELINE_EVIDENCE_GLOBS]:
+            paths = cls._glob_paths(glob)
+            if len(paths) <= _MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB:
+                capped.append(glob)
+                continue
+            trimmed = tuple(paths[:_MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB])
+            capped.append(
+                glob.model_copy(update={"paths": trimmed})
+                if isinstance(glob, PipelineGlobEvidence)
+                else {**glob, "paths": trimmed}
+            )
+        return {
+            **data,
+            "globs": tuple(capped),
+            "read_paths": tuple(list(reads)[:_MAX_PIPELINE_EVIDENCE_READ_PATHS]),
+            "truncated": True,
+        }
+
+    @staticmethod
+    def _glob_paths(glob: Any) -> Sequence[str]:
+        """``paths`` off a glob entry that may still be a raw mapping at this point.
+
+        A ``mode="before"`` validator runs on whatever the caller passed, so an
+        entry is a model when constructed in Python and a dict when it arrived as
+        JSON off the runner Protocol. Reading both here keeps the cap above from
+        depending on which door the data came through.
+        """
+        if isinstance(glob, PipelineGlobEvidence):
+            return glob.paths
+        if isinstance(glob, dict):
+            return glob.get("paths") or ()
+        return ()
+
+    @classmethod
+    def from_observations(
+        cls,
+        *,
+        glob_results: Mapping[str, Sequence[str]],
+        # An ITERABLE, not a Sequence: the context accumulates read paths in a
+        # set (order is not meaningful there), and this sorts them anyway.
+        read_paths: Iterable[str],
+        workspace: str | None = None,
+    ) -> PipelineEvidence:
+        """Project ctx observations into a deterministic, bounded diagnostic record.
+
+        Cost: ``O(one record)`` — it examines only this execution's recorded
+        paths, caps both the item counts and UTF-8 character budget, and never
+        re-walks the workspace. The context records complete match sets for its
+        cache fingerprint; this projection is deliberately a smaller model-facing
+        view rather than a second source of truth.
+        """
+        # JSON punctuation and field names are structural response overhead, so
+        # reserve it before accounting paths. The exact projection is an internal
+        # record; the lower bound turns the public 4 KiB promise into a real bound
+        # without hand-counting serialization syntax per item.
+        remaining = _MAX_PIPELINE_EVIDENCE_CHARS // 2
+        truncated = False
+        globs: list[PipelineGlobEvidence] = []
+        for index, (pattern, matches) in enumerate(sorted(glob_results.items())):
+            if index >= _MAX_PIPELINE_EVIDENCE_GLOBS:
+                truncated = True
+                break
+            ordered = sorted(matches)
+            paths: list[str] = []
+            if len(ordered) > _MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB:
+                truncated = True
+            pattern_cost = len(pattern.encode("utf-8"))
+            if pattern_cost > remaining:
+                truncated = True
+                break
+            remaining -= pattern_cost
+            for path in ordered[:_MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB]:
+                cost = len(path.encode("utf-8"))
+                if cost > remaining:
+                    truncated = True
+                    break
+                remaining -= cost
+                paths.append(path)
+            if len(paths) < min(len(ordered), _MAX_PIPELINE_EVIDENCE_PATHS_PER_GLOB):
+                truncated = True
+            globs.append(
+                PipelineGlobEvidence(
+                    pattern=pattern, match_count=len(ordered), paths=tuple(paths)
+                )
+            )
+
+        shown_reads: list[str] = []
+        ordered_reads = sorted(read_paths)
+        if len(ordered_reads) > _MAX_PIPELINE_EVIDENCE_READ_PATHS:
+            truncated = True
+        for path in ordered_reads[:_MAX_PIPELINE_EVIDENCE_READ_PATHS]:
+            cost = len(path.encode("utf-8"))
+            if cost > remaining:
+                truncated = True
+                break
+            remaining -= cost
+            shown_reads.append(path)
+        if len(shown_reads) < min(len(ordered_reads), _MAX_PIPELINE_EVIDENCE_READ_PATHS):
+            truncated = True
+        return cls(
+            globs=tuple(globs),
+            read_paths=tuple(shown_reads),
+            truncated=truncated,
+            workspace=workspace,
         )
 
 
@@ -1430,9 +1975,11 @@ class PipelineResult(_AppsModel):
     was freshly computed (``miss``) or served from the runner's process-local
     cache (``hit``, in which case ``docs_written`` is empty — a hit does no
     writes); ``docs_written`` mirrors the per-collection counts the run's ``ctx``
-    accumulated. Frozen because it is an immutable record of a completed run — a
-    failure is RAISED (:class:`~mewbo_api.apps.pipeline_runner.PipelineExecutionError`),
-    never encoded as a result, so this type only ever represents success.
+    accumulated; and ``evidence`` is the bounded `ctx.glob`/`ctx.read_file`
+    observation needed to explain a zero-write run. Frozen because it is an
+    immutable record of a completed run — a failure is RAISED
+    (:class:`~mewbo_api.apps.pipeline_runner.PipelineExecutionError`), never
+    encoded as a result, so this type only ever represents success.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -1441,11 +1988,35 @@ class PipelineResult(_AppsModel):
     evaluated_at: datetime
     cache: Literal["hit", "miss"]
     docs_written: dict[str, int] = Field(default_factory=dict)
+    evidence: PipelineEvidence = Field(default_factory=PipelineEvidence)
 
     @field_validator("evaluated_at")
     @classmethod
     def _validate_evaluated_at(cls, value: datetime) -> datetime:
         return cls._require_aware(value)
+
+    def unwritten_collections(self, declared_collections: Sequence[str]) -> list[str]:
+        """Declared collections this successful result did not write in this run.
+
+        Mirrors :meth:`PipelineRun.unwritten_collections` for a dry run, which
+        has no durable run row. The caller supplies declared names because this
+        result deliberately does not retain an app reference.
+
+        Cost: ``O(one record)`` — one pass over the supplied app manifest.
+        """
+        return sorted(name for name in declared_collections if not self.docs_written.get(name))
+
+    def missing_expected_writes(self, expected_writes: Sequence[str]) -> list[str]:
+        """Expected materializations this successful result did not write.
+
+        The result does not decide whether a missing write is an execution
+        failure — integrity policy owns that — but this direct signal lets an
+        interactive caller choose the next diagnostic action without waiting for
+        a scheduled verifier.
+
+        Cost: ``O(one record)`` — one pass over the pipeline's declared contract.
+        """
+        return sorted(name for name in expected_writes if not self.docs_written.get(name))
 
 
 class AppDataDoc(_AppsModel):
@@ -1522,6 +2093,14 @@ __all__ = [
     "CronSchedule",
     "AtSchedule",
     "PipelineSchedule",
+    "JsonResult",
+    "CsvResult",
+    "XmlResult",
+    "TextResult",
+    "ResultSpec",
+    "VerifierSpec",
+    "PipelineSample",
+    "FailureBudget",
     "PipelineSpec",
     "AppPolicies",
     "AppFrontend",
@@ -1530,6 +2109,8 @@ __all__ = [
     "AppVersion",
     "PipelineRun",
     "PipelineIssue",
+    "PipelineGlobEvidence",
+    "PipelineEvidence",
     "PipelineResult",
     "AppDataDoc",
     "AppReadToken",

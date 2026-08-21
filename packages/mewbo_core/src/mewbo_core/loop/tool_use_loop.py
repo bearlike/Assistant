@@ -58,7 +58,7 @@ from mewbo_core.contracts.verification import (
     VerifierRunner,
 )
 from mewbo_core.hooks import HookManager
-from mewbo_core.llm.llm import build_chat_model, specs_to_langchain_tools
+from mewbo_core.llm.llm import build_chat_model, response_text, specs_to_langchain_tools
 from mewbo_core.llm.llm_resilience import (
     DEFAULT_LLM_CALL_LIVENESS_S,
     DOOM_LOOP_EXEMPT_TOOLS,
@@ -71,6 +71,11 @@ from mewbo_core.llm.llm_resilience import (
 )
 from mewbo_core.llm.prompt_registry import get_prompt_registry
 from mewbo_core.loop.cancellation import CancellationSignal, RunCancelled
+from mewbo_core.loop.multimodal import (
+    IMAGE_STRIPPED_PLACEHOLDER,
+    ImageHistoryStrip,
+    ToolResultContent,
+)
 from mewbo_core.permissions import PermissionDecision, PermissionPolicy
 from mewbo_core.safety.plane import SafetyPlane
 from mewbo_core.safety.spec import SafetyVerdict, ToolCallObservation, TurnObservation
@@ -90,10 +95,12 @@ from mewbo_core.tooling.session_tools import (
     SessionTool,
     SessionToolRegistry,
 )
+from mewbo_core.tooling.skills import ACTIVATE_SKILL_MAX_RESULT_CHARS
 from mewbo_core.tooling.tool_registry import (
     TOOL_SEARCH_TOOL_ID,
     ToolRegistry,
     ToolSpec,
+    capability_mode_admits,
     get_or_build_registry,
     is_deferred,
 )
@@ -218,6 +225,18 @@ _REQUIRED_TERMINAL_MAX_NUDGES = 3
 # raises this too, so the store always records at least what the model read.
 _EVENT_SNAPSHOT_MAX_CHARS = 100_000
 
+# Result caps for the tools ``_bind_model`` binds DIRECTLY — the population with
+# no ``ToolSpec`` and no ``SessionTool`` instance to declare on. Only a tool
+# whose result is not a short status line needs an entry; the rest are correctly
+# served by the 2000-char default ``_result_char_cap`` falls back to.
+#
+# The value is imported from the module that OWNS the tool rather than restated
+# here, so the cap and the schema it applies to move together. A second literal
+# is exactly how the store came to record a result the model never read.
+LOOP_INJECTED_RESULT_CAPS: dict[str, int] = {
+    "activate_skill": ACTIVATE_SKILL_MAX_RESULT_CHARS,
+}
+
 # The fields of a dict result large enough to need windowing before the dict is
 # serialized. Anything not named here rides the envelope whole, so a payload
 # whose bulk sits elsewhere cannot be fitted field-wise at all.
@@ -299,6 +318,13 @@ class ToolCallResult:
     # so every other execution path is unchanged.
     blocked_code: str | None = None
     permanence: str | None = None
+    # Image parts a multimodal tool returned (a device screenshot today).
+    # ``content`` stays the STRING every existing consumer reads — the cap, the
+    # ANSI strip, the event snapshot and the compaction summary are all
+    # unchanged and still string-only. These parts bypass all of it and are
+    # spliced into the ``ToolMessage`` alongside the text, which is what puts
+    # the image inside the provider's native ``tool_result`` block.
+    images: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass
@@ -343,6 +369,7 @@ class ToolUseLoop:
         agent_registry: Any = None,
         session_tool_registry: SessionToolRegistry | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         cwd: str | None = None,
         session_id: str | None = None,
@@ -386,6 +413,14 @@ class ToolUseLoop:
                 tools the plugin registry should build for this agent.  ``None``
                 means "no plugin session tools" (root agents get only the
                 built-in ``ExitPlanModeTool``).
+            denied_tools: Session-tool ids withheld regardless of which gate in
+                ``SessionToolRegistry.build_for`` would otherwise admit them —
+                the unconditional auto-surface and the capability auto-surface
+                included, and it beats a NAMED ``allowed_tools`` entry too.
+                Deliberately NOT three-state like ``allowed_tools``: deny is
+                purely subtractive, so ``None`` and ``[]`` are the same "nothing
+                denied" set. ``None`` (the default) changes nothing for every
+                existing session.
             strict_tool_scope: Whether ``allowed_tools`` is AUTHORITATIVE for this
                 agent. ``True`` (spawned leaf sub-agents, wiki-qa/search runs) —
                 the allowlist is the whole tool scope, so it also gates
@@ -480,6 +515,7 @@ class ToolUseLoop:
         # Retained so the tool ceiling can reach the tools this loop injects
         # OUTSIDE ``filter_specs`` — see :meth:`_loop_injected_admitted`.
         self._allowed_tools = allowed_tools
+        self._denied_tools = denied_tools
         self._strict_tool_scope = strict_tool_scope
         self._project_catalog = project_catalog
         self._session_context_reader = session_context_reader
@@ -546,6 +582,10 @@ class ToolUseLoop:
         # Dedup cache for read_file: prevents redundant reads when the
         # same file + range hasn't changed on disk (mtime check).
         self._file_read_cache: dict[str, _CachedFileRead] = {}
+
+        # Takes stale images out of history when the list is compacted. A
+        # plain field rather than a knob — nothing has asked to tune it.
+        self._image_history = ImageHistoryStrip()
 
         # Plan-mode state (mutable across the loop's lifetime).
         self._current_mode: str = "act"
@@ -706,6 +746,11 @@ class ToolUseLoop:
                     session_id=session_id,
                     event_logger=agent_context.event_logger,
                     session_capabilities=session_capabilities,
+                    # Deny wins over everything else this call admits —
+                    # unconditional, the capability auto-surface, even a named
+                    # allowlist entry. Same list ``ids_for`` (the operator-facing
+                    # catalog) is given, so the two selections cannot drift.
+                    denied_tools=denied_tools,
                     # df875 law: a PERMISSIVE allowlist (FE mcp_tools) is
                     # only an MCP ceiling, so an unconditional tool
                     # (schedule_trigger) still surfaces; a STRICT AgentDef scope
@@ -720,10 +765,27 @@ class ToolUseLoop:
                 )
             )
         # Caller-injected session tools (e.g. the structured-response emit
-        # tool) — no plugin manifest needed. They terminate / dispatch through
-        # the same machinery as plugin tools.
+        # tool, and every client-declared device tool) — no plugin manifest
+        # needed. They terminate / dispatch through the same machinery as
+        # plugin tools.
+        #
+        # They ARE gated on ``capability_mode``, through the same
+        # ``capability_mode_admits`` predicate ``build_for`` uses above. This
+        # append sits AFTER build_for's gates, so without this it is a hole in
+        # the privilege ceiling: a ``read_only`` sub-agent would be handed
+        # every client-declared device tool, which now includes a shell at
+        # shell UID. A tool that declares no ``capability`` is treated as
+        # ``execute`` — session tools are actions, and an undeclared tier must
+        # fail closed under a restrictive mode rather than open.
         if extra_session_tools:
-            self._session_tools.extend(extra_session_tools)
+            self._session_tools.extend(
+                tool
+                for tool in extra_session_tools
+                if capability_mode_admits(
+                    agent_context.capability_mode,
+                    getattr(tool, "capability", None) or "execute",
+                )
+            )
 
         # Self-steering model control. Bound whenever the operator opts into
         # self-steering fallback — unlike a task tool it is resilience
@@ -886,8 +948,16 @@ class ToolUseLoop:
             self._last_active_ids = {s.tool_id for s in active_specs}
 
             langfuse_handler = build_langfuse_handler(
-                user_id="mewbo-tool-use",
-                session_id=f"tool-use-{self._ctx.agent_id}",
+                # The loop does NOT author trace identity. The real session and
+                # principal arrive from the enclosing session context via
+                # ``propagate_attributes`` and override anything the handler
+                # carries — so a value invented here is not an override, it is
+                # contradictory garbage sitting in every observation's metadata.
+                # An empty string attaches no metadata key at all, which is the
+                # honest reading of "this seam does not know". The session id is
+                # passed only where the loop genuinely holds one.
+                user_id="",
+                session_id=self._session_id or "",
                 trace_name="mewbo-tool-use",
                 version=get_version(),
                 release=get_config_value("runtime", "envmode", default="Not Specified"),
@@ -900,10 +970,18 @@ class ToolUseLoop:
                     invoke_config["metadata"] = metadata
 
             # -- Langfuse: agent-level span + attribute propagation --------
-            _agent_role = "root" if self._ctx.depth == 0 else f"child-{self._ctx.agent_id[:8]}"
-            _agent_span_name = f"agent:{_agent_role}"
+            # Typed ``agent`` so the trace renders as an agent graph, and named
+            # from the AgentDef rather than the runtime handle id: a per-run hex
+            # id is unbounded cardinality and folds every aggregation into
+            # one-bucket-per-run. The handle id keeps its place in metadata.
+            _agent_def_name = await self._agent_def_name()
             _agent_span_cm = langfuse_trace_span(
-                _agent_span_name,
+                f"invoke_agent {_agent_def_name}",
+                as_type="agent",
+                attributes={
+                    "gen_ai.operation.name": "invoke_agent",
+                    "gen_ai.agent.name": _agent_def_name,
+                },
                 metadata={
                     "agentid": self._ctx.agent_id[:12],
                     "model": self._ctx.model_name,
@@ -1040,8 +1118,14 @@ class ToolUseLoop:
                         content=self._render_system_prompt(context, plan, agent_tree)
                     )
 
+                # The span stays — it is the natural parent of this turn's
+                # generation and tool calls — but its NAME must not carry the
+                # turn counter: a per-execution integer in a name is unbounded
+                # cardinality, so "how long does a step take" had as many
+                # groups as the longest run has turns. The index is a metadata
+                # field, which is where a filter can still reach it.
                 with langfuse_trace_span(
-                    f"step:{turns}",
+                    "agent_step",
                     metadata={
                         "turn": str(turns),
                         "model": self._ctx.model_name,
@@ -1130,6 +1214,12 @@ class ToolUseLoop:
                             },
                         }
                     )
+                    # Own clock for the successful ``llm_call_end`` payload's
+                    # ``duration_ms``, separate from the liveness leg below: that
+                    # one is re-armed per retry/fallback attempt
+                    # (``_invoke_with_resilience``), so it cannot bracket the
+                    # whole logical call the way this single capture does.
+                    _llm_call_t0 = _time.monotonic()
                     # Arm the liveness leg for exactly the window this call is
                     # outstanding; the ``finally`` disarms it on every exit so a
                     # completed call can never read as a wedged one.
@@ -1254,6 +1344,7 @@ class ToolUseLoop:
                                 "reasoning_output_tokens": int(_out_det.get("reasoning", 0) or 0),
                                 "cumulative_input_tokens": (_h_ref.input_tokens if _h_ref else 0),
                                 "cumulative_output_tokens": (_h_ref.output_tokens if _h_ref else 0),
+                                "duration_ms": int((_time.monotonic() - _llm_call_t0) * 1000),
                             },
                         }
                     )
@@ -1263,8 +1354,15 @@ class ToolUseLoop:
                     # but proxies (LiteLLM) may not preserve it.
                     raw = getattr(response, "content", None)
                     if isinstance(raw, list):
-                        sanitized = [
-                            block
+                        # A reasoning model's answer arrives as a BARE STRING
+                        # element alongside ``{"type": "thinking", ...}``
+                        # dicts, not as a proper content part. Left as-is, a
+                        # strict OpenAI-shaped backend (a self-hosted Ollama
+                        # behind LiteLLM) rejects the replayed history with
+                        # 400 "invalid message format" the moment the turn is
+                        # replayed on a later request.
+                        sanitized: list[str | dict[Any, Any]] = [
+                            block if isinstance(block, dict) else {"type": "text", "text": block}
                             for block in raw
                             if not (isinstance(block, dict) and block.get("type") == "thinking")
                         ]
@@ -1557,7 +1655,13 @@ class ToolUseLoop:
                     for tool_call, result in zip(response.tool_calls, results):
                         messages.append(
                             ToolMessage(
-                                content=result.content,
+                                # A multimodal result becomes a list of content
+                                # parts, which LiteLLM translates into a native
+                                # ``tool_result`` carrying the text block then
+                                # the image block. Everything else stays the
+                                # plain string it always was, so an ordinary
+                                # result's cache prefix is byte-identical.
+                                content=_tool_message_content(result),
                                 tool_call_id=result.tool_call_id,
                             )
                         )
@@ -2080,7 +2184,16 @@ class ToolUseLoop:
                 return declared
             return DEFAULT_SESSION_TOOL_MAX_RESULT_CHARS
         spec = self._tool_registry.get_spec(tool_id) if self._tool_registry else None
-        return spec.max_result_chars if spec else 2000
+        if spec is not None:
+            return spec.max_result_chars
+        # The THIRD population, and the one that had no way to declare at all:
+        # ``_bind_model`` binds several tools directly, so they are neither a
+        # registry spec nor a ``SessionTool`` instance and fell through to the
+        # 2000-char default that the arm above exists to keep off curated
+        # payloads. Silence still means 2000 — correct for the small results the
+        # rest of that population returns — but a tool whose result is authored
+        # content now declares, on the module that owns it.
+        return LOOP_INJECTED_RESULT_CAPS.get(tool_id, 2000)
 
     @staticmethod
     def _windowed(text: str, cap: int) -> str:
@@ -2359,6 +2472,26 @@ class ToolUseLoop:
             batches.append(ToolBatch(calls=list(current_concurrent), concurrent=True))
         return batches
 
+    async def _agent_def_name(self) -> str:
+        """The bounded AgentDef name for this agent, for its trace span.
+
+        Two stable literals stand in where no def name exists: ``root`` for the
+        top agent, which registers no handle at all, and ``subagent`` for an
+        ad-hoc spawn that named no ``agent_type``. Both are deliberate — the
+        alternative is the runtime handle id, whose cardinality is one value per
+        run and which the OTel agent conventions forbid recording for exactly
+        that reason. `O(1)`.
+        """
+        if self._ctx.depth == 0:
+            return "root"
+        try:
+            handle = await self._ctx.registry.get(self._ctx.agent_id)
+        except Exception as lookup_exc:  # noqa: BLE001 — telemetry never fails a run
+            logging.debug("agent def name lookup failed: {}", lookup_exc)
+            return "subagent"
+        agent_type = getattr(handle, "agent_type", None)
+        return str(agent_type) if agent_type else "subagent"
+
     async def _safe_execute(
         self,
         tool_call: Any,
@@ -2378,42 +2511,128 @@ class ToolUseLoop:
         # attribution to "unknown", never to a wrong tool name.
         await self._ctx.registry.mark_tool_start(self._ctx.agent_id, tool_name)
         self._emit_tool_call_event(tool_call)
+        # The ONE seam every tool call passes through, so it is also the only
+        # place a per-tool span covers every terminal — success, error,
+        # rejection, timeout and cancellation alike. The span degrades to
+        # ``None`` when Langfuse is disabled, so a deployment without it pays
+        # a context-manager enter and nothing else.
+        span_name, span_attributes = self._tool_span_identity(tool_name, tool_call, tool_specs)
+        with langfuse_trace_span(
+            span_name,
+            as_type="tool",
+            attributes=span_attributes,
+            input_data=self._tool_span_input(tool_call),
+        ) as tool_span:
+            try:
+                result = await asyncio.wait_for(
+                    self._execute_tool_call(tool_call, tool_specs),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
+                logging.error(error_msg)
+                # A timeout kills ``_execute_tool_call`` mid-flight, so the emit at
+                # its tail never runs and the step left NO ``tool_result`` event
+                # behind at all. The durable record then showed 100% tool success
+                # for runs with known live timeouts — the failure was not
+                # under-reported but structurally absent, and no amount of reading
+                # the store could have found it. Every exit of this method emits.
+                self._emit_timeout_or_crash_result(tool_call, error_msg)
+                result = ToolCallResult(
+                    tool_call_id=tool_call.get("id", ""),
+                    tool_id=tool_name,
+                    content=f"ERROR: {error_msg}",
+                    success=False,
+                )
+            except asyncio.CancelledError:
+                raise  # Must propagate for TaskGroup cancellation.
+            except Exception as exc:
+                # Same contract as the timeout branch: an exception that escaped
+                # every inner handler would otherwise return a failed result the
+                # event log has no record of.
+                self._emit_timeout_or_crash_result(tool_call, str(exc))
+                result = ToolCallResult(
+                    tool_call_id=tool_call.get("id", ""),
+                    tool_id=tool_name,
+                    content=f"ERROR: {exc}",
+                    success=False,
+                )
+            finally:
+                await self._ctx.registry.mark_tool_start(self._ctx.agent_id, None)
+            self._mark_tool_span_outcome(tool_span, result)
+            return result
+
+    def _tool_span_identity(
+        self,
+        tool_name: str,
+        tool_call: Any,
+        tool_specs: list[ToolSpec],
+    ) -> tuple[str, dict[str, str]]:
+        """Span name and OTel attributes for one tool execution.
+
+        **The name carries the tool id and nothing else.** A tool's arguments
+        are a file path, a shell command or a query, so a name built from them
+        is unbounded cardinality — every call its own group — and republishes
+        the argument text into every aggregation that reads the name. They ride
+        the span INPUT instead, where a reader can still see them.
+
+        For an MCP-backed tool the server NAME is what tells two servers
+        exposing a same-named tool apart, and it is the only server identity
+        reachable from here: ``server.address`` lives in the merged MCP config,
+        which is a filesystem read per call. `O(len(tool_specs))`.
+        """
+        spec = next((s for s in tool_specs if s.tool_id == tool_name), None)
+        attributes: dict[str, str] = {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": tool_name,
+        }
+        call_id = self._tool_call_id_of(tool_call)
+        if call_id:
+            attributes["gen_ai.tool.call.id"] = call_id
+        if spec is None or spec.kind != "mcp":
+            return f"execute_tool {tool_name}", attributes
+        attributes["mcp.method.name"] = "tools/call"
+        server = str(spec.metadata.get("server", "") or "")
+        if server:
+            attributes["mcp.server.name"] = server
+        remote_tool = str(spec.metadata.get("tool", "") or "")
+        if remote_tool:
+            attributes["mcp.tool.name"] = remote_tool
+        return f"tools/call {tool_name}", attributes
+
+    def _tool_span_input(self, tool_call: Any) -> dict[str, str]:
+        """The bounded argument payload for a tool span's input.
+
+        Windowed rather than sent whole: an edit's arguments carry a file's
+        content, and exporting that per call costs the trace pipeline far more
+        than the answer it buys. 2000 chars keeps both ends of the argument
+        blob, which is where a path and a trailing flag live.
+        """
         try:
-            return await asyncio.wait_for(
-                self._execute_tool_call(tool_call, tool_specs),
-                timeout=timeout,
+            return {"args": self._windowed(str(tool_call.get("args", "")), 2000)}
+        except Exception:  # noqa: BLE001 — telemetry never fails a tool call
+            return {}
+
+    @staticmethod
+    def _mark_tool_span_outcome(span: Any, result: ToolCallResult) -> None:
+        """Record a finished call's outcome on its tool span.
+
+        Every failure terminal at this seam — a timeout, a crash, a permission
+        denial, a rejected argument, an MCP tool reporting ``isError`` — arrives
+        as a RESULT rather than as an exception, so nothing else would mark the
+        span and a failed call would close indistinguishable from a clean one.
+        Best-effort: the span is telemetry and must never be what fails a call.
+        """
+        if span is None or result.success:
+            return
+        try:
+            span.update(
+                level="ERROR",
+                status_message=result.content[:500],
+                metadata={"error.type": "tool_error"},
             )
-        except asyncio.TimeoutError:
-            error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
-            logging.error(error_msg)
-            # A timeout kills ``_execute_tool_call`` mid-flight, so the emit at
-            # its tail never runs and the step left NO ``tool_result`` event
-            # behind at all. The durable record then showed 100% tool success
-            # for runs with known live timeouts — the failure was not
-            # under-reported but structurally absent, and no amount of reading
-            # the store could have found it. Every exit of this method emits.
-            self._emit_timeout_or_crash_result(tool_call, error_msg)
-            return ToolCallResult(
-                tool_call_id=tool_call.get("id", ""),
-                tool_id=tool_name,
-                content=f"ERROR: {error_msg}",
-                success=False,
-            )
-        except asyncio.CancelledError:
-            raise  # Must propagate for TaskGroup cancellation.
-        except Exception as exc:
-            # Same contract as the timeout branch: an exception that escaped
-            # every inner handler would otherwise return a failed result the
-            # event log has no record of.
-            self._emit_timeout_or_crash_result(tool_call, str(exc))
-            return ToolCallResult(
-                tool_call_id=tool_call.get("id", ""),
-                tool_id=tool_name,
-                content=f"ERROR: {exc}",
-                success=False,
-            )
-        finally:
-            await self._ctx.registry.mark_tool_start(self._ctx.agent_id, None)
+        except Exception as span_exc:  # noqa: BLE001 — telemetry never fails a call
+            logging.warning("failed to mark tool span outcome: {}", span_exc)
 
     def _emit_tool_call_event(self, tool_call: Any) -> None:
         """Emit one ``tool_call`` event for a call about to be dispatched.
@@ -3425,11 +3644,27 @@ class ToolUseLoop:
         to_summarize = messages[1:-recent_keep]
         kept_tail = messages[-recent_keep:]
 
+        # Take stale images out of the tail we are KEEPING. Compaction is the
+        # one moment this is free: the message list is being rewritten anyway,
+        # so the prompt-cache prefix is already void and stripping costs no
+        # additional invalidation. The newest image survives — a run driving a
+        # phone that loses sight of the current screen has to spend a turn
+        # re-observing it. The rest become a placeholder that says the image is
+        # re-requestable, which for a screenshot is the only honest recovery:
+        # the screen has moved on, so a retained copy would answer a question
+        # about the CURRENT screen with a stale picture.
+        # (The summarized half needs no strip — it is replaced by text.)
+        images_stripped = self._image_history.strip(kept_tail)
+
         # Build text representation for the summarizer.
         lines: list[str] = []
         for m in to_summarize:
             role = getattr(m, "type", "unknown")
-            text = m.content if isinstance(m.content, str) else str(m.content)
+            # A multimodal message's content is a LIST of parts, and ``str()``
+            # on it would inline a whole base64 data URI into the summarizer's
+            # prompt — paying for an image the summarizer cannot see, then
+            # cutting it at 2000 chars. Keep the text parts only.
+            text = m.content if isinstance(m.content, str) else _text_of_parts(m.content)
             lines.append(f"[{role}] {text[:2000]}")
         summary_input = "\n".join(lines)
 
@@ -3488,13 +3723,7 @@ class ToolUseLoop:
                 _h.input_tokens += _usage.get("input_tokens", 0)
                 _h.output_tokens += _usage.get("output_tokens", 0)
 
-        raw = response.content if hasattr(response, "content") else str(response)
-        if isinstance(raw, list):
-            raw = next(
-                (b["text"] for b in raw if isinstance(b, dict) and b.get("type") == "text"),
-                "",
-            )
-        summary = _extract_summary(raw)
+        summary = _extract_summary(response_text(response))
         events_summarized = len(to_summarize)
 
         # Rebuild messages in-place.
@@ -3510,11 +3739,18 @@ class ToolUseLoop:
         # The recent-tail slice can orphan a tool_use/tool_result pair, which
         # Anthropic rejects with a 400. Rebalance before the list is replayed.
         repair_tool_pairing(messages)
-        return {
+        info: dict[str, Any] = {
             "summary": summary,
             "events_summarized": events_summarized,
             "model": _compact_model,
         }
+        # Reported only when it happened, so every existing compaction event
+        # stays byte-identical and no consumer has to learn a new always-zero
+        # field. Stripping images silently would make a run that lost its
+        # screenshots indistinguishable from one that never took any.
+        if images_stripped:
+            info["images_stripped"] = images_stripped
+        return info
 
     def _is_tool_search_enabled(self, tool_specs: list[ToolSpec] | None = None) -> bool:
         """Return True if the deferred-tool / on-demand-schema feature is on.
@@ -4076,6 +4312,16 @@ class ToolUseLoop:
         content = getattr(result, "content", None)
         if content is None:
             content = "" if result is None else str(result)
+        # A tool may carry image parts alongside its text (a device
+        # screenshot). They are read off a SEPARATE attribute rather than
+        # smuggled into ``content``, so everything below stays string-only:
+        # ``str()``-ing a list of content parts would hand the model the Python
+        # repr of that list, which reads as working and is unusable. The images
+        # also never reach ``event_str``, so no base64 is persisted to the
+        # session store or replayed on a transcript read.
+        multimodal = ToolResultContent.parse(content)
+        content = multimodal.text if multimodal.has_images else content
+        result_images = multimodal.images or tuple(getattr(result, "images", ()) or ())
         content_str = str(content) if not isinstance(content, str) else content
         max_chars = self._result_char_cap(tool_id)
         if isinstance(content, dict):
@@ -4130,11 +4376,20 @@ class ToolUseLoop:
         # string-level cut lands mid-value — see ``_fitted_json``. The length is
         # re-tested because the export branch may already have replaced the
         # payload with a short pointer.
+        #
+        # A plain STRING result is windowed, for the reason ``_windowed`` states
+        # at length: the verdict of a command lives at its END. This arm used to
+        # be a head-only ``content_str[:max_chars]``, so ``_windowed`` reached
+        # only the fields of a dict result and every string-returning tool was
+        # cut head-first — while the ``mewbo-harness`` skill told the model the
+        # opposite, in the engine's own voice. A model that trusts a documented
+        # invariant and gets the other behaviour cannot tell a bounded read from
+        # a complete one, which is the failure the marker exists to prevent.
         if result_truncated and len(content_str) > max_chars:
             content_str = (
                 self._fitted_json(content, max_chars)
                 if isinstance(content, dict)
-                else content_str[:max_chars] + "\n[truncated]"
+                else self._windowed(content_str, max_chars)
             )
 
         # Populate file read cache after successful read. A truncated read did
@@ -4198,6 +4453,11 @@ class ToolUseLoop:
             tool_id=tool_id,
             content=content_str,
             success=True,
+            # Images ride ONLY on the success path. The provider rejects a
+            # ``tool_result`` that carries a non-text block while marked as an
+            # error, so a failed capture must degrade to text — the failure
+            # arrives as a 400 on the whole request, not as a bad image.
+            images=result_images,
         )
 
     # ------------------------------------------------------------------
@@ -4735,6 +4995,47 @@ class _SessionToolError:
             # carried through: a typo must never present as a typed verdict.
             permanence=raw_permanence if raw_permanence in _ENVELOPE_PERMANENCE else None,
         )
+
+
+def _text_of_parts(content: object) -> str:
+    """The readable text of a multipart message content, images dropped.
+
+    Used wherever a message body is rendered into a PROMPT (the compaction
+    summarizer). An image part contributes its placeholder rather than its
+    data URI, so the rendered text stays proportional to what a reader can
+    actually use.
+    """
+    if not isinstance(content, list):
+        return str(content)
+    pieces: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            pieces.append(part)
+        elif isinstance(part, dict):
+            if part.get("type") == "image_url":
+                pieces.append(IMAGE_STRIPPED_PLACEHOLDER)
+            elif part.get("type") == "text":
+                pieces.append(str(part.get("text", "")))
+    return " ".join(p for p in pieces if p)
+
+
+def _tool_message_content(result: ToolCallResult) -> str | list[str | dict]:
+    """The ``ToolMessage`` body for *result* — a string, or text + image parts.
+
+    A result with no images returns the plain string it always did, so the
+    serialized prefix of an ordinary conversation is unchanged by this seam
+    existing. Only a tool that actually returned an image pays the list form.
+
+    The return type widens the element type to ``str | dict`` because
+    langchain's message ``content`` is declared ``list[str | dict]`` and
+    ``list`` is invariant — the same widening ``_messages_from_system_prompt``
+    already does for a multipart ``HumanMessage``.
+    """
+    if not result.images:
+        return result.content
+    parts: list[str | dict] = [{"type": "text", "text": result.content}]
+    parts.extend(result.images)
+    return parts
 
 
 def _session_tool_error_envelope(content: object) -> str | None:

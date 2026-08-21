@@ -1,5 +1,6 @@
 package com.mewbo.aura.voice
 
+import com.mewbo.aura.data.device.DeviceShape
 import com.mewbo.aura.data.model.ChatItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,20 @@ import kotlinx.coroutines.launch
 internal class SpeechController(
     private val synthesizer: Synthesizer,
     scope: CoroutineScope,
+    /**
+     * Which product shape this instance is speaking for - the ONE thing that decides whether a
+     * TYPED turn is narrated ([narratesTurn]). Injected as a collaborator rather than read from a
+     * platform API so this class stays plain-JVM testable, same rule every seam in `voice/` follows.
+     *
+     * **[DeviceShape.Handheld] is the default because the OTHER call site
+     * ([AssistTurnMachine]) has no television path to serve.** The assist overlay is reached
+     * through the assistant role, which is unreachable on every Android TV / Fire TV
+     * (apps/mewbo_aura/CLAUDE.md), so an overlay turn is either voice - already spoken - or a
+     * debug-host typed turn. Defaulting there keeps the overlay's behaviour byte-identical and
+     * leaves exactly one instance ([com.mewbo.aura.ui.chat.ChatViewModel]'s) narrating text turns,
+     * which is also what keeps the two instances from ever speaking the same text.
+     */
+    private val deviceShape: DeviceShape = DeviceShape.Handheld,
 ) {
     private val _speakingKey = MutableStateFlow<String?>(null)
     val speakingKey: StateFlow<String?> = _speakingKey.asStateFlow()
@@ -80,15 +95,30 @@ internal class SpeechController(
     }
 
     /**
+     * Whether a turn tagged [modality] may be narrated at all - the ONE answer both
+     * [onAssistantMessage] and [primeAlreadySpoken] ask, so a turn that speaks is always a turn
+     * that primes. Split apart, a shape that narrated typed turns would re-speak a whole reply
+     * from word one on the next binding, because priming would have quietly stopped covering it.
+     *
+     * A voice turn speaks because the user spoke. A TYPED turn speaks only where the shape says
+     * the modality gate is answering the wrong question - see
+     * [DeviceShape.narratesTextTurns], which carries the reasoning. Muting is deliberately NOT part
+     * of this: [onAssistantMessage] must not speak a muted turn, but [primeAlreadySpoken] must
+     * still mark its text consumed, or unmuting mid-reply would start at the beginning.
+     */
+    fun narratesTurn(modality: InputModality): Boolean =
+        modality == InputModality.Voice || deviceShape.narratesTextTurns
+
+    /**
      * Called after every transcript fold with the transcript's current LAST [ChatItem.AssistantMessage]
-     * (or `null`). A Text-modality turn or a muted conversation never instantiates a chunker at all
-     * ("text turns stay completely silent"). [ChatItem.AssistantMessage.key] is the
+     * (or `null`). A turn [narratesTurn] rejects, or a muted conversation, never instantiates a
+     * chunker at all. [ChatItem.AssistantMessage.key] is the
      * SAME `assistant:$ts` key for the whole turn (`TranscriptReducer`); the turn closes the moment
      * [ChatItem.AssistantMessage.isStreaming] flips `false`, which flushes the trailing remainder and
      * closes the key for good via [closedKey].
      */
     fun onAssistantMessage(item: ChatItem.AssistantMessage?, modality: InputModality, muted: Boolean) {
-        if (item == null || modality != InputModality.Voice || muted || item.key == closedKey) return
+        if (item == null || !narratesTurn(modality) || muted || item.key == closedKey) return
         val open = chunker?.takeIf { activeKey == item.key } ?: SentenceChunker(item.key).also {
             chunker = it
             activeKey = item.key
@@ -128,12 +158,12 @@ internal class SpeechController(
      * unspoken remainder; a completed [item] closes the key outright (mirrors
      * [onAssistantMessage]'s own close-on-finish branch), so a later fold for the SAME key (there
      * shouldn't be one - history is never re-folded - but this stays defensive) can never reopen it.
-     * A no-op under the exact same gating [onAssistantMessage] itself uses (`null`/non-Voice/
-     * already-closed) - safe to call on EVERY [com.mewbo.aura.ui.chat.ChatViewModel.bind], not just
+     * A no-op under the exact same gating [onAssistantMessage] itself uses (`null`/[narratesTurn]
+     * says no/already-closed) - safe to call on EVERY [com.mewbo.aura.ui.chat.ChatViewModel.bind], not just
      * a handoff one.
      */
     fun primeAlreadySpoken(item: ChatItem.AssistantMessage?, modality: InputModality) {
-        if (item == null || modality != InputModality.Voice || item.key == closedKey) return
+        if (item == null || !narratesTurn(modality) || item.key == closedKey) return
         val primer = SentenceChunker(item.key)
         primer.push(item.text) // discarded - only advances the consumed cursor
         if (item.isStreaming) {

@@ -8,7 +8,7 @@
 ARG BASE_IMAGE
 FROM $BASE_IMAGE
 
-ARG VERSION="0.0.13"
+ARG VERSION="0.0.14"
 
 LABEL org.opencontainers.image.title="Mewbo MCP" \
       org.opencontainers.image.description="Standalone MCP server exposing Mewbo to external agents" \

@@ -148,6 +148,25 @@ itself. **Feeding a detector's verdict back into the same agent's context teache
 the tell**, so that path is closed by construction. Session tools miss `specs_map`
 and count as non-progress by construction.
 
+## Tool schemas drop upper bounds (`sanitize_tool_schema`)
+
+`maxLength`, `maxItems` and `maxProperties` are stripped from every tool schema at
+the `specs_to_langchain_tools` funnel. **This looks like lost validation and is not
+— do not "restore" them.** A backend that constrains decoding with a grammar
+(llama.cpp/Ollama, anything compiling JSON Schema to GBNF) expands an upper bound
+into that many literal repetitions and inlines every `$ref` while doing it, so in a
+RECURSIVE schema the two multiply. `present_ui`, whose `Card.children` is a `oneOf`
+over eleven component types including `Card`, made Ollama reject a whole 17-tool
+request with `400 Failed to initialize samplers: failed to parse grammar`.
+
+A size threshold would not fix it: the blow-up scales with nesting depth as well as
+with the bound, so any limit safe at one depth is fatal one level down. Dropping is
+strictly permissive — it can never truncate or reject a valid argument, only stop
+advertising a ceiling — and tool arguments are still validated against the ORIGINAL
+schema in `EmitStructuredResponseTool.handle`. Lower bounds stay. Where a ceiling is
+genuinely load-bearing for generation, say it in the field's `description`, which is
+what `ask_user` already does with "2-4 distinct choices".
+
 ## Prompt registry (`prompt_registry.py`)
 
 Every engine prompt has ONE schema'd home. `PromptRegistry` (atomic class) loads

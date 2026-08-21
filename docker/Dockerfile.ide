@@ -38,7 +38,7 @@ FROM node:20-slim AS runtime
 
 # In lockstep with apps/mewbo_ide/package.json and the other images — see
 # Dockerfile.base.
-ARG VERSION="0.0.13"
+ARG VERSION="0.0.14"
 
 LABEL org.opencontainers.image.title="Mewbo IDE Broker" \
       org.opencontainers.image.description="Docker-socket broker for Mewbo's per-session Web IDE containers" \

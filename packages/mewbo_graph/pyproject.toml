@@ -1,8 +1,8 @@
 [project]
 name = "mewbo-graph"
-version = "0.0.13"
+version = "0.0.14"
 description = "Optional knowledge-graph substrate for Mewbo — tree-sitter code graph, multiplex atomic-note memory, embedder, hybrid retriever, and the Source Capability Graph (SCG) reachability engine. Powers MewboWiki and Mewbo Search; depends only on mewbo-core."
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.10,<4.0"
 authors = [
   { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },

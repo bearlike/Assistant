@@ -252,15 +252,22 @@ sealed interface SessionEvent {
 
         /**
          * The tool allowlist an EXISTING session's next turn narrows to: the most recent `context`
-         * event's `mcp_tools` array. `mcp_tools` is persisted ONLY when the user narrowed the set
-         * (data/CLAUDE.md: omitted => the backend binds every tool), so an absent OR empty array
-         * round-trips back to `null` (= untouched / all tools), which is exactly the value
-         * [ComposerScope.activeToolIds] uses to omit the field again on the next `/query`.
+         * event's `mcp_tools` array. THREE-STATE, and this is the READ half of the same law
+         * [ComposerScope.mcpToolsForContext] writes - the two must agree or a session cannot
+         * round-trip its own ceiling:
+         * - key ABSENT (or not an array) => `null`, untouched, and the next `/query` omits it again
+         *   so the backend binds every tool.
+         * - key present and EMPTY => the empty set, an explicit ceiling of zero that the next
+         *   `/query` re-declares verbatim.
+         * - non-empty => exactly those ids.
+         *
+         * Collapsing the empty case into `null` here re-opens the fail-open from the WRITE side
+         * one turn later: re-opening an all-tools-off session would hydrate it as untouched and the
+         * very next send would re-bind the whole registry, with nothing in the UI to show it.
          */
         fun lastContextMcpTools(events: List<SessionEvent>): Set<String>? {
             val raw = lastContextPayload(events)?.get("mcp_tools") as? JsonArray ?: return null
-            val ids = raw.mapNotNull { (it as? JsonPrimitive)?.content?.takeIf(String::isNotBlank) }
-            return ids.toSet().takeIf { it.isNotEmpty() }
+            return raw.mapNotNull { (it as? JsonPrimitive)?.content?.takeIf(String::isNotBlank) }.toSet()
         }
     }
 }

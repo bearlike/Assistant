@@ -18,19 +18,37 @@
 
 import { apiFetch } from "./httpBase";
 
+/**
+ * Mutable resume cursor shared by one subscriber across reconnects. The parser
+ * owns updates because only it sees frame ids; the caller owns its lifetime.
+ */
+export class SseCursor {
+  lastEventId: string | null = null;
+}
+
 /** Parse a `fetch` Response body as an SSE stream, yielding typed events. */
 export async function* parseSseStream<T>(
   resp: Response,
   signal?: AbortSignal,
+  cursor?: SseCursor,
 ): AsyncGenerator<T> {
   if (!resp.body) throw new Error("SSE response has no body");
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let failure: unknown;
+  let hasFailure = false;
   try {
     while (true) {
       if (signal?.aborted) break;
-      const { done, value } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (signal?.aborted) break;
+        throw error;
+      }
+      const { done, value } = chunk;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       let idx: number;
@@ -40,7 +58,8 @@ export async function* parseSseStream<T>(
         let type = "message";
         let data = "";
         for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) type = line.slice(6).trim();
+          if (line.startsWith("id:")) cursor && (cursor.lastEventId = line.slice(3).trim());
+          else if (line.startsWith("event:")) type = line.slice(6).trim();
           else if (line.startsWith("data:")) data += line.slice(5).trim();
         }
         if (type === "heartbeat") continue;
@@ -53,9 +72,20 @@ export async function* parseSseStream<T>(
         }
       }
     }
+  } catch (error) {
+    failure = error;
+    hasFailure = true;
   } finally {
-    reader.cancel();
+    try {
+      await reader.cancel();
+    } catch (error) {
+      if (!signal?.aborted && !hasFailure) {
+        failure = error;
+        hasFailure = true;
+      }
+    }
   }
+  if (hasFailure) throw failure;
 }
 
 export interface SseOptions {
@@ -68,6 +98,8 @@ export interface SseOptions {
   base?: string;
   /** Map an error Response into a thrown error. Defaults to a generic Error. */
   onError?: (resp: Response, payload: Record<string, unknown> | null) => Error;
+  /** Resume cursor updated from `id:` frames and sent as `Last-Event-ID`. */
+  cursor?: SseCursor;
 }
 
 /**
@@ -78,7 +110,7 @@ export async function* sseStream<T>(
   path: string,
   opts: SseOptions = {},
 ): AsyncGenerator<T> {
-  const { method = "GET", body, signal, apiKey, base = "", onError } = opts;
+  const { method = "GET", body, signal, apiKey, base = "", onError, cursor } = opts;
   const sep = path.includes("?") ? "&" : "?";
   const keyParam = apiKey ? `${sep}api_key=${encodeURIComponent(apiKey)}` : "";
   const url = base + path + keyParam;
@@ -86,6 +118,7 @@ export async function* sseStream<T>(
     method,
     headers: {
       Accept: "text/event-stream",
+      ...(cursor?.lastEventId ? { "Last-Event-ID": cursor.lastEventId } : {}),
       ...(body != null ? { "Content-Type": "application/json" } : {}),
     },
     body: body == null ? undefined : JSON.stringify(body),
@@ -104,5 +137,5 @@ export async function* sseStream<T>(
           (payload?.message as string) ?? `SSE failed: HTTP ${resp.status}`,
         );
   }
-  yield* parseSseStream<T>(resp, signal);
+  yield* parseSseStream<T>(resp, signal, cursor);
 }

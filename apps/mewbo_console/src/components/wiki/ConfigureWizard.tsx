@@ -40,8 +40,8 @@ export function ConfigureWizard({ initialUrl = "", initialRepo }: ConfigureWizar
   const {
     platformList,
     languageList,
-    modelList,
     developerMode,
+    embeddingDefault,
     state,
     set,
     errors,
@@ -106,11 +106,11 @@ export function ConfigureWizard({ initialUrl = "", initialRepo }: ConfigureWizar
                   state={state}
                   set={set}
                   languages={languageList}
-                  models={modelList}
                   branches={branches.data?.branches ?? []}
                   defaultBranch={branches.data?.defaultBranch ?? seedDefaultBranch}
                   branchesLoading={branches.isLoading}
                   developerMode={developerMode}
+                  embeddingDefault={embeddingDefault}
                 />
               )}
               {step === 2 && state.sourceType === "git" && (

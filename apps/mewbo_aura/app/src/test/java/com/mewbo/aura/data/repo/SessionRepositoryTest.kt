@@ -19,8 +19,18 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import retrofit2.Response
+
+/**
+ * The bound [SessionRepository.refreshSessions] is expected to put on the wire, spelled as a LITERAL
+ * rather than imported from production. The production constant is file-private, but that is not the
+ * reason: asserting a constant against itself proves nothing, whereas a literal makes changing the
+ * bound fail here and forces whoever changes it to re-justify the number against the measurement in
+ * its KDoc.
+ */
+private const val RECENTS_FETCH_LIMIT = 50
 
 /**
  * Drawer long-press sheet (Rename/Archive): [SessionRepository.renameSession] and
@@ -33,12 +43,45 @@ class SessionRepositoryTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     private suspend fun repoWithSessions(api: AuraApi, vararg ids: String): SessionRepository {
-        `when`(api.listSessions(false)).thenReturn(
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(
             SessionsListResponseDto(sessions = ids.map { SessionSummaryDto(sessionId = it, title = "Original $it") }),
         )
         val repo = SessionRepository(api, json)
         repo.refreshSessions()
         return repo
+    }
+
+    /**
+     * The drawer refreshes on EVERY open, so an unbounded read here is paid per gesture and grows
+     * with the store forever — measured at 721 rows / 3.07 MB / 1.77 s before this bound existed.
+     * The wire call is where that is decided, so the wire call is what this asserts.
+     */
+    @Test
+    fun `refreshSessions sends a bounded limit rather than reading the whole store`() = runTest {
+        val api = mock(AuraApi::class.java)
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(
+            SessionsListResponseDto(sessions = listOf(SessionSummaryDto(sessionId = "s1"))),
+        )
+
+        val repo = SessionRepository(api, json)
+        repo.refreshSessions()
+
+        verify(api).listSessions(false, RECENTS_FETCH_LIMIT)
+    }
+
+    /** The bound rides ALONGSIDE the existing filter — the server pages what the filter admitted,
+     * so a bound that dropped `include_archived` would page a different candidate set. */
+    @Test
+    fun `refreshSessions carries include_archived through with the bound`() = runTest {
+        val api = mock(AuraApi::class.java)
+        `when`(api.listSessions(true, RECENTS_FETCH_LIMIT)).thenReturn(
+            SessionsListResponseDto(sessions = listOf(SessionSummaryDto(sessionId = "s1"))),
+        )
+
+        val repo = SessionRepository(api, json)
+        repo.refreshSessions(includeArchived = true)
+
+        verify(api).listSessions(true, RECENTS_FETCH_LIMIT)
     }
 
     @Test
@@ -129,7 +172,7 @@ class SessionRepositoryTest {
         )
         // forkSession's own best-effort refreshSessions() re-fetches the list - simulate the
         // backend now reporting both the source and the new forked row.
-        `when`(api.listSessions(false)).thenReturn(
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenReturn(
             SessionsListResponseDto(
                 sessions = listOf(
                     SessionSummaryDto(sessionId = "s1", title = "Original s1"),
@@ -153,7 +196,7 @@ class SessionRepositoryTest {
         `when`(api.forkSession("s1", ForkSessionRequest())).thenReturn(
             Response.success(201, ForkSessionResponseDto(sessionId = "s1-fork", forkedFrom = "s1")),
         )
-        `when`(api.listSessions(false)).thenThrow(RuntimeException("network down"))
+        `when`(api.listSessions(false, RECENTS_FETCH_LIMIT)).thenThrow(RuntimeException("network down"))
 
         val newId = repo.forkSession("s1")
 

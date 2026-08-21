@@ -294,6 +294,32 @@ def test_tool_rejects_an_unknown_argument():
     assert "Invalid arguments" in content
 
 
+def test_refusal_names_the_offending_field_and_the_expected_set():
+    """The refusal must close the gap, not merely report it.
+
+    'Extra inputs are not permitted' WITHOUT the field name kept a real agent
+    looping for five calls — it could not tell which of the keys it sent was
+    the wrong one. A Claude-Code-shaped agent definition gets this tool via a
+    NAME-only alias (`BashOutput` → `shell_session_tool`) and sends `bash_id`,
+    so a single refusal must be enough to re-derive the whole contract.
+    """
+    content = call_tool(operation="read", bash_id="shell_3")
+    assert isinstance(content, str)
+    assert "bash_id" in content, "the refusal must name WHICH input was extra"
+    assert "Expected fields" in content
+    assert "shell_id" in content
+    assert "wait_ms (0..30000)" in content
+    assert "'read'|'write'|'kill'|'list'" in content
+
+
+def test_refusal_reports_every_error_not_just_the_first():
+    """Two mistakes in one call surface together, so one round trip fixes both."""
+    content = call_tool(operation="read", shell_id="s", wait_ms=60000, timeout=30)
+    assert isinstance(content, str)
+    assert "wait_ms" in content and "less than or equal to 30000" in content
+    assert "timeout" in content and "Extra inputs are not permitted" in content
+
+
 def test_tool_rejects_an_uncompilable_filter():
     """A bad regex is refused at the boundary, not raised from inside a read."""
     content = call_tool(operation="read", shell_id="shell_1", filter="([")

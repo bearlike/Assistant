@@ -1,30 +1,38 @@
 /**
- * Indexing / progress screen — honest stateful progress.
+ * Indexing / progress screen — one bounded panel, four fixed regions.
  *
- * The old version showed a fake percentage that jumped to 96% the moment
- * scanning ended, then stalled with "Generating wiki pages…" for the
- * (much longer) page-writing phase. Customers complained, rightly.
+ * ## Why it is shaped this way
  *
- * This screen now:
- *   - Drives the progress bar from real phase transitions emitted by the
- *     server (clone → scan → graph → plan → pages → finalize).
- *   - Shows sub-progress inside the two long phases that have it
- *     (scan: files/total; pages: pages/total-planned).
- *   - Replaces the file-scan list with a milestone log timeline so the
- *     user can see exactly what the indexer is doing right now.
+ * The screen answers, in this order: is it alive, what is it doing, how far in,
+ * and what has it actually said. Everything below follows from keeping those
+ * four answers in fixed places instead of stacking them down a growing page.
+ *
+ * The previous version appended each region beneath the last — header, phase
+ * dots, the whole declared plan, then a log box — so the panel grew taller with
+ * every phase the backend declared and the page itself scrolled (measured at
+ * 1,225 px of content in an 882 px viewport, with the log box's own scrollbar
+ * nested inside it). Two scrollbars, controls pushed below the fold, and the
+ * plan and the log reading as unrelated lists that happened to be adjacent.
+ *
+ * So: the root never scrolls. The panel fills the viewport and splits into a
+ * fixed header, a two-pane body where each pane owns its own bounded scroll
+ * container, and a fixed footer. The plan and the activity log sit side by side
+ * because they are two views of the same run — the plan is what the indexer
+ * intends, the log is what it is saying — and the log's lines are grouped by
+ * the declared step that produced them, which is what makes the pairing legible
+ * rather than decorative.
+ *
+ * ## Cost
+ *
+ * `O(one record)` per render: one pass over one job's declared steps, plus a
+ * bounded tail of its log. Neither grows with the run's history — the earlier
+ * shape put 5,468 log rows and 22,205 DOM nodes on screen mid-index.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useLocation } from "wouter";
-import {
-  AlertTriangle,
-  CircleAlert,
-  Dot,
-  Info,
-  Loader2,
-  RotateCcw,
-  TriangleAlert,
-} from "lucide-react";
+import { Info, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ModelBrandIcon } from "@/components/ModelBrandIcon";
@@ -41,7 +49,11 @@ import { useIndexingStream } from "./api/streamHooks";
 import type { IndexingStatus } from "./api/types";
 import type { PlatformId } from "./router";
 import { buildHref } from "./router";
-import { IndexingProgress, PHASE_ORDER } from "./progress";
+import { IndexingProgress } from "./progress";
+import { ActivityLog } from "./indexing/ActivityLog";
+import { PhaseBar } from "./indexing/PhaseBar";
+import { PlanOutline } from "./indexing/PlanOutline";
+import { IndexingPlan } from "./indexing/planModel";
 import { DEFAULT_WIKI_SLUG } from "./slug";
 
 // --- Session jump -----------------------------------------------------------
@@ -56,6 +68,9 @@ const INDEXING_SESSION_JUMP = {
   label: "Watch the indexing session",
   title: "Open the Mewbo session running this index",
 } as const;
+
+/** How often the elapsed readouts re-derive while work is open. */
+const TICK_MS = 1_000;
 
 interface IndexingScreenProps {
   jobId?: string;
@@ -121,44 +136,36 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
   // the stream is still catching up, stream takes over once it has. ETA
   // always comes from the snapshot — the stream doesn't carry
   // ``phaseStartedAt``.
-  const { pct, phase, label, statusLine, etaSeconds, fromSnap } = useMemo(() => {
-    const fromStream = IndexingProgress.fromStream({
-      job: job ?? null,
-      phase: stream.phase,
-      pagesSubmitted: stream.pagesSubmitted,
-      totalPages: stream.totalPages,
-    });
-    const snap = snapshot.data;
-    const fromSnapInner = snap ? IndexingProgress.fromJob(snap) : null;
-    const base =
-      fromSnapInner && fromSnapInner.pct > fromStream.pct
-        ? fromSnapInner
-        : fromStream;
-    return {
-      ...base,
-      etaSeconds:
-        fromSnapInner && fromSnapInner.phase === base.phase
-          ? fromSnapInner.etaSeconds
-          : base.etaSeconds,
-      fromSnap: fromSnapInner,
-    };
-  }, [
-    stream.phase,
-    stream.pagesSubmitted,
-    stream.totalPages,
-    job,
-    snapshot.data,
-  ]);
-
-  const etaLabel = IndexingProgress.formatEta(etaSeconds);
-  // "Waiting for the indexer to start" should ONLY appear when neither
-  // transport reports any sign of life — otherwise the snapshot already
-  // tells us the indexer is past clone/scan and the log timeline is just
-  // lagging an SSE replay.
-  const indexerHasStarted =
-    stream.logs.length > 0 ||
-    Boolean(fromSnap && fromSnap.pct > 0) ||
-    Boolean(snapshot.data && snapshot.data.status !== "queued");
+  const { pct, phase, label, statusLine, etaSeconds, elapsedSeconds, fromSnap, progressLedger } =
+    useMemo(() => {
+      const fromStream = IndexingProgress.fromStream({
+        job: job ?? null,
+        phase: stream.phase,
+        pagesSubmitted: stream.pagesSubmitted,
+        totalPages: stream.totalPages,
+      });
+      const snap = snapshot.data;
+      const fromSnapInner = snap ? IndexingProgress.fromJob(snap) : null;
+      const snapWins = Boolean(fromSnapInner && fromSnapInner.pct > fromStream.pct);
+      const base = snapWins && fromSnapInner ? fromSnapInner : fromStream;
+      return {
+        ...base,
+        etaSeconds:
+          fromSnapInner && fromSnapInner.phase === base.phase
+            ? fromSnapInner.etaSeconds
+            : base.etaSeconds,
+        fromSnap: fromSnapInner,
+        // The ledger MUST come from whichever transport won the percentage,
+        // not from a fixed preference. The `progress` event fires on a write
+        // cadence while the snapshot polls twice a second, so a fixed
+        // "stream first" rule renders a stale outline beside a fresh percent
+        // — seen live as a header still naming an embedding step while the
+        // activity log was already minting entities. One source per frame.
+        progressLedger: snapWins
+          ? (snap?.progress ?? job?.progress)
+          : (job?.progress ?? snap?.progress),
+      };
+    }, [stream.phase, stream.pagesSubmitted, stream.totalPages, job, snapshot.data]);
 
   // Terminal-but-incomplete: the run stopped (failed / interrupted /
   // cancelled) without finishing. We show a recovery panel instead of a
@@ -184,6 +191,43 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
   const isIncomplete = Boolean(terminalStatus) || Boolean(stream.error);
   const incompleteError =
     stream.error?.message ?? snapshot.data?.error?.message ?? null;
+
+  // Elapsed readouts are derived, not stored, so they need a clock. It ticks
+  // only while work is open — a stopped run's durations are already final, and
+  // a screen left on a failed job should not re-render once a second forever.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (isIncomplete) return;
+    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [isIncomplete]);
+
+  const plan = useMemo(
+    () => IndexingPlan.from(progressLedger, phase, now),
+    [progressLedger, phase, now],
+  );
+  const activeStep = plan.activeStep;
+  const stepLabels = useMemo(() => plan.labelsByKey, [plan]);
+
+  // The header's headline is the open step when the ledger names one, because
+  // "Embedding graph nodes" is a better answer to "what is it doing" than the
+  // phase it belongs to. The counter beside it comes from the same step, so the
+  // two can never describe different work.
+  const headline = isIncomplete ? "Indexing stopped" : (activeStep?.label ?? label);
+  const detail = activeStep ? IndexingPlan.stepDetail(activeStep, now) : statusLine;
+  const etaLabel = IndexingProgress.formatEta(etaSeconds);
+  const elapsedLabel =
+    elapsedSeconds == null ? "" : `${IndexingProgress.formatElapsed(elapsedSeconds)} elapsed`;
+
+  // "Waiting for the indexer to start" should ONLY appear when neither
+  // transport reports any sign of life — otherwise the snapshot already
+  // tells us the indexer is past clone/scan and the log timeline is just
+  // lagging an SSE replay.
+  const indexerHasStarted =
+    stream.logs.length > 0 ||
+    Boolean(fromSnap && fromSnap.pct > 0) ||
+    Boolean(snapshot.data && snapshot.data.status !== "queued");
+
   // Cancelability is the server's call, not a local re-derivation from
   // `status`: `isActive` (`IndexingJob.isActive`) is the ONE authority. Read
   // ONLY off the snapshot poll — the SSE-folded `job` never carries it (each
@@ -202,140 +246,105 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
     });
   };
 
-  // Pin the log timeline to the bottom on each new entry so the user
-  // always sees the latest milestone without manual scroll. Earlier
-  // entries remain accessible by scrolling up.
-  const logScrollRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = logScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [stream.logs.length]);
-
   return (
-    <div className="flex flex-col flex-1 overflow-y-auto">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <WikiTopBar repo={displaySlug} showBackToAll />
-      <div className="flex-1 px-4 sm:px-6 py-10 sm:py-16 flex items-start justify-center">
-        <div className={cn(cardSurface({ radius: "modal", elevation: "elev-3" }), "w-full max-w-[720px] p-6 sm:p-6")}>
-          {/* Header — brand, slug, current phase line, model, percent */}
-          <div className="flex items-center gap-3.5">
-            <span className={isIncomplete ? "text-[hsl(var(--warning))]" : "text-[hsl(var(--primary))]"}>
-              {isIncomplete ? (
-                <TriangleAlert size={28} />
-              ) : (
-                <BrandMark size={28} spin />
-              )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">
-                {isIncomplete ? "Indexing stopped" : label}
+      <div className="flex min-h-0 flex-1 justify-center px-3 py-3 sm:px-6 sm:py-5">
+        <section
+          className={cn(
+            cardSurface({ radius: "modal", elevation: "elev-3" }),
+            "flex h-full min-h-0 w-full max-w-[1040px] flex-col overflow-hidden",
+          )}
+          aria-label="Indexing progress"
+        >
+          {/* ── Header: the four answers, in fixed positions ─────────────── */}
+          <header className="shrink-0 border-b border-[hsl(var(--border))] px-4 pb-3 pt-4 sm:px-6">
+            <div className="flex items-start gap-3.5">
+              <span
+                className={cn(
+                  "mt-0.5",
+                  isIncomplete
+                    ? "text-[hsl(var(--warning))]"
+                    : "text-[hsl(var(--primary))]",
+                )}
+              >
+                {isIncomplete ? <TriangleAlert size={26} /> : <BrandMark size={26} spin />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <h1 className="truncate text-base font-medium text-[hsl(var(--foreground))]">
+                  {headline}
+                </h1>
+                <p className="mt-0.5 truncate text-xs text-[hsl(var(--muted-foreground))]">
+                  <span className="font-mono">{displaySlug}</span>
+                  {isIncomplete ? (
+                    <MetaSegment>reached {IndexingProgress.label(phase)}</MetaSegment>
+                  ) : (
+                    <>
+                      {detail && <MetaSegment>{detail}</MetaSegment>}
+                      {elapsedLabel && (
+                        <MetaSegment>
+                          <span className="tabular-nums">{elapsedLabel}</span>
+                        </MetaSegment>
+                      )}
+                      {etaLabel && (
+                        <MetaSegment>
+                          <span className="tabular-nums">{etaLabel}</span>
+                        </MetaSegment>
+                      )}
+                    </>
+                  )}
+                </p>
+                {displayModel && (
+                  <p className="mt-1 inline-flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
+                    <ModelBrandIcon modelId={displayModel} size={12} />
+                    <span>Authored by</span>
+                    <span className="text-[hsl(var(--foreground))]">
+                      {formatModelName(displayModel)}
+                    </span>
+                  </p>
+                )}
               </div>
-              <div className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))] truncate">
-                <span className="font-mono">{displaySlug}</span>
-                {statusLine && (
-                  <>
-                    <span className="opacity-50 mx-1.5">·</span>
-                    {statusLine}
-                  </>
+              <div
+                className={cn(
+                  "shrink-0 text-xl font-medium tabular-nums",
+                  isIncomplete
+                    ? "text-[hsl(var(--warning))]"
+                    : "text-[hsl(var(--primary-text))]",
                 )}
-                {!isIncomplete && etaLabel && (
-                  <>
-                    <span className="opacity-50 mx-1.5">·</span>
-                    <span className="tabular-nums">{etaLabel}</span>
-                  </>
-                )}
-                {isIncomplete && (
-                  <>
-                    <span className="opacity-50 mx-1.5">·</span>
-                    <span>reached {IndexingProgress.label(phase)}</span>
-                  </>
-                )}
+                aria-label={`${pct} percent complete`}
+              >
+                {pct}%
               </div>
-              {displayModel && (
-                <div className="mt-1 inline-flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
-                  <ModelBrandIcon modelId={displayModel} size={12} />
-                  <span>Authored by</span>
-                  <span className="text-[hsl(var(--foreground))]">
-                    {formatModelName(displayModel)}
-                  </span>
-                </div>
-              )}
             </div>
-            <div
-              className={cn(
-                "text-base font-medium tabular-nums",
-                isIncomplete ? "text-[hsl(var(--warning))]" : "text-[hsl(var(--primary-text))]",
-              )}
-            >
-              {pct}%
-            </div>
-          </div>
 
-          {/* Progress bar — amber + frozen when the run stopped incomplete,
-              so the fill reads as "what completed" rather than live progress. */}
-          <div className="mt-3 h-1 rounded-full bg-[hsl(var(--muted))]/60 overflow-hidden">
-            <div
-              className={cn(
-                "h-full transition-[width] duration-500",
-                isIncomplete
-                  ? "bg-[hsl(var(--warning))]/70"
-                  : "bg-gradient-to-r from-[hsl(var(--primary))] to-[hsl(var(--primary))]/70",
-              )}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+            {/* One positional readout, not two: each segment is a stage, and
+                the stage doing work fills as its steps settle. */}
+            <PhaseBar phases={plan.phases} stopped={isIncomplete} className="mt-3.5" />
+          </header>
 
-          {/* Phase strip — small dots showing which phase we're in */}
-          <div className="mt-2 flex items-center gap-1 text-2xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-            {PHASE_ORDER.map((p, i) => {
-              const reached = PHASE_ORDER.indexOf(phase) >= i;
-              return (
-                <span key={p} className="inline-flex items-center gap-0.5">
-                  <Dot
-                    className={cn(
-                      "h-3 w-3 -mx-1",
-                      reached ? "text-[hsl(var(--primary))]" : "text-[hsl(var(--muted-foreground))] opacity-40",
-                    )}
-                  />
-                  <span className={cn(reached ? "" : "opacity-40")}>{p}</span>
-                </span>
-              );
-            })}
-          </div>
-
-          {/* Refresh scope transparency — why a full rebuild was chosen, or
-              what a scoped refresh actually touched. Renders nothing on a
-              first index (no `refreshDecision`) or while a scoped run's
-              delta pass hasn't reported back yet. */}
-          <RefreshScopeSummary
-            refreshDecision={refreshDecision}
-            scopePreview={scopePreview}
-            className="mt-4"
-          />
-
-          {/* Recovery panel — terminal-but-incomplete run. Surfaces the
-              error and a Resume button instead of a stuck progress bar; the
-              percent above already shows what completed. Resume re-drives the
-              same job and re-opens the stream in place. */}
+          {/* ── Recovery: the only thing that matters when a run stops ────── */}
           {isIncomplete && (
-            <div className="mt-4 rounded-lg border border-[hsl(var(--warning))]/30 bg-[hsl(var(--warning))]/5 p-3.5">
+            <div className="shrink-0 border-b border-[hsl(var(--border))] bg-[hsl(var(--warning))]/5 px-4 py-3 sm:px-6">
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-[hsl(var(--warning))]">
+                  <p className="text-sm font-medium text-[hsl(var(--warning-text))]">
                     {terminalStatus === "cancelled"
                       ? "Indexing was cancelled"
                       : terminalStatus === "interrupted"
                         ? "Indexing was interrupted"
                         : "Indexing failed"}
                   </p>
-                  <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                  {/* Bounded: a provider error can be arbitrarily long, and an
+                      unbounded dump here is what would re-grow the panel. */}
+                  <div className="mt-1 max-h-[104px] overflow-y-auto text-xs text-[hsl(var(--muted-foreground))]">
                     {incompleteError ? (
-                      <span className="font-mono break-words text-[hsl(var(--warning))]/90">
+                      <span className="break-words font-mono text-[hsl(var(--warning-text))]">
                         {incompleteError}
                       </span>
                     ) : (
                       "Resume to continue from where it stopped — completed pages and the knowledge graph are reused."
                     )}
-                  </p>
+                  </div>
                 </div>
                 {jobId && (
                   <Button
@@ -361,52 +370,49 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
             </div>
           )}
 
-          {/* Log timeline — real milestone lines from the BE.
-              Renders all logs (not a rolling last-N) so refreshing the
-              page never shows a "different" subset. Auto-scrolls to the
-              latest entry; users can scroll up to read history. */}
+          {/* Refresh scope transparency — why a full rebuild was chosen, or
+              what a scoped refresh actually touched. Self-nulls on a first
+              index, so the band is gated on the decision existing at all
+              rather than rendering as an empty strip. */}
+          {refreshDecision && (
+            <div className="shrink-0 border-b border-[hsl(var(--border))] px-4 py-2.5 sm:px-6">
+              <RefreshScopeSummary
+                refreshDecision={refreshDecision}
+                scopePreview={scopePreview}
+              />
+            </div>
+          )}
+
+          {/* ── Body: two panes, each with its OWN scroll container. The page
+                 has none — that is the whole point of the rebuild. ───────── */}
           <div
-            ref={logScrollRef}
-            className="mt-5 space-y-1 min-h-[230px] max-h-[280px] overflow-y-auto pr-1"
-          >
-            {stream.logs.length === 0 && (
-              <div className="text-xs text-[hsl(var(--muted-foreground))] py-6 text-center">
-                {indexerHasStarted
-                  ? "Catching up on the indexer log…"
-                  : "Waiting for the indexer to start…"}
-              </div>
+            className={cn(
+              "grid min-h-0 flex-1",
+              "grid-rows-[minmax(0,2fr)_minmax(0,3fr)] divide-y divide-[hsl(var(--border))]",
+              "lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:grid-rows-1 lg:divide-x lg:divide-y-0",
             )}
-            {stream.logs.map((line, i) => (
-              <div
-                key={`${i}-${line.text}`}
-                className={cn(
-                  "flex items-start gap-2 px-2 py-1.5 rounded-md text-xs",
-                  line.level === "error"
-                    ? "text-[hsl(var(--destructive-text))] bg-[hsl(var(--destructive))]/10"
-                    : line.level === "warn"
-                    ? "text-[hsl(var(--warning))] bg-[hsl(var(--warning))]/10"
-                    : "text-[hsl(var(--muted-foreground))]",
-                )}
-              >
-                {line.level === "error" ? (
-                  <CircleAlert className="h-3 w-3 mt-0.5 shrink-0" />
-                ) : line.level === "warn" ? (
-                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                ) : (
-                  <Loader2 className="h-3 w-3 mt-0.5 shrink-0 text-[hsl(var(--primary))]/60" />
-                )}
-                <span className="font-mono leading-relaxed flex-1">{line.text}</span>
-              </div>
-            ))}
+          >
+            <PlanOutline plan={plan} now={now} className="min-w-0" />
+            <ActivityLog
+              entries={stream.logs}
+              labels={stepLabels}
+              live={!isIncomplete}
+              emptyMessage={
+                indexerHasStarted
+                  ? "Catching up on the indexer log…"
+                  : "Waiting for the indexer to start…"
+              }
+              className="min-w-0"
+            />
           </div>
 
-          {/* Footer — info + session jump + cancel */}
-          <div className="mt-4 pt-3 border-t border-[hsl(var(--border))] flex items-center gap-3 flex-wrap">
-            <div className="inline-flex items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))] flex-1 min-w-[200px]">
-              <Info className="h-3 w-3" />
-              Indexing typically takes a few minutes to half an hour. The page
-              you'll land on opens automatically when ready.
-            </div>
+          {/* ── Footer: what you can do, always reachable ─────────────────── */}
+          <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-[hsl(var(--border))] px-4 py-2.5 sm:px-6">
+            <p className="inline-flex min-w-[200px] flex-1 items-center gap-1.5 text-2xs text-[hsl(var(--muted-foreground))]">
+              <Info className="h-3 w-3 shrink-0" aria-hidden />
+              Indexing takes a few minutes to half an hour. You can leave this
+              page — the wiki opens on its own when it is ready.
+            </p>
             {sessionId ? (
               <SessionJumpButton sessionId={sessionId} {...INDEXING_SESSION_JUMP} />
             ) : (
@@ -431,17 +437,28 @@ export function IndexingScreen({ jobId, slug, platform }: IndexingScreenProps) {
                   })
                 }
                 disabled={cancel.isPending}
-                className="text-2xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive-text))] transition-colors px-2 py-1 rounded hover:bg-[hsl(var(--destructive))]/10"
+                className="rounded px-2 py-1 text-2xs text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive-text))]"
               >
                 Cancel indexing
               </button>
             )}
-          </div>
-        </div>
+          </footer>
+        </section>
       </div>
     </div>
   );
 }
 
+/** One `·`-separated segment of the header's meta line. */
+function MetaSegment({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <span className="mx-1.5 opacity-50">·</span>
+      {children}
+    </>
+  );
+}
+
 // (Progress / ETA / phase math lives in ``./progress.ts`` so the
-// landing card and this page render from the exact same calculation.)
+// landing card and this page render from the exact same calculation;
+// the plan's grouping and the log's windowing live in ``./indexing/``.)

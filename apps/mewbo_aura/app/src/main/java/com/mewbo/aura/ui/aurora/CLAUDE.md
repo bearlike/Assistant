@@ -254,7 +254,7 @@ decaying into the bottom-only live glow, without a second shader or a radial mas
 - **The bloom envelope is CALLER-owned.** `AuroraEdgeGlow(perimeterBloom: State<Float>? = null)` is a
   0..1 value the CALLER animates — the composable only turns it into pixels, the same externally-driven
   pattern as `EdgeGlowState.Igniting`'s progress and the orb's `rmsDb`.
-  `AssistOverlayScreen.rememberPerimeterBloom` owns the timeline: snap to 1 on leaving Idle, hold
+  `ui/overlay/OverlayAnimations.kt`'s `rememberPerimeterBloom` owns the timeline: snap to 1 on leaving Idle, hold
   through the 450ms ignite (`AuraMotion.edgeSweepMs`), exhale to 0 over `AuraMotion.bloomSettleMs`
   (950ms, FastOutSlowIn), reset on Idle. Read in the DRAW phase only so the per-frame value never
   subscribes the composable to recompose. `null`/0 = no bloom; `ChatScreen` never passes it, so chat
@@ -301,6 +301,140 @@ Three additive mechanisms, all inside the existing rules:
 All three are additive `valueNoise` samples (+3/px worst case incl. the Rule-4b hue field, branch-
 skipped at `iHueDrift 0`) — accepted on SwiftShader for geometry checks, never FPS.
 
+## The border profile — `perimeterBias`, and why it is ONE knob
+
+The device-control overlay is the surface whose whole job is to say "an agent is driving your phone
+right now". At the bottom-anchored balance every other caller uses it read as a **bottom wash**:
+`glow = clamp(vGlow + perimeter, 0, 1)` is a SUM, so at Listening's wide reach the bottom-anchored
+term saturates the lower third *before the perimeter contributes anything there*, and the side rails
+are what is left over rather than the subject. Numerically, at `perimeterBias = 0` (1080×2400 @2.75,
+noise held at 0): bottom-centre **1.000**, side rails **0.23**, top **0.20**.
+
+`AuroraEdgeGlow(perimeterBias: Float = 0f)` shifts that balance. At 1: bottom-centre **0.996**, side
+rails **0.992**, top **0.993**, screen-centre **0.00046** (0.12 of an 8-bit LSB — quantizes to 0) —
+an even border with a saturated corner join, and the haze gone.
+
+**Seven effects, one knob, and splitting them is the trap.** Each alone re-opens the imbalance:
+raising the floor without levelling the bottom just makes the bottom the subject again; damping the
+bottom without raising the floor dims the surface; either without contracting the reach leaves a
+haze with brighter edges.
+
+| Effect | Where | At bias 1 |
+|---|---|---|
+| per-state perimeter floor gained | CPU, `perimeterGain` | ×2.857 → Listening 0.35 → **1.00** |
+| bottom-anchored term held level with the rails | shader `iBottomWeight` | ×1.00 (see parity below) |
+| reach contracted | CPU, `reachFraction` | ×0.28 → 139dp → 39dp; **also the rail thickness**, since `sideDecay` derives from `decayLength` |
+| horizontal center-weight flattened | CPU, `centerWeight` | ×0 — a bloom is brightest under the pill, a border's bottom edge is EVEN |
+| `bottomBias` + top term to four-edge parity | shader `iPerimeterBias` | the two terms that make the light read as EMANATING from a composer pill this surface does not have |
+| `peakAlpha` spends its last tenth | shader `iPerimeterBias` | 0.9 → **1.0** |
+| hue field's SPATIAL frequency raised | shader `iPerimeterBias` | ×2.2 — ~1 noise cell spans the surface at bias 0 (one family per frame), ~2–3 at bias 1, so the families play ALONG each rail |
+
+### Parity is ONE number, and it is the border's brightness
+
+`BORDER_PARITY_LEVEL` is the level both the bottom edge and the rails peak at, as a fraction of the
+shader's `glow` term; `BORDER_PERIMETER_GAIN` is *derived* from it
+(`BORDER_PARITY_LEVEL / LISTENING_PERIMETER_FLOOR`) and `bottomWeight` reads it directly. That
+one-source shape is what makes the border even by construction — two independently-tuned numbers
+drift apart the first time either moves, and a bottom brighter than the sides is the bottom wash
+again with extra steps. The float32 round-trip `0.35f * (1f / 0.35f)` is exactly `1.0`, so the
+identity holds bit-exactly and the test asserts exact equality rather than a tolerance.
+
+**Parity 1.0 is the ceiling, and the first round's 0.70 reservation was refuted, not retuned.** It
+claimed the rails needed "headroom against the bottom term where the two meet at the corners". The
+corner join was *already* saturated at 0.70: on a 1080×2400 @2.75 frame with noise at 0, the
+bottom-left join summed `vGlow 0.697 + perimeter 0.695 = 1.391` and clamped. The corner saturates at
+any parity above 0.5, so the reserve bought no gradient where it claimed to and cost 30% of the
+surface's luminance everywhere else — which is what a real device read as "practically invisible".
+Two accepted consequences, both measured off the same probe:
+
+- the saturated fillet hugging the two bottom corners grows ~1.8k px → ~11k px (0.07% → 0.43% of
+  the frame). It is a sliver, not a block: it reaches 520px up only in the outermost column and is
+  under 2px deep by 256px in. The hue-drift field still varies across it — only the light-vs-deep
+  ramp *within* a family is flat there;
+- at the very edge the Listening breathe clips on its up-swing (glow 0.99 × intensity 1.2 clamps),
+  so the outer ~11px of each rail breathes downward only. Past that the full swing is expressed.
+
+**Raise the parity, never `iIntensity`** — they are the same scalar on the alpha and are NOT the
+same on the colour. `glow` also feeds `mix(hueDeep, hueLight, glow)`, so raising parity moves the
+border toward the PALE stop exactly as Rule 4/Rule 6 intend, while an intensity boost leaves the
+colour mid-ramp and brightens only the alpha: a brighter, muddier border. Intensity also carries the
+breathe, so scaling it scales the swing — the wrong direction for photosensitivity — and any boost
+past the clamp manufactures the flat plateau Rule 2 forbids, where parity keeps the exponential's
+shape and clamps only at the edge itself.
+
+**What is NOT available: the host window's obscuring-alpha cap** (`ui/control`, 0.8). Above it
+Android 12+ revokes touch pass-through and the window swallows every touch on screen, the user's and
+the agent's injected taps alike, with nothing reporting a problem. It is a WINDOW property, so
+per-pixel shader alpha does not enter that decision — which is why `peakAlpha` may go to 1.0 while
+that number does not move. With parity and `peakAlpha` both at their ceilings, the composited rail
+peak is `1.0 × 1.0 × 0.8 = 0.80`, up from `0.70 × 0.9 × 0.8 = 0.50`. **There is no further headroom
+in this chain**; the only levers left are the colour pair (`AuraColors`, shared with the assist
+overlay) and the reach, and the reach is what stopped it being a haze.
+
+**Byte-identity is by CONSTRUCTION, not by tuning.** Every one of the seven is an exact identity at
+bias 0: `mix(x, y, 0.0)` is `x*(1-0) + y*0` = `x` exactly (and `x + 0*(y-x)`, the other lowering a
+compiler may choose, is equally exact), and a `* 1.0` is exact in IEEE. So chat
+(`perimeterBias` defaulted, `hueDriftAmount` 0, `perimeterPresence` 0) and the assist overlay
+(defaulted) render the same bytes as before. `perimeterGain` is applied AFTER `perimeterPresence`,
+so a caller at presence 0 stays at exactly 0 for any bias.
+
+**It does NOT touch the drift rate.** `speedScale` stays the single rate source with its own
+phase-continuity contract; a second rate source would need that argument re-derived. Reduced motion
+is untouched for the same reason the floor and the hue field are: a border is static PRESENCE, not
+travel — only the drift speeds are 0 there, so reduced motion keeps an even, multi-hue, frozen
+border rather than falling back to a bottom wash.
+
+Known asymmetry, accepted: the bottom band stays ~1.7× thicker than the rails, because `sideDecay`
+carries a 0.6 factor the bottom term does not. Peaks match; thickness does not. The bottom being the
+heaviest edge is consistent with the rest of this family. Raising the parity does not change the
+RATIO, only the absolute widths — taking "still above 5% composited alpha" as the visible band, the
+rails go 148px → 178px (54dp → 65dp) and the bottom 247px → 296px (90dp → 108dp).
+
+## The rise bound — `riseFraction`, and why the border needed one
+
+The border profile's side rails run the FULL height of the surface by construction: at
+`perimeterBias = 1` the `bottomBias` mix flattens to 1.0, so a rail is as bright at the top row as at
+the bottom. On a tall handheld that reads as a frame. On a short, wide 16:9 television it reads as a
+wash over most of the screen — reported from a physical panel as the aura "spanning from the bottom
+to the top" and eating more than half the height.
+
+`AuroraEdgeGlow(riseFraction: Float = 0f)` bounds how far up the WHOLE composite reaches — rails, top
+term and bottom term alike, applied to `glow` after the sum. **It is not a retune of the border**, and
+that distinction is the point: the border is what makes the surface legible at every edge, and
+lowering the parity or the floor to shrink it would take the legibility with it.
+
+- **A fraction, never a dp.** The complaint is about the PROPORTION of the screen the surface eats,
+  and a dp says something different on every panel.
+- **Branch-skipped at 0** (`if (iRiseFraction > 0.0)`), the same idiom as `iHueDrift` — so every
+  existing caller is byte-identical by CONSTRUCTION rather than by tuning, the same standard the
+  border profile itself is held to.
+- **It feathers over the upper 45% of the allowed rise**, reaching exactly 0 well below the bound.
+  This is the edge-window law applied to the terms the top fade deliberately leaves alone:
+  `iTopFadeFraction` scopes to `vGlow` only, because the perimeter terms PEAK at the draw bounds and
+  have no mid-falloff for a clip edge to slice. Once a rise bound is on they no longer reach a bound
+  — so they DO have a mid-falloff, and it has to be feathered or it hard-stops into a horizontal seam
+  straight across the screen.
+- The shader-free API 30-32 fallback honours it too, as a ceiling on the band height. That path has
+  no perimeter and was never the surface this was written for, but a caller asking for a bounded rise
+  must not get an unbounded band merely because the device is too old for the shader.
+
+The value is a `DeviceShape` member (`controlAuraRiseFraction`), so which shapes need a bound stays
+one answer rather than a literal per call site. **Unmeasured:** 0.4 is the 60% cut that was asked
+for, not a number read off a capture — nothing here has run on a television.
+
+## Flow rate — derive it from the breathe, never pick it
+
+The device-control surface passes `speedScale = AuraMotion.deviceControlFlowScale` (2.3) because at
+the ambient pace it read as "just slightly breathing". **The value is derived, and a future retune
+must re-derive rather than nudge:** the fastest drift term in the shader is the reach wave's fine
+octave, whose noise argument advances at `WAVE_DRIFT_HZ × 1.9` ≈ 0.067 value-changes/s at a fixed
+pixel; the fastest periodic term this family already ships — and the one the design language already
+calls calm — is the `listeningBreathePeriodMs` breathe at ≈ 0.154 Hz. 2.3 is their ratio, so the
+fastest drift term lands exactly ON the breathe cadence and **nothing on the surface runs faster
+than a rate already accepted**. That sits ~20× under the 3 Hz photosensitivity flash threshold, and
+what it modulates is a smooth gradient's geometry (±22% of the decay length), never a full-area
+luminance step. Reduced motion is unaffected — the base speed is already 0, and 0 × 2.3 is 0.
+
 ## Tuning-constant provenance — measured token vs. behavioral ratio
 
 Every `AuraColors`/`AuraSpacing` value consumed here must be traceable to an actual capture
@@ -342,7 +476,10 @@ ratio/multiplier OF. There is no third category; a value fitting neither is not 
 
 `LivenessShowcase` (debug-only, `ui/aurora/LivenessShowcase.kt`) is the one place all
 `AuroraState`/`EdgeGlowState` values are exercised side-by-side without a live backend; its Wash page
-exercises all four `AuroraState` values including `Resting`. Any new state or shader parameter needs a
+exercises all four `AuroraState` values including `Resting`. The Edge-glow page's **Profile** button
+toggles the border profile in place (`perimeterBias` + `deviceControlFlowScale` together, the two
+arguments that are the whole difference between the device-control surface and the assist overlay) —
+toggling in place is what makes "border, not bottom wash" checkable instead of asserted. Any new state or shader parameter needs a
 page/variant here before it can be called verified — a single dev-build screenshot is not enough (see
 the verify-across-time trap). redroid's software GPU (SwiftShader) is fine for judging
 geometry/crispness; never judge FPS on it.

@@ -18,6 +18,10 @@ scrim gradient; 3-phase invocation bloom + session resting glow; a11y channel),
 aurora must be a pretty MULTI-HUE field [blue + violet + ember], FLUID toward the edges [2-octave
 wave + per-row liquid level], and STRONGER at the edges [persistent edge-lit perimeter floor]; plus
 a fluid synthesizer-style RMS voice bar),
+**[R6]** = user directive (device-control surface: the aura must glow round the ENTIRE PERIMETER as
+a border rather than washing the bottom, at a REDUCED radius so it reads as a border and not a haze,
+visibly FLOWING rather than "just slightly breathing" — slow, steady, and explicitly never fast
+enough to be a photosensitivity risk — with the multiple hues playing more visibly),
 **[Ref]** = measured reference-capture
 values, **[Rev F]** = instrumented uiautomator audit. Precedence: **the
 highest-numbered user directive wins over every measured reference value**. Do not "fix" a directive value
@@ -74,6 +78,7 @@ and spacing, not size.
 | `ActivityGroup` | rowHeight 36dp, topGapAfterBubble 32dp [R3], detailMaxHeight 200dp | tool fold geometry [Ref] |
 | `ToolCard` | paddingVertical **20dp**, headerIconSize **16dp**, headerIconGap **4dp**, headerToContentGap **12dp** | promoted-tool action card (§6); GMS reference capture. Reuses `AssistantText.gutter` (24dp) + `Composer.internalPadding` (16dp) — only these four were uncovered |
 | `Markdown.headingTopGap / BottomGap` | 36 / 16dp | headings cling to what follows (~2:1) [Ref measured] |
+| `Focus.ringWidth / ringCornerRadius` | **2dp / 12dp** | the D-pad focus ring (§4). One geometry for every surface — a ring that varies stops reading as "you are here" and starts reading as decoration |
 | `UserBubble` | pad 16/12, rightMargin 24, maxWidth 0.78 | [Rev F] |
 | `DrawerRow` recents (rail) | rowHeight **44dp** (vs 56dp action rows), `dateGroupTopPad` 12dp, `runningDotSize` 8dp trailing | compact, date-grouped Recents [user directive] |
 | `Composer.overlayHeight` | **84dp** | [R4] overlay-only pill height (vs docked 64dp) — full conversational surface, not a media strip |
@@ -81,6 +86,7 @@ and spacing, not size.
 | `Composer.scopeRowStartInset` | **48dp** (= `horizontalMargin` 16 + `height/2` 32) | docked scope-row start anchor: `radiusPill` is `CircleShape` (a 50% stadium), so the corner curve becomes the straight edge exactly `height/2` in from the pill edge — align composer content there, not to `horizontalMargin` alone [user directive] |
 | `Composer.scopeRowIconSize` | **16dp** | scope-row glyph, one step down from the 24dp `iconSize` to sit proportionate to `chipLabel`/`sectionHeader` text |
 | `DrawerSheet.shadowElevation` | **16dp** | the drop shadow under the left drawer — `ModalDrawerSheet` casts NONE by default (m3 1.4.0 forwards only `drawerTonalElevation`, tinted toward `accentPrimary`), so it is applied via `Modifier.shadow(…, RectangleShape, clip = false)` at the call site [side-rail polish] |
+| `NavigationRail.width` | **240dp** | the television shell's permanent left rail (`ui/navigation/AuraNavHost`'s `TelevisionChatHome`) — a FIXED width, unlike the handheld drawer's 0.78 screen fraction: that fraction exists because a sheet laid over content should not fully cover it, and a rail covers nothing, so what it must do instead is leave the transcript enough room to stay the subject. At the 960dp width a 16:9 television reports, this keeps roughly three quarters of the screen for the conversation while still fitting a session title without truncating it to a stub |
 
 **Recents rail [user directive].** The left drawer's session history is a *navigation list*,
 not a conversational turn stream — so §1.2's "never cramped" law (which governs turn separation in
@@ -124,6 +130,15 @@ is a bug we shipped once), `outlineHairline #2A2B2E` (ALL dividers). Text tiers:
 #E9EAED` → `textSecondary #9AA0A6` → `textTertiary #5F6368` — a hierarchy step means stepping BOTH
 size and tier where possible. Accents: `accentPrimary #4C6EF5`, `accentError #E46962` (failure
 glyphs only).
+**`focusRing #E9EAED`** — where a D-pad currently is, drawn at `AuraSpacing.Focus.ringWidth` **2dp**
+(a divider hairline vanishes at couch distance). Deliberately NOT `accentPrimary`, which already
+means *selected*: on a television the focused row and the selected row are routinely different rows,
+and one colour for both makes the remote's position unreadable exactly when it matters. Near-white
+also survives every surface token in this palette, which a tinted ring does not — the focusable set
+spans `surfaceCanvas`, `surfaceDrawer` and `surfaceInput`. It is **not** a touch state and is never
+gated on being a television: a finger cannot grant focus, so a handheld shows it only with a keyboard
+or remote attached.
+
 Shapes: `radiusPill` (stadium), `radiusBubble` 28dp (user bubble **and the action card** — both are
 full-width, bubble-scale surfaces), `radiusThumb` 16dp (code blocks), `radiusCard` 20dp (the assist
 overlay's SMALL floating response card — deliberately tighter; do not reach for it just because a
@@ -259,6 +274,117 @@ motion. Full mechanism: `ui/aurora/CLAUDE.md` → "Rule 4b" + "Perimeter bloom".
 overlay ON SCREEN is a live state by that same language — its [R4] session-resting pool (the
 `Resting` row above) is not a regression of §7.2 and must not be "fixed" back to hide-on-done;
 record a new directive instead.
+
+**Device-control surface — one 2–3s envelope in and out.** The overlay raised for the whole
+device-control grant (`ui/control/`, a third surface again: it lives over OTHER apps, so neither the
+chat solid-resting law nor the assist overlay's dismiss applies) arrives and leaves over ONE shared
+window, `AuraMotion.deviceControlEaseMs` (2400ms), read by the glow, the narration stack and the
+Stop pill's entrance so none of them can drift apart. User directive: "let it take about two to
+three seconds to appear smoothly", both directions — it superseded a 180ms exit for the whole
+surface, which read as a cut.
+
+| Phase | Window | What rides it |
+|---|---|---|
+| **Arrival** | 2400ms linear | glow, narration stack and Stop pill together — one `graphicsLayer` alpha per window, read in the LAYER phase |
+| **Departure — affordance** | `AuraMotion.scrimFadeMs` (180ms), then the window is REMOVED | the Stop pill only |
+| **Departure — decoration** | 2400ms linear | glow + narration stack, easing off IN PLACE |
+| **Teardown** | `maxOf` of the two exits + one frame | derived, never a second literal — a teardown short of a fade in flight rips the window out mid-animation |
+
+Laws: the ramp is LINEAR at both ends (a fast final segment is the same photosensitivity trigger as
+the cut it replaced [R3]). The glow is never handed `EdgeGlowState.Hidden` on the way out — its own
+dismiss ramp underneath the envelope would multiply into that fast segment; the envelope alone
+fades it. Reduced motion FLATTENS the envelope to `reducedBlockFadeMs`, never removes it (a fade is
+opacity, not travel). **Only the pill is asymmetric, and that asymmetry is what makes the long exit
+legible**: the pill is the one element asserting the phone can still be taken over, so it leaves at
+once and what remains is an afterglow rather than a claim — removing its window, not fading it, is
+what ends its touch region. The `ScreenCaptureVeil`'s own 96ms per-action fade is a DIFFERENT
+mechanism and must never follow this window: it runs on every injected tap. Full mechanism:
+`ui/control/CLAUDE.md` → "Arrival and departure are ONE envelope".
+
+**Device-control surface — a PERIMETER BORDER, not a bottom wash [R6].** The same surface renders
+`AuroraEdgeGlow` in `Listening` for the whole grant, and at the bottom-anchored balance every other
+caller uses it read as "only bottom lit". The cause is arithmetic, not tuning: `glow` is
+`clamp(vGlow + perimeter, 0, 1)`, a SUM, so at Listening's wide reach the bottom-anchored term
+saturates the lower third **before the perimeter contributes anything there** — the side rails are
+the leftover, not the subject. Measured on the terms (1080×2400 @2.75, noise held at 0):
+bottom-centre 1.000 vs rails 0.23 vs top 0.20.
+
+`AuroraEdgeGlow(perimeterBias = 1f)` is the caller knob that shifts it: bottom-centre 0.694, rails
+0.679, top 0.679, screen-centre 0.000 — an even border with a saturated corner join and no haze.
+Six effects ride one knob because each alone re-opens the imbalance (raising the floor without
+damping the bottom only saturates harder; either without contracting the reach leaves a haze with
+brighter edges). Reach contracts to 0.28 of the state's own — the "reduced radius" half of the
+directive, which tightens the rail thickness with the same number since `sideDecay` derives from
+`decayLength`. The hue field's SPATIAL frequency rises ×2.2 so the three families play ALONG each
+rail rather than tinting a whole frame one family at a time; it is still bounded aperiodic noise,
+never an angle (Rule 4b). **Chat and the assist overlay keep the default 0, where every one of the
+six is an exact identity** (`mix(x, y, 0)` is `x`; `* 1.0` is exact) — byte-identity by
+construction, not by tuning.
+
+**Flow rate is DERIVED, and a retune re-derives [R6].** The surface passes
+`speedScale = AuraMotion.deviceControlFlowScale` (2.3), because at the ambient pace it read as "just
+slightly breathing". The fastest drift term in the shader is the reach wave's fine octave at
+`WAVE_DRIFT_HZ × 1.9` ≈ 0.067 value-changes/s at a fixed pixel; the fastest periodic term this
+family already ships and the design language already calls calm is the `listeningBreathePeriodMs`
+breathe at ≈ 0.154 Hz. 2.3 is their ratio, so the fastest drift term lands exactly ON the breathe
+cadence and **nothing on the surface runs faster than a rate already accepted** — ~20× under the
+3 Hz flash threshold, modulating a smooth gradient's geometry (±22% of the decay length) and never
+full-area luminance. Reduced motion keeps the FIELD and drops only the TRAVEL: an even, multi-hue,
+frozen border, never a fallback to the bottom wash. Full mechanism: `ui/aurora/CLAUDE.md` → "The
+border profile" + "Flow rate".
+
+**The navigation-bar strip cannot be made to match, and that is a platform limit rather than a gap
+[R6].** The directive asked for the Pixel's bottom navigation strip to carry the aura colour so the
+glow and the system bar read as one surface, gated on "only if possible". It is not possible for the
+case that motivated it — an agent driving a DIFFERENT app — and the evidence is two independent
+blocks in AOSP, either sufficient alone: the nav bar composites at window layer 24 against
+`TYPE_APPLICATION_OVERLAY`'s 11, and `DisplayPolicy`'s nav-bar-appearance candidate admits only an
+app window or `TYPE_VOICE_INTERACTION`, which categorically excludes this window type.
+`FLAG_LAYOUT_NO_LIMITS` does not help: it governs extent, not z-order, which is exactly why the
+overlay reaches into that region and still renders beneath it.
+
+What IS ours is already correct and must stay: `MainActivity` runs `enableEdgeToEdge` with both bars
+transparent and `isNavigationBarContrastEnforced = false`, and `AuraSession` matches. Under gesture
+navigation the bar is forced transparent by the system, so the seam should not arise; under 3-button
+navigation, or beneath an app targeting < SDK 35 still setting an opaque `navigationBarColor`, it
+will — and the answer is to record it, not to reach for `TYPE_ACCESSIBILITY_OVERLAY`. **Never
+"fix" this by deleting the three deprecated-looking bar calls**: `setDecorFitsSystemWindows` and the
+theme's bar colours are disabled on Android 15+ but still live at API 33/34, which is `minSdk`.
+*(AOSP source read directly; the on-device rendering consequence is reasoned, not measured — the
+reporting device's navigation mode is the one fact that would settle what, if anything, remains.)*
+
+**The aura reaches the true display edge, and `FLAG_LAYOUT_NO_LIMITS` is not what gets it there
+[R6].** The decoration window sets `layoutInDisplayCutoutMode = ALWAYS`, and it has to be set
+explicitly. No-limits governs extent past the system bars; the display cutout is a SEPARATE
+attribute with its own default, under which `WindowLayout` intersects a fullscreen window's PARENT
+frame with the display's cutout-safe rect — and the no-limits branch runs afterwards on the DISPLAY
+frame only, so it cannot undo it. The glow began where the status-bar strip began: **a hard line,
+which is what distinguishes a clipped window from a faint one.** The platform's edge-to-edge
+enforcement does not close it either — that is applied in `PhoneWindow.generateLayout`, so it
+reaches an Activity's decor and never a window added straight to the `WindowManager`, however recent
+the `targetSdk`. `ALWAYS` rather than `SHORT_EDGES`, because short-edges relaxes only the two short
+sides per orientation and a long-edge cutout would clip a surface whose whole subject is an unbroken
+border. Safe here for the reason a cutout is not extra screen: it is a HOLE, so what extends into it
+must be decoration — the narration stack and the Stop pill stay bottom-anchored and never move under
+it. *(AOSP `WindowLayout.computeFrames` and `ViewRootImpl.adjustLayoutInDisplayCutoutMode` read
+directly; the on-device result is reasoned, not measured.)*
+
+**The device-control border renders at FULL STRENGTH [R6].** The perimeter profile's rails and its
+bottom edge both peak at 1.0 of the shader's glow term — the border is the surface's subject, not
+what is left over once a bottom bloom has taken its share. The first pass held them at 0.70,
+reserving headroom at the corner join; **the corner was already saturated at that level**
+(`vGlow 0.697 + perimeter 0.695 = 1.391`, clamped), so the reservation cost 30% of the surface's
+luminance and bought nothing. One number (`BORDER_PARITY_LEVEL`) now sets both edges, because a
+border whose bottom is brighter than its sides is a bottom wash with extra steps. Measured on the
+deterministic terms, composited: rails 0.500 → 0.794, a 1.59× lift, and the rail colour brightens
+about 1.75× over a dark backdrop because `glow` also drives the light-vs-deep mix. Above that, only
+the window's obscuring-alpha ceiling remains, **and that number is not available**: past it Android
+revokes touch pass-through and the window silently swallows every touch on screen.
+
+The two fixes COMPOUND, which is worth knowing before reading either as sufficient alone: an
+edge-anchored exponential peaks precisely AT the edge, so while the outermost columns were clipped
+the surface was losing exactly its brightest part and showing only the falloff. Some of
+"practically invisible" was geometry.
 
 ## 6. Component laws (chat surface)
 
@@ -453,6 +579,55 @@ is a blocking review failure.
     the two action sheets WERE bounded and could never overflow, but padded their bottom row with a
     fixed dp constant instead of a real `WindowInsets.navigationBars` inset, leaving the last touch
     target under the gesture bar — an inset is not a padding constant.
+25. **`FLAG_LAYOUT_NO_LIMITS` assumed to cover the DISPLAY CUTOUT.** They are separate attributes
+    with separate defaults, and the device-control glow shipped a release clipped to the status-bar
+    line because of it — no-limits resets the DISPLAY frame while the cutout clamp has already
+    intersected the PARENT frame the window is measured against. → **A window added straight to the
+    `WindowManager` sets `layoutInDisplayCutoutMode` explicitly.** It inherits nothing from an
+    Activity: the platform's edge-to-edge enforcement lives in `PhoneWindow.generateLayout`, so a
+    recent `targetSdk` grants such a window neither the cutout mode nor the enforcement — the same
+    no-Activity-no-inheritance trap as `FLAG_HARDWARE_ACCELERATED` on the same params.
+26. **A perimeter "evened" by damping the bright edge down rather than raising the dim edges up.**
+    The first border profile matched its rails and bottom at 0.70 of the glow term and shipped a
+    release the device read as "practically invisible"; the headroom it reserved at the corner join
+    did not exist, because the corner saturates at any parity above 0.5. → **Evenness is a parity
+    LEVEL, declared once (`BORDER_PARITY_LEVEL`) and read by both edges, never an identity that
+    emerges from two independently-tuned numbers.** Raise parity, never `iIntensity`: intensity
+    leaves `glow` mid-ramp so the border brightens muddier rather than paler, carries the breathe
+    swing with it, and manufactures the flat plateau §7 Rule 2 forbids once it clamps.
+27. **A focus ring appended AFTER the click modifier — drawn nowhere, warned about nowhere.**
+    A whole wave of `Modifier.clickable{ }.auraFocusRing()` calls landed across the drawer, chat and
+    settings; every one compiled, every element took focus correctly, and not one ring ever
+    rendered. `onFocusChanged` observes only the focus targets that FOLLOW it in the chain, so
+    ringing from behind is silently inert — there is no crash, no lint, and the element still
+    behaves, which is why reading the diff cannot catch it. → **The ring PRECEDES the click:
+    `Modifier.auraFocusRing().clickable{ }`, or `Modifier.auraFocusRing().then(modifier)` where the
+    click arrives in a caller's parameter.** A Material `IconButton`/`Switch`/`Button` applies its
+    click after its own `modifier`, so passing the ring there is already correct. **Only a rendered
+    frame closes this one** — the accessibility tree reports the element as focused either way.
+28. **A remote stranded with no focus and no way to get it back.** One press of Down in the composer
+    moved focus to a node the IME's reflow then destroyed; from then on the tree reported no focused
+    node in any direction, permanently, and the only exit was force-stopping the app. A handheld
+    never shows this because a finger re-grants focus. → **A bottom-most control REFUSES the move it
+    cannot satisfy** (`focusProperties { down = FocusRequester.Cancel }`), which makes `moveFocus`
+    report false and hands the key back to the caret. Do not attempt to recover after the fact:
+    Compose dispatches no key event at all once focus is gone, so a root `onPreviewKeyEvent` never
+    fires — measured, not assumed.
+29. **A modal drawer's focus containment must be conditional in BOTH directions, or it trades one
+    trap for a worse one.** `ModalNavigationDrawer` composes its sheet content even while CLOSED, so
+    an unconditional `exit = Cancel` on that content would refuse every attempt to leave it — trapping
+    a remote inside a drawer the user cannot even see, which is strictly worse than the open-drawer
+    escape it exists to fix, and on television unrecoverable for the same reason entry 28 is
+    (`ui/common/DpadFocusContainer`'s own law: nothing recovers focus once it is gone). → `containsFocus`
+    on `NavigationHost.ModalSheet` is read together with `isActive`: CLOSED refuses ENTRY, OPEN refuses
+    EXIT, never both at once and never the closed→trap direction alone (`ui/navigation/AuraDrawerContent`'s
+    `focusProperties { enter; exit }`).
+30. **A permanent rail must NOT be focus-contained, or the remote is stranded in the navigation list
+    with no way into the app.** The modal sheet's containment law (entry 29) does not transfer whole —
+    a rail is on screen for the app's entire lifetime, so refusing focus EXIT the way a sheet refuses
+    it while open would mean the transcript, composer and every other destination are permanently
+    unreachable by D-pad. → `NavigationHost.PersistentRail.containsFocus = false`, always: moving focus
+    right into the transcript is the primary way a rail is used, not an edge case to guard against.
 
 ## 8. Enforcement map
 

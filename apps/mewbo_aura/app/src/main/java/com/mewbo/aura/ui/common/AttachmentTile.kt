@@ -78,7 +78,7 @@ fun AttachmentTile(filename: String, mimeType: String, modifier: Modifier = Modi
  * Shared (filename, mimeType) -> type indicator resolution, the ONE place the `image/`-mime check
  * lives - both [AttachmentTile] and the composer's pre-send `AttachmentChip` drive their glyph
  * from this instead of each duplicating it (same "one atomic helper, two chrome styles" shape as
- * `ui/chat/ChatMessageRows.kt`'s existing `ActivityToolGlyphs`).
+ * `ui/chat/ToolCallGroupCard.kt`'s existing `ActivityToolGlyphs`).
  */
 object AttachmentGlyphs {
     fun forMimeType(mimeType: String): ImageVector =

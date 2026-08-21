@@ -21,7 +21,7 @@ by how many apps or sessions are stored.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -121,6 +121,14 @@ class AppStagingArea:
         two claimants would make the first-match scan above load-bearing for
         which one keeps working.
 
+        **Every app tool resolves through here** — ``get_app``, ``submit_app``,
+        ``run_pipeline`` and ``app_data``. That is the point of the method: a
+        session's binding is ONE fact, and a tool that re-derives it privately
+        drifts. Two of them did, resolving by the id fields alone, so a tag-bound
+        composer session could ship a new live version of an app it was
+        simultaneously told did not exist — the destructive operation permitted
+        and the diagnostic ones refused. Add a caller here; never a second rule.
+
         **The tag, and never the ``app_id`` CONTEXT key** — the same ruling the
         wiki tier already carries. A request's ``context`` is merged VERBATIM
         into the session (``backend.py:_build_context_payload`` refuses no
@@ -136,20 +144,52 @@ class AppStagingArea:
 
         Cost: ``O(collection)`` in the number of stored apps for the field scan,
         plus one ``O(1)`` get per apps tag — the same scan ``get_app`` already
-        performs per call.
+        performs per call. A caller that ALREADY holds the app wants
+        :meth:`binds` instead, which answers the same question in ``O(1)``.
         """
         for app in app_store.list_apps(include_archived=True):
             if self._session_id in (app.maintainer_session_id, app.owner_session_id):
                 return app
+        for app_id in self._tagged_app_ids(session_tags):
+            app = app_store.get(app_id)
+            if app is not None:
+                return app
+        return None
+
+    @staticmethod
+    def _tagged_app_ids(session_tags: Sequence[str]) -> Iterator[str]:
+        """App ids named by this session's apps TAGS, parsed through the core grammar.
+
+        The ONE place an ``app:<id>[:…]`` tag is decoded, so :meth:`binds` and
+        :meth:`app_for_session` cannot disagree about what a tag means — the two
+        differ only in DIRECTION (does a tag name THIS app, versus which app do
+        the tags name), never in the rule.
+        """
         for tag in session_tags:
             parsed = SessionTag.parse(tag)
             if parsed is None or parsed.product != _APPS_PRODUCT:
                 continue
             app_id = parsed.ids.get("app_id")
-            app = app_store.get(app_id) if app_id else None
-            if app is not None:
-                return app
-        return None
+            if app_id:
+                yield app_id
+
+    def binds(self, app: AppSpec, *, session_tags: Sequence[str] = ()) -> bool:
+        """Whether this session is bound to *app* — the membership rule, in ``O(1)``.
+
+        The same two tiers :meth:`app_for_session` resolves by, asked of an app
+        the caller already has. ``app_data`` is the caller that needs this shape:
+        it takes an ``app_id`` argument, so it never has to DISCOVER the binding,
+        and routing it through the discovery scan would gate a detail read on a
+        walk of every stored app — the performance contract's "a detail surface
+        must never be gated on a collection query", and a real regression on a
+        tool an agent calls once per document.
+
+        Cost: ``O(1)`` — two field compares plus one pass over this session's own
+        tags, which are bounded per session and never by how many apps exist.
+        """
+        if self._session_id in (app.maintainer_session_id, app.owner_session_id):
+            return True
+        return any(app_id == app.app_id for app_id in self._tagged_app_ids(session_tags))
 
     def directory_for(self, app_id: str) -> Path:
         """The absolute staging directory for *app_id* under this session.

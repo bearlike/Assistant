@@ -6,6 +6,7 @@
 
 import { useRef, useState } from "react";
 
+import { MicButton } from "@/components/MicButton";
 import { composerInputCls, ComposerSendButton, ComposerShell } from "@/components/ui/composer-shell";
 import { cn } from "@/lib/utils";
 
@@ -78,12 +79,15 @@ export function QADock({ placeholder, model, onModelChange, mode, onModeChange, 
         </div>
       }
       toolbarRight={
-        <ComposerSendButton
-          onClick={submit}
-          active={Boolean(value.trim())}
-          shape="square"
-          aria-label="Ask question"
-        />
+        <>
+          <MicButton value={value} onChange={setValue} />
+          <ComposerSendButton
+            onClick={submit}
+            active={Boolean(value.trim())}
+            shape="square"
+            aria-label="Ask question"
+          />
+        </>
       }
     />
   );

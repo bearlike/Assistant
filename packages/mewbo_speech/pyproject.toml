@@ -1,0 +1,69 @@
+[project]
+name = "mewbo-speech"
+version = "0.0.14"
+description = "Optional speech substrate for Mewbo — text-to-speech and speech-to-text against the LiteLLM gateway, plus a markdown-to-speech verbalizer. Pure Pydantic contracts and one atomic gateway client with an injected transport."
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+authors = [
+  { name = "Krishnakanth Alagiri", email = "mail@kanth.tech" },
+]
+license = { text = "MIT" }
+
+# Down-only: the substrate depends on the lean core SDK (config accessor) and
+# pydantic, never on mewbo-tools, mewbo-graph, mewbo-iam or an app. The network
+# leg lives behind the `gateway` extra (below) plus in-code import-guards, so a
+# bare install carries only the contracts and the container sniffer.
+#
+# `mistune` is BASE, not an extra, and the reasoning is the extra's own test
+# rather than a preference. An extra exists to keep a heavy or environment-bound
+# dependency off a bare install AND to let the feature report itself absent —
+# `is_available()` is a state a caller renders. mistune fails both halves of
+# that test: it is 464 KB of pure Python with zero runtime dependencies above
+# Python 3.11 (typing-extensions below it) and no system library, so there is
+# nothing to keep off; and markdown verbalization has no absent state worth
+# rendering — a caller asking for speech-ready text either gets it or gets a
+# surface that must reimplement it in regular expressions, which is the failure
+# this package exists to end. Behind an extra it would also have to be guarded
+# at every call site, and the guard's fallback could only be the regex pass.
+#
+# The floor is >=3.0 because the AST shape this code walks — a renderer of
+# `None` returning plain dicts, `table_head`/`table_body` sections, `codespan`
+# carrying `raw` — is the v3 shape; v2 rendered to HTML only. `<4.0` because a
+# major bump may reshape the tree this walks node type by node type. Same
+# specifier the api already declares, so the workspace resolves one version.
+dependencies = [
+  "mewbo-core>=0.0.10",
+  "mistune>=3.0,<4.0",
+  "pydantic>=2.7.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+# The network leg — `LiteLlmSpeechTransport`, the only module here that talks to
+# the gateway. Absent, the contracts and `AudioContainer.sniff` still import and
+# work; only a transport call raises `SpeechUnavailableError`.
+#
+# The floor is the API surface this code actually calls, not "something
+# installable":
+#   * litellm >=1.88 — the version that exposes `aspeech`/`atranscription` as
+#     module-level coroutines and returns `TranscriptionResponse.text`. Declared
+#     here even though mewbo-core already installs litellm today: depending on a
+#     sibling's transitive dependency is how a dependency silently disappears
+#     when that sibling swaps clients.
+#   * httpx >=0.27 — the `/model/info` fetch. litellm vendors httpx as its own
+#     transport, but the model-listing leg is ours and does not route through
+#     litellm at all, so it declares the dependency it uses.
+gateway = [
+  "litellm>=1.88.0",
+  "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mewbo_speech"]
+# Contributor docs are not runtime assets; keep them out of the published wheel.
+exclude = [
+  "**/CLAUDE.md",
+]

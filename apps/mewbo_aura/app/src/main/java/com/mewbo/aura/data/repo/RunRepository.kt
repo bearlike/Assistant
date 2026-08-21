@@ -8,6 +8,7 @@ import com.mewbo.aura.data.api.QuestionAnswerRequest
 import com.mewbo.aura.data.api.RecoverSessionRequest
 import com.mewbo.aura.data.api.SendMessageRequest
 import com.mewbo.aura.data.api.SessionQueryRequest
+import com.mewbo.aura.data.device.DeviceControlSession
 import com.mewbo.aura.data.device.DeviceToolCatalog
 import com.mewbo.aura.data.device.DeviceToolDispatch
 import com.mewbo.aura.data.model.SessionEvent
@@ -35,7 +36,8 @@ sealed interface SendResult {
     /** `/message`'s `200`, or `/query`'s `202` - a new run started. */
     data class RunStarted(val runId: String) : SendResult
 
-    /** `/message`'s `202` - steered an already-active run. */
+    /** `/message`'s `202` - steered an already-active run. Also what [RunRepository.sendQuery]
+     * returns once it has re-routed a `409`-refused fresh turn onto the steer path. */
     data object Enqueued : SendResult
 
     /** `/query`'s `200` - a slash command (`/status`, `/terminate`) was handled inline; no run
@@ -62,6 +64,33 @@ sealed interface QuestionAnswerResult {
 }
 
 /**
+ * Outcome of [RunRepository.interrupt].
+ *
+ * **None of these arms means "the run stopped", including [Interrupted].** The endpoint signals a
+ * marker into the loop at its next turn boundary; the loop continues either way (the measurement is
+ * on [com.mewbo.aura.data.api.AuraApi.interruptSession]). The arms exist so the ONE caller can tell
+ * a delivered signal from an undelivered one for logging and for the terminated case — never so a
+ * surface can report a run as ended.
+ */
+sealed interface InterruptResult {
+    /** `202` — a live step was signalled. The run keeps going. */
+    data object Interrupted : InterruptResult
+
+    /** `200` — the session was idle; the documented idempotent no-op. Not an error: the client's
+     * phase is a guess about what the server is doing, so aiming an interrupt at an already-finished
+     * run is the ORDINARY case, not a bug (same reasoning as [RunRepository.sendQuery]'s `409`). */
+    data object NoActiveRun : InterruptResult
+
+    /** `410` — the session is permanently terminated, so there is nothing to interrupt and never
+     * will be. Kept distinct from [Failed] because it is a settled fact rather than a transient one;
+     * a caller that renders terminal state has everything it needs without a retry. */
+    data object SessionTerminated : InterruptResult
+
+    /** Transport failure or an unexpected status. Nothing was delivered. */
+    data object Failed : InterruptResult
+}
+
+/**
  * A mutation was refused because the session is PERMANENTLY TERMINATED (HTTP 410, envelope
  * `code == "session_terminated"`). A DISTINCT type — not a bare [HttpException] — so
  * [com.mewbo.aura.ui.chat.ChatViewModel] can flip the pre-wired
@@ -81,16 +110,41 @@ class SessionTerminatedException(val reason: String) : Exception(reason)
  * notification's body so the user knows which request finished; `null` for a retry (no fresh text).
  */
 fun interface RunNotifications {
-    fun onRunStarted(sessionId: String, preview: String?)
+    /**
+     * [deviceControl] says this run may drive the phone, so the watch must hold
+     * its subscription past the run's terminal event. Without it the channel
+     * that delivers device tools dies ~5s after the UI stops collecting — and
+     * launching another app is what stops the UI collecting.
+     *
+     * Asked of [com.mewbo.aura.data.device.DeviceControlSession], which owns the
+     * fact: a grant already held, or one this run could still take. Both need
+     * the channel, and neither is knowable from a per-request toggle read.
+     */
+    fun onRunStarted(sessionId: String, preview: String?, deviceControl: Boolean)
 }
 
 /**
+ * `/query`'s refusal when a run is already active for the session. NOT an error condition on this
+ * client: it is the only signal the server gives that a turn the caller believed was fresh is
+ * actually a steer, so [RunRepository.sendQuery] routes on it rather than raising. `/message` has
+ * no equivalent - it services both states - which is why the constant is read at exactly one site.
+ */
+private const val HTTP_RUN_ALREADY_ACTIVE = 409
+
+/**
  * Sends a message into a session and follows its live event stream. Two distinct routes, per the
- * task brief (mirrors the web console): [send] is the steer path (`/message`, active-run only,
- * text-only - no attachments field exists on that endpoint); [sendQuery] is the fresh-turn path
- * (`/query`, carries `context` + `attachments`). [com.mewbo.aura.ui.chat.ChatViewModel] picks the
- * route from the CURRENT [com.mewbo.aura.ui.chat.RunPhase] before either network call, not from
- * either response.
+ * task brief (mirrors the web console): [send] is the steer path (`/message`, text-only - no
+ * attachments field exists on that endpoint); [sendQuery] is the fresh-turn path (`/query`, carries
+ * `context` + `attachments`). [com.mewbo.aura.ui.chat.ChatViewModel] picks the route from the
+ * CURRENT [com.mewbo.aura.ui.chat.RunPhase] before either network call.
+ *
+ * **That phase is a guess, and [sendQuery] corrects it from the response.** `RunPhase` describes
+ * what this client is WATCHING, not what the server is DOING, and the two diverge by design every
+ * time the client stops following a run that is still going. Only the server knows, so a `409`
+ * ("Session is already running.") is treated as the authoritative answer and the turn is re-routed
+ * onto [send] - see [sendQuery]'s own doc. The asymmetry is deliberate: `/message` is correct in
+ * BOTH states (`202` enqueue while running, `200` re-engage when idle), so only the `/query` leg
+ * can be wrong about liveness and only it needs the correction.
  *
  * **`@Singleton` (added with the turn-completion notification feature).** [live] hands out a
  * per-session multicast so every follower shares ONE SSE connection ([liveStreams]); that only holds
@@ -107,6 +161,7 @@ class RunRepository @Inject constructor(
     private val api: AuraApi,
     private val streamClient: SessionStreamClient,
     private val deviceToolCatalog: DeviceToolCatalog,
+    private val deviceControlSession: DeviceControlSession,
     private val deviceToolDispatch: DeviceToolDispatch,
     private val json: Json,
     private val runNotifications: RunNotifications,
@@ -131,7 +186,7 @@ class RunRepository @Inject constructor(
         return if (response.code() == 200) {
             // 200 = a NEW run started (steering an active one is 202 Enqueued, whose watch already
             // exists from the send that started that run — never re-armed here).
-            runNotifications.onRunStarted(sessionId, preview = text)
+            runNotifications.onRunStarted(sessionId, preview = text, deviceControl = deviceControlInPlay())
             SendResult.RunStarted(runId = body.runId ?: sessionId)
         } else {
             SendResult.Enqueued
@@ -143,6 +198,25 @@ class RunRepository @Inject constructor(
      * [buildSessionContext]'s doc for why the backend requires that. `attachments`, when non-empty,
      * must already be uploaded records ([AttachmentRepository.upload]'s return value) - this method
      * does no upload of its own.
+     *
+     * **A `409` is not a failure here - it is the server telling us this turn is a STEER.** `/query`
+     * refuses a second concurrent run (`{"message": "Session is already running."}`), and the caller
+     * reaches this route whenever [com.mewbo.aura.ui.chat.RunPhase] has left `Sending`/`Streaming`
+     * while the run itself has not ended: a `stop()` (a CLIENT-side detach by contract - the backend
+     * run keeps going), a `stream_error` (which means "you are no longer seeing this run", not "the
+     * run failed"), or the live collector failing. In every one of those the user is looking at a
+     * session the server still considers busy, so their follow-up is exactly the steer [send]
+     * exists for - and before this re-route it surfaced as a raw `HTTP 409` error card instead of a
+     * queued message.
+     *
+     * Re-routing rather than pre-checking liveness is what keeps the happy path at ONE round trip,
+     * and it is strictly safer than asking first: a liveness read is stale the moment it returns,
+     * whereas the `409` IS the server's answer about the very request being made. The web console
+     * routes on a polled `activeSession.running` and carries that same race with no recovery.
+     *
+     * Attachments cannot follow onto `/message` (no such field), so a re-routed turn sends text
+     * only - the identical limitation the console's own running branch has, which skips the upload
+     * entirely. They stay uploaded against the session; they simply do not ride THIS turn.
      */
     suspend fun sendQuery(
         sessionId: String,
@@ -162,10 +236,16 @@ class RunRepository @Inject constructor(
             sessionId,
             SessionQueryRequest(query = text, mode = "act", context = context, attachments = attachments.ifEmpty { null }),
         )
+        // Checked BEFORE the generic non-2xx throw - a 409 is a routing correction, not an error.
+        if (response.code() == HTTP_RUN_ALREADY_ACTIVE) return send(sessionId, text)
         if (!response.isSuccessful) throw errorFor(json, response)
         return if (response.code() == 202) {
             // 202 = a run started; 200 = a slash command handled inline (nothing to follow/notify).
-            runNotifications.onRunStarted(sessionId, preview = text)
+            runNotifications.onRunStarted(
+                sessionId,
+                preview = text,
+                deviceControl = deviceControlInPlay(),
+            )
             SendResult.RunStarted(runId = sessionId)
         } else {
             SendResult.SlashHandled
@@ -184,8 +264,34 @@ class RunRepository @Inject constructor(
         if (!response.isSuccessful) throw errorFor(json, response)
         // A retry always starts a run; there is no fresh query text, so the notification falls back
         // to its generic body.
-        runNotifications.onRunStarted(sessionId, preview = null)
+        runNotifications.onRunStarted(sessionId, preview = null, deviceControl = deviceControlInPlay())
         return SendResult.RunStarted(runId = response.body()?.runId ?: sessionId)
+    }
+
+    /**
+     * Signals the backend that the user wants the current run to stop, and reports only what was
+     * DELIVERED — never whether anything stopped, because measurably nothing has to.
+     *
+     * **Deliberately unconditional: never gate this on believing a run is live.** The endpoint
+     * documents itself as "always safe to make" and answers `200`/`interrupted: false` on an idle
+     * session, while this client's [com.mewbo.aura.ui.chat.RunPhase] describes what it is WATCHING
+     * rather than what the server is DOING — the two diverge by design (see this class's own doc and
+     * [sendQuery]'s `409` re-route). A pre-check would therefore be both a wasted round trip and
+     * stale by the time it returned; the response IS the server's answer about this very request.
+     *
+     * Never throws. Every failure is an arm of [InterruptResult], because the sole caller
+     * ([com.mewbo.aura.ui.chat.ChatViewModel.stop]) fires this beside work that must happen whether
+     * or not the network is reachable — an exception here would take that work with it. This is the
+     * ONE method on this class that does not route through [errorFor]: [errorFor] exists to turn a
+     * `410` into a typed throw for the three routes that START a run, where a terminated session must
+     * abort the send. Interrupting a terminated session aborts nothing, so it reports
+     * [InterruptResult.SessionTerminated] as data instead.
+     */
+    suspend fun interrupt(sessionId: String): InterruptResult = runCatching {
+        interpretInterruptResponse(api.interruptSession(sessionId))
+    }.getOrElse { e ->
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        InterruptResult.Failed
     }
 
     /**
@@ -225,6 +331,20 @@ class RunRepository @Inject constructor(
      */
     fun live(sessionId: String): Flow<SessionEvent> =
         buildMulticastLiveFlow(sessionId, streamClient.stream(sessionId), liveStreams, scope, deviceToolDispatch)
+
+    /**
+     * Whether this run needs the device-tool channel held past its terminal event.
+     *
+     * True for a grant already held AND for one this run could still take, because the
+     * hold has to be armed at run START and the grant is taken part-way through it: the
+     * model calls `device_control_start` several steps in, by which time the only chance
+     * to arm the watch is long gone. Arming on "could take control" is therefore not
+     * over-arming — it is the only ordering the platform allows, since Android forbids
+     * starting a foreground service once the app is in the background, which is exactly
+     * where a run that drives the phone ends up.
+     */
+    private fun deviceControlInPlay(): Boolean =
+        deviceControlSession.isActive() || deviceControlSession.canTakeControl()
 }
 
 /**
@@ -259,6 +379,22 @@ internal fun errorFor(json: Json, response: Response<*>): Throwable {
  * settles the card, so this is not an error); every other non-2xx (`403`/`422`/`410`/transport) ⇒
  * [QuestionAnswerResult.Failed].
  */
+/**
+ * Maps an interrupt-POST [response] to an [InterruptResult]. Pulled top-level (like [errorFor] and
+ * [interpretAnswerResponse]) so the test suite can drive every branch with a synthetic
+ * `Response.success/error(...)` rather than a live run.
+ *
+ * The `202`-vs-`200` split is read off the STATUS, not off the body's `interrupted` flag, for the
+ * reason [AuraApi.sendMessage]'s own 200/202 branch is: the flag restates the code and adds nothing,
+ * while a tolerantly-defaulted DTO field would read `false` on a body that never carried it.
+ */
+internal fun interpretInterruptResponse(response: Response<*>): InterruptResult = when (response.code()) {
+    202 -> InterruptResult.Interrupted
+    200 -> InterruptResult.NoActiveRun
+    410 -> InterruptResult.SessionTerminated
+    else -> InterruptResult.Failed
+}
+
 internal fun interpretAnswerResponse(response: Response<ResponseBody>): QuestionAnswerResult = when {
     response.isSuccessful -> QuestionAnswerResult.Resolved
     response.code() == 404 || response.code() == 409 -> QuestionAnswerResult.AlreadyResolved
@@ -333,6 +469,12 @@ internal fun buildMulticastLiveFlow(
     rawUpstream
         .onEach { if (it is SessionEvent.DeviceToolCall) dispatch.dispatch(sessionId, it.payload) }
         .catch { e -> emit(SessionEvent.StreamError(message = e.message ?: e.toString())) }
+        // **Nothing about the device-control GRANT may hang off this completion.** It briefly did,
+        // and the reasoning was wrong in a way worth recording: upstream completion reads like "the
+        // run is over", but it fires on every `WhileSubscribed` stop AND on each of the hold's
+        // transport rebuilds — so a grant released here is revoked every few seconds, by the very
+        // hold that exists to protect it. Releasing a grant belongs to the hold's own epoch, which
+        // is the unit that actually means "the agent is done driving". See `notify/CLAUDE.md`.
         .onCompletion { cache.remove(sessionId) }
         .shareIn(
             scope = scope,

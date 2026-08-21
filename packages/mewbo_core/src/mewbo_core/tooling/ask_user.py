@@ -50,17 +50,20 @@ from typing import ClassVar, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from mewbo_core.capabilities import ASK_USER_CAPABILITY
 from mewbo_core.classes import ActionStep
 from mewbo_core.common import MockSpeaker, get_logger
+from mewbo_core.tooling.container_args import JsonContainerArguments
 
 logging = get_logger(name="core.ask_user")
 
 ASK_USER_QUESTION_TOOL_ID = "ask_user_question"
 
-# The client-advertised capability that opts a run into this tool. A plain
-# string two sides agree on (there is deliberately no capability enum — see
-# packages/mewbo_core/CLAUDE.md → "Custom system instructions", trap 2).
-ASK_USER_CAPABILITY = "ask_user"
+# ``ASK_USER_CAPABILITY`` is re-exported from its real home in
+# ``mewbo_core.capabilities``, which owns the first-party capability registry and
+# the ``X-Mewbo-Capabilities`` wire seam. It stays importable from here because
+# existing call sites reach for it at this path; new code imports it from
+# ``mewbo_core.capabilities``.
 
 # Transcript event kinds. ``user_question`` announces a pending question
 # (rides the session SSE stream + backlog replay); ``user_question_answered``
@@ -536,7 +539,8 @@ class AskUserQuestionTool:
         if not isinstance(tool_input, dict):
             return None
         try:
-            return AskUserQuestionArgs.model_validate(tool_input).execution_ceiling()
+            raw = JsonContainerArguments.decode(AskUserQuestionArgs, tool_input).arguments
+            return AskUserQuestionArgs.model_validate(raw).execution_ceiling()
         except ValidationError:
             return None
 
@@ -549,6 +553,11 @@ class AskUserQuestionTool:
         tool_input = (
             action_step.tool_input if isinstance(action_step.tool_input, dict) else {}
         )
+        # A `questions` list emitted as a JSON string is decoded through the one
+        # shared law before validation (see tooling/container_args.py).
+        tool_input = JsonContainerArguments.decode(
+            AskUserQuestionArgs, tool_input
+        ).arguments
         try:
             args = AskUserQuestionArgs.model_validate(tool_input)
         except ValidationError as exc:

@@ -126,6 +126,24 @@ regex-validated to `^[a-f0-9]{32}$` at the route before it reaches this code.
 - **Auth is checked before the session id.** An unauthenticated caller learns nothing
   about what the broker considers well-formed.
 
+## `create` ensures the image; the daemon never does that for you
+
+`docker.createContainer` — unlike the `docker run` CLI — does not implicitly pull a
+missing image; the daemon just answers `create` with a 404 "No such image". A host
+that never ran `codercom/code-server` (a fresh deployment, or an operator who bumped
+`MEWBO_IDE_IMAGE`) failed **every** launch that way, for every session, regardless of
+which project it named — indistinguishable from a genuine daemon outage because the
+Python client collapses every non-`workspace_denied` broker error onto the same
+`DockerUnavailable`/503.
+
+`IdeContainers.ensureImage` closes this: an `inspect` first (cheap, no network once the
+image is cached), a `pull` only when that 404s. It runs from two call sites for two
+different reasons — `create` self-heals if the image was pruned after boot, and
+`BrokerServer.ensureImage` runs once at startup, alongside `sweep`, so the very first
+launch after a deploy doesn't pay a cold registry pull inline with a session open. Both
+follow `sweep`'s never-throws contract: a registry hiccup at boot must delay readiness,
+not refuse it, and `create`'s own call retries on the next launch either way.
+
 ## A missing bind source is not a missing volume subpath — they fail oppositely
 
 A volume-backed workspace (`MEWBO_IDE_VOLUME_ROOTS`) mounts by `Type: "volume"` with a
@@ -215,6 +233,12 @@ web-ide containers and runs **once at boot**, never on a request path. It is als
 the only long-ish operation, and it is explicitly allowed to fail: `BrokerServer.sweep`
 never throws, so a daemon that is not up yet delays the reap, not the listener.
 
+`create`'s `ensureImage` step is the other exception to the round-trip bound: on a
+cached image it's one cheap `inspect`, but on a cold one it's a real network pull —
+sized by the registry, not by anything this service controls. `BrokerServer.ensureImage`
+pays that cost once at boot, alongside `sweep`, so it is ordinarily absorbed before the
+first request rather than inline with a session open.
+
 There are no streaming or long-lived routes, so this service spends no concurrency
 budget of the kind `apps/mewbo_api/CLAUDE.md` describes. **Keep it that way** — if a
 log-follow or exec-attach route is ever proposed here, it needs a stated concurrency
@@ -227,7 +251,7 @@ bound first, because Fastify's single event loop is this process's whole capacit
 | `BrokerConfig` | the validated env surface, plus `memoryBytes()`/`nanoCpus()`/`parseRoots()` |
 | `WorkspaceAllowlist` | the roots and the one `resolve()` decision |
 | `DeadlineFiles` | the state dir; write/read/clear |
-| `IdeContainers` | the docker handle, spec CONSTRUCTION, create/inspect/remove, the sweep |
+| `IdeContainers` | the docker handle, spec CONSTRUCTION, create/inspect/remove, the sweep, `ensureImage` |
 | `IdeRoutes` | HTTP adaptation only — validate, delegate, serialize |
 | `BrokerServer` | composition root, the one error-rendering seam, process lifecycle |
 | `BrokerError` | every refusal: its status, wire code, retryability and body |

@@ -114,7 +114,9 @@ class TestPipelineExecutorLandlockScope:
     @requires_landlock
     def test_the_workspace_root_stays_reachable(self, projects, monkeypatch):
         _configure(projects)
-        monkeypatch.setattr(PipelineSpec, "check_exec_allowed", lambda self, argv: None)
+        monkeypatch.setattr(
+            PipelineSpec, "check_exec_allowed", lambda self, argv, *, allowed_binaries: None
+        )
         pipeline = _code_pipeline(allow_exec=["git"])
         result = _executor(pipeline, projects["alpha"]).run(
             _read_probe(projects["alpha"] / "secret.env")
@@ -127,7 +129,9 @@ class TestPipelineExecutorLandlockScope:
         # The pipeline's workspace is alpha; beta is a DIFFERENT configured
         # project and must stay unreachable from a spawn scoped to alpha.
         _configure(projects)
-        monkeypatch.setattr(PipelineSpec, "check_exec_allowed", lambda self, argv: None)
+        monkeypatch.setattr(
+            PipelineSpec, "check_exec_allowed", lambda self, argv, *, allowed_binaries: None
+        )
         pipeline = _code_pipeline(allow_exec=["git"])
         result = _executor(pipeline, projects["alpha"]).run(
             _read_probe(projects["beta"] / "secret.env")
@@ -142,7 +146,9 @@ class TestPipelineExecutorLandlockScope:
         # `None` ⇒ `scoped_preexec` degrades to `nullcontext(None)` — byte
         # identical to the pre-scoping spawn. Proven by reaching `beta` clean.
         _configure(projects, shell_sandbox=False)
-        monkeypatch.setattr(PipelineSpec, "check_exec_allowed", lambda self, argv: None)
+        monkeypatch.setattr(
+            PipelineSpec, "check_exec_allowed", lambda self, argv, *, allowed_binaries: None
+        )
         pipeline = _code_pipeline(allow_exec=["git"])
         result = _executor(pipeline, projects["alpha"]).run(
             _read_probe(projects["beta"] / "secret.env")

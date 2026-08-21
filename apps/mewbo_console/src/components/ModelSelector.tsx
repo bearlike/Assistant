@@ -1,30 +1,9 @@
-import { useMemo } from 'react';
-import {
-  ChevronDown,
-  ChevronUp,
-  Cpu,
-} from 'lucide-react';
+import { ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import { formatModelName } from '../utils/model';
 import { getProviderIcon } from '../utils/modelIcon';
-import { isUnsupportedModel } from '../utils/modelSupport';
 import { ModelBrandIcon } from './ModelBrandIcon';
-import { ModelFallbackChain } from './ModelFallbackChain';
+import { ModelPickerTabs } from './ModelPickerTabs';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
-import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from './ui/command';
-import {
-  COMMAND_EMPTY_CLS,
-  COMMAND_INPUT_CLS,
-  COMMAND_ITEM_SINGLE_LINE_CLS,
-  COMMAND_ITEM_TWO_LINE_CLS,
-  ErrorBanner,
-  RefreshIcon,
-} from './ConfigMenu';
 
 type ModelSelectorProps = {
   models: string[];
@@ -53,9 +32,9 @@ type ModelSelectorProps = {
 
 /**
  * Top-level model control for the composer footer. The trigger is a visible
- * pill showing the ACTIVE model name (Devin's "Fast" label idiom); the popover
- * co-locates the primary model picker and the opt-in fallback chain, because
- * both are model concerns and belong together. Brand icons + name reuse `ModelBrandIcon` +
+ * pill showing the ACTIVE model name (Devin's "Fast" label idiom); the
+ * popover body is the shared `ModelPickerTabs` — see that file for the
+ * tabbed Model/Fallback design. Brand icons + name reuse `ModelBrandIcon` +
  * `formatModelName` — no bespoke glyphs.
  */
 export function ModelSelector({
@@ -76,19 +55,8 @@ export function ModelSelector({
   disabled = false,
   compact = false,
 }: ModelSelectorProps) {
-  // Unsupported (whisper/embedding) models sink to the bottom of the list.
-  const orderedModels = useMemo(
-    () =>
-      [...models].sort((a, b) => {
-        const aUn = isUnsupportedModel(a) ? 1 : 0;
-        const bUn = isUnsupportedModel(b) ? 1 : 0;
-        return aUn - bUn;
-      }),
-    [models],
-  );
-
-  const effectiveModelId = activeModel ?? defaultModel;
   const triggerLabel = activeModel ? formatModelName(activeModel) : 'Default';
+  const effectiveModelId = activeModel ?? defaultModel;
   const hasBrand = !!effectiveModelId && !!getProviderIcon(effectiveModelId);
   // Fallback counts as "active" only when enabled AND at least one model is
   // chosen — an empty enabled chain is inert (matches the submit-time guard).
@@ -132,75 +100,19 @@ export function ModelSelector({
         align="start"
         className="w-80 max-h-[460px] p-0 flex flex-col overflow-hidden"
       >
-        {/* Primary model picker. */}
-        <Command className="min-h-0">
-          <div className="flex items-center justify-between pr-2">
-            <CommandInput placeholder="Filter models..." className={COMMAND_INPUT_CLS} />
-            <RefreshIcon onRefresh={onRefresh} label="Refresh models" />
-          </div>
-          <ErrorBanner error={error} />
-          <CommandList className="max-h-[240px]">
-            <CommandEmpty className={COMMAND_EMPTY_CLS}>
-              {loading ? 'Loading...' : 'No matches.'}
-            </CommandEmpty>
-            <CommandItem
-              value="__default__ Default"
-              onSelect={() => { onSelectModel(null); onToggleOpen(); }}
-              className={`${COMMAND_ITEM_SINGLE_LINE_CLS} ${!activeModel ? 'font-medium' : ''}`}
-            >
-              <span className="flex items-center gap-1.5">
-                {hasBrand && effectiveModelId && !activeModel ? (
-                  <ModelBrandIcon modelId={effectiveModelId} size={14} />
-                ) : (
-                  <Cpu className="w-3.5 h-3.5 opacity-60" />
-                )}
-                <span>Default</span>
-                {defaultModel && (
-                  <span className="text-xs text-[hsl(var(--muted-foreground))]">
-                    {formatModelName(defaultModel)}
-                  </span>
-                )}
-              </span>
-            </CommandItem>
-            {orderedModels.map((model) => {
-              const unsupported = isUnsupportedModel(model);
-              const isActive = activeModel === model;
-              return (
-                <CommandItem
-                  key={model}
-                  value={model}
-                  onSelect={() => { onSelectModel(model); onToggleOpen(); }}
-                  title={unsupported ? 'Not supported for chat or agents' : undefined}
-                  className={`${COMMAND_ITEM_TWO_LINE_CLS} ${unsupported ? 'text-[hsl(var(--muted-foreground))]' : ''} ${isActive ? 'font-medium' : ''}`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <ModelBrandIcon modelId={model} size={14} />
-                    {unsupported && (
-                      <span role="img" aria-label="Not supported for chat" className="text-amber-500">
-                        ⚠️
-                      </span>
-                    )}
-                    <span>{formatModelName(model)}</span>
-                  </span>
-                  {model.includes('/') && (
-                    <span className="text-xs text-[hsl(var(--muted-foreground))] truncate w-full mt-0.5">
-                      {model}
-                    </span>
-                  )}
-                </CommandItem>
-              );
-            })}
-          </CommandList>
-        </Command>
-
-        {/* Fallback section — opt-in cross-model retry chain, co-located with
-            the primary picker because it is a model concern. */}
-        <ModelFallbackChain
-          models={orderedModels}
-          value={fallbackModels}
-          onChange={onFallbackModelsChange}
-          enabled={fallbackEnabled}
-          onEnabledChange={onToggleFallbackEnabled}
+        <ModelPickerTabs
+          models={models}
+          value={activeModel}
+          onSelect={(model) => { onSelectModel(model); onToggleOpen(); }}
+          defaultLabel="Default"
+          defaultModel={defaultModel}
+          loading={loading}
+          error={error}
+          onRefresh={onRefresh}
+          fallbackEnabled={fallbackEnabled}
+          fallbackModels={fallbackModels}
+          onFallbackEnabledChange={onToggleFallbackEnabled}
+          onFallbackModelsChange={onFallbackModelsChange}
         />
       </PopoverContent>
     </Popover>

@@ -1,5 +1,21 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+
+// Testing Library's own async window is 1000 ms and is INDEPENDENT of vitest's
+// `testTimeout` — raising one does nothing for the other, which is why a suite
+// can be given a generous test budget and still fail inside `findBy*`. On the
+// shared CI runner this suite takes roughly twice its local wall time, and a
+// component whose content arrives through a query (the composer's mic, a nav
+// tree, a lazily-mounted pane) can miss a 1 s window purely because the box was
+// busy. The tell is that the FAILING SET CHANGES between runs of the same
+// commit — load, not a regression.
+//
+// Deliberately smaller than `testTimeout` (20 s): a genuinely missing element
+// still fails inside its own window and reports "unable to find …" with the
+// rendered DOM, which names the defect, rather than expiring the whole test and
+// reporting only that time ran out.
+configure({ asyncUtilTimeout: 5_000 });
 
 // vite-plugin-pwa virtual module has no build-time source — stub it for tests.
 vi.mock("virtual:pwa-register/react", () => ({
@@ -90,6 +106,32 @@ if (!Element.prototype.releasePointerCapture) {
   Element.prototype.releasePointerCapture = () => undefined;
 }
 
+// jsdom implements neither blob URLs nor media playback, and the read-aloud
+// button needs both: it turns a synthesized audio Blob into an object URL and
+// hands it to an `<audio>` element.
+//
+// The two need OPPOSITE treatments, which is the trap. `URL.createObjectURL` is
+// simply absent, so a guard works. `HTMLMediaElement.prototype.play` EXISTS —
+// jsdom defines it and its body raises "Not implemented" into the virtual
+// console — so a `if (!play)` guard never fires and the stub never installs.
+// These are overwritten outright for that reason.
+if (typeof URL.createObjectURL !== "function") {
+  let blobUrlSeq = 0;
+  URL.createObjectURL = () => `blob:mewbo-test/${++blobUrlSeq}`;
+  URL.revokeObjectURL = () => undefined;
+}
+HTMLMediaElement.prototype.play = function play(this: HTMLMediaElement) {
+  this.dispatchEvent(new Event("play"));
+  return Promise.resolve();
+};
+HTMLMediaElement.prototype.pause = function pause() {
+  /* no-op: nothing is decoding, so there is nothing to suspend */
+};
+HTMLMediaElement.prototype.load = function load() {
+  /* no-op: the chunked reader preloads the next clip, and jsdom raises
+     "Not implemented" into the virtual console for the real method */
+};
+
 // jsdom lacks matchMedia — stub it for hooks that use media queries (e.g. useIsMobile)
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -103,4 +145,92 @@ Object.defineProperty(window, "matchMedia", {
     removeEventListener: () => undefined,
     dispatchEvent: () => false,
   }),
+});
+
+// ---------------------------------------------------------------------------
+// Audio capture — `MediaRecorder` + `getUserMedia` (the composer's mic)
+// ---------------------------------------------------------------------------
+//
+// jsdom implements NEITHER, and the mic feature-detects both: without these the
+// control renders nothing and a test asserting on it passes for the wrong
+// reason. They are installed here rather than per-test because absence is a
+// jsdom gap like every other entry in this file.
+//
+// Unlike the passive stubs above, these are DRIVEN by tests: `MediaRecorderStub`
+// records every instance it constructs on a static, so a test can drive one
+// recorder's transitions and assert on the ORDER of stop/upload/track-release
+// rather than merely that a recorder exists. A test wanting to observe track
+// release spies on `getUserMedia` and returns its own stream, so the default
+// below stays a plain "permission granted" and never has to grow assertions.
+class MediaStreamTrackStub {
+  kind = "audio";
+  readyState: "live" | "ended" = "live";
+  stop() {
+    // The browser's recording indicator goes out only when every track ends,
+    // so a test asserting on privacy asserts on exactly this flag.
+    this.readyState = "ended";
+  }
+}
+
+class MediaStreamStub {
+  private readonly tracks = [new MediaStreamTrackStub()];
+  getTracks() {
+    return this.tracks;
+  }
+  getAudioTracks() {
+    return this.tracks;
+  }
+}
+
+class MediaRecorderStub {
+  /** Every recorder ever constructed, newest last. Reset between tests. */
+  static instances: MediaRecorderStub[] = [];
+  /** Containers this fake browser claims to support; a test may narrow it. */
+  static supportedTypes: string[] = ["audio/webm;codecs=opus", "audio/webm"];
+  static isTypeSupported(type: string) {
+    return MediaRecorderStub.supportedTypes.includes(type);
+  }
+
+  state: "inactive" | "recording" | "paused" = "inactive";
+  mimeType: string;
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+
+  constructor(_stream: unknown, options?: { mimeType?: string }) {
+    this.mimeType = options?.mimeType ?? "audio/webm";
+    MediaRecorderStub.instances.push(this);
+  }
+
+  start() {
+    this.state = "recording";
+  }
+  pause() {
+    this.state = "paused";
+  }
+  resume() {
+    this.state = "recording";
+  }
+
+  /** Mirrors the real thing: state flips synchronously, events land later. */
+  stop() {
+    this.state = "inactive";
+    queueMicrotask(() => {
+      this.ondataavailable?.({ data: new Blob(["fake-audio"], { type: this.mimeType }) });
+      this.onstop?.();
+    });
+  }
+}
+
+Object.defineProperty(globalThis, "MediaRecorder", {
+  writable: true,
+  configurable: true,
+  value: MediaRecorderStub,
+});
+
+Object.defineProperty(navigator, "mediaDevices", {
+  writable: true,
+  configurable: true,
+  value: {
+    getUserMedia: () => Promise.resolve(new MediaStreamStub()),
+  },
 });

@@ -402,6 +402,12 @@ class TestLoopContract:
         assert caught.value.models_tried == ["model-a", "model-b"]
         assert provider.invocations == ["model-a", "model-a", "model-b"]
 
+        # The failed ``llm_call_end`` (success=False) carries no ``duration_ms`` —
+        # that field lives only on the successful-end payload shape.
+        ends = [e for e in events if e["type"] == "llm_call_end"]
+        assert ends and all(e["payload"]["success"] is False for e in ends)
+        assert all("duration_ms" not in e["payload"] for e in ends)
+
 
 # ---------------------------------------------------------------------------
 # The streaming seam — "no stream" and "an empty stream" are different facts

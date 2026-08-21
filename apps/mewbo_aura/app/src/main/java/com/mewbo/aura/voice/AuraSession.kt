@@ -131,12 +131,23 @@ class AuraSession(context: Context) :
         // isNavigationBarContrastEnforced of its own. Dialog itself wraps a real Window reachable via
         // its OWN getWindow(), so the fix is one property-access deeper than the Activity case.
         window?.window?.isNavigationBarContrastEnforced = false
+        // That this flag is reachable HERE and nowhere else on this app's surfaces is a platform
+        // fact, not an oversight. DisplayPolicy admits a window as a navigation-bar appearance
+        // candidate only when it is a fullscreen app window OR TYPE_VOICE_INTERACTION, so this
+        // session qualifies while the device-control glow (TYPE_APPLICATION_OVERLAY) is excluded
+        // outright and has no equivalent lever - see ui/control/. It is also the only system-bar
+        // appearance setter left undeprecated at compileSdk 37; every colour setter beside it is
+        // deprecated, so do not read the neighbours below as live API.
         // decorFitsSystemWindows(false) keeps the decor from consuming insets
         // so Compose's systemBarsPadding() sees the real values (P3, the Compose-side half). The
         // soft-input mode is left at the platform DEFAULT - there is NO setSoftInputMode call
         // anywhere: the WM force-pans TYPE_VOICE_INTERACTION windows regardless (measured), so the
         // overlay tree deliberately carries NO imePadding - see AssistOverlayScreen's bottom Column
         // (and ui/overlay/CLAUDE.md's IME section) for the measured double-shift postmortem.
+        // Deprecated AND documented as disabled from Android 15 for a targetSdk-35+ app, so on a
+        // current device this call does nothing. It stays because minSdk is 33, where it still does
+        // the work; on 15+ the enforced edge-to-edge regime produces the same result without it.
+        // A "remove deprecated APIs" pass that deletes it silently regresses API 33/34 only.
         window?.window?.setDecorFitsSystemWindows(false)
         return ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)

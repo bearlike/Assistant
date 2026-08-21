@@ -17,7 +17,7 @@ import { SEED } from "./shots";
  *
  * ## Framing
  * The facet is ~1830px of content, so no landscape viewport holds all of it and
- * the shot has to pick a band. It picks the two panes — `Installed plugins` and
+ * the shot has to pick a band. It picks the two panes — `External plugins` and
  * `Marketplace` — because that pair is what the docs pages promise
  * (`features-plugins.md`, and the index carousel's "Plugins and a marketplace
  * to extend any session"), and a Marketplace with no Install button in frame
@@ -35,7 +35,7 @@ import { SEED } from "./shots";
  * 1400x1249 is chosen so the bottom edge lands in the GAP between marketplace
  * rows 2 and 3 rather than through one. It is taller than the sibling Settings
  * shots (1400x1000), which costs some window width on the 16:9 canvas and buys
- * the whole Installed list plus two Install buttons. Even so the composited
+ * the whole External list plus two Install buttons. Even so the composited
  * window comes out wider than the hand-capture it replaces, which was nearly
  * square.
  */
@@ -57,7 +57,7 @@ test("settingsPlugins — installed plugins + marketplace", async ({ page, demo 
   // `SettingsCard` renders a `<section aria-labelledby>`, so each pane is a
   // `region` named by its own title. That resolves the card ROOT rather than
   // the heading inside it, which is what the framing below has to scroll.
-  const installed = page.getByRole("region", { name: "Installed plugins" });
+  const installed = page.getByRole("region", { name: "External plugins" });
   await expect(installed).toBeVisible();
   await expect(page.getByRole("region", { name: "Marketplace" })).toBeVisible();
 

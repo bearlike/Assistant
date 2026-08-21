@@ -4,6 +4,11 @@ import com.mewbo.aura.data.api.AuraApi
 import com.mewbo.aura.data.api.DeviceToolResultRequest
 import com.mewbo.aura.data.api.RecoverSessionRequest
 import com.mewbo.aura.data.api.RecoverSessionResponseDto
+import com.mewbo.aura.data.api.SendMessageRequest
+import com.mewbo.aura.data.api.SendMessageResponseDto
+import com.mewbo.aura.data.api.SessionInterruptResponseDto
+import com.mewbo.aura.data.api.SessionQueryRequest
+import com.mewbo.aura.data.api.SessionQueryResponseDto
 import com.mewbo.aura.data.device.DeviceClock
 import com.mewbo.aura.data.device.DevicePermissionChecker
 import com.mewbo.aura.data.device.DeviceToolCallLedger
@@ -11,6 +16,11 @@ import com.mewbo.aura.data.device.DeviceToolCatalog
 import com.mewbo.aura.data.device.DeviceToolDispatch
 import com.mewbo.aura.data.device.DeviceToolExecutor
 import com.mewbo.aura.data.device.DeviceToolGate
+import com.mewbo.aura.data.device.DeviceControlSession
+import com.mewbo.aura.data.device.shizuku.DeviceControlBinder
+import com.mewbo.aura.data.device.shizuku.DeviceControlGate
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatus
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatusSource
 import com.mewbo.aura.data.device.DeviceToolHandler
 import com.mewbo.aura.data.device.DeviceToolResultReporter
 import com.mewbo.aura.data.model.DeviceToolCallPayload
@@ -25,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.take
@@ -46,6 +57,8 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
+import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import retrofit2.HttpException
 import retrofit2.Response
@@ -368,13 +381,189 @@ class RunRepositoryTest {
         }
     }
 
+    // ---- sendQuery's 409 re-route: a follow-up into a run the client stopped watching ----
+    //
+    // THE regression test for "sending a follow-up to a running session shows an HTTP error".
+    // ChatViewModel picks the route from RunPhase, which describes what the client is WATCHING, not
+    // what the server is DOING - and the two diverge by design: stop() is a client-side detach that
+    // leaves the backend run going, and a stream_error means "you are no longer seeing this run",
+    // not "the run failed". Either one leaves the phase outside Sending/Streaming, so the next
+    // follow-up takes the fresh-turn route into a session the server still considers busy.
+    //
+    // Measured against the deployed API rather than assumed, because the client's assumption about
+    // the codes was the thing under test:
+    //   POST /query   while running -> 409 {"message": "Session is already running."}
+    //   POST /message while running -> 202 {"enqueued": true}
+    //   POST /message while idle    -> 200 {"enqueued": true, "run_id": "<id>:r1"}
+    // So `/message` is correct in BOTH states and only the `/query` leg can be wrong about
+    // liveness. Before the re-route the 409 fell through errorFor to a bare HttpException, which
+    // ChatViewModel.send's generic catch rendered as an "HTTP 409" ErrorCard.
+
+    /** The request `sendQuery` builds for the arguments these tests pass - reconstructed through the
+     * REAL [buildSessionContext] and a catalog configured identically to [runRepository]'s, so a
+     * change to either side fails the scripted match instead of silently matching nothing. */
+    private suspend fun expectedQuery(text: String) = SessionQueryRequest(
+        query = text,
+        mode = "act",
+        context = buildSessionContext(
+            model = null,
+            project = null,
+            mcpTools = null,
+            deviceTools = DeviceToolCatalog(
+                DevicePermissionChecker { true },
+                DeviceToolGate { emptySet() },
+                DeviceControlGate { false },
+            ).availableTools(),
+        ),
+        attachments = null,
+    )
+
+    private fun queryConflict(): Response<SessionQueryResponseDto> =
+        Response.error(409, """{"message": "Session is already running."}""".toResponseBody("application/json".toMediaType()))
+
+    @Test
+    fun `sendQuery re-routes a 409 onto the steer path and reports Enqueued`() = runTest {
+        val api = mock(AuraApi::class.java)
+        `when`(api.query("s1", expectedQuery("follow-up"))).thenReturn(queryConflict())
+        // The server's real steer answer while a run is active: 202, no run_id.
+        `when`(api.sendMessage("s1", SendMessageRequest("follow-up")))
+            .thenReturn(Response.success(202, SendMessageResponseDto(sessionId = "s1", enqueued = true)))
+
+        val result = runRepository(api).sendQuery("s1", "follow-up", null, null, null, emptyList())
+
+        // Enqueued, NOT a thrown HttpException - the message is queued into the live run, which is
+        // what the web console's own running branch achieves by asking the server first.
+        assertEquals(SendResult.Enqueued, result)
+        verify(api).sendMessage("s1", SendMessageRequest("follow-up"))
+    }
+
+    @Test
+    fun `a re-routed turn whose run has since ended comes back as RunStarted, not an error`() = runTest {
+        // The race the re-route must not turn into a failure: the run ends between /query's refusal
+        // and /message landing, so the steer route RE-ENGAGES the idle session (200 + a fresh
+        // run_id) instead of steering. Either outcome is a delivered message; only a raise is a bug.
+        val api = mock(AuraApi::class.java)
+        `when`(api.query("s1", expectedQuery("follow-up"))).thenReturn(queryConflict())
+        `when`(api.sendMessage("s1", SendMessageRequest("follow-up")))
+            .thenReturn(Response.success(200, SendMessageResponseDto(sessionId = "s1", enqueued = true, runId = "s1:r2")))
+
+        val result = runRepository(api).sendQuery("s1", "follow-up", null, null, null, emptyList())
+
+        assertEquals("s1:r2", (result as SendResult.RunStarted).runId)
+    }
+
+    @Test
+    fun `an ordinary 202 never touches the steer route`() = runTest {
+        // The happy path stays ONE round trip - the re-route must not become a second request on
+        // every fresh turn.
+        val api = mock(AuraApi::class.java)
+        `when`(api.query("s1", expectedQuery("fresh turn")))
+            .thenReturn(Response.success(202, SessionQueryResponseDto(sessionId = "s1", accepted = true)))
+
+        val result = runRepository(api).sendQuery("s1", "fresh turn", null, null, null, emptyList())
+
+        assertTrue(result is SendResult.RunStarted)
+        verify(api, never()).sendMessage("s1", SendMessageRequest("fresh turn"))
+    }
+
+    @Test
+    fun `sendQuery still raises a terminated session's 410 rather than re-routing it`() = runTest {
+        // Only 409 is a routing correction. A 410 must keep reaching errorFor, or a permanently
+        // terminated session would steer forever instead of flipping the composer's terminal state.
+        val api = mock(AuraApi::class.java)
+        val body =
+            """{"error":{"code":"session_terminated","reason":"Session is permanently terminated","retryable":false}}"""
+        `when`(api.query("s1", expectedQuery("follow-up")))
+            .thenReturn(Response.error(410, body.toResponseBody("application/json".toMediaType())))
+        val repo = runRepository(api)
+
+        try {
+            repo.sendQuery("s1", "follow-up", null, null, null, emptyList())
+            throw AssertionError("expected SessionTerminatedException")
+        } catch (e: SessionTerminatedException) {
+            assertEquals("Session is permanently terminated", e.reason)
+        }
+        verify(api, never()).sendMessage("s1", SendMessageRequest("follow-up"))
+    }
+
+    // ---- interrupt: the server-side half of Stop ----
+    //
+    // Wired because ChatViewModel.stop() was a CLIENT-side detach only, so a user who stopped a run
+    // from the phone left it running server-side. Measured against the deployed API, and the
+    // measurement is the reason every name here says "delivered" rather than "stopped":
+    //   POST /interrupt while running -> 202 {"interrupted": true}   ... and the run then executed
+    //     three more shell steps and finished normally (done_reason "completed") 91s later.
+    //   POST /interrupt while idle    -> 200 {"interrupted": false}  (documented idempotent no-op)
+    //   POST /interrupt on terminated -> 410 {"error":{"code":"session_terminated",...}}
+    // The engine agrees: SessionRuntime.interrupt_step only sets a threading.Event that ToolUseLoop
+    // reads at the next turn top, clears, and answers by appending a one-line HumanMessage marker.
+    // state.done is never set, so the loop continues. Nothing in this client may report it as an end.
+
+    private fun interruptOk(code: Int, interrupted: Boolean): Response<SessionInterruptResponseDto> =
+        Response.success(code, SessionInterruptResponseDto(sessionId = "s1", interrupted = interrupted))
+
+    @Test
+    fun `interpretInterruptResponse maps 202 to Interrupted and 200 to NoActiveRun`() {
+        assertEquals(InterruptResult.Interrupted, interpretInterruptResponse(interruptOk(202, true)))
+        assertEquals(InterruptResult.NoActiveRun, interpretInterruptResponse(interruptOk(200, false)))
+    }
+
+    @Test
+    fun `interpretInterruptResponse reads the STATUS, never the body's interrupted flag`() {
+        // The flag only restates the code, and a tolerantly-defaulted DTO field reads `false` on a
+        // body that never carried it - so a 202 whose body omits the flag must still be Interrupted,
+        // and a 200 claiming `true` must still be NoActiveRun. Same rule sendMessage's 200/202
+        // branch already follows for `enqueued`.
+        assertEquals(InterruptResult.Interrupted, interpretInterruptResponse(interruptOk(202, false)))
+        assertEquals(InterruptResult.NoActiveRun, interpretInterruptResponse(interruptOk(200, true)))
+    }
+
+    @Test
+    fun `interpretInterruptResponse maps 410 to SessionTerminated and everything else to Failed`() {
+        val terminated =
+            """{"error":{"code":"session_terminated","reason":"Session is permanently terminated","retryable":false}}"""
+        assertEquals(
+            InterruptResult.SessionTerminated,
+            interpretInterruptResponse(Response.error<SessionInterruptResponseDto>(410, terminated.toResponseBody("application/json".toMediaType()))),
+        )
+        assertEquals(
+            InterruptResult.Failed,
+            interpretInterruptResponse(Response.error<SessionInterruptResponseDto>(500, "boom".toResponseBody("application/json".toMediaType()))),
+        )
+    }
+
+    @Test
+    fun `interrupt reports Interrupted on a 202`() = runTest {
+        val api = mock(AuraApi::class.java)
+        `when`(api.interruptSession("s1")).thenReturn(interruptOk(202, true))
+
+        assertEquals(InterruptResult.Interrupted, runRepository(api).interrupt("s1"))
+    }
+
+    @Test
+    fun `interrupt never throws - a transport failure degrades to Failed`() = runTest {
+        // The sole caller (ChatViewModel.stop) fires this beside work that must happen whether or
+        // not the network is reachable: the device-control grant release and the client detach. An
+        // exception escaping here would take that work with it, which is why this is the one method
+        // on the class that does not route through errorFor's typed throw.
+        val api = mock(AuraApi::class.java)
+        `when`(api.interruptSession("s1")).thenThrow(IllegalStateException("socket closed"))
+
+        assertEquals(InterruptResult.Failed, runRepository(api).interrupt("s1"))
+    }
+
     private fun TestScope.runRepository(api: AuraApi): RunRepository = RunRepository(
         api = api,
         streamClient = mock(SessionStreamClient::class.java),
-        deviceToolCatalog = DeviceToolCatalog(DevicePermissionChecker { true }, DeviceToolGate { emptySet() }),
+        deviceToolCatalog = DeviceToolCatalog(
+            DevicePermissionChecker { true },
+            DeviceToolGate { emptySet() },
+            DeviceControlGate { false },
+        ),
+        deviceControlSession = controlSession(),
         deviceToolDispatch = noDispatch,
         json = json,
-        runNotifications = RunNotifications { _, _ -> },
+        runNotifications = RunNotifications { _, _, _ -> },
         scope = shareScope(),
     )
 
@@ -394,8 +583,19 @@ class RunRepositoryTest {
         callLedger = FakeLedger(),
         clock = DeviceClock { 0.0 },
         gate = DeviceToolGate { emptySet() },
+        controlSession = controlSession(),
         handlers = listOf(handler),
         scope = CoroutineScope(Dispatchers.Unconfined),
+    )
+
+    /** Shizuku absent, so no grant is ever taken. These tests are about the multicast pipeline and
+     * the send seam; the grant's own gates are `DeviceControlSessionTest`'s and
+     * `DeviceToolExecutorTest`'s. The device tool they dispatch (`device_get_time`) is outside the
+     * control family, so the grant never enters the picture. */
+    private fun controlSession() = DeviceControlSession(
+        DeviceControlStatusSource { MutableStateFlow(DeviceControlStatus.NotInstalled) },
+        DeviceControlBinder { false },
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
     )
 
     private fun deviceToolCall(callId: String = "call-1") = DeviceToolCallPayload(

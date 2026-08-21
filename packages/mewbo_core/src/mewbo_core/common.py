@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging as logging_real
 import os
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import tiktoken
 from jinja2 import Environment, PackageLoader, TemplateNotFound
@@ -28,6 +29,14 @@ class MockSpeaker(NamedTuple):
     """Simple mock response container used across tools and tests."""
 
     content: str
+    # Image content parts a multimodal tool returned, in LiteLLM's
+    # ``{"type": "image_url", ...}`` shape. Defaulted and additive on purpose:
+    # ``content`` stays a plain ``str`` for all ~100 construction sites and
+    # every reader of it, so a tool that returns no image is unchanged in both
+    # type and behaviour. The loop lifts these into the ``ToolMessage``
+    # alongside the text, which is what makes them an image block inside the
+    # provider's native ``tool_result``.
+    images: tuple[dict[str, Any], ...] = ()
 
 
 def get_mock_speaker() -> type[MockSpeaker]:
@@ -547,7 +556,38 @@ def render_jinja_prompt(name: str, **variables: object) -> str:
     raise RuntimeError(f"No template found for prompt '{name}'") from last_exc
 
 
-def pydantic_to_openai_tool(model_cls: type, *, name: str) -> dict[str, object]:
+def _strip_schema_titles(node: Any) -> Any:
+    """Drop Pydantic's auto-generated ``title`` annotations, at every depth.
+
+    ``title`` carries nothing a model can act on — it is the field name in title
+    case — and it is emitted once per field, per definition. On a schema with
+    nested ``$defs`` that is real weight: 303 of ``present_ui``'s 3,144 tokens,
+    bound on the call that uses it.
+
+    **``properties`` and ``$defs`` are NAME MAPS, not schemas**, so their keys are
+    author-chosen and must survive: a field genuinely called ``title`` (``Card``
+    and ``Alert`` both have one) would otherwise vanish from the model's view of
+    the component while remaining required by validation — a silent divergence,
+    not an error. Recursion therefore enters those two through their VALUES only.
+    """
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "title" and isinstance(value, str):
+                continue
+            if key in {"properties", "$defs"} and isinstance(value, dict):
+                out[key] = {name: _strip_schema_titles(sub) for name, sub in value.items()}
+            else:
+                out[key] = _strip_schema_titles(value)
+        return out
+    if isinstance(node, list):
+        return [_strip_schema_titles(item) for item in node]
+    return node
+
+
+def pydantic_to_openai_tool(
+    model_cls: type, *, name: str, schema_generator: type | None = None
+) -> dict[str, object]:
     """Build an OpenAI function-calling tool dict from a Pydantic model.
 
     Uses the model's docstring as the tool description and its JSON schema
@@ -559,6 +599,12 @@ def pydantic_to_openai_tool(model_cls: type, *, name: str) -> dict[str, object]:
     Args:
         model_cls: A Pydantic ``BaseModel`` subclass defining the tool args.
         name: The tool name (function name visible to the LLM).
+        schema_generator: Optional ``GenerateJsonSchema`` subclass, passed
+            straight to pydantic. This is the supported seam for changing how
+            the schema is NAMED or shaped — a caller that post-processes the
+            emitted dict instead has to find every ``$ref`` string AND the
+            discriminator mapping, and one that finds only some of them leaves
+            the schema self-inconsistent.
 
     Returns:
         ``{"type": "function", "function": {"name", "description", "parameters"}}``
@@ -572,16 +618,13 @@ def pydantic_to_openai_tool(model_cls: type, *, name: str) -> dict[str, object]:
         raise TypeError(
             "pydantic_to_openai_tool requires a Pydantic BaseModel subclass"
         )
-    params = model_cls.model_json_schema()
-    params.pop("title", None)
-    for prop in params.get("properties", {}).values():
-        if isinstance(prop, dict):
-            prop.pop("title", None)
+    kwargs = {"schema_generator": schema_generator} if schema_generator else {}
+    params = _strip_schema_titles(model_cls.model_json_schema(**kwargs))  # type: ignore[arg-type]
     return {
         "type": "function",
         "function": {
             "name": name,
-            "description": (model_cls.__doc__ or "").strip(),
+            "description": inspect.cleandoc(model_cls.__doc__ or ""),
             "parameters": params,
         },
     }

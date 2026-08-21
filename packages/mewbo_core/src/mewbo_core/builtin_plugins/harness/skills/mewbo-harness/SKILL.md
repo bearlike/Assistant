@@ -17,6 +17,7 @@ Every tool result is fitted to a per-tool character cap before you see it.
 |---|---|
 | registry tools (`ToolSpec.max_result_chars`) | **2000 characters** |
 | session tools (plugin/per-session tools) | **200000 characters** |
+| directly-bound tools (`activate_skill`, the spawn family) | **2000 characters**, except `activate_skill` at **200000** |
 | shell tools | **30000 characters** (declared, not the default) |
 
 When a result exceeds its cap it is **windowed, not head-truncated**: the head and
@@ -27,6 +28,13 @@ the tail are both kept and the middle is replaced by a marker of the form
   command (traceback, exit banner, failure summary) survives.
 - **Do not treat a windowed result as complete.** Narrow the read instead of
   re-issuing the same call: `grep` for the line you need, or page.
+
+**A capped result is capped for YOU only.** The transcript keeps its own, far
+larger snapshot, so a result you read in part is stored whole — which means the
+session page, the console and anyone reading the store see the complete text and
+have no way to tell that you did not. Nothing warns either side. If a decision
+turns on a result that carries a marker, say so rather than assuming the reader
+can see what you were missing.
 
 **Paging.** `read_file` is line-windowed — pass `offset` (0-based start line) and
 `limit` (max lines, default 2000) to walk a large file instead of re-reading it.
@@ -85,28 +93,5 @@ Poll with `check_agents` rather than assuming; a spawn returns an id, not a resu
 
 ## Presenting a UI panel
 
-`present_ui` (when bound) renders a small structured panel inline. The tree is
-built from a fixed component vocabulary:
-
-`Text` · `Heading` · `Card` · `Stack` · `Badge` · `KeyValue` · `Table` ·
-`CodeBlock` · `Alert` · `Divider` · `Link`
-
-`Card` and `Stack` are the only containers (they take `children`). One example:
-
-```json
-{
-  "root": [
-    {"component": "Heading", "value": "Index run"},
-    {"component": "Card", "children": [
-      {"component": "Badge", "label": "green", "status": "success"},
-      {"component": "KeyValue", "items": [
-        {"label": "Files", "value": "1204"},
-        {"label": "Duration", "value": "38s"}
-      ]}
-    ]}
-  ]
-}
-```
-
-Presenting a panel is an ordinary step — it does not end the run, so write your
-closing message as usual.
+For panel choice, component fields, and follow-up behavior, read `generative-ui`.
+`present_ui` is an ordinary step, so it does not end the run.

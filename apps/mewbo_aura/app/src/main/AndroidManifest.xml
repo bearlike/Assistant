@@ -11,6 +11,32 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Device control holds a command channel open while the user is inside the app being
+         automated. `dataSync` is the wrong type for that and is now actively harmful: at
+         targetSdk 35+ it carries a 6h/24h budget SHARED across the app, and exhausting it makes
+         the next start throw — swallowed by the launcher's catch, so the channel would simply
+         stop existing with no signal. `specialUse` is the documented home for a case that fits
+         no other type and cannot be expressed as a job, and it carries no timeout. API 34+;
+         below that the service falls back to `dataSync`, which is why both are declared. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Device control holds the screen on for the whole grant (RunNotificationService.screenLock):
+         an agent driving the phone must not have the display sleep under it. FLAG_KEEP_SCREEN_ON is
+         a WINDOW attribute and a service owns no window — the only window available during control
+         is the ui/control overlay, gated on the optional SYSTEM_ALERT_WINDOW, so hanging the screen
+         on it would fail silently wherever that prompt was skipped. Normal protection level,
+         granted at install; no runtime prompt. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Speech volume boost: the LoudnessEnhancer that amplifies spoken replies past the device's
+         own maximum (voice/SpeechVolumeBoost). Declared as insurance rather than as the gate, and
+         the distinction is worth stating so nobody removes it OR mis-cites it: AOSP requires this
+         permission for an audio effect ONLY on the global output mix (AudioFlinger::createEffect
+         checks it for AUDIO_SESSION_OUTPUT_MIX), and we never attach there — every attach is to a
+         generated per-session id, which AOSP gates on nothing. So this is not the VIBRATE case; a
+         missing declaration would not by itself have made the effect a no-op on stock Android. It
+         is declared because the effect framework is an OEM-divergent surface and because a
+         refusal here surfaces as a silent absence of amplification. Normal protection level,
+         granted at install, no runtime prompt. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Haptic map (spec §6.13) — without this, Vibrator.vibrate silently no-ops. -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- device_set_alarm/device_set_timer: lets ACTION_SET_ALARM/ACTION_SET_TIMER
@@ -26,11 +52,54 @@
          requested at runtime via Settings' "SMS access" row (ui/settings) - no other gate. -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Device control: the Shizuku permission is what lets us bind a UserService at shell UID.
+         It is declared by the Shizuku app as `dangerous`, so it is requested at runtime from
+         Settings alongside the SMS grants — the OS grant stays the sole gate. -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <!-- Device control: the on-screen overlay that says an agent is driving this phone
+         (ui/control). A SPECIAL permission, never a runtime one — it is checked with
+         Settings.canDrawOverlays and granted from ACTION_MANAGE_OVERLAY_PERMISSION. Ungranted,
+         the overlay simply does not appear: device control keeps working and the grant is never
+         blocked, so this declaration can only ever add the announcement, never gate the feature. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- In-app update: lets PackageInstaller commit a downloaded APK. A SPECIAL, per-app grant
+         ("Install unknown apps"), never a runtime one — this declaration is not the grant, it is
+         read with PackageManager.canRequestPackageInstalls() and turned on from a system screen,
+         so there is no dialog to request and no result callback to refresh from. Without it
+         PackageInstaller.commit FAILS rather than prompting, so the update stops with an error
+         instead of asking. No FileProvider is needed: the session API streams the bytes in
+         directly and exports no content URI. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- READ_SMS/SEND_SMS otherwise imply telephony hardware is REQUIRED (Play Store default,
          lint's PermissionImpliesUnsupportedChromeOsHardware) - required="false" so a phone-less
          install (tablet/ChromeOS) isn't blocked; the SMS tools are just permission-gated out of
          the catalog there like anywhere else the grant is missing. -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+
+    <!-- TV admission: without required="false" on these three, storefronts that gate on an
+         implied-required feature filter the app off Android TV / Google TV entirely. -->
+    <!-- Declares TV-shaped-UI support so the leanback storefront (and its LEANBACK_LAUNCHER
+         intent-filter below) will list the app at all. -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <!-- A touchscreen is otherwise implied REQUIRED by default; false so a remote-only TV box
+         isn't filtered out for lacking one. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <!-- RECORD_AUDIO above implies this feature as REQUIRED by default, and a TV box with no mic
+         would then be filtered off the store. required="false" keeps Aura installable there.
+         This is a STORE-FILTER fix, not a behaviour change: nothing reads FEATURE_MICROPHONE, the
+         composer still offers its mic affordance on a mic-less box, and capture fails there to
+         TranscriberError.Unavailable with text input as the working path. A feature check that
+         hides the affordance is not built yet. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Android 11+ package visibility. Without this the Shizuku app is invisible to us and every
+         API call fails with the manager "not installed" — observed as
+         `AppsFilter: com.mewbo.aura -> moe.shizuku.privileged.api BLOCKED` in logcat, which reads
+         as Shizuku being absent rather than as a visibility problem. -->
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+    </queries>
 
     <application
         android:name=".AuraApp"
@@ -38,6 +107,7 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:banner="@drawable/tv_banner"
         android:label="@string/app_name"
         android:theme="@style/Theme.Aura"
         android:supportsRtl="true">
@@ -62,6 +132,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Separate filter (never merged with LAUNCHER above) so the leanback storefront's
+                 launcher can find this activity as the TV entry point. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
 
@@ -90,6 +166,20 @@
             android:name=".data.device.WakeAlarmReceiver"
             android:exported="false" />
 
+        <!-- Device control: the Shizuku server reads this provider under ADB identity at app start
+             to learn our uid. Every attribute is load-bearing, not boilerplate:
+             `exported=true` so the server (a different uid) can reach it at all; `multiprocess=false`
+             so it resolves in our main process; and the INTERACT_ACROSS_USERS_FULL permission is held
+             by shell but not by an ordinary app, which is what stops other apps calling it.
+             Copied from RikkaApps/Shizuku-API's demo manifest. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
         <!-- Turn-completion notifications: follows a backgrounded run to completion. foregroundServiceType
              MUST match the ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC passed to startForeground.
              dataSync (not shortService) because a long agentic turn can exceed shortService's ~3min cap
@@ -97,7 +187,15 @@
         <service
             android:name=".notify.RunNotificationService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse|dataSync">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Holds the assistant's command channel to its server and executes
+                    user-authorized on-device automation steps while the user is inside the app
+                    being automated. The channel is the transport each step is dispatched over;
+                    it cannot be deferred or batched, and interrupting it abandons the user's
+                    task part-way through." />
+        </service>
     </application>
 
 </manifest>

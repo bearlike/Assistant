@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, ClassVar
 
+from mewbo_core.capabilities import ASK_USER_CAPABILITY, SCG_CAPABILITY, WIKI_CAPABILITY
 from mewbo_core.session.session_provenance import SessionOrigin
 from mewbo_core.session.session_store import SessionStoreBase
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -74,6 +75,15 @@ class SessionSpec(BaseModel):
             "Truthiness collapses () into None, turning 'no tools' into 'every tool'."
         ),
     )
+    denied_tools: tuple[str, ...] | None = Field(
+        None,
+        description=(
+            "Tool ids withheld regardless of any other gate — including a built-in "
+            "session tool's unconditional or capability auto-surface. Deliberately "
+            "NOT three-state like `allowed_tools`: deny is purely subtractive, so "
+            "None and () are the same 'nothing denied' set."
+        ),
+    )
     strict_tool_scope: bool = Field(
         False, description="Whether the allowlist is authoritative over built-ins too."
     )
@@ -95,8 +105,14 @@ class SessionSpec(BaseModel):
 
     # Fields a request may ALWAYS override. Choosing a model (and the ladder that
     # backs it, and whether this turn plans or acts) is the user's call on any
-    # session — the deliberate act the composer exists to express.
-    ALWAYS_OVERRIDABLE: ClassVar[frozenset[str]] = frozenset({"model", "fallback_models", "mode"})
+    # session — the deliberate act the composer exists to express. ``denied_tools``
+    # joins them for a different reason: unlike ``allowed_tools`` it is purely
+    # SUBTRACTIVE, so a caller can only ever narrow a purpose-bound session's tool
+    # surface further, never widen it back toward the binding the OVERRIDABLE_
+    # WHEN_UNBOUND tier exists to protect.
+    ALWAYS_OVERRIDABLE: ClassVar[frozenset[str]] = frozenset(
+        {"model", "fallback_models", "mode", "denied_tools"}
+    )
     # Fields a request may override only on a session that is NOT purpose-bound. On
     # a bound session these ARE the binding: letting a caller replace them is
     # exactly the drift that sent a console follow-up into an indexer session with
@@ -118,7 +134,9 @@ class SessionSpec(BaseModel):
     NEVER_OVERRIDABLE: ClassVar[frozenset[str]] = frozenset({"origin", "surface", "capabilities"})
     # Capabilities that only mean anything with a human attached to the run: bound
     # on an interactive turn, stripped from every unattended fire.
-    INTERACTIVE_ONLY_CAPABILITIES: ClassVar[frozenset[str]] = frozenset({"ask_user"})
+    INTERACTIVE_ONLY_CAPABILITIES: ClassVar[frozenset[str]] = frozenset(
+        {ASK_USER_CAPABILITY}
+    )
     # Capabilities that belong to what a session IS FOR rather than to whoever is
     # driving this request, so they must survive a re-engage from any surface. A
     # viewer re-engaging a wiki session still reasons about ``wiki``, and the
@@ -136,7 +154,9 @@ class SessionSpec(BaseModel):
     # same promiscuity that once made ``SessionOrigin`` file every ordinary chat
     # under ``apps``), so treating it as session-owned would union it onto sessions
     # that merely happened to be created from a browser.
-    SESSION_OWNED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset({"wiki", "scg"})
+    SESSION_OWNED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset(
+        {WIKI_CAPABILITY, SCG_CAPABILITY}
+    )
 
     # field name → the loose ``context``-event key it has always been persisted
     # under. ONE vocabulary: the overrides parser, the persisted payload and the
@@ -149,6 +169,7 @@ class SessionSpec(BaseModel):
         "model": "model",
         "fallback_models": "fallback_models",
         "allowed_tools": "mcp_tools",
+        "denied_tools": "denied_tools",
         "strict_tool_scope": "strict_tool_scope",
         "skill_instructions": "skill_instructions",
         "session_step_budget": "session_step_budget",
@@ -213,14 +234,17 @@ class SessionSpec(BaseModel):
     def _clean_ids(cls, value: object) -> tuple[str, ...] | None:
         return cls.normalize_ids(value)
 
-    @field_validator("fallback_models", mode="before")
+    @field_validator("fallback_models", "denied_tools", mode="before")
     @classmethod
-    def _clean_ladder(cls, value: object) -> tuple[str, ...] | None:
-        """An empty ladder is no opt-in, i.e. the same as absent (defer to config).
+    def _clean_subtractive_ids(cls, value: object) -> tuple[str, ...] | None:
+        """An empty set collapses to absent — for two DIFFERENT reasons.
 
-        Unlike ``allowed_tools`` an empty tuple here is NOT a meaningful ceiling — an
-        explicit empty ladder would DISABLE the auto-heal chain, which no caller has
-        ever meant to request.
+        Unlike ``allowed_tools`` an empty ``fallback_models`` is NOT a meaningful
+        ceiling — an explicit empty ladder would DISABLE the auto-heal chain, which
+        no caller has ever meant to request. ``denied_tools`` collapses for the
+        opposite-flavoured reason stated on the field itself: deny is purely
+        subtractive, so an empty denylist and no denylist are the same set — there
+        is no third "deny nothing, on purpose" state to preserve.
         """
         return cls.normalize_ids(value) or None
 
@@ -271,6 +295,7 @@ class SessionSpec(BaseModel):
                 "model": payload.get("model"),
                 "fallback_models": payload.get("fallback_models"),
                 "allowed_tools": payload.get("mcp_tools"),
+                "denied_tools": payload.get("denied_tools"),
                 "strict_tool_scope": bool(payload.get("strict_tool_scope", False)),
                 "skill_instructions": payload.get("skill_instructions"),
                 "capabilities": payload.get("client_capabilities"),
@@ -457,6 +482,10 @@ class SessionSpec(BaseModel):
         # this key is written whenever it is not None — never filtered by falsiness.
         if self.allowed_tools is not None:
             payload["mcp_tools"] = list(self.allowed_tools)
+        # NOT three-state — an empty denylist is the same as no denylist, so this
+        # is safe to filter by falsiness like every other loose key above.
+        if self.denied_tools:
+            payload["denied_tools"] = list(self.denied_tools)
         if self.strict_tool_scope:
             payload["strict_tool_scope"] = True
         return payload
@@ -478,6 +507,7 @@ class SessionSpec(BaseModel):
             "model": self.model,
             "fallback_models": list(self.fallback_models) if self.fallback_models else None,
             "allowed_tools": list(self.allowed_tools) if self.allowed_tools is not None else None,
+            "denied_tools": list(self.denied_tools) if self.denied_tools else None,
             "strict_tool_scope": self.strict_tool_scope,
             "capabilities": list(self.capabilities) if self.capabilities else None,
             "skill_instructions_present": self.skill_instructions is not None,
@@ -503,12 +533,13 @@ class SessionSpecOverrides(BaseModel):
     model: str | None = None
     fallback_models: tuple[str, ...] | None = None
     allowed_tools: tuple[str, ...] | None = None
+    denied_tools: tuple[str, ...] | None = None
     strict_tool_scope: bool | None = None
     skill_instructions: str | None = None
     session_step_budget: int | None = None
     mode: str | None = None
 
-    @field_validator("allowed_tools", "fallback_models", mode="before")
+    @field_validator("allowed_tools", "denied_tools", "fallback_models", mode="before")
     @classmethod
     def _clean_ids(cls, value: object) -> tuple[str, ...] | None:
         """Normalize declared id sequences through the field's OWNER, never a second copy."""

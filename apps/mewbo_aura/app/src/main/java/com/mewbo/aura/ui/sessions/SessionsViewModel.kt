@@ -20,6 +20,11 @@ import kotlinx.coroutines.launch
  * ([SessionsUiState.Loading]) shows only when the cache is genuinely empty (first launch); a failed
  * background refresh keeps the cached list ([SessionsUiState.Loaded] with `offline = true`), never
  * blanks to [SessionsUiState.Error].
+ *
+ * **The list this VM exposes is a bounded window, not the whole store** (see [filter], and the
+ * fetch-limit constant in [com.mewbo.aura.data.repo.SessionRepository]). `SearchChatsScreen` reuses
+ * this same VM and filters over the same `sessions` list, so chat search searches that window too —
+ * it is a client-side title filter over what the drawer already holds, never its own query.
  */
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
@@ -41,8 +46,27 @@ class SessionsViewModel @Inject constructor(
      * the rail shows only mobile-created sessions, the analogue of the web console's
      * `DEFAULT_VISIBLE_ORIGINS`. Held here rather than in [SessionsUiState] so it survives a refresh
      * (which replaces the state) and resets to the mobile-only default whenever the host recreates
-     * the ViewModel — the desired default either way. The drawer applies it client-side over the
-     * full fetched list (`GET /api/sessions` returns everything, so the filter can't starve).
+     * the ViewModel — the desired default either way.
+     *
+     * **The drawer applies it client-side over a BOUNDED fetch**, and that is the real contract now:
+     * [com.mewbo.aura.data.repo.SessionRepository.refreshSessions] caps how many candidates the
+     * server examines, so this filter narrows a window rather than the whole store. It can
+     * therefore STARVE — if every session in that window came from another surface, the rail reads
+     * "No mobile chats yet" while older mobile sessions exist beyond it.
+     *
+     * That is accepted, for two reasons that are properties of the ordering rather than luck. A
+     * session Aura creates is mobile-origin and lands at the HEAD of the server's newest-first
+     * ordering, so the window keeps precisely this device's own history; starving needs a whole
+     * window's worth of non-mobile sessions all newer than this device's newest. And the bound was
+     * sized at the point where mobile yield saturates, so the rail was measured full, not assumed
+     * full ([com.mewbo.aura.data.repo.SessionRepository]'s fetch-limit constant carries the
+     * numbers). The in-menu escape hatch is [RecentsFilter.ALL], which shows the same fetched
+     * window unfiltered — never a second, wider fetch.
+     *
+     * **Narrowing further belongs on the server, not here.** `GET /api/sessions` filters on
+     * `include_archived`/`pinned`/`project` only; there is no `origin` parameter, so a mobile-scoped
+     * page would be a backend change. Fetching more and filtering harder client-side is the
+     * opposite move — it re-opens the unbounded transfer this bound exists to close.
      */
     private val _filter = MutableStateFlow(RecentsFilter.MOBILE_ONLY)
     val filter: StateFlow<RecentsFilter> = _filter.asStateFlow()
@@ -55,6 +79,11 @@ class SessionsViewModel @Inject constructor(
         refresh()
     }
 
+    /**
+     * Re-fetches the recents window. **Cost: `O(collection)`, bounded** — the drawer calls this on
+     * EVERY open (`AuraDrawerContent`'s `LaunchedEffect(isOpen)`), so an unbounded read here is
+     * paid per gesture and grows with the store forever.
+     */
     fun refresh() {
         val cached = sessionRepository.sessions.value
         _uiState.update { current ->

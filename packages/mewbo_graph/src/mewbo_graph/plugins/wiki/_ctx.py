@@ -8,15 +8,20 @@ provides those lookups via the store's reverse-session index.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import AbstractContextManager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from mewbo_core.contracts.progress import ProgressLedger, StepSpec, StepState
 from mewbo_core.session.session_provenance import SessionTag
 from mewbo_core.session.session_store import SessionStoreBase, create_session_store
 
+from mewbo_graph.wiki.events import LogJobEvent, ProgressErrorJobEvent
 from mewbo_graph.wiki.types import IndexingJob
 
 if TYPE_CHECKING:
@@ -89,6 +94,18 @@ class WikiJobCtx:
     # supersede the prior commit's; ``None`` for a job whose clone never
     # resolved a sha (the artifacts are then written commit-less).
     commit_sha: str | None = None
+
+    @property
+    def progress(self) -> ProgressReporter:
+        """Build a ledger reporter for one tool invocation.
+
+        Bind this once per tool call and pass it down rather than rebuilding one
+        inside a loop. Construction reads one job record so a fresh tool instance
+        sees the durable ledger history.
+
+        Cost: ``O(one record)``.
+        """
+        return ProgressReporter(self)
 
     @property
     def job_bound(self) -> bool:
@@ -702,21 +719,53 @@ def emit_phase_once(ctx: WikiJobCtx, name: str) -> None:
     emit_phase(ctx, name)
 
 
-def emit_log(ctx: WikiJobCtx, text: str, *, level: str = "info") -> None:
+_UNSET_STEP = object()
+_MUTATION_FAILED = object()
+
+
+def emit_log(
+    ctx: WikiJobCtx,
+    text: str,
+    *,
+    level: Literal["info", "warn", "error"] = "info",
+    step: str | None | object = _UNSET_STEP,
+) -> None:
     """Append a free-form ``log`` event for the indexing timeline.
+
+    An open :class:`ProgressReporter` stamps its active step unless *step*
+    explicitly names one. A line intentionally outside the ledger, such as a
+    phase opener, must pass ``step=None`` at its call site rather than omit the
+    argument. The event model records missing attribution instead of raising:
+    this writer is best-effort, and a validation error here would silently drop
+    the line rather than preserve the evidence the coverage gate needs.
 
     Silent for a ctx with no job, for :func:`emit_phase`'s reason: the timeline
     belongs to an indexing job, and a line written under an empty job id is an
     orphan record no surface can reach.
+
+    Cost: ``O(1)`` — one append to this job's event stream.
     """
     if not getattr(ctx, "job_id", ""):
         return
+    active = _ACTIVE_STEP.get()
+    if step is _UNSET_STEP and active is not None and active[0] == id(ctx):
+        step = active[1]
+    # Preserve an omitted step rather than rejecting the line. The stored event's
+    # computed fact lets the coverage test expose this escaped scope deterministically.
+    event = LogJobEvent(
+        type="log", level=level, text=text, step=step if isinstance(step, str) else None
+    ).stored_payload()
     try:
-        ctx.store.append_job_event(
-            ctx.job_id, {"type": "log", "level": level, "text": text}
-        )
+        ctx.store.append_job_event(ctx.job_id, event)
     except Exception:
         pass
+
+
+# Kept task-local so simultaneous job/tool calls cannot stamp one another's
+# logs. The context manager resets its token even on an exception.
+_ACTIVE_STEP: ContextVar[tuple[int, str] | None] = ContextVar(
+    "wiki_active_progress_step", default=None
+)
 
 
 # How long a bulk phase may run without reporting progress. Same order as
@@ -726,8 +775,569 @@ def emit_log(ctx: WikiJobCtx, text: str, *, level: str = "info") -> None:
 _PROGRESS_INTERVAL_S: float = 5.0
 
 
+class StepHandle(AbstractContextManager["StepHandle"]):
+    """The open scope for one :class:`ProgressReporter` step.
+
+    A handle is hot in-process state, not a persisted contract. It owns the
+    scoped active-step stamp and leaves no running record behind when its body
+    raises.
+    """
+
+    def __init__(
+        self, reporter: ProgressReporter, key: str, *, total: int | None = None
+    ) -> None:
+        self._reporter = reporter
+        self._key = key
+        self._total = total
+        self._token: Token[tuple[int, str] | None] | None = None
+        self._declared = False
+
+    def __enter__(self) -> StepHandle:
+        """Open the step and force its durable running state. Cost: ``O(steps)``."""
+        self._declared = self._reporter._enter(self._key, total=self._total)
+        if self._declared:
+            self._token = _ACTIVE_STEP.set((id(self._reporter.ctx), self._key))
+        return self
+
+    def __exit__(
+        self, exc_type: Any, exc: BaseException | None, traceback: Any
+    ) -> Literal[False]:
+        """Close the step durably, marking a raised body failed before re-raising.
+
+        Cost: ``O(steps)``.
+        """
+        if self._token is not None:
+            _ACTIVE_STEP.reset(self._token)
+        if self._declared:
+            if exc is None:
+                self._reporter._finish(self._key, state="done")
+            else:
+                self._reporter._finish(
+                    self._key, state="failed", note=self._reporter._exception_note(exc)
+                )
+        return False
+
+    def advance(
+        self,
+        current: int | None = None,
+        total: int | None = None,
+        detail: str = "",
+    ) -> None:
+        """Advance this step and persist on the shared five-second cadence.
+
+        Cost: ``O(steps)`` only when the cadence is due; otherwise ``O(1)``.
+        """
+        if self._declared:
+            self._reporter._advance(self._key, current, total, detail=detail)
+
+    def log(
+        self, text: str, *, level: Literal["info", "warn", "error"] = "info"
+    ) -> None:
+        """Append a line owned by this handle's declared step.
+
+        The explicit key makes attribution independent of task-local lookup, so a
+        callback or a later refactor cannot silently turn step work into a phase
+        line merely by running outside this context manager's dynamic extent.
+        """
+        emit_log(self._reporter.ctx, text, level=level, step=self._key)
+
+    def count(self, iterable: Iterable[Any], total: int | None = None) -> Iterator[Any]:
+        """Yield items while advancing once per item without caller bookkeeping.
+
+        Cost: ``O(1)`` per yielded item, plus an ``O(steps)`` persist when due.
+        """
+        current = self._reporter._current_for(self._key)
+        for item in iterable:
+            current += 1
+            self.advance(current=current, total=total)
+            yield item
+
+
+class ProgressReporter:
+    """The ONE writer of a job's step ledger.
+
+    Construction reads the durable ledger from the job record, so a fresh tool
+    instance per call sees prior declarations and completions. Bind one reporter
+    per tool invocation and pass it down; do not construct reporters inside a
+    loop. The context, clock, and shared :class:`PhaseProgress` cadence are
+    injected collaborators so time can be tested without sleeping.
+    """
+
+    def __init__(self, ctx: Any, *, clock: Any = None, interval_s: float | None = None) -> None:
+        """Load *ctx*'s persisted ledger and bind its persistence collaborators.
+
+        A missing job or unavailable store starts an empty ledger: reporting must
+        not be the thing that fails an index.
+
+        Cost: ``O(one record)``.
+        """
+        self.ctx = ctx
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._ledger = ProgressLedger()
+        # Filled by ``settle``; see ``settled_unreported``.
+        self._settled_unreported: list[str] = []
+        if not getattr(ctx, "job_id", ""):
+            job = None
+        else:
+            try:
+                job = ctx.store.get_job(ctx.job_id)
+            except Exception:
+                job = None
+        if job is not None and getattr(job, "progress", None) is not None:
+            self._ledger = job.progress.model_copy(deep=True)
+        # PhaseProgress owns the cross-instance persisted-clock throttle. This
+        # reporter intentionally delegates that cadence rather than growing a
+        # second elapsed-time rule for ledger updates.
+        self._cadence = PhaseProgress(
+            ctx, label="", unit="", interval_s=interval_s, clock=self._clock
+        )
+        self._declare_pipeline_plan()
+
+    def _declare_pipeline_plan(self) -> None:
+        """Persist every pipeline step before the first phase can report it.
+
+        Cost: ``O(one record + declared steps)``. A phase-local declaration makes
+        the denominator grow as work starts, so an in-progress index measures a
+        prefix of the pipeline as though it were the whole run. Extending an old
+        partial ledger preserves its history while adding its formerly unseen
+        tail, which keeps persisted jobs readable and corrects their next write.
+        """
+        slug = getattr(self.ctx, "slug", None)
+        if not getattr(self.ctx, "job_id", "") or not isinstance(slug, str) or not slug:
+            return
+        try:
+            from mewbo_graph.plugins.wiki.step_plans import (  # noqa: PLC0415
+                planned_pipeline_steps_for_slug,
+            )
+
+            before = len(self._ledger.steps)
+            self._ledger.extend(planned_pipeline_steps_for_slug(self.ctx.store, slug))
+            if len(self._ledger.steps) != before:
+                self._persist(self._clock(), force=True)
+        except Exception as exc:
+            self._record_mutation_failure("declare_pipeline", exc)
+
+    @property
+    def active_key(self) -> str | None:
+        """The currently open declared step, or ``None``.
+
+        Cost: ``O(steps)``.
+        """
+        active = self._ledger_active()
+        return active.key if active is not None else None
+
+    def declare(self, specs: Sequence[StepSpec]) -> None:
+        """Extend the declared plan idempotently and force a durable write.
+
+        Cost: ``O(steps)``.
+        """
+        try:
+            self._ledger.extend(specs)
+        except Exception as exc:
+            self._record_mutation_failure("declare", exc)
+            return
+        self._persist(self._clock(), force=True)
+
+    def _record_mutation_failure(
+        self, operation: str, exc: Exception, *, step: str | None = None
+    ) -> None:
+        """Persist a bounded failure record without letting progress stop work.
+
+        A ledger validation error proves the display state is invalid, not that
+        the index's actual work failed. The record makes that omission observable
+        on the job timeline rather than silently swallowing the defect, while the
+        enclosing index proceeds.
+        """
+        if not getattr(self.ctx, "job_id", ""):
+            return
+        try:
+            self.ctx.store.append_job_event(
+                self.ctx.job_id,
+                ProgressErrorJobEvent(
+                    type="progress_error",
+                    operation=operation,
+                    error=self._exception_note(exc),
+                    step=step,
+                ).stored_payload(),
+            )
+        except Exception:
+            pass
+
+    def _mutate(self, operation: str, action: Any, *, step: str | None = None) -> Any:
+        """Run one ledger mutation without allowing reporting to fail an index."""
+        try:
+            return action()
+        except Exception as exc:
+            self._record_mutation_failure(operation, exc, step=step)
+            return _MUTATION_FAILED
+
+    def _ledger_record(self, key: str) -> Any:
+        """Read one record while reporting malformed ledger state visibly."""
+        return self._mutate("find", lambda: self._ledger.find(key), step=key)
+
+    def _ledger_active(self) -> Any:
+        """Read the active record while reporting malformed ledger state visibly."""
+        return self._mutate("active", lambda: self._ledger.active)
+
+    def step(self, key: str, *, total: int | None = None) -> StepHandle:
+        """Return the context manager that opens and closes declared *key*.
+
+        Enter writes ``running`` immediately; normal exit writes ``done`` and an
+        exceptional exit writes ``failed`` with bounded exception text before the
+        original exception is re-raised.
+
+        Cost: ``O(1)`` to construct; entering and exiting cost ``O(steps)``.
+        """
+        return StepHandle(self, key, total=total)
+
+    def skip(self, key: str, *, note: str = "") -> None:
+        """Mark a declared step skipped and force its durable terminal state.
+
+        Cost: ``O(steps)``.
+        """
+        record = self._ledger_record(key)
+        if record is None or record is _MUTATION_FAILED or record.terminal:
+            return
+        now = self._clock()
+        finished = self._mutate(
+            "skip", lambda: self._ledger.finish(key, now, state="skipped", note=note), step=key
+        )
+        if finished is _MUTATION_FAILED:
+            return
+        self._persist(now, force=True)
+
+    def set_total(self, key: str, total: int) -> None:
+        """Prime an aggregate step's known denominator without opening it.
+
+        Cost: ``O(steps)``. A plan can know a fan-out's size before its first
+        worker begins; stamping a total alone keeps that distinction truthful.
+        """
+        record = self._ledger_record(key)
+        if record is None or record is _MUTATION_FAILED or record.terminal:
+            return
+        result = self._mutate(
+            "set_total", lambda: self._ledger.advance(key, current=0, total=total), step=key
+        )
+        if result is not _MUTATION_FAILED:
+            self._persist(self._clock(), force=True)
+
+    def finish(self, key: str) -> None:
+        """Close an aggregate step after its durable final unit lands.
+
+        Cost: ``O(steps)``. Aggregate fan-outs report each unit through
+        :meth:`report` and use this once at their real terminal boundary.
+        """
+        record = self._ledger_record(key)
+        if record is None or record is _MUTATION_FAILED or record.terminal:
+            return
+        self._finish(key, state="done")
+
+    def skip_group(self, group: str, *, note: str = "") -> None:
+        """Mark every unfinished step in a bypassed phase terminal.
+
+        Cost: ``O(steps)``. The full pipeline plan is declared before a job starts,
+        so a known-bypassed phase must close every one of its records; otherwise
+        its pending weight would strand the operation short of completion.
+        """
+        now = self._clock()
+        changed = False
+        for record in self._ledger.steps_in(group):
+            if record.terminal:
+                continue
+            result = self._mutate(
+                "skip_group",
+                lambda key=record.key: self._ledger.finish(
+                    key, now, state="skipped", note=note
+                ),
+                step=record.key,
+            )
+            changed = changed or result is not _MUTATION_FAILED
+        if changed:
+            self._persist(now, force=True)
+
+    def finish_group(self, group: str) -> None:
+        """Close each unfinished step in an externally driven completed phase.
+
+        Cost: ``O(steps)``. Sessionless runners reuse phase cores that do not
+        expose individual step boundaries. They still ran the phase, so recording
+        it as skipped would lie; these zero-duration records preserve completion
+        without inventing a second progress mechanism for that runner. They must
+        not feed calibration: an uninstrumented runner observed no duration.
+        """
+        now = self._clock()
+        changed = False
+        for record in self._ledger.steps_in(group):
+            if record.terminal:
+                continue
+            result = self._mutate(
+                "finish_group",
+                lambda key=record.key: self._ledger.enter(key, now),
+                step=record.key,
+            )
+            if result is _MUTATION_FAILED:
+                continue
+            result = self._mutate(
+                "finish_group",
+                lambda key=record.key: self._ledger.finish(key, now),
+                step=record.key,
+            )
+            changed = changed or result is not _MUTATION_FAILED
+        if changed:
+            self._persist(now, force=True)
+
+    def settle(self) -> None:
+        """Close every non-terminal declared step at the operation's own end.
+
+        Cost: ``O(steps)``. A terminal boundary tool is the one place the whole
+        operation can honestly answer "is anything still open" — a fan-out step
+        opened via :meth:`report` (no closing ``with`` scope) has no other
+        moment that marks it finished, and a run shape that never reaches a
+        declared group (an optional phase this deployment or resume skipped)
+        has no other moment that marks it inapplicable. A ``running`` record
+        genuinely did work, so it closes ``done``; a ``pending`` one never
+        started this run, so it closes ``skipped`` — the same distinction
+        :meth:`skip_group` draws, generalised to whatever is still open rather
+        than one named group.
+
+        **Settling must not be silent about the suspicious case.** A step left
+        `pending` in a group whose OTHER steps completed did not go unreached —
+        that group ran, and one implementation of it reported nothing. Closing
+        it `skipped` writes a false statement about work that happened, and a
+        false statement nobody can see is how a reporting gap survives: an
+        uninstrumented second implementation of the scan phase was found only
+        because a finished job still showed its steps `pending`. So those
+        settle with a note naming what actually happened, and settling itself
+        says so on the timeline — the emission lives HERE rather than at the
+        call site because a caller that forgets it is a second writer on one
+        timeline, the shape this ledger exists to remove.
+        """
+        now = self._clock()
+        changed = False
+        settled_partial: list[str] = []
+        # A group is "reached" when anything in it settled — the discriminator
+        # between an optional phase this run genuinely skipped and a phase that
+        # ran while half of it stayed silent.
+        reached = {record.group for record in self._ledger.steps if record.terminal}
+        for record in self._ledger.steps:
+            if record.terminal:
+                continue
+            if record.state == "running":
+                # A fan-out reported through ``report`` has no closing scope;
+                # this is its documented end, not an anomaly. No note: `note`
+                # explains a SKIP or a FAILURE, and the contract rejects one on
+                # a step that finished its work.
+                result = self._mutate(
+                    "settle", lambda key=record.key: self._ledger.finish(key, now), step=record.key
+                )
+            else:
+                partial = record.group in reached
+                if partial:
+                    settled_partial.append(record.key)
+                note = (
+                    "never reported — its phase ran without it"
+                    if partial
+                    else "not reached this run"
+                )
+                result = self._mutate(
+                    "settle",
+                    lambda key=record.key, note=note: self._ledger.finish(
+                        key, now, state="skipped", note=note
+                    ),
+                    step=record.key,
+                )
+            changed = changed or result is not _MUTATION_FAILED
+        if changed:
+            self._persist(now, force=True)
+        self._settled_unreported = settled_partial
+        if settled_partial:
+            try:
+                emit_log(
+                    self.ctx,
+                    "Progress gap: "
+                    + ", ".join(sorted(settled_partial))
+                    + " never reported while their phase completed",
+                    level="warn",
+                )
+            except Exception as exc:  # pragma: no cover - reporting is best-effort
+                self._record_mutation_failure("settle_warn", exc)
+
+    @property
+    def settled_unreported(self) -> list[str]:
+        """Steps :meth:`settle` closed whose own phase had already reported.
+
+        Empty on a healthy run. A non-empty list names steps whose work either
+        ran uninstrumented or never ran while its siblings did — either way a
+        reporting defect the operator should see rather than a run shape.
+        """
+        return list(self._settled_unreported)
+
+    def _enter(self, key: str, *, total: int | None) -> bool:
+        """Open one declared step and force the initial snapshot. Cost: ``O(steps)``."""
+        now = self._clock()
+        record = self._mutate("enter", lambda: self._ledger.enter(key, now), step=key)
+        if record is None or record is _MUTATION_FAILED:
+            return False
+        if total is not None:
+            advanced = self._mutate(
+                "enter", lambda: self._ledger.advance(key, current=0, total=total), step=key
+            )
+            if advanced is _MUTATION_FAILED:
+                return False
+        self._persist(now, force=True)
+        return True
+
+    def _finish(self, key: str, *, state: StepState, note: str = "") -> None:
+        """Finish one declared step and force its terminal snapshot. Cost: ``O(steps)``."""
+        now = self._clock()
+        result = self._mutate(
+            "finish", lambda: self._ledger.finish(key, now, state=state, note=note), step=key
+        )
+        if result is _MUTATION_FAILED:
+            self._discard_failed_step(key)
+        self._persist(now, force=True)
+
+    def _discard_failed_step(self, key: str) -> None:
+        """Remove a step whose close was rejected rather than leave it running.
+
+        A failed ledger transition cannot be persisted as a terminal record, but
+        retaining the prior ``running`` record would assert work is still active
+        after its scope has exited. Dropping this one progress detail is the only
+        honest best-effort fallback; the preceding ``progress_error`` event
+        records why it vanished.
+        """
+        try:
+            self._ledger = ProgressLedger(
+                version=self._ledger.version,
+                steps=[record for record in self._ledger.steps if record.key != key],
+            )
+        except Exception as exc:
+            self._record_mutation_failure("discard_failed_step", exc, step=key)
+
+    def report(
+        self,
+        key: str,
+        current: int | None = None,
+        total: int | None = None,
+        *,
+        detail: str = "",
+    ) -> None:
+        """Record a declared active step without closing a fan-out scope.
+
+        A fresh reporter per worker reloads the prior running record, advances it,
+        and leaves it open for the next worker. Cost: ``O(steps)`` when due.
+        """
+        record = self._ledger_record(key)
+        if record is None or record is _MUTATION_FAILED:
+            return
+        if record.state != "running":
+            now = self._clock()
+            entered = self._mutate(
+                "report", lambda: self._ledger.enter(key, now), step=key
+            )
+            if entered is _MUTATION_FAILED:
+                return
+            advanced = self._mutate(
+                "report",
+                lambda: self._ledger.advance(key, current, total, detail=detail),
+                step=key,
+            )
+            if advanced is not _MUTATION_FAILED:
+                self._persist(now, force=True)
+            return
+        self._advance(key, current, total, detail=detail)
+
+    def _advance(
+        self, key: str, current: int | None, total: int | None, *, detail: str
+    ) -> None:
+        """Record one unit and persist only when the shared cadence is due.
+
+        Cost: ``O(1)`` when throttled; ``O(steps)`` when it writes.
+        """
+        advanced = self._mutate(
+            "advance",
+            lambda: self._ledger.advance(key, current=current, total=total, detail=detail),
+            step=key,
+        )
+        if advanced is _MUTATION_FAILED:
+            return
+        now = self._clock()
+        self._persist(now, force=False)
+
+    def _current_for(self, key: str) -> int:
+        """Return this step's current count, defaulting to zero. Cost: ``O(steps)``."""
+        record = self._ledger_record(key)
+        if record is None or record is _MUTATION_FAILED:
+            return 0
+        return record.current if record.current is not None else 0
+
+    def _exception_note(self, exc: BaseException) -> str:
+        """Return bounded exception text without allowing formatting to fail reporting.
+
+        Cost: ``O(1)``.
+        """
+        try:
+            return str(exc)[:500]
+        except Exception:
+            return exc.__class__.__name__
+
+    def _persist(self, now: datetime, *, force: bool) -> None:
+        """Write the ledger snapshot and its matching SSE event best-effort.
+
+        Every snapshot is a NAMED-field write: writing ``progress`` cannot revert
+        a concurrent ``cancel_job`` status update. Concurrent ledger reporters
+        can lose one another's step update because fan-out mints fresh tools; the
+        loss is bounded and heals on the next write. Reverting an unrelated field
+        is the unacceptable direction, so no lock is added here.
+
+        The legacy triple is derived from an active declared-count step with a
+        reported position so an in-flight job and an un-migrated client keep
+        working; it is no longer the
+        progress model. Snapshot and event share this cadence, never one write per
+        repository unit.
+
+        Cost: ``O(steps)`` when due; ``O(1)`` when throttled.
+        """
+        if not getattr(self.ctx, "job_id", ""):
+            return
+        if force:
+            self._cadence._last = now
+        elif not self._cadence._due(now):
+            return
+        else:
+            self._cadence._last = now
+        active = self._ledger.active
+        fields: dict[str, Any] = {
+            "progress": self._ledger,
+            "last_progress_at": IndexingJob.format_stamp(now),
+            "phase_progress_current": None,
+            "phase_progress_total": None,
+            "phase_progress_unit": None,
+        }
+        if active is not None and active.unit is not None and active.current is not None:
+            fields.update(
+                phase_progress_current=active.current,
+                phase_progress_total=active.total,
+                phase_progress_unit=active.unit,
+            )
+        try:
+            self.ctx.store.update_job(self.ctx.job_id, **fields)
+        except Exception:
+            pass
+        if not force:
+            try:
+                self.ctx.store.append_job_event(
+                    self.ctx.job_id, {"type": "progress", **self._ledger.export(now)}
+                )
+            except Exception:
+                pass
+
+
 class PhaseProgress:
-    """Throttled "this phase is still moving" writer for the bulk phases.
+    """Throttled cadence for an open step in the bulk phases.
+
+    The durable step ledger is now the progress mechanism. This class remains
+    its shared five-second write cadence, preserving cross-instance throttling
+    for long loops and fresh fan-out tool instances.
 
     ``graph`` and ``enrich`` are the two phases whose work is a long loop or a
     fan-out with no per-unit boundary tool, so nothing at all was written to the
@@ -959,4 +1569,6 @@ __all__ = [
     "emit_phase_once",
     "emit_log",
     "emit_scope_preview",
+    "ProgressReporter",
+    "StepHandle",
 ]

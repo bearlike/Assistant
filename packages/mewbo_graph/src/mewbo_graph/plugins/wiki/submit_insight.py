@@ -112,7 +112,7 @@ class WikiSubmitInsightTool(WikiSessionTool):
 
         # Deterministic in-session ingest: no LLM (agents pre-atomize), embedder
         # defaults via from_store (BM25-only if no backend).
-        ingestor = InsightIngestor.from_store(ctx.store)
+        ingestor = InsightIngestor.from_store(ctx.store, slug=ctx.slug)
         result = ingestor.ingest(
             ctx.slug,
             args.content,

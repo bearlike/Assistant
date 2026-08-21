@@ -223,3 +223,34 @@ def test_generate_title_handles_reasoning_model_content_blocks():
     assert result == "API Authentication Plan"
     # Must NOT contain the raw list repr
     assert "[{" not in (result or "")
+
+
+def test_generate_title_handles_reasoning_blocks_with_bare_string_answer():
+    """The answer can arrive as a BARE STRING element, not a ``text`` block.
+
+    Captured verbatim from the deployed gateway: the model streams a run of
+    ``thinking`` blocks and then appends its answer as a plain string, with no
+    ``{"type": "text"}`` dict anywhere in the list. Taking the first ``text``
+    dict therefore yielded ``""`` and the title became ``None`` — silently, with
+    no exception and nothing logged, so every session answered by that model
+    simply had no title.
+    """
+    events = [{"type": "user", "payload": {"text": "hello there"}}]
+    structured_content = [
+        {"type": "thinking", "thinking": "Brainstorming 3-word titles"},
+        {"type": "thinking", "thinking": " ... picking the best one"},
+        "A Warm Welcome",
+    ]
+    fake_llm = AsyncMock()
+    fake_llm.ainvoke = AsyncMock(return_value=_msg(structured_content))
+
+    with (
+        patch(
+            "mewbo_core.session.title_generator.get_config_value",
+            side_effect=lambda *keys, **_kw: "gpt-5.2" if keys[-1] == "default_model" else "",
+        ),
+        patch("mewbo_core.llm.llm.build_chat_model", return_value=fake_llm),
+    ):
+        result = asyncio.run(generate_session_title(events))
+
+    assert result == "A Warm Welcome"

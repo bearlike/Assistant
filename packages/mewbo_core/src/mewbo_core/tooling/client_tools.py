@@ -157,6 +157,44 @@ def _error_envelope(code: str, message: str) -> MockSpeaker:
     )
 
 
+# A device result may carry ONE image, under this key, as a bare base64 JPEG
+# payload plus its media type. The client sends base64 rather than a data URI
+# so the wire stays a plain JSON string field.
+_IMAGE_KEY = "image_base64"
+_IMAGE_MEDIA_TYPE_KEY = "image_media_type"
+_DEFAULT_IMAGE_MEDIA_TYPE = "image/jpeg"
+
+
+def _multimodal_result(result: dict[str, Any]) -> MockSpeaker:
+    """Build the tool result, lifting any image out of the JSON payload.
+
+    A screenshot arrives inside ``result["result"]`` as base64. Left there it
+    would reach the model as a multi-thousand-character string no vision model
+    can decode — the silent failure this whole seam exists to prevent. Lifting
+    it into a content PART is what makes it an image block in the provider's
+    native ``tool_result``.
+
+    The base64 is REMOVED from the JSON text rather than duplicated, so the
+    text half stays small and the event snapshot the console persists never
+    carries image data.
+    """
+    payload = result.get("result")
+    if not isinstance(payload, dict) or not payload.get(_IMAGE_KEY):
+        return MockSpeaker(content=json.dumps(result))
+
+    remaining = {k: v for k, v in payload.items() if k not in (_IMAGE_KEY, _IMAGE_MEDIA_TYPE_KEY)}
+    media_type = str(payload.get(_IMAGE_MEDIA_TYPE_KEY) or _DEFAULT_IMAGE_MEDIA_TYPE)
+    return MockSpeaker(
+        content=json.dumps({**result, "result": remaining}),
+        images=(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{payload[_IMAGE_KEY]}"},
+            },
+        ),
+    )
+
+
 def _unavailable_result(tool_id: str) -> MockSpeaker:
     """Envelope for "no dispatcher registered" — our own failure to dispatch."""
     return _error_envelope(
@@ -175,6 +213,21 @@ class ClientDeclaredTool:
     """
 
     modes: frozenset[str] = DEFAULT_SESSION_TOOL_MODES
+
+    # A device tool's output is shell-class: ``dumpsys``, ``pm list packages``
+    # and a pruned element list are all routinely tens of KB. The undeclared
+    # fallback is the 2000-char registry default (the SessionTool declaration
+    # law) — 32x tighter than the comparable shell surface, and every bind
+    # costs a full network round trip to the device rather than a local pipe
+    # read. Sized against real ``dumpsys`` output, matching the registry shell
+    # spec's own 30_000 rather than picking a fresh number.
+    max_result_chars: int = 30_000
+
+    # Device tools ACT on the user's phone — tapping, typing, and at shell UID
+    # running commands. ``execute`` is what keeps them out of a ``read_only``
+    # sub-agent's toolset once the loop gates ``extra_session_tools`` through
+    # ``capability_mode_admits``.
+    capability: str = "execute"
 
     def __init__(self, session_id: str, spec: ClientToolSpec) -> None:
         """Bind the session id and validated spec; build the verbatim schema."""
@@ -220,7 +273,7 @@ class ClientDeclaredTool:
             code = str(error.get("code", "")) if isinstance(error, dict) else ""
             message = str(error.get("message", "")) if isinstance(error, dict) else ""
             return _error_envelope(code, message)
-        return MockSpeaker(content=json.dumps(result))
+        return _multimodal_result(result)
 
 
 __all__ = [

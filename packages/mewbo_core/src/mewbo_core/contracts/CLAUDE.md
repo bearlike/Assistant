@@ -3,8 +3,9 @@
 # `contracts/` — the modules that import nothing from core
 
 Scope: `types.py` · `errors.py` · `defaults.py` · `run_error.py` ·
-`verification.py` · `secret_redaction.py` · `diff_stat.py`. What groups these is
-not subject matter. It is a structural property, and the property is load-bearing.
+`verification.py` · `secret_redaction.py` · `diff_stat.py` · `progress.py`. What
+groups these is not subject matter. It is a structural property, and the property
+is load-bearing.
 
 ## The zero-core-import law
 
@@ -93,6 +94,43 @@ payload into every client and into the next run's `recent_events`.
   replacing them, so a consumer that only knows `error`/`last_error` is unaffected.
   Aura's decoder is `ignoreUnknownKeys = true` at every decode site
   (`di/DataModule.provideJson`), so a new payload key is safe there.
+
+## Declared work plans (`progress.py`)
+
+`StepSpec` is the plan (code), `StepRecord` the observation (state),
+`ProgressLedger` the export (wire). It lives here because three long-running
+subsystems project into it and the DAG only flows down; it imports nothing but
+pydantic and stdlib, and the clock arrives as an ARGUMENT to every method that
+needs one.
+
+**The defect it makes unrepresentable.** A single `(current, total, unit)` triple
+on an operation's record is a shared register with no owner and no lifetime.
+Whoever wrote last holds it until someone else writes, so a loop that finished at
+`921/921` keeps asserting `921/921` through every later step that reports
+nothing — and a reader computing `current/total` paints a *completed* bar, with a
+time-remaining of exactly zero, over work that has an hour left. That is strictly
+harder to notice than a stalled bar. Records have an owner and a lifetime by
+construction, so the same state cannot be spelled.
+
+- **A step with `unit=None` is UNCOUNTABLE and still has a start time.** The cure
+  for an opaque stretch is an OPEN STEP, not a counter: a blocking subprocess
+  cannot supply a denominator, but "Resolving symbols · running 47m" is already
+  the honest answer. Threading a counter through such a call is the fix that
+  looks right and changes nothing.
+- **`fraction()` is monotonic by construction** — a terminal step holds its full
+  weight forever, a pending one contributes nothing — so a bar built on it cannot
+  walk backwards when a phase changes unit.
+- **`eta_seconds` measures a rate over the WHOLE operation**, so a step boundary
+  has no discontinuity to explode at. A rate measured from the operation's start
+  divided by a fraction describing only the CURRENT step blows up as that
+  fraction approaches zero, which is exactly when a reader first looks.
+- **`None` and `0` are different answers and must stay so.** `None` is "nothing
+  to extrapolate from"; `0` is "finished". Collapsing them is the original bug.
+- **The ledger is bounded by DECLARED steps, never by units.** A record minted per
+  file turns a constant-size field into one that grows with the repository, which
+  is `O(all history)` on an interactive read path. Weights are RELATIVE, so a
+  caller may declare hand-set defaults now and replace them with measured seconds
+  later without any consumer changing.
 
 ## Diff arithmetic (`diff_stat.py`)
 

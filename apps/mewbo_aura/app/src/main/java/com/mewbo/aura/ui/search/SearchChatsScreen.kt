@@ -37,6 +37,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mewbo.aura.data.model.SessionSummary
 import com.mewbo.aura.ui.common.ErrorCard
+import com.mewbo.aura.ui.common.dpadFocusEscape
+import com.mewbo.aura.ui.common.imeOnConfirmOnly
 import com.mewbo.aura.ui.sessions.RelativeTime
 import com.mewbo.aura.ui.sessions.SessionsUiState
 import com.mewbo.aura.ui.sessions.SessionsViewModel
@@ -152,7 +154,13 @@ private fun SearchTopRow(
                 textStyle = AuraType.listItem.copy(color = AuraColors.textPrimary),
                 singleLine = true,
                 cursorBrush = SolidColor(AuraColors.accentPrimary),
-                modifier = Modifier.fillMaxWidth(),
+                // The search field is the first thing a remote lands on, and without these it is
+                // also the last: the arrows move the caret and the IME swallows BACK, so the
+                // results below are unreachable. Plain String state, so no caret to consult.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .dpadFocusEscape()
+                    .imeOnConfirmOnly(),
             )
         }
         // Trailing affordance per spec §6.8: clear (✕) while there's a query, back when empty —

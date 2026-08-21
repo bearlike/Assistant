@@ -33,8 +33,12 @@ function CountBadge({ singular, count }: { singular: string; count: number }) {
   );
 }
 
-const INSTALLED_DESCRIPTION =
-  "The plugins active in this deployment. Each one gives the agent new capabilities.\n\n" +
+const BUILT_IN_DESCRIPTION =
+  "The capabilities included with Mewbo.\n\n" +
+  "Built-in plugins add features that are maintained as part of this deployment.";
+
+const EXTERNAL_DESCRIPTION =
+  "The external plugins active in this deployment. Each one gives the agent new capabilities.\n\n" +
   "Installing a plugin is not cosmetic. Its **skills, agent definitions, hooks, and MCP " +
   "tools** all become available to the agent, and a hook can run on this machine, so install " +
   "only what you trust. Uninstalling takes those capabilities away again, from every session " +
@@ -73,85 +77,107 @@ export function PluginsPane() {
     const matchesCategory = categoryFilter === "all" || p.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
+  const builtInPlugins = plugins.filter((plugin) => plugin.scope === "built-in");
+  const externalPlugins = plugins.filter((plugin) => plugin.scope !== "built-in");
+
+  const renderPluginRows = (items: typeof plugins, canUninstall: boolean) => (
+    <div className="space-y-2">
+      {items.map((plugin) => {
+        const pending = isUninstalling(plugin.name);
+        return (
+          <div
+            key={plugin.name}
+            className="flex items-start justify-between gap-4 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3"
+          >
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-[hsl(var(--foreground))]">
+                  {plugin.display_name}
+                </span>
+                {plugin.version && <Badge color="muted">v{plugin.version}</Badge>}
+                {plugin.marketplace && <Badge color="muted">{plugin.marketplace}</Badge>}
+                {!plugin.enabled && <Badge color="muted">disabled</Badge>}
+                {plugin.has_hooks && <Badge color="emerald">hooks</Badge>}
+              </div>
+              {plugin.description && (
+                <p className="text-xs text-[hsl(var(--muted-foreground))] leading-snug">
+                  {plugin.description}
+                </p>
+              )}
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <CountBadge singular="skill" count={plugin.skills} />
+                <CountBadge singular="agent" count={plugin.agents} />
+                <CountBadge singular="command" count={plugin.commands} />
+                <CountBadge singular="MCP server" count={plugin.mcp_servers} />
+              </div>
+            </div>
+            {canUninstall && (
+              <Button
+                variant="neutral"
+                size="sm"
+                tone="danger"
+                onClick={() => uninstall(plugin.name)}
+                disabled={pending}
+                aria-label={`Uninstall ${plugin.display_name}`}
+                leadingIcon={
+                  pending ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )
+                }
+                className="shrink-0"
+              >
+                Uninstall
+              </Button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="space-y-4">
-      <SettingsCard
-        id="settings-plugins-installed"
-        title="Installed plugins"
-        description={INSTALLED_DESCRIPTION}
-      >
-        {error && (
-          <ErrorAlert error={error} fallback="Failed to load plugins" className="mb-3" />
-        )}
+      {error && (
+        <ErrorAlert error={error} fallback="Failed to load plugins" className="mb-3" />
+      )}
 
+      <SettingsCard
+        id="settings-plugins-built-in"
+        title="Built-in plugins"
+        description={BUILT_IN_DESCRIPTION}
+      >
         {loading ? (
           <div className="flex items-center justify-center py-6">
             <Loader2 className="w-5 h-5 animate-spin text-[hsl(var(--muted-foreground))]" />
           </div>
-        ) : plugins.length === 0 ? (
+        ) : builtInPlugins.length === 0 ? (
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">No built-in plugins available.</p>
+        ) : (
+          renderPluginRows(builtInPlugins, false)
+        )}
+      </SettingsCard>
+
+      <SettingsCard
+        id="settings-plugins-installed"
+        title="External plugins"
+        description={EXTERNAL_DESCRIPTION}
+      >
+        {loading ? (
+          <div className="flex items-center justify-center py-6">
+            <Loader2 className="w-5 h-5 animate-spin text-[hsl(var(--muted-foreground))]" />
+          </div>
+        ) : externalPlugins.length === 0 ? (
           <div className="rounded-lg border border-dashed border-[hsl(var(--border))] px-4 py-6 text-center">
-            <p className="text-sm text-[hsl(var(--muted-foreground))]">No plugins installed.</p>
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">No external plugins installed.</p>
             <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-              The agent runs on its built-in tools alone. Install one from the marketplace below
-              to give it new skills, hooks, or MCP tools.
+              Install one from the marketplace below to give the agent new skills, hooks, or MCP
+              tools.
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {plugins.map((plugin) => {
-              const pending = isUninstalling(plugin.name);
-              return (
-                <div
-                  key={plugin.name}
-                  className="flex items-start justify-between gap-4 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3"
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-[hsl(var(--foreground))]">
-                        {plugin.name}
-                      </span>
-                      {plugin.version && <Badge color="muted">v{plugin.version}</Badge>}
-                      <Badge color="muted">{plugin.marketplace}</Badge>
-                      {plugin.scope && plugin.scope !== "user" && (
-                        <Badge color="muted">{plugin.scope}</Badge>
-                      )}
-                      {plugin.has_hooks && <Badge color="emerald">hooks</Badge>}
-                    </div>
-                    {plugin.description && (
-                      <p className="text-xs text-[hsl(var(--muted-foreground))] leading-snug">
-                        {plugin.description}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                      <CountBadge singular="skill" count={plugin.skills} />
-                      <CountBadge singular="agent" count={plugin.agents} />
-                      <CountBadge singular="command" count={plugin.commands} />
-                      <CountBadge singular="MCP server" count={plugin.mcp_servers} />
-                    </div>
-                  </div>
-                  <Button
-                    variant="neutral"
-                    size="sm"
-                    tone="danger"
-                    onClick={() => uninstall(plugin.name)}
-                    disabled={pending}
-                    aria-label={`Uninstall ${plugin.name}`}
-                    leadingIcon={
-                      pending ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Trash2 className="w-3.5 h-3.5" />
-                      )
-                    }
-                    className="shrink-0"
-                  >
-                    Uninstall
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
+          renderPluginRows(externalPlugins, true)
         )}
       </SettingsCard>
 

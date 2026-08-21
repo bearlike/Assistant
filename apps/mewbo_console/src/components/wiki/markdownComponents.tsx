@@ -15,8 +15,11 @@
  * streaming Q&A renderer turn it on; a QA diagram is validated at the
  * backend `wiki_emit_answer` seam before it ever reaches this renderer.
  *
- * Citation chips: a `[label](src:path#L1-9)` link (or a `path:line` /
- * `path#L..` bare-text fallback) renders as an accent CHIP. Clicking it opens
+ * Citation chips: a `[label](src:path#L1-9)` link renders its label as ordinary
+ * prose followed by an accent CHIP — the citation annotates the sentence rather
+ * than replacing it, because the label is usually the answer's own words. Only
+ * a label that merely restates the citation (`CitationRef.isBareLabel`) is
+ * dropped in favour of the chip alone. Clicking the chip opens
  * the cited file in the source repository (a host-aware blob URL at the cited
  * lines) in a new tab, resolved via the injected {@link SourceHrefProvider}.
  * When no repo URL resolves it falls back to scrolling to + flashing the
@@ -264,7 +267,20 @@ export function buildMarkdownComponents(opts: MarkdownComponentOptions): Compone
       if (href?.startsWith(SRC_SCHEME)) {
         const stripped = href.slice(SRC_SCHEME.length);
         const [path, range] = stripped.split("#");
-        return <SrcChip citation={CitationRef.fromSrc(path, range)} />;
+        const citation = CitationRef.fromSrc(path, range);
+        const chip = <SrcChip citation={citation} />;
+        // A citation ANNOTATES the sentence it cites; it never replaces it.
+        // Returning the chip alone deleted the link's visible text, and models
+        // routinely write a clause or a whole sentence there rather than the
+        // path-shaped label the prompt asks for — so answers rendered with
+        // words missing mid-sentence, silently, with no other copy on the page.
+        // The chip stands alone only when the label restates the citation.
+        if (CitationRef.isBareLabel(citation, flattenToText(children))) return chip;
+        return (
+          <>
+            {children} {chip}
+          </>
+        );
       }
       if (href && !/^[a-z]+:|^\/|^#/.test(href)) {
         return (

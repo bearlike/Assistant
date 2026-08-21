@@ -21,7 +21,9 @@ spawn_agent(
 
 ## What goes in the task
 
-The sub-agent designs the collections, frontend, and pipelines itself. **Your task gives it only two things:**
+The sub-agent designs the collections, frontend, and pipelines itself. It handles both live/render apps and periodic/collection-backed apps. Worked pipeline shapes live at `${CLAUDE_PLUGIN_ROOT}/examples/recipes/`.
+
+**Your task gives it only two things:**
 
 1. **Intent** — what the user wants the app to do, in their own terms (what it tracks, who it's for, how often it should refresh).
 2. **Workspace choice** — which workspace the app's agents anchor to: `own` (a fresh private workspace for this app) or `shared` (an existing one, named). This is the one structural decision the user makes at creation; pass it through, don't invent it.

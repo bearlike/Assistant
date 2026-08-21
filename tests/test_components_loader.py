@@ -19,6 +19,7 @@ Stubs only the Langfuse I/O boundary — all host logic under test runs real.
 from __future__ import annotations
 
 import os
+import uuid
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -176,7 +177,18 @@ class TestIsHexTraceId:
 # _build_langfuse_trace_context()  (lines 116–145)
 # ---------------------------------------------------------------------------
 class TestBuildLangfuseTraceContext:
-    """Tests for _build_langfuse_trace_context branching logic."""
+    """Tests for _build_langfuse_trace_context branching logic.
+
+    Contract (see the function's own docstring): *invocation_id* is the ONLY
+    thing that MINTS a trace id -- a valid hex value is used directly, and a
+    non-hex value becomes a fresh ``uuid4().hex`` (never a value DERIVED from
+    it, and never from ``session_id``). *session_id* is honoured only when it
+    is ALREADY a valid trace id -- naming a trace, not seeding one. There is
+    no seeded-fallback branch through Langfuse any more: a non-hex
+    ``session_id`` with no ``invocation_id`` returns ``None`` outright, which
+    is what lets an enclosing span (or a fresh trace) take over rather than
+    every run of a session collapsing onto one deterministic id.
+    """
 
     def test_invocation_id_valid_hex_uses_it_directly(self):
         hex_id = "a" * 32
@@ -191,45 +203,56 @@ class TestBuildLangfuseTraceContext:
         assert len(result["trace_id"]) == 32
         assert _is_hex_trace_id(result["trace_id"])
 
-    def test_no_session_id_returns_none(self):
+    def test_invocation_id_non_hex_is_not_derived_from_seed(self):
+        """A non-hex invocation_id mints a fresh id each call, not a deterministic one.
+
+        This is the property that broke every run of a session onto one
+        trace: the old code seeded ``Langfuse.create_trace_id(seed=...)``,
+        which is deterministic on its seed. Two calls with the SAME non-hex
+        invocation_id must now produce DIFFERENT trace ids.
+        """
+        first = _build_langfuse_trace_context(None, invocation_id="not-hex")
+        second = _build_langfuse_trace_context(None, invocation_id="not-hex")
+        assert first is not None
+        assert second is not None
+        assert first["trace_id"] != second["trace_id"]
+
+    def test_no_session_id_no_invocation_id_returns_none(self):
         result = _build_langfuse_trace_context(None, invocation_id=None)
         assert result is None
 
-    def test_hex_session_id_used_directly(self):
-        hex_sid = "b" * 32
-        result = _build_langfuse_trace_context(hex_sid, invocation_id=None)
-        assert result is not None
-        assert result["trace_id"] == hex_sid
+    def test_hex_session_id_does_not_become_the_trace_id(self):
+        """A session_id is NEVER honoured as a trace id, by any route.
 
-    def test_non_hex_session_id_tries_langfuse(self):
-        """Non-hex session_id falls through to Langfuse.create_trace_id or returns None."""
-        # Without langfuse installed or returning a valid ID, expect None or a trace context
-        result = _build_langfuse_trace_context("non-hex-session-id", invocation_id=None)
-        # Either None (langfuse not available) or a dict with trace_id
-        if result is not None:
-            assert "trace_id" in result
+        Session ids are minted as ``uuid.uuid4().hex`` (``session_store.py``)
+        -- exactly the 32-lowercase-hex shape ``_is_hex_trace_id`` accepts.
+        Constructing the fixture the same way (rather than a hand-written
+        literal) pins the real collision: a passthrough here would make
+        EVERY real session's trace_id equal its session_id byte for byte,
+        which is what actually happened before the passthrough was deleted.
+        """
+        real_shaped_sid = uuid.uuid4().hex
+        assert _is_hex_trace_id(real_shaped_sid)  # sanity: this IS the shape
+        result = _build_langfuse_trace_context(real_shaped_sid, invocation_id=None)
+        assert result is None
 
-    def test_non_hex_session_id_returns_none_when_create_trace_id_returns_invalid(self):
-        """When Langfuse.create_trace_id returns invalid ID, returns None."""
+    def test_non_hex_session_id_returns_none_with_no_seeded_fallback(self):
+        """A non-hex session_id no longer seeds a derived trace id via Langfuse.
+
+        The deleted ``Langfuse.create_trace_id(seed=session_id)`` fallback
+        must not be called at all -- proven by handing the seam a fake
+        Langfuse client that WOULD happily return a valid id, and asserting
+        both that the result is None and that the fake was never invoked.
+        """
         fake_langfuse_cls = MagicMock()
-        fake_langfuse_cls.create_trace_id = staticmethod(lambda seed: "not-a-valid-hex-id")
+        fake_langfuse_cls.create_trace_id = MagicMock(return_value="c" * 32)
         fake_module = MagicMock()
         fake_module.Langfuse = fake_langfuse_cls
 
         with patch.dict("sys.modules", {"langfuse": fake_module}):
             result = _build_langfuse_trace_context("non-hex-session", invocation_id=None)
         assert result is None
-
-    def test_non_hex_session_id_returns_none_when_create_trace_id_returns_empty(self):
-        """When Langfuse.create_trace_id returns empty string, returns None."""
-        fake_langfuse_cls = MagicMock()
-        fake_langfuse_cls.create_trace_id = staticmethod(lambda seed: "")
-        fake_module = MagicMock()
-        fake_module.Langfuse = fake_langfuse_cls
-
-        with patch.dict("sys.modules", {"langfuse": fake_module}):
-            result = _build_langfuse_trace_context("non-hex-session", invocation_id=None)
-        assert result is None
+        fake_langfuse_cls.create_trace_id.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +362,12 @@ class TestLangfuseSessionContext:
         after = comp_module._LANGFUSE_SESSION_ID.get()
         assert after == before_session
 
-    def test_user_id_defaults_to_session_id_when_not_provided(self, tmp_path):
-        """When user_id is None, resolved_user falls back to session_id."""
+    def test_user_id_defaults_to_anonymous_marker_when_not_provided(self, tmp_path):
+        """When user_id is None, resolved_user is the honest anonymous marker.
+
+        Not session_id: aliasing the two axes made every session read in the
+        UI as "its own user", which is a worse loss than an explicit unknown.
+        """
         cfg_path = tmp_path / "app.json"
         AppConfig.model_validate({"langfuse": {"enabled": False}}).write(cfg_path)
         from mewbo_core.config import reset_config
@@ -350,7 +377,8 @@ class TestLangfuseSessionContext:
 
         with langfuse_session_context("sid-123", user_id=None):
             uid = comp_module._LANGFUSE_USER_ID.get()
-            assert uid == "sid-123"
+            assert uid == comp_module.ANONYMOUS_USER_ID
+            assert uid != "sid-123"
 
     def test_user_id_used_when_provided(self, tmp_path):
         cfg_path = tmp_path / "app.json"
@@ -512,6 +540,14 @@ class TestEnsureLangfuseClient:
 # ---------------------------------------------------------------------------
 class TestAttachLangfuseMetadata:
     def test_metadata_set_on_handler(self):
+        """Only the three keys the handler actually reads are stamped.
+
+        ``trace_name`` lands on ``langfuse_trace_name`` -- a real trace-naming
+        field the handler forwards on the root span -- never folded into a
+        tags list, which is unfilterable free text. ``version``/``release``
+        are client-level fields now (stamped once per process elsewhere) and
+        are deliberately IGNORED here even though callers still pass them.
+        """
         handler = MagicMock()
         _attach_langfuse_metadata(
             handler,
@@ -525,9 +561,9 @@ class TestAttachLangfuseMetadata:
         meta = handler.langfuse_metadata
         assert meta["langfuse_user_id"] == "user1"
         assert meta["langfuse_session_id"] == "sess1"
-        assert "mewbo-trace" in meta["langfuse_tags"]
-        assert "version:1.0" in meta["langfuse_tags"]
-        assert "release:dev" in meta["langfuse_tags"]
+        assert meta["langfuse_trace_name"] == "mewbo-trace"
+        assert "langfuse_tags" not in meta
+        assert set(meta) == {"langfuse_user_id", "langfuse_session_id", "langfuse_trace_name"}
 
     def test_empty_user_id_skipped(self):
         handler = MagicMock()
@@ -541,8 +577,8 @@ class TestAttachLangfuseMetadata:
         )
         meta = handler.langfuse_metadata
         assert "langfuse_user_id" not in meta
-        # No tags means langfuse_tags not in metadata
-        assert "langfuse_tags" not in meta
+        assert "langfuse_trace_name" not in meta
+        assert meta["langfuse_session_id"] == "sess1"
 
     def test_no_metadata_not_set_when_all_empty(self):
         """When all values are empty, langfuse_metadata is never set on the handler."""

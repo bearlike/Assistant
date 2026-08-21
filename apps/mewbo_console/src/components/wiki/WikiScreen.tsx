@@ -158,6 +158,7 @@ export function WikiScreen({ pageId, slug, platform }: WikiScreenProps) {
         showBackToAll
         showSettings
         onRefresh={() => setRefreshSignal((n) => n + 1)}
+        body={page?.body}
       />
       <div id="wiki-scroller" className="flex-1 overflow-y-auto pb-32">
         {graphOnly ? (

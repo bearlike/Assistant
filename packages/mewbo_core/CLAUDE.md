@@ -136,9 +136,35 @@ reasons, one import.
 capabilities via a `client_capabilities` context event written at session-creation
 time. Tools and agent definitions can be gated on specific capabilities.
 
-Adding one: (1) define it in `capabilities.py`; (2) have the producer advertise it
-via `runtime.append_context_event(session_id, {"client_capabilities": [...]})`;
-(3) have the consumer (the agent definition or tool) filter on it.
+**The registry is a closed `Capability` `Literal` + `ALL_CAPABILITIES`, mirroring
+`AgentStatus`'s shape for the same reason** — it is a contract shared across three
+languages, hand-mirrored into each client behind a tripwire. A `Literal` rather
+than an enum because every consumer wants the bare string (a comma-joined header, a
+JSON manifest, a set membership test), so mypy gets a closed set at annotated
+boundaries while all of those call sites keep working verbatim. `StrEnum` needs
+3.11 and this package declares `>=3.10`; the 3.10-safe `(str, Enum)` renders as
+`Capability.ASK_USER` inside an f-string, which would corrupt a header silently.
+
+Adding one: (1) add it to `Capability` AND `ALL_CAPABILITIES` in `capabilities.py`,
+with a docstring saying what the client is CLAIMING; (2) add it to the client
+mirrors that can service it — `apps/mewbo_console/src/api/capabilities.ts` and
+Aura's `AuthInterceptor` companion object; (3) have the consumer (the agent
+definition or tool) filter on it. `tests/test_capability_registry.py` fails if a
+mirror names an id the registry does not, if a plugin manifest requires an unknown
+one, or if Aura declares a constant it never puts on the wire.
+
+**The registry closes the FIRST-PARTY set, and is NOT a wire validator.**
+`parse_capability_header` KEEPS an unrecognised id rather than dropping it, because
+a third-party plugin legitimately ships its own and the operator-facing list is
+computed from installed MANIFESTS, never from `ALL_CAPABILITIES`
+(`system_instructions/CLAUDE.md` trap 2). Filtering to the registry there would
+silently disable every third-party gate, and a newer client talking to an older
+server would lose features with nothing logged as an error.
+
+**The header has exactly one parse and one serialize.** `parse_capability_header` /
+`serialize_capabilities` own the comma format; the persisted list is sorted and
+deduped, so two clients advertising the same set store the same payload and header
+ORDER carries no meaning (every consumer uses set semantics).
 
 **Capability gating has TWO enforcement surfaces — gate BOTH.** A capability gates
 (a) the AgentDef/skill CATALOGS via `filter_by_capabilities`, AND (b) the per-agent

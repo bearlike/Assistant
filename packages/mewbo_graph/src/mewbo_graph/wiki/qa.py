@@ -41,6 +41,12 @@ logging = get_logger(name="mewbo_graph.wiki.qa")
 # NOT mistaken for a scheme and still gets matched as a title.
 _SCHEME_RE = re.compile(r"^(?:wiki|graph|src|entity):")
 
+# The inline-href wrapper the answer prose uses (``[label](src:path#L1-9)``).
+# It is deliberately NOT a citation scheme: it carries no claim about what the
+# target IS, so a sources-list ref wearing it must be unwrapped before the page
+# authority decides. Kept beside ``_SCHEME_RE`` so the two cannot drift.
+_SRC_SCHEME = "src:"
+
 
 class QaFinalizer:
     """Reconcile a QA answer snapshot from its event log and close it.
@@ -319,8 +325,16 @@ class QaFinalizer:
     def _tag_page_ref(ref: str, authority: dict[str, str]) -> str:
         """Re-scheme a bare page ref (slug id OR title) → ``wiki:<id>`` when it IS a page."""
         ref = ref.strip()
+        # ``src:`` is the INLINE HREF wrapper, not a citation scheme — it says
+        # nothing about whether the target is a file or a page, so treating it as
+        # "already schemed" let ``src:<page-id>`` through untagged. The console
+        # then read it as a file path and rendered a dead "Source unavailable"
+        # card against ``/source``, which holds no pages. Unwrap it and let the
+        # page authority decide, exactly as for a bare ref.
+        if ref.startswith(_SRC_SCHEME):
+            ref = ref[len(_SRC_SCHEME):].strip()
         # A ``#`` ⇒ a file line-range/anchor ref; a leading ``scheme:`` ⇒ already
-        # schemed (graph:/wiki:/src:/entity:) — leave both alone. The scheme test is
+        # schemed (graph:/wiki:/entity:) — leave both alone. The scheme test is
         # anchored + whitespace-free, so a plain multi-word title still gets matched.
         if not ref or "#" in ref or _SCHEME_RE.match(ref):
             return ref
@@ -380,7 +394,7 @@ class QaMemoryDepositor:
             anchors = cls._anchors_from_sources(store, answer)
             from mewbo_graph.wiki.memory import InsightIngestor  # noqa: PLC0415
 
-            ingestor = InsightIngestor.from_store(store)
+            ingestor = InsightIngestor.from_store(store, slug=slug)
             # Prefer the ingestor's condenser (distill → atomic refined claims).
             # ``condense=True`` is safe with NO condenser configured: the ingestor
             # degrades to a single ≤200-char claim, so we feed the deterministic

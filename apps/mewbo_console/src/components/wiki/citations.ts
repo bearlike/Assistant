@@ -41,6 +41,13 @@ export interface Citation {
  */
 const NESTED_PROVENANCE = /(?:^|\/)((?:wiki|graph):.+)$/;
 
+/**
+ * What may follow a path inside a label that is purely a restatement of the
+ * citation: separators plus an optional single line or line range. Used by
+ * {@link CitationRef.isBareLabel}.
+ */
+const BARE_LABEL_TAIL = /^[\s:#,-]*(?:L?\d+(?:\s*[-–—]\s*L?\d+)?)?$/;
+
 /** A valid DOM-id character set so ``getElementById`` round-trips cleanly. */
 function toDomToken(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -188,6 +195,32 @@ export class CitationRef {
   /** Dedup key — two citations to the same path+range collapse into one card. */
   static key(c: Citation): string {
     return CitationRef.domId(c);
+  }
+
+  /**
+   * Does a link's visible label say anything the badge does not already say?
+   *
+   * The generation prompt asks for ``[path:line](src:path#L<a>-<b>)`` — a label
+   * that IS the citation — and for that shape the badge carries the whole
+   * content, so rendering the label beside it would print the path twice.
+   * Models routinely ignore that instruction and attach the citation to a
+   * sentence of prose instead, which is the more useful output and MUST
+   * survive rendering: a renderer that drops the label deletes the answer's
+   * own words with no error and no other copy on the page.
+   *
+   * Bare means the label is the path (or just its basename) followed by
+   * nothing but line-range noise — ``a/b.py``, ``a/b.py:63``, ``b.py L63-76``,
+   * ``a/b.py#L63-L76``. Anything else is prose and is kept.
+   */
+  static isBareLabel(c: Citation, label: string): boolean {
+    const text = label.trim();
+    if (!text) return true;
+    const basename = c.path.split("/").pop() ?? "";
+    for (const head of [c.path, basename]) {
+      if (!head || !text.startsWith(head)) continue;
+      if (BARE_LABEL_TAIL.test(text.slice(head.length))) return true;
+    }
+    return false;
   }
 
   private static _parseRange(frag: string): { start: number | null; end: number | null } {

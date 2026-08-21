@@ -92,6 +92,58 @@ def test_aider_read_file_blocks_escape(tmp_path):
     assert "resolves outside all allowed project roots" in result.content
 
 
+def test_read_file_names_the_cause_of_a_failed_read(tmp_path):
+    """A failed read must say WHICH failure it was, not just that it failed.
+
+    The three causes warrant different responses — correct the path, read a
+    file inside the directory, or give up — so collapsing them into one
+    message leaves the caller unable to tell its own bad guess from a
+    repository it genuinely cannot read. Measured consequence: an indexing run
+    asked for a directory and for a README that lives one level down, got the
+    same opaque string twice, read it as fatal and stopped with the repository
+    cloned and its graph fully built.
+
+    Each case asserts the DISTINCTION, not merely that some string came back:
+    a test accepting any message passes just as well against the single
+    collapsed one this exists to prevent.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "real.txt").write_text("data\n", encoding="utf-8")
+
+    tool = ReadFileTool()
+
+    def read(path: str) -> str:
+        result = tool.get_state(
+            ActionStep(
+                tool_id="read_file",
+                operation="get",
+                tool_input={"path": path, "root": str(tmp_path)},
+            )
+        )
+        assert isinstance(result.content, str), "a failed read returns a message, not a payload"
+        return result.content
+
+    directory = read("src")
+    assert "is a directory" in directory
+    assert "not found" not in directory
+
+    missing = read("README.md")
+    assert "not found" in missing
+    assert "is a directory" not in missing
+
+    # The positive case is what keeps the two negatives non-vacuous: the same
+    # tool on the same root still returns a payload rather than a message.
+    ok = tool.get_state(
+        ActionStep(
+            tool_id="read_file",
+            operation="get",
+            tool_input={"path": "real.txt", "root": str(tmp_path)},
+        )
+    )
+    assert isinstance(ok.content, dict)
+    assert ok.content.get("kind") == "file"
+
+
 def test_aider_read_file_truncates(tmp_path):
     """Truncate file contents when max_bytes is set."""
     target = tmp_path / "long.txt"

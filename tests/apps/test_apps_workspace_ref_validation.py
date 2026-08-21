@@ -246,6 +246,41 @@ class TestSubmitValidatesWorkspaceRef:
         assert any("No project catalog wired" in m for m in messages)
 
 
+class TestBoundResubmitRepairsLegacyWorkspace:
+    def test_a_bound_resubmit_replaces_a_legacy_bad_key_and_fresh_sessions_use_it(
+        self, tmp_path
+    ):
+        lifecycle, app_store, sessions = _make(tmp_path, catalog=_catalog(tmp_path))
+        legacy = _draft(
+            CARRIER,
+            builder_sid="builder-1",
+            workspace_ref=WorkspaceRef(kind="shared", key=BAD_KEY),
+        ).model_copy(
+            update={"status": "live", "maintainer_session_id": "maintainer-1", "version": 1}
+        )
+        app_store.save(legacy)
+        app_store.save_version(AppVersion(app_id=CARRIER, version=1, spec=legacy, author="builder"))
+
+        repaired = lifecycle.submit(
+            _draft(
+                CARRIER,
+                builder_sid="maintainer-1",
+                workspace_ref=WorkspaceRef(kind="own", key=""),
+            ),
+            builder_session_id="maintainer-1",
+        )
+
+        assert repaired.version == 2
+        assert repaired.workspace_ref == WorkspaceRef(kind="own", key="")
+        assert app_store.get(CARRIER).workspace_ref == WorkspaceRef(kind="own", key="")
+        # Historical snapshots retain their original contract and stay readable.
+        assert app_store.get_version(CARRIER, 1).spec.workspace_ref.key == BAD_KEY
+
+        session_id, created = lifecycle.get_or_create_maintainer_session(CARRIER, fresh=True)
+        assert created is True
+        assert "project" not in sessions.contexts[session_id][0]
+
+
 class TestSubmitMirrorsTheRuntimeRecovery:
     """The validator must predict ``_resolve_project_cwd``, not ``catalog.resolve``.
 

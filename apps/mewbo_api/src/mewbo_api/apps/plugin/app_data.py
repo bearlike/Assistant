@@ -36,7 +36,9 @@ from mewbo_api.apps.plugin.runtime import (
     AppDataStore,
     AppStore,
     PipelineRunStore,
+    session_tags_for,
 )
+from mewbo_api.apps.staging import AppStagingArea
 from mewbo_api.apps.store import (
     CollectionCapExceeded,
     get_app_data_store,
@@ -45,7 +47,7 @@ from mewbo_api.apps.store import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from mewbo_core.classes import ActionStep
     from mewbo_core.contracts.types import Event
@@ -196,17 +198,24 @@ class AppDataTool:
         app_store: AppStore | None = None,
         data_store: AppDataStore | None = None,
         run_store: PipelineRunStore | None = None,
+        tags_reader: Callable[[str], Sequence[str]] | None = None,
     ) -> None:
-        """Bind the maintainer session id + the three store collaborators.
+        """Bind the session id + the three store collaborators and the tag reader.
 
         Args:
-            session_id: The maintainer session — the scope boundary (only apps
-                whose ``maintainer_session_id`` equals this may be touched).
+            session_id: The bound session — the scope boundary (only the app the
+                SERVER bound this session to may be touched).
             event_logger: Reserved for parity with the plugin build path (this
                 tool emits no transcript event; the ledger is the record).
             app_store: Manifest read store (scope check + collection lookup).
             data_store: The app-ID-keyed data plane.
             run_store: The provenance ledger store.
+            tags_reader: Reads this session's server-stamped tags — the second
+                binding tier. Injected rather than reached for, because the
+                default (``session_tags_for``) resolves a process-wide session
+                store: a test could otherwise never drive the tag tier THROUGH
+                this tool, which is why the tier could drift out of three of the
+                four app tools without a single test noticing.
             A ``None`` store (the plugin path) is resolved from A's process-wide
             store factory at handle time.
         """
@@ -215,6 +224,7 @@ class AppDataTool:
         self._app_store = app_store
         self._data_store = data_store
         self._run_store = run_store
+        self._tags_reader = tags_reader or session_tags_for
 
     def should_terminate_run(self) -> bool:
         """Never terminates — reading/writing app data is normal work."""
@@ -235,10 +245,16 @@ class AppDataTool:
         if app_store is None or data_store is None or run_store is None:
             return self._err("unavailable", "the apps runtime is not configured")
 
-        app = app_store.get(args.app_id)
-        if app is None or app.maintainer_session_id != self._session_id:
+        app = self._resolve_app(app_store, args.app_id)
+        if app is None:
             # Uniform not_found for missing AND foreign — no existence leak.
-            return self._err("not_found", f"no app {args.app_id!r} bound to this session")
+            return self._err(
+                "not_found",
+                f"no app {args.app_id!r} bound to this session — the server binds an "
+                "app by its owner/maintainer session or by a stamped app tag. Call "
+                "get_app(operation='get') to see which app (if any) this session is "
+                "bound to, and pass that app_id.",
+            )
 
         collection = self._collection(app, args.collection)
         if collection is None:
@@ -420,6 +436,40 @@ class AppDataTool:
         run_store.save(run)
 
     # -- helpers ------------------------------------------------------------
+
+    def _resolve_app(self, app_store: AppStore, app_id: str) -> AppSpec | None:
+        """The app the SERVER bound this session to, iff it is *app_id*; else ``None``.
+
+        Delegates to :meth:`~mewbo_api.apps.staging.AppStagingArea.app_for_session`
+        — the two id FIELDS (``maintainer_session_id`` / ``owner_session_id``)
+        first, then the server-stamped ``app:<id>`` TAG — so this tool, ``get_app``,
+        ``run_pipeline`` and ``submit_app`` give ONE answer about which app a
+        session may act on.
+
+        This previously compared ``maintainer_session_id`` alone, which was
+        narrower than every other tool in the suite in TWO ways. A tag-bound
+        composer session could stage the app and ship a new live version of it
+        while being told the app did not exist here; and a pre-submit BUILDER
+        session (``owner_session_id`` set, no maintainer yet) could not read back
+        the documents its own pipeline had just written.
+
+        :meth:`~mewbo_api.apps.staging.AppStagingArea.binds` and not
+        ``app_for_session``: this tool TAKES an ``app_id``, so it never has to
+        discover the binding, and the discovery scan would gate a per-document
+        read on a walk of every stored app — the performance contract's "a detail
+        surface must never be gated on a collection query". Both encode the one
+        membership rule; they differ only in whether the caller already has the
+        app.
+
+        Cost: ``O(one app)`` — one keyed get plus an ``O(1)`` membership test.
+        """
+        app = app_store.get(app_id)
+        if app is None:
+            return None
+        binder = AppStagingArea(session_id=self._session_id)
+        if not binder.binds(app, session_tags=self._tags_reader(self._session_id)):
+            return None
+        return app
 
     def _resolve_stores(
         self,

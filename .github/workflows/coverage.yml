@@ -84,6 +84,11 @@ jobs:
             -o coverage-core.xml
 
       - name: Upload coverage artifact
+        # Same reason as the console workflow's artifact step: the v4 artifact
+        # API is a github.com service and the self-hosted runner answers it with
+        # a hard error, so a fully GREEN suite still reported a failed job — the
+        # worst possible signal, because the red says "tests" and means "upload".
+        if: github.server_url == 'https://github.com'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
@@ -91,7 +96,15 @@ jobs:
             coverage.xml
             coverage-core.xml
 
+      # Both Codecov steps are github.com-only, and `fail_ci_if_error: false` is
+      # NOT enough to make them safe elsewhere: `use_oidc` makes the action fetch
+      # an ID token FIRST, and Gitea Actions serves no OIDC endpoint, so it dies
+      # on "Unable to get ACTIONS_ID_TOKEN_REQUEST_URL" before the upload — and
+      # before the flag that was supposed to forgive an upload failure is ever
+      # consulted. A whole green suite (11,813 passed) therefore reported a red
+      # job, which is the worst kind of red: it says "tests" and means "telemetry".
       - name: Upload overall coverage to Codecov
+        if: github.server_url == 'https://github.com'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
@@ -100,6 +113,7 @@ jobs:
           use_oidc: true
 
       - name: Upload core coverage to Codecov
+        if: github.server_url == 'https://github.com'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage-core.xml

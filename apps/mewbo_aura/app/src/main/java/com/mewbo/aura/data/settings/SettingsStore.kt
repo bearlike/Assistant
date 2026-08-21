@@ -5,9 +5,11 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.mewbo.aura.data.device.DeviceToolToggles
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -52,10 +54,41 @@ class SettingsStore @Inject constructor(
         }
     }
 
+    /**
+     * "Speak responses" — on by default, on every device shape.
+     *
+     * Deliberately NOT device-conditional. A television being hands-off argues for speaking
+     * replies, but the default was already `true` everywhere, so making it a shape member would
+     * have changed nothing on a television and silently switched read-aloud OFF for every handheld
+     * that had never touched the switch. What actually left a television silent was the SYNTHESIZER
+     * it resolved to, not this flag (`voice/`).
+     */
     val speakResponses: Flow<Boolean> = context.auraDataStore.data.map { it[KEY_SPEAK_RESPONSES] ?: true }
 
     suspend fun setSpeakResponses(value: Boolean) {
         context.auraDataStore.edit { it[KEY_SPEAK_RESPONSES] = value }
+    }
+
+    /**
+     * How much to amplify spoken replies ABOVE the device's own maximum, in whole decibels; `0` is
+     * off and is the untouched default.
+     *
+     * Persisted raw and unclamped ON PURPOSE: the range is intrinsic to the effect, so
+     * [com.mewbo.aura.voice.SpeechVolumeBoost] owns the clamp and this layer only stores what it
+     * was handed. Clamping in both places is how the two ranges drift, and `data/` may not import
+     * `voice/` to share the constant. Read through the
+     * [com.mewbo.aura.voice.SpeechVolumeBoostGate] seam, never here directly, for the same reason
+     * as the two engine selections above.
+     *
+     * Zero rather than a small default because a boost is amplification past what the platform
+     * itself will do: it changes how loud the device is without the user having asked, so it stays
+     * off until someone opens the control.
+     */
+    val speechVolumeBoostDecibels: Flow<Int> =
+        context.auraDataStore.data.map { it[KEY_SPEECH_VOLUME_BOOST_DB] ?: 0 }
+
+    suspend fun setSpeechVolumeBoostDecibels(value: Int) {
+        context.auraDataStore.edit { it[KEY_SPEECH_VOLUME_BOOST_DB] = value }
     }
 
     val reducedMotion: Flow<Boolean> = context.auraDataStore.data.map { it[KEY_REDUCED_MOTION] ?: false }
@@ -107,19 +140,60 @@ class SettingsStore @Inject constructor(
     }
 
     /**
+     * Which engine dictation and the assist overlay's voice capture run on: blank = the ON-DEVICE
+     * recognizer, otherwise a server model id from `GET api/speech/models`.
+     *
+     * **Blank is the default and that is load-bearing** — a user who never opens the setting keeps
+     * the platform behaviour exactly, and no microphone audio leaves the device unless someone
+     * chose that. Same empty-means-default convention as [selectedModel], and not a secret, so
+     * plain. Read through the [com.mewbo.aura.voice.SpeechEngineGate] seam, never here directly, so
+     * the routing stays plain-JVM testable ([com.mewbo.aura.di.SpeechModule]).
+     */
+    val speechToTextEngine: Flow<String> = context.auraDataStore.data.map { it[KEY_STT_ENGINE] ?: "" }
+
+    suspend fun setSpeechToTextEngine(value: String) {
+        context.auraDataStore.edit { it[KEY_STT_ENGINE] = value }
+    }
+
+    /**
+     * Which engine read-aloud and speak-along run on: blank = the ON-DEVICE `TextToSpeech` engine,
+     * otherwise a server model id. Independent of [speechToTextEngine] — the two directions are
+     * chosen separately, so a user can dictate locally and still hear a server voice.
+     *
+     * Blank by default, for the same reason: nothing is sent to a server until asked.
+     */
+    val textToSpeechEngine: Flow<String> = context.auraDataStore.data.map { it[KEY_TTS_ENGINE] ?: "" }
+
+    suspend fun setTextToSpeechEngine(value: String) {
+        context.auraDataStore.edit { it[KEY_TTS_ENGINE] = value }
+    }
+
+    /**
      * Tool ids the user has switched OFF in Settings' "Device tools" section.
-     * Empty by default = every `device_*` tool enabled, preserving the pre-toggle behavior. Read
-     * through the [com.mewbo.aura.data.device.DeviceToolGate] seam at the ONE catalog gate
+     * Read through the [com.mewbo.aura.data.device.DeviceToolGate] seam at the ONE catalog gate
      * (`DeviceToolCatalog.availableTools` intersects it with runtime-permission availability, so a
      * disabled tool is never advertised) AND at execution (`DeviceToolExecutor` refuses a disabled
      * tool with a `tool_disabled` error, since a stale server could still dispatch one).
+     *
+     * **Absent means the screen-control defaults, not "nothing disabled".** The nine
+     * handoff-style tools stay enabled by default as before; the three screen-control tools start
+     * OFF, because they drive the phone rather than hand a request to a system API. Once the user
+     * touches ANY toggle the stored set is authoritative, so re-enabling a control tool is not
+     * undone on the next read — which is why the union is applied only to a missing key, never to
+     * a stored one.
      */
     val disabledDeviceToolIds: Flow<Set<String>> =
-        context.auraDataStore.data.map { it[KEY_DISABLED_DEVICE_TOOL_IDS] ?: emptySet() }
+        context.auraDataStore.data.map {
+            it[KEY_DISABLED_DEVICE_TOOL_IDS] ?: DeviceToolToggles.DEFAULT_DISABLED_TOOL_IDS
+        }
 
     suspend fun setDeviceToolEnabled(toolId: String, enabled: Boolean) {
         context.auraDataStore.edit { prefs ->
-            val current = prefs[KEY_DISABLED_DEVICE_TOOL_IDS] ?: emptySet()
+            // The same defaults the reader falls back to, so the FIRST toggle
+            // persists the whole effective set rather than an empty one — else
+            // enabling one control tool would silently enable the other two.
+            val current = prefs[KEY_DISABLED_DEVICE_TOOL_IDS]
+                ?: DeviceToolToggles.DEFAULT_DISABLED_TOOL_IDS
             prefs[KEY_DISABLED_DEVICE_TOOL_IDS] = if (enabled) current - toolId else current + toolId
         }
     }
@@ -147,7 +221,26 @@ class SettingsStore @Inject constructor(
         context.auraDataStore.edit { it[KEY_SELECTED_PROJECT] = value }
     }
 
+    /**
+     * Permissions this app has already asked for at least once.
+     *
+     * Needed because `shouldShowRequestPermissionRationale` is `false` in TWO
+     * opposite situations — before the first ask, and after a permanent denial.
+     * Without a record of having asked, those are indistinguishable, and the
+     * screen cannot tell "the dialog will appear" from "the dialog is dead and
+     * you must go to Settings".
+     */
+    val askedPermissions: Flow<Set<String>> =
+        context.auraDataStore.data.map { it[KEY_ASKED_PERMISSIONS] ?: emptySet() }
+
+    suspend fun markPermissionAsked(vararg permissions: String) {
+        context.auraDataStore.edit { prefs ->
+            prefs[KEY_ASKED_PERMISSIONS] = (prefs[KEY_ASKED_PERMISSIONS] ?: emptySet()) + permissions
+        }
+    }
+
     private companion object {
+        val KEY_ASKED_PERMISSIONS = stringSetPreferencesKey("asked_permissions")
         val KEY_BASE_URL = stringPreferencesKey("base_url")
         val KEY_API_KEY_CIPHERTEXT = stringPreferencesKey("api_key_ciphertext")
         val KEY_API_KEY_IV = stringPreferencesKey("api_key_iv")
@@ -158,6 +251,9 @@ class SettingsStore @Inject constructor(
         val KEY_SELECTED_MODEL = stringPreferencesKey("selected_model")
         val KEY_OVERLAY_DEFAULT_MODEL = stringPreferencesKey("overlay_default_model")
         val KEY_SELECTED_PROJECT = stringPreferencesKey("selected_project")
+        val KEY_STT_ENGINE = stringPreferencesKey("speech_to_text_engine")
+        val KEY_TTS_ENGINE = stringPreferencesKey("text_to_speech_engine")
+        val KEY_SPEECH_VOLUME_BOOST_DB = intPreferencesKey("speech_volume_boost_db")
         val KEY_DISABLED_DEVICE_TOOL_IDS = stringSetPreferencesKey("disabled_device_tool_ids")
         val KEY_STREAMLIT_WIDGETS = booleanPreferencesKey("streamlit_widgets_enabled")
 

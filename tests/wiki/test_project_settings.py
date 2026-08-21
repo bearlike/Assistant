@@ -100,6 +100,7 @@ def test_from_submission_drops_the_token() -> None:
 def test_submission_round_trip_preserves_every_editable_field() -> None:
     """to_submission() must replay exactly what a refresh needs — and stay token-less."""
     original = _submission(
+        embeddingModel="openai/text-embedding-3-large",
         ref="develop",
         depth="concise",
         graphOnly=True,
@@ -118,6 +119,7 @@ def test_submission_round_trip_preserves_every_editable_field() -> None:
     assert replayed.filter_mode == "include"
     assert replayed.dirs == ["src"]
     assert replayed.files == ["*.py"]
+    assert replayed.embedding_model == "openai/text-embedding-3-large"
     assert replayed.model == original.model
     assert replayed.slug == original.slug
 
@@ -340,6 +342,37 @@ def test_reindex_does_not_wipe_an_edited_model(tmp_path: Path) -> None:
     assert after is not None
     assert after.model == "openai/gpt-5.4"
     assert after.desc == "edited"
+
+
+def test_start_preserves_an_existing_embedding_model_when_the_submission_omits_it(
+    tmp_path: Path,
+) -> None:
+    """A fresh onboarding payload must not erase a project's configured vector model.
+
+    Projects chosen before the field existed carry no value in a new submission.
+    The existing durable record is authoritative, just as it is for description,
+    so a repeat index must retain it rather than switch vector space silently.
+    """
+    store = JsonWikiStore(root_dir=tmp_path)
+    store.save_project_settings(
+        SLUG,
+        ProjectSettings.from_submission(
+            _submission(embeddingModel="openai/text-embedding-3-large")
+        ),
+    )
+    runtime = MagicMock()
+    runtime.wiki_store = store
+    runtime.resolve_session.return_value = "sess-x"
+
+    from mewbo_api.wiki.jobs import WikiIndexingJob
+
+    WikiIndexingJob.start(_submission(), runtime=runtime, hook_manager=None)
+
+    saved = store.get_project_settings(SLUG)
+    assert saved is not None
+    assert saved.embedding_model == "openai/text-embedding-3-large"
+    job = store.list_jobs(slug=SLUG)[0]
+    assert store.get_job_submission(job.job_id)["embeddingModel"] == "openai/text-embedding-3-large"
 
 
 # ── refresh: settings record wins; legacy fallback is ordered honestly ────────

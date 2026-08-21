@@ -152,6 +152,26 @@ def test_payload_key_treats_null_and_empty_as_unset(
     assert event["payload"]["project"] == "demo"
 
 
+def test_payload_key_treats_an_empty_collection_as_SET(store: SessionStoreBase) -> None:
+    """An empty list is a DECLARATION of none, not an absent key.
+
+    The distinction is load-bearing for any caller reading a declaration back:
+    ``device_tools: []`` is a client saying it advertises nothing, which must
+    de-register, while a context event silent on the key says nothing at all and
+    must not. ``payload_key_is_set`` deliberately stops at "not ``None``, not the
+    empty string" and leaves what counts as USABLE to the caller — so both
+    drivers have to agree that ``[]`` clears the bar, and Mongo's ``$nin`` is a
+    separate spelling of the same rule.
+    """
+    session_id = store.create_session()
+    store.append_event(session_id, {"type": "context", "payload": {"device_tools": ["a"]}})
+    store.append_event(session_id, {"type": "context", "payload": {"device_tools": []}})
+
+    event = store.latest_event_of_type(session_id, "context", payload_key="device_tools")
+    assert event is not None
+    assert event["payload"]["device_tools"] == []
+
+
 def test_payload_key_none_when_no_event_carries_it(store: SessionStoreBase) -> None:
     session_id = store.create_session()
     store.append_event(session_id, {"type": "context", "payload": {"client_capabilities": []}})

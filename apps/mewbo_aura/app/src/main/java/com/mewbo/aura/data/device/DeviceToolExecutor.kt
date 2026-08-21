@@ -63,6 +63,7 @@ class DeviceToolExecutor @Inject constructor(
     private val callLedger: DeviceToolCallLedger,
     private val clock: DeviceClock,
     private val gate: DeviceToolGate,
+    private val controlSession: DeviceControlSession,
     handlers: List<@JvmSuppressWildcards DeviceToolHandler>,
     @ApplicationScope private val scope: CoroutineScope,
 ) : DeviceToolDispatch {
@@ -149,6 +150,27 @@ class DeviceToolExecutor @Inject constructor(
                 result = null,
                 error = DeviceToolErrorDto(code = "tool_disabled", message = "Tool '${call.toolId}' is disabled in device settings"),
             )
+        }
+        // The ANSWER half of the grant. Its ADVERTISE half is
+        // `DeviceToolCatalog.availableTools`, and both read the one
+        // `DeviceControlSession` — the catalog asks whether control is possible,
+        // this asks whether it is held. Two questions, one owner: the divergence
+        // that shipped a playbook for absent tools came from two booleans
+        // derived independently in two modules, not from asking twice.
+        //
+        // The refusal is DISCRIMINATED rather than a single "unavailable": never
+        // started is the model's to fix in this same run, while a grant whose
+        // substrate went away is the user's, and reporting the first for the
+        // second sends both round a loop that cannot terminate — `start` would
+        // refuse for the identical reason. The session owns that distinction.
+        if (call.toolId in DeviceToolCatalog.CONTROL_TOOL_IDS) {
+            controlSession.controlRefusal()?.let { refusal ->
+                return Outcome(
+                    status = "error",
+                    result = null,
+                    error = DeviceToolErrorDto(code = refusal.code, message = refusal.message),
+                )
+            }
         }
         val handler = handlers[call.toolId]
             ?: return Outcome(

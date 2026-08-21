@@ -133,7 +133,10 @@ fun ChatTranscript(
     // AND the run itself is live - the moment an assistant reply (or anything
     // else) lands after it, or the run ends, it's no longer "the last item" and should read as
     // settled history, not in-flight work.
-    val isRunLive = runPhase == RunPhase.Sending || runPhase == RunPhase.Streaming
+    // [RunPhase.isRunInFlight], not a second spelling of {Sending, Streaming}: ChatUiState already
+    // owns that predicate and ChatScreen reads it off the same field. Two copies of it drifting
+    // apart desyncs the spark from the disclaimer gate below, and neither failure announces itself.
+    val isRunLive = runPhase.isRunInFlight
 
     // The AuraSpark row is the PERSISTENT run-liveness cue, visible for the entire run - not just
     // the pre-first-delta gap. Follow-up sends and mid-turn tool phases (nothing else on screen
@@ -212,10 +215,16 @@ fun ChatTranscript(
             // this fixed row). Gated on `showDisclaimer` (= a reply has settled AND no run is
             // live): it never shows during a turn's stream, first or follow-up, where it would
             // otherwise sit under the fresh user bubble ahead of the new response. So it is
-            // mutually exclusive with the spark below (settled ⇔ disclaimer, live ⇔ spark), and
-            // its appearance coincides with the settled ActionRow footer's. Index 0 stays the
-            // visual-bottom stick target, so autoscroll/isAtBottom above are unaffected. animateItem
-            // fades it in/out on that gated appearance rather than popping.
+            // mutually exclusive with the spark below (settled ⇔ disclaimer, live ⇔ spark).
+            // **Its predecessor is NOT always the settled ActionRow footer**, though: a turn that
+            // ends on a tool/widget/question card, or one whose only rendered item is an
+            // ErrorCard, leaves that chip/card as the disclaimer's actual visual neighbour instead -
+            // see [AuraSpacing.ActionRow.disclaimerGap]'s KDoc for why the gap can no longer assume
+            // the footer's own cell inset is doing the work. Both top AND bottom padding are explicit
+            // now (user directive: consistent air on both sides, always) - the bottom edge previously
+            // leaned on the LazyColumn's own generic `contentPadding` rather than a token tuned to
+            // this row. Index 0 stays the visual-bottom stick target, so autoscroll/isAtBottom above
+            // are unaffected. animateItem fades it in/out on that gated appearance rather than popping.
             if (showDisclaimer) {
                 item(key = "disclaimer") {
                     Text(
@@ -224,7 +233,10 @@ fun ChatTranscript(
                         modifier = transcriptItemTransition(reducedMotion, fadeEdges = true)
                             .fillMaxWidth()
                             .padding(horizontal = AuraSpacing.AssistantText.gutter)
-                            .padding(top = AuraSpacing.ActionRow.disclaimerGap),
+                            .padding(
+                                top = AuraSpacing.ActionRow.disclaimerGap,
+                                bottom = AuraSpacing.ActionRow.disclaimerBottomGap,
+                            ),
                     )
                 }
             }

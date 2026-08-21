@@ -1,24 +1,11 @@
 /**
  * IndexingProgress — atomic class describing one job's progress.
  *
- * The landing page card polls the snapshot endpoint (``IndexingJob``)
- * and the indexing page consumes the SSE stream (folded
- * ``IndexingStreamState``). Computing progress independently in each surface
- * invites exactly the drift a single-owner class prevents — e.g. reading
- * ``(scanned/total)*96`` alone (ignoring ``phase``) pegs at 96 for the entire
- * graph/plan/pages window, where a phase-weighted computation with
- * per-phase sub-progress does not.
- *
- * This class is the single source of truth. ``fromJob`` and ``fromStream``
- * both feed the same private ``_compute`` core, so the two views can
- * never drift apart again. ETA is a MEASURED-RATE-OR-NOTHING estimate of
- * time left in the CURRENT phase only — see "ETA" below for why a fixed
- * per-phase budget and a trailing-phase guess were both removed.
- *
- * Convention: an atomic class — frozen state in the instance, behaviour
- * on the prototype, static helpers off the class.
+ * The landing page card polls the snapshot endpoint and the indexing page
+ * consumes folded SSE state. Both enter through this class so the two surfaces
+ * cannot disagree about a job's current work or its remaining estimate.
  */
-import type { IndexingJob, IndexingPhase } from "./api/types";
+import type { IndexingJob, IndexingPhase, ProgressLedger, StepRecord } from "./api/types";
 
 /** Indexing-screen reducer state (a subset — only the fields we read here). */
 export interface IndexingStreamSnapshot {
@@ -28,10 +15,8 @@ export interface IndexingStreamSnapshot {
   pagesSubmitted: number;
 }
 
-// Phase weights — calibrated to real run shape.
-// Each phase has a (start, end) percent range; sub-progress fills the
-// range linearly. The bar never finishes a phase at 100% until the NEXT
-// phase event arrives (sub is clamped to 0.98 inside ``_compute``).
+// The weights now live with the work on the backend. This table is strictly the
+// no-ledger fallback for an in-flight un-migrated job or an older snapshot.
 const PHASE_RANGE: Record<IndexingPhase, [number, number]> = {
   clone: [0, 5],
   scan: [5, 20],
@@ -52,6 +37,22 @@ const PHASE_LABEL: Record<IndexingPhase, string> = {
   finalize: "Finalizing",
 };
 
+/**
+ * One-word phase names for the phase rail and the plan outline, where the
+ * sentence-length `PHASE_LABEL` would wrap seven times across a strip. The
+ * long label still carries the header, so a reader gets the sentence where
+ * there is room for one and the noun where there is not.
+ */
+export const PHASE_SHORT_LABEL: Record<IndexingPhase, string> = {
+  clone: "Clone",
+  scan: "Scan",
+  graph: "Graph",
+  enrich: "Entities",
+  plan: "Plan",
+  pages: "Pages",
+  finalize: "Finish",
+};
+
 export const PHASE_ORDER: readonly IndexingPhase[] = [
   "clone",
   "scan",
@@ -62,27 +63,22 @@ export const PHASE_ORDER: readonly IndexingPhase[] = [
   "finalize",
 ];
 
-/** Default unit label when the BE hasn't started sending one yet
- *  (`phaseProgressUnit` absent) — generic enough to read as honest. */
 const DEFAULT_PROGRESS_UNIT = "units";
+const TERMINAL_STATES = new Set<StepRecord["state"]>(["done", "skipped", "failed"]);
 
 export interface ProgressView {
   /** Whole-number percent for the bar (0-100). */
   pct: number;
-  /** Phase used for rendering. Falls back to ``"clone"`` on unknown. */
+  /** Phase used for the legacy phase strip. Falls back to ``clone``. */
   phase: IndexingPhase;
-  /** Heading line — "Cloning repository", "Writing wiki pages", … */
+  /** The active ledger step's label, or the fallback phase label. */
   label: string;
-  /** Sub-line — "12 of 30 files", "Page 4 of 25", "9 of 12 nodes", or empty. */
+  /** Active counter, or an uncountable step's label plus its elapsed time. */
   statusLine: string;
-  /**
-   * Seconds remaining estimate, scoped to the CURRENT phase only — never a
-   * whole-job guess (see "ETA" below). ``null`` when there's no measured
-   * rate to extrapolate from: the run hasn't committed a unit in this phase
-   * yet, the phase carries no progress signal at all, or the run is already
-   * complete.
-   */
+  /** Whole-operation estimate for a ledger, current-phase estimate otherwise. */
   etaSeconds: number | null;
+  /** Elapsed from the first declared step that opened, when a ledger exists. */
+  elapsedSeconds: number | null;
 }
 
 interface ComputeInput {
@@ -93,32 +89,16 @@ interface ComputeInput {
   pagesSubmitted: number;
   totalPages: number | null;
   phaseStartedAt: string | null | undefined;
-  /**
-   * Generic per-phase progress — the ONE mechanism for every phase beyond
-   * scan/pages (today: graph/enrich; works for a future phase with zero
-   * changes here). The BE resets all three of these to ``null`` on every
-   * ``emit_phase`` transition, which is the invariant this class leans on:
-   * a non-null ``phaseProgressCurrent`` always belongs to the phase named by
-   * ``phase``, never a stale value from a phase that already ended (the
-   * class of bug ``scannedCount``/``currentFile`` had — frozen leftovers
-   * from a phase that finished, read as if they described the current one).
-   */
   phaseProgressCurrent: number | null;
-  /** Paired with {@link phaseProgressCurrent}. ``null`` means "a running
-   *  count with no known total yet" — a real status line, but no honest
-   *  fraction to paint (pct stays at the phase floor, no ETA). */
   phaseProgressTotal: number | null;
-  /** "files" | "nodes" | "entities" | … — defaults to a generic label when
-   *  the BE hasn't started sending one. */
   phaseProgressUnit: string | null;
+  progress: ProgressLedger | undefined;
 }
 
 export class IndexingProgress {
   /** Compute from a snapshot ``IndexingJob`` (landing card path). */
   static fromJob(job: IndexingJob | null | undefined): ProgressView {
-    if (!job) {
-      return { pct: 0, phase: "clone", label: PHASE_LABEL.clone, statusLine: "", etaSeconds: null };
-    }
+    if (!job) return IndexingProgress._empty();
     return IndexingProgress._compute({
       phase: (job.phase ?? null) as IndexingPhase | null,
       status: job.status,
@@ -130,6 +110,7 @@ export class IndexingProgress {
       phaseProgressCurrent: job.phaseProgressCurrent ?? null,
       phaseProgressTotal: job.phaseProgressTotal ?? null,
       phaseProgressUnit: job.phaseProgressUnit ?? null,
+      progress: job.progress,
     });
   }
 
@@ -142,14 +123,11 @@ export class IndexingProgress {
       totalCount: state.job?.totalCount ?? 0,
       pagesSubmitted: state.pagesSubmitted,
       totalPages: state.totalPages,
-      // SSE state doesn't carry phaseStartedAt (or the generic per-phase
-      // progress fields) — the snapshot path does. ETA on the indexing page
-      // falls back to the snapshot through ``fromJob`` when the caller has
-      // it (most pages render both).
       phaseStartedAt: state.job?.phaseStartedAt ?? null,
       phaseProgressCurrent: state.job?.phaseProgressCurrent ?? null,
       phaseProgressTotal: state.job?.phaseProgressTotal ?? null,
       phaseProgressUnit: state.job?.phaseProgressUnit ?? null,
+      progress: state.job?.progress,
     });
   }
 
@@ -158,7 +136,7 @@ export class IndexingProgress {
     return PHASE_LABEL[phase];
   }
 
-  /** Format *seconds* as "~3 min left" / "~45 s left"; ``""`` if null. */
+  /** Format *seconds* as "~3 min left" / "~45 s left"; ``""`` if unusable. */
   static formatEta(seconds: number | null): string {
     if (seconds == null || seconds <= 0 || !Number.isFinite(seconds)) return "";
     if (seconds < 60) return `~${Math.round(seconds)}s left`;
@@ -169,19 +147,104 @@ export class IndexingProgress {
     return rem ? `~${h}h ${rem}m left` : `~${h}h left`;
   }
 
-  // ── Internal ────────────────────────────────────────────────────────
+  /** Compact elapsed duration for an open, uncountable step. */
+  static formatElapsed(seconds: number | null): string {
+    if (seconds == null || seconds < 0 || !Number.isFinite(seconds)) return "running";
+    const whole = Math.floor(seconds);
+    if (whole < 60) return `${whole}s`;
+    const minutes = Math.floor(whole / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+  }
+
+  // ── Ledger path ─────────────────────────────────────────────────────
+
+  private static _ledger(input: ComputeInput, ledger: ProgressLedger): ProgressView {
+    const now = Date.now();
+    const totalWeight = ledger.steps.reduce((total, step) => total + step.weight, 0) || 1;
+    const spentWeight = ledger.steps.reduce(
+      (spent, step) => spent + IndexingProgress._progressedWeight(step),
+      0,
+    );
+    const fraction = Math.max(0, Math.min(1, spentWeight / totalWeight));
+    const startedAt = ledger.steps
+      .map((step) => IndexingProgress._stamp(step.startedAt))
+      .filter((stamp): stamp is number => stamp != null)
+      .sort((a, b) => a - b)[0];
+    const elapsedSeconds = startedAt == null ? null : Math.max(0, (now - startedAt) / 1000);
+    const remainingWeight = totalWeight - spentWeight;
+    const etaSeconds =
+      elapsedSeconds == null || elapsedSeconds <= 0 || spentWeight <= 0 || remainingWeight <= 0
+        ? null
+        : remainingWeight * (elapsedSeconds / spentWeight);
+    const active = ledger.steps.find((step) => step.state === "running");
+    const phase = IndexingProgress._phase(active?.group ?? input.phase, input.status);
+
+    if (!active) {
+      return {
+        pct: Math.round(fraction * 100),
+        phase,
+        label: input.status === "complete" ? PHASE_LABEL.finalize : PHASE_LABEL[phase],
+        statusLine: input.status === "complete" ? "Done" : "",
+        etaSeconds,
+        elapsedSeconds,
+      };
+    }
+
+    const counted = IndexingProgress._counted(active);
+    const activeElapsed = IndexingProgress._elapsed(active, now);
+    return {
+      pct: Math.round(fraction * 100),
+      phase,
+      label: active.label,
+      statusLine: counted
+        ? `${active.current ?? 0} of ${active.total} ${active.unit ?? DEFAULT_PROGRESS_UNIT}`
+        : `${active.label} · ${IndexingProgress.formatElapsed(activeElapsed)}`,
+      etaSeconds,
+      elapsedSeconds,
+    };
+  }
+
+  private static _progressedWeight(step: StepRecord): number {
+    if (TERMINAL_STATES.has(step.state)) return step.weight;
+    if (!IndexingProgress._counted(step)) return 0;
+    return step.weight * Math.max(0, Math.min(1, (step.current ?? 0) / (step.total ?? 1)));
+  }
+
+  private static _counted(step: StepRecord): boolean {
+    return step.current != null && (step.total ?? 0) > 0;
+  }
+
+  private static _stamp(value: string | null | undefined): number | null {
+    if (!value) return null;
+    const stamp = new Date(value).getTime();
+    return Number.isFinite(stamp) ? stamp : null;
+  }
+
+  private static _elapsed(step: StepRecord, now: number): number | null {
+    const started = IndexingProgress._stamp(step.startedAt);
+    if (started == null) return null;
+    const ended = IndexingProgress._stamp(step.endedAt);
+    return Math.max(0, ((ended ?? now) - started) / 1000);
+  }
+
+  // ── Legacy no-ledger fallback ────────────────────────────────────────
 
   private static _compute(input: ComputeInput): ProgressView {
-    // Pick a phase — explicit if known, else infer from the `status`
-    // field so a run with no `phase` reported still renders meaningfully.
-    let phase: IndexingPhase = input.phase ?? "clone";
-    if (!input.phase) {
-      if (input.status === "scanning") phase = "scan";
-      else if (input.status === "finalizing") phase = "pages";
-      else if (input.status === "complete") phase = "finalize";
-    }
+    if (input.progress) return IndexingProgress._ledger(input, input.progress);
+
+    const phase = IndexingProgress._phase(input.phase, input.status);
     if (input.status === "complete") {
-      return { pct: 100, phase: "finalize", label: PHASE_LABEL.finalize, statusLine: "Done", etaSeconds: 0 };
+      return {
+        pct: 100,
+        phase: "finalize",
+        label: PHASE_LABEL.finalize,
+        statusLine: "Done",
+        etaSeconds: 0,
+        elapsedSeconds: null,
+      };
     }
 
     const [lo, hi] = PHASE_RANGE[phase];
@@ -194,11 +257,6 @@ export class IndexingProgress {
       sub = input.pagesSubmitted / Math.max(1, input.totalPages ?? 1);
       line = `Page ${input.pagesSubmitted} of ${input.totalPages}`;
     } else if (input.phaseProgressCurrent != null) {
-      // Phase-agnostic ladder for every OTHER phase (today: graph/enrich —
-      // works for a future phase with zero changes here, per the class doc
-      // above). One branch: a positive total ⇒ a real fraction; otherwise
-      // ``sub`` stays 0 (floor pct, no ETA) but the line still reports real
-      // activity instead of staying empty for the phase's whole duration.
       const current = input.phaseProgressCurrent;
       const total = input.phaseProgressTotal;
       const unit = input.phaseProgressUnit ?? DEFAULT_PROGRESS_UNIT;
@@ -210,52 +268,48 @@ export class IndexingProgress {
       }
     }
     sub = Math.max(0, Math.min(1, sub));
-
-    // Headroom: don't paint 100% of the phase until the next phase event arrives.
-    const reach = lo + (hi - lo) * Math.min(sub, 0.98);
-    const pct = Math.round(reach);
-
+    const pct = Math.round(lo + (hi - lo) * Math.min(sub, 0.98));
     return {
       pct,
       phase,
-      label: PHASE_LABEL[phase] ?? "Indexing repository",
+      label: PHASE_LABEL[phase],
       statusLine: line,
-      etaSeconds: IndexingProgress._eta({ ...input, phase, sub }),
+      etaSeconds: IndexingProgress._legacyEta({ ...input, phase, sub }),
+      elapsedSeconds: null,
     };
   }
 
-  /**
-   * ETA — a measured-rate-or-nothing estimate of time left in the CURRENT
-   * phase. Two things this deliberately does NOT do, both removed by this
-   * fix:
-   *
-   *   - No fixed per-phase budget fallback. The old fallback (a
-   *     ``PHASE_BUDGET_S`` lookup, sized "for ~30 files, 25 pages") was
-   *     wrong by 15-20x on a real multi-thousand-file repo, and — because
-   *     it never changed once picked — never counted down either: a run
-   *     could sit at a frozen bar with a stale ETA for its entire real
-   *     duration. An absent ETA is honest; a guess that doesn't scale with
-   *     repo size is not.
-   *   - No trailing-phase summation. Every phase after the current one
-   *     hasn't started, so there is no measured number to add for it —
-   *     summing a guessed budget for an unstarted phase onto an otherwise
-   *     honest current-phase estimate just re-introduces the same
-   *     dishonesty one phase early. The reported number is therefore
-   *     "time left in this phase," not "time left in the whole job" — a
-   *     real, shrinking number beats a compounded guess.
-   */
-  private static _eta(
+  private static _phase(
+    candidate: string | null | undefined,
+    status: IndexingJob["status"] | undefined,
+  ): IndexingPhase {
+    if (candidate && PHASE_ORDER.includes(candidate as IndexingPhase)) return candidate as IndexingPhase;
+    if (status === "scanning") return "scan";
+    if (status === "finalizing") return "pages";
+    if (status === "complete") return "finalize";
+    return "clone";
+  }
+
+  private static _empty(): ProgressView {
+    return {
+      pct: 0,
+      phase: "clone",
+      label: PHASE_LABEL.clone,
+      statusLine: "",
+      etaSeconds: null,
+      elapsedSeconds: null,
+    };
+  }
+
+  /** The legacy phase estimate remains measured-rate-or-nothing. */
+  private static _legacyEta(
     input: ComputeInput & { phase: IndexingPhase; sub: number },
   ): number | null {
-    const elapsed = input.phaseStartedAt
-      ? Math.max(0, Date.now() / 1000 - new Date(input.phaseStartedAt).getTime() / 1000)
-      : null;
-
+    const startedAt = IndexingProgress._stamp(input.phaseStartedAt);
+    const elapsed = startedAt == null ? null : Math.max(0, (Date.now() - startedAt) / 1000);
     let inPhase: number | null;
     if (input.phase === "pages" && (input.totalPages ?? 0) > 0) {
       const remaining = Math.max(0, (input.totalPages ?? 0) - input.pagesSubmitted);
-      // Measured per-page rate once we have ≥1 page committed:
-      // (elapsed / pagesSubmitted) extrapolated to remaining pages.
       inPhase = elapsed != null && input.pagesSubmitted > 0
         ? (elapsed / input.pagesSubmitted) * remaining
         : null;
@@ -265,21 +319,10 @@ export class IndexingProgress {
         ? (elapsed / input.scannedCount) * remaining
         : null;
     } else if (elapsed != null && input.sub > 0) {
-      // Generic linear extrapolation off the per-phase signal (graph/enrich,
-      // once ``phaseProgressCurrent``/``phaseProgressTotal`` populate ``sub``
-      // above): ``elapsed / sub`` is the phase's total-time estimate;
-      // subtract elapsed for what's left.
       inPhase = elapsed / Math.max(0.01, input.sub) - elapsed;
     } else {
-      // No measurable rate for this phase: clone/plan/finalize never carry
-      // a progress signal, and graph/enrich read this way until
-      // ``phaseProgressCurrent`` starts arriving (old job) or its total is
-      // still unknown. Showing nothing here is the fix — see the class doc
-      // above.
       inPhase = null;
     }
-
-    if (inPhase == null || !Number.isFinite(inPhase) || inPhase < 0) return null;
-    return inPhase;
+    return inPhase == null || !Number.isFinite(inPhase) || inPhase < 0 ? null : inPhase;
   }
 }

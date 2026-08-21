@@ -186,15 +186,39 @@ object AuraSpacing {
         val topMargin: Dp = 8.dp
 
         /**
-         * Same ink-vs-box correction as [topMargin]: the reference's action-row-to-disclaimer ink
-         * gap measures 8dp, but the ORIGINAL 8dp token here was stacking on top of the [cellSize]
-         * cell's own 12dp bottom inset (12 + 8 = 20dp measured, not 8). Zeroing this token still
-         * yields ~12dp of ink (the cell inset alone), not the reference's 8dp - going lower would
-         * mean either shrinking the 48dp touch target below the a11y minimum or a negative offset
-         * clipping into the action row's own touch cells, neither acceptable for a ~4dp residual.
-         * Accepted as the best achievable value; do not add a positive number back here.
+         * Top gap between the disclaimer and whatever precedes it. Same ink-vs-box correction as
+         * [topMargin] motivated the old value here (0dp, leaning entirely on the settled
+         * `ActionRow` footer's own [cellSize] cell inset for ~12dp of ink) - but that reasoning
+         * assumed the footer is ALWAYS this row's visual predecessor. It isn't: `shouldShowDisclaimer`
+         * only requires that SOME reply has settled somewhere in the transcript, not that the
+         * transcript's actual LAST item is one. A turn that ends on a tool call/widget/question card
+         * (no trailing assistant text), or a completion whose only rendered item is a
+         * `ChatItem.ErrorCard`, leaves the disclaimer's true predecessor as that chip/card - which
+         * carries no cell inset of its own - so the old 0dp measured as a flush, touching 0dp gap in
+         * exactly those states (user report: "extremely close to the user bubble or the response
+         * text itself"). User directive: comfortable, CONSISTENT padding above the disclaimer
+         * regardless of what precedes it - so this is now an explicit 8dp, the same "small real gap"
+         * value as [topMargin]/[Composer.gapTight] elsewhere in this file, rather than a value tuned
+         * to one specific predecessor's geometry. When the footer DOES precede, this adds to its
+         * ~12dp cell inset for ~20dp of ink (symmetric with [topMargin]'s own ~22dp
+         * response-to-footer ink); when it doesn't, this alone is the whole gap, and it is never
+         * zero. Do not chase ink-parity with the footer case back down - the point of this token is
+         * that it no longer depends on the footer being there. See [disclaimerBottomGap] for the
+         * matching gap below.
          */
-        val disclaimerGap: Dp = 0.dp
+        val disclaimerGap: Dp = 8.dp
+
+        /**
+         * Bottom gap between the disclaimer and whatever follows it (the composer, or the card edge
+         * in the overlay's bounded `ResponseCard`). There was previously NO padding on the
+         * disclaimer item's own trailing edge - it leaned entirely on the transcript `LazyColumn`'s
+         * shared `contentPadding` ([Composer.gapTight], 8dp), a generic inset meant for every item,
+         * not tuned to this one. User directive (same round as [disclaimerGap]): comfortable padding
+         * below the disclaimer as well as above, so both sides read consistently rather than one
+         * being an explicit token and the other an incidental shared default. Same 8dp value as
+         * [disclaimerGap] for the symmetry the directive asks for.
+         */
+        val disclaimerBottomGap: Dp = 8.dp
     }
 
     object DrawerRow {
@@ -248,6 +272,35 @@ object AuraSpacing {
     }
 
     val searchRowHeight: Dp = 64.dp
+
+    /**
+     * The settings screen's collapsible sections. Every generic value reuses an existing token —
+     * [screenGutter] for the outer margin, [Composer.internalPadding] for the inner padding,
+     * [Composer.gapTight] for small gaps, [DrawerRow.iconSize]/[DrawerRow.iconToLabelGap] for the
+     * heading glyph. Only the four below were genuinely uncovered.
+     */
+    object Settings {
+        /** Air between two adjacent section cards, so each reads as its own bounded unit rather
+         * than one continuous list under repeated hairlines. A step down from the chat surface's
+         * [Turn] band: a settings list is a control surface, not a conversation. */
+        val cardGap: Dp = 12.dp
+
+        /**
+         * Floor for a settings row. Taller than the 48dp accessibility minimum because a row here
+         * carries a label AND a purpose caption; the floor governs the single-line case so a row
+         * with no caption still clears the touch-target law.
+         */
+        val rowMinHeight: Dp = 56.dp
+
+        /** Label → purpose caption. Tight enough that the pair reads as one control rather than
+         * two stacked rows. */
+        val captionGap: Dp = 2.dp
+
+        /** Status glyph beside a status word. One step below [DrawerRow.iconSize] so the badge
+         * sits proportionate to its [AuraType.caption] label instead of competing with the row
+         * label above it. */
+        val statusIconSize: Dp = 16.dp
+    }
 
     /**
      * Mewbo Apps gallery card + detail health row (design spec §4D). Every generic gap/padding
@@ -406,4 +459,37 @@ object AuraSpacing {
         /** Read-aloud badge glyph size (bottom control row). */
         val speakerBadgeSize: Dp = 25.dp
     }
+
+    /**
+     * The D-pad focus ring's geometry. One grouping, because a ring that varies per surface stops
+     * reading as "this is where you are" and starts reading as decoration.
+     *
+     * Sized to be legible from a couch rather than from arm's length: a television is viewed at
+     * roughly three times a handset's distance, so the hairline weight used for [outlineHairline]
+     * dividers disappears entirely at that range.
+     */
+    object Focus {
+        /** Ring stroke. Thicker than a divider on purpose — see the object KDoc. */
+        val ringWidth: Dp = 2.dp
+
+        /** Corner rounding for the default ring, matching the row-shaped surfaces it most often
+         * wraps. A caller whose target has its own silhouette (a circle, a pill) passes its own
+         * shape instead of inheriting this. */
+        val ringCornerRadius: Dp = 12.dp
+    }
+
+    /**
+     * The television shell's permanent navigation rail.
+     *
+     * A fixed width rather than a fraction, unlike the handheld drawer's 0.78 of the screen: that
+     * fraction exists because a sheet laid over content should not fully cover it, and a rail
+     * covers nothing. What it must do instead is leave the transcript enough room to stay the
+     * subject — at the 960dp width a 16:9 television reports, this keeps roughly three quarters of
+     * the screen for the conversation while still fitting a session title without truncating it to
+     * a stub.
+     */
+    object NavigationRail {
+        val width: Dp = 240.dp
+    }
+
 }

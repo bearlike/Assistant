@@ -57,7 +57,7 @@ def refresh_config():
 def _build(store) -> RefreshOrchestrator:
     """The production composition root, with only its I/O collaborators stubbed."""
     return RefreshOrchestrator.from_store(
-        store, parser=FakeParser({}), embedder=FakeEmbedder()
+        store, slug="acme/repo", parser=FakeParser({}), embedder=FakeEmbedder()
     )
 
 

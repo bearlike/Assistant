@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { AlertCircle, Info, Loader2, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
+import { MicButton } from "@/components/MicButton";
 import { Button } from "@/components/ui/button";
 import { cardSurface } from "@/components/ui/card-surface";
 import { ComposerShell, composerInputCls } from "@/components/ui/composer-shell";
@@ -202,21 +203,24 @@ function HeroComposer({
         // same height the shared `ComposerSendButton` uses on a hero surface,
         // and `leadingIcon` keeps the icon gap on the primitive (a hand-rolled
         // `mr-1.5` stacks on the button's own `gap-1.5` and doubles it).
-        <Button
-          variant="primary"
-          size="md"
-          onClick={onSubmit}
-          disabled={submitting}
-          leadingIcon={
-            submitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="h-3.5 w-3.5" />
-            )
-          }
-        >
-          Build app
-        </Button>
+        <>
+          <MicButton value={value} onChange={onChange} disabled={submitting} />
+          <Button
+            variant="primary"
+            size="md"
+            onClick={onSubmit}
+            disabled={submitting}
+            leadingIcon={
+              submitting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )
+            }
+          >
+            Build app
+          </Button>
+        </>
       }
     />
   );

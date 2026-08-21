@@ -28,7 +28,12 @@ from typing import TYPE_CHECKING
 
 from mewbo_core.common import get_logger
 
-from mewbo_graph.plugins.wiki._ctx import build_jobless_ctx, emit_log, emit_phase
+from mewbo_graph.plugins.wiki._ctx import (
+    ProgressReporter,
+    build_jobless_ctx,
+    emit_log,
+    emit_phase,
+)
 from mewbo_graph.plugins.wiki._jobless import JoblessIndexRunner, JoblessPhaseError
 from mewbo_graph.plugins.wiki.build_graph import build_graph_core
 from mewbo_graph.plugins.wiki.clone import _git_rev_parse
@@ -99,7 +104,18 @@ class GraphOnlyIndexer(JoblessIndexRunner):
         if not ctx.clone_dir.exists():
             raise JoblessPhaseError("internal", f"clone dir missing: {ctx.clone_dir}")
         emit_phase(ctx, "graph")
+        ProgressReporter(ctx).skip_group(
+            "enrich", note="not run by graph-only index"
+        )
+        ProgressReporter(ctx).skip_group(
+            "plan", note="not run by graph-only index"
+        )
+        ProgressReporter(ctx).skip_group(
+            "pages", note="not run by graph-only index"
+        )
         result = build_graph_core(ctx)
+        ProgressReporter(ctx).finish_group("clone")
+        ProgressReporter(ctx).finish_group("scan")
         emit_log(
             ctx,
             f"Graph built (graph-only): {result.get('nodeCount', 0)} nodes, "
@@ -205,12 +221,24 @@ class GraphOnlyIndexer(JoblessIndexRunner):
                 logging.info("graph-only finalize: supersede failed ({})", exc)
 
         emit_phase(ctx, "finalize")
+        ProgressReporter(ctx).finish_group("finalize")
         emit_log(ctx, "Graph-only wiki ready: AST graph built, no documentation pages")
         ctx.store.append_job_event(ctx.job_id, {
             "type": "complete",
             "landingPageId": _GRAPH_ONLY_LANDING_ID,
             "pageCount": 0,
         })
+
+        # Defense-in-depth, matching the other two terminal tools: the
+        # explicit skip/finish_group calls above cover the phases this shape
+        # knows it bypasses, but ``build_graph_core`` (shared with the
+        # agent-driven path) is code this runner does not own — a future gap
+        # in it should read as "settled by finalize", not as a permanently
+        # open step on a completed graph-only job.
+        # ``settle`` emits its own timeline warning for an unreported step, so
+        # no call site repeats it: four terminal callers each remembering to
+        # log the same thing is the second-writer shape this ledger removed.
+        ProgressReporter(ctx).settle()
 
 
 def build_graph_only_ctx(

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Command as CmdK } from "cmdk"
+import { MicButton } from "@/components/MicButton"
 import {
   ComposerSendButton,
   composerInputCls,
@@ -235,14 +236,17 @@ export function SearchBar({
         }
         toolbarLeft={toolbarLeft}
         toolbarRight={
-          <ComposerSendButton
-            onClick={() => submit()}
-            submitting={submitting}
-            active={Boolean(value.trim())}
-            shape="square"
-            aria-label={submitting ? "Starting search…" : "Search"}
-            className={isHero ? "h-8 w-8 hover:brightness-110 hover:opacity-100" : ""}
-          />
+          <>
+            <MicButton value={value} onChange={onChange} disabled={submitting} />
+            <ComposerSendButton
+              onClick={() => submit()}
+              submitting={submitting}
+              active={Boolean(value.trim())}
+              shape="square"
+              aria-label={submitting ? "Starting search…" : "Search"}
+              className={isHero ? "h-8 w-8 hover:brightness-110 hover:opacity-100" : ""}
+            />
+          </>
         }
         popover={
           <SearchSuggestions

@@ -471,9 +471,10 @@ class SessionEventTest {
     }
 
     // --- lastContextMcpTools (ChatViewModel.bind's session tool-narrowing hydration) ---
-    // `mcp_tools` is persisted ONLY when the user narrowed the tool set (non-empty allowlist); an
-    // absent/empty field means "all tools bound" (untouched), which must round-trip back to null so
-    // the next /query omits the field entirely (ComposerScope.mcpToolsForContext).
+    // THREE-STATE, matching what ComposerScope.mcpToolsForContext writes: an ABSENT field means "all
+    // tools bound" (untouched) and round-trips to null so the next /query omits it again; an EMPTY
+    // array is an explicit ceiling of zero and round-trips to the empty set so the next /query
+    // re-declares it. Reading empty as absent re-widens an all-tools-off session one turn later.
 
     @Test
     fun `lastContextMcpTools reads the allowlist off a context event as a set`() {
@@ -503,9 +504,24 @@ class SessionEventTest {
     }
 
     @Test
-    fun `lastContextMcpTools treats an empty allowlist array the same as absent`() {
+    fun `lastContextMcpTools reads an EMPTY allowlist array as an explicit ceiling of zero`() {
+        // NOT null. A session whose newest context event declares `mcp_tools: []` asked for no MCP
+        // tools; hydrating that as "untouched" would make the very next send omit the field and
+        // re-bind the whole registry, with nothing on screen to show the ceiling was dropped.
         val events = listOf(SessionEvent.decode(json, """{"type":"context","ts":"t1","payload":{"mcp_tools":[]}}"""))
-        assertEquals(null, SessionEvent.lastContextMcpTools(events))
+        assertEquals(emptySet<String>(), SessionEvent.lastContextMcpTools(events))
+    }
+
+    @Test
+    fun `an all-tools-off session round-trips its own empty ceiling back onto the wire`() {
+        // The contract joined end to end: what lastContextMcpTools READS off the persisted event
+        // feeds ComposerScope.activeToolIds, and what mcpToolsForContext WRITES has to be the same
+        // declaration. Either half alone re-widens the session one turn later, and each half looks
+        // correct in isolation, so the join is what has to be pinned.
+        val events = listOf(SessionEvent.decode(json, """{"type":"context","ts":"t1","payload":{"mcp_tools":[]}}"""))
+        val hydrated = ComposerScope(activeToolIds = SessionEvent.lastContextMcpTools(events))
+
+        assertEquals(emptyList<String>(), hydrated.mcpToolsForContext())
     }
 
     @Test

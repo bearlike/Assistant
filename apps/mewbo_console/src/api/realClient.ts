@@ -16,38 +16,12 @@ import { QuestionAnswerItemPayload } from "../types";
 import { AgentSummary, AnswerQuestionResult, ApiClient, ApiConfig, ApiKeyCreated, ApiKeyRevoked, ApiKeySummary, ConfigState, CreateWorktreeInput, ForkResponse, MarketplacePlugin, ModelInfo, PluginSummary, ProjectBranches, ProjectSummary, RecoverResponse, SessionListFilter, SkillSummary, ToolSummary, VirtualProject, WorktreeSummary } from "./contracts";
 import { apiFetch, withBase, authHeaders, readError, readJson as handleJson } from "./httpBase";
 
-// Capability IDs can be overridden at build time. Each must match the id in a
-// plugin manifest's requires-capabilities (hardcoded server-side; there is no
-// server config key for them):
-//   - `stlite`   → the widget-builder plugin (chat `widget_ready` cards).
-//   - `apps`     → the app-builder plugin (Mewbo Apps sub-product). Advertised
-//     on every session-driving request so a ROOT session can delegate to the
-//     app-builder AgentDef (two-surface gating: catalogs AND build_for).
-//   - `ask_user` → core's ASK_USER_CAPABILITY. The console renders the
-//     ask-user-question card and POSTs the answer, so it advertises this on
-//     the ordinary chat/query path. Headless product drives (wiki/search) use
-//     their own client and never send this — they must not bind the
-//     block-until-answered tool.
-//   - `generative_ui` → core's generative-UI capability, which gates the
-//     `present_ui` SessionTool. Advertising it and rendering the result are
-//     one decision: the console has the allowlist renderer
-//     (`components/generative-ui/`), so it grants the tool. A surface that
-//     advertised without rendering would let a run spend a step producing a
-//     tree nobody can read.
-// The header is a comma-separated list (backend.py splits on "," and strips),
-// so all four grants ride every session the console opens.
-const WIDGET_CAPABILITY_ID =
-  (import.meta.env.VITE_WIDGET_CAPABILITY_ID as string | undefined) || "stlite";
-const APPS_CAPABILITY_ID =
-  (import.meta.env.VITE_APPS_CAPABILITY_ID as string | undefined) || "apps";
-const ASK_USER_CAPABILITY_ID = "ask_user";
-const GENERATIVE_UI_CAPABILITY_ID = "generative_ui";
-const CLIENT_CAPABILITIES = [
-  WIDGET_CAPABILITY_ID,
-  APPS_CAPABILITY_ID,
-  ASK_USER_CAPABILITY_ID,
-  GENERATIVE_UI_CAPABILITY_ID
-].join(",");
+// Capability ids and the header's comma join live in ONE place — `./capabilities`,
+// the TypeScript mirror of core's `capabilities.py` registry, pinned by
+// `src/__tests__/capabilityRegistryAlignment.test.ts`. Each id there names where
+// its answering half lives, because advertising a capability and servicing it
+// are one decision.
+import { CLIENT_CAPABILITIES } from "./capabilities";
 
 function headers(apiKey?: string): HeadersInit {
   return {

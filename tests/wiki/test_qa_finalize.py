@@ -90,6 +90,39 @@ def test_tag_page_citations_reschemes_only_real_pages(store):
     ]
 
 
+def test_tag_page_citations_unwraps_the_src_href_scheme(store):
+    """A page cited as ``src:<page-id>`` re-schemes to ``wiki:<id>``.
+
+    ``src:`` is the INLINE HREF wrapper the answer prose uses, so the model
+    reaches for it in the sources list too. Treating it as "already schemed"
+    let it bypass the page authority: the console read ``src:overview`` as a
+    file PATH, fetched it from ``/source`` (which holds no pages), and rendered
+    a dead "Source unavailable" card. The wrapper carries no claim about what
+    the target is, so it is unwrapped before the authority decides — a wrapped
+    FILE ref still falls through untagged, just without the dead prefix.
+    """
+    store.save_page("org/repo", WikiPage(
+        id="overview", title="Mewbo Architecture Overview",
+        frontmatter=Frontmatter(title="Mewbo Architecture Overview", slug="overview"),
+        body="# x", toc=[], nav=[],
+    ))
+    block = {"kind": "sources", "items": [
+        "src:overview",                    # wrapped page id → wiki:
+        "src:Mewbo Architecture Overview",  # wrapped page TITLE → wiki:
+        "overview",                        # bare page id still works
+        "src:app.py",                      # wrapped file (not a page) → unwrapped
+        "graph:n7",                        # a real scheme → untouched
+    ]}
+    tagged = QaFinalizer.tag_page_citations(block, store, "org/repo")
+    assert tagged["items"] == [
+        "wiki:overview",
+        "wiki:overview",
+        "wiki:overview",
+        "app.py",
+        "graph:n7",
+    ]
+
+
 def test_tag_page_citations_matches_title_form_refs(store):
     """A page cited by its human TITLE re-schemes to ``wiki:<id>``.
 

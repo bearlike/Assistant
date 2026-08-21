@@ -17,6 +17,7 @@ EXPECTED_SECRET = {
     "api.apps_token_secret",  # Mewbo Apps render-token signing secret — write-only
     "api.auth.session.secret",  # browser session cookie signing secret
     "api.auth.scim.secret",  # bearer secret an IdP presents to the SCIM endpoint
+    "speech.api_key",  # key for a speech gateway kept separate from the llm one
     # Credentials on a LIST element. No index segment: the path means "this
     # field, in EVERY authenticator entry" — the representation strip/patch can
     # actually apply while walking a decoded config.
@@ -164,6 +165,7 @@ def test_secret_status_reports_is_set_bools():
         "api.apps_token_secret": False,  # missing -> not set
         "api.auth.session.secret": False,  # missing -> not set
         "api.auth.scim.secret": False,  # missing -> not set
+        "speech.api_key": False,  # missing -> not set (it falls back to llm.api_key)
         "api.auth.authenticators.client_secret": False,  # missing -> not set
         "api.auth.authenticators.bind_password": False,  # missing -> not set
     }

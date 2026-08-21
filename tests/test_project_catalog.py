@@ -331,6 +331,61 @@ def test_raising_repository_store_degrades_only_the_repository_section(tmp_path)
 
 
 # ---------------------------------------------------------------------------
+# Ownership — owns_path()
+# ---------------------------------------------------------------------------
+
+
+def test_owns_path_returns_true_for_configured_project_path(tmp_path):
+    project_dir = tmp_path / "configured"
+    project_dir.mkdir()
+    catalog = ProjectCatalog(
+        configured={"cfg": ProjectConfig(path=str(project_dir), description="")}
+    )
+
+    assert catalog.owns_path(str(project_dir)) is True
+
+
+def test_owns_path_returns_true_for_managed_project_path(tmp_path):
+    project_dir = tmp_path / "managed"
+    project_dir.mkdir()
+    project_store = _FakeProjectStore([_virtual_project("proj-1", str(project_dir))])
+    catalog = ProjectCatalog(configured={}, project_store=project_store)
+
+    assert catalog.owns_path(str(project_dir)) is True
+
+
+def test_owns_path_returns_false_for_unrelated_directory(tmp_path):
+    project_dir = tmp_path / "configured"
+    unrelated_dir = tmp_path / "unrelated"
+    project_dir.mkdir()
+    unrelated_dir.mkdir()
+    catalog = ProjectCatalog(
+        configured={"cfg": ProjectConfig(path=str(project_dir), description="")}
+    )
+
+    assert catalog.owns_path(str(unrelated_dir)) is False
+
+
+@pytest.mark.parametrize("path", [None, ""])
+def test_owns_path_returns_false_for_empty_path(path):
+    catalog = ProjectCatalog(configured={})
+
+    assert catalog.owns_path(path) is False
+
+
+def test_owns_path_returns_true_for_configured_project_symlink(tmp_path):
+    project_dir = tmp_path / "configured"
+    project_dir.mkdir()
+    project_symlink = tmp_path / "configured-via-symlink"
+    project_symlink.symlink_to(project_dir)
+    catalog = ProjectCatalog(
+        configured={"cfg": ProjectConfig(path=str(project_dir), description="")}
+    )
+
+    assert catalog.owns_path(str(project_symlink)) is True
+
+
+# ---------------------------------------------------------------------------
 # Resolution — resolve()
 # ---------------------------------------------------------------------------
 

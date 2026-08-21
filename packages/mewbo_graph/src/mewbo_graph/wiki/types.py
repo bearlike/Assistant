@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, cast
 
+from mewbo_core.contracts.progress import ProgressLedger, StepRecord
 from mewbo_core.workspaces.repositories import PlatformId
 from pydantic import (
     BaseModel,
@@ -42,6 +43,52 @@ _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 # ── Project ────────────────────────────────────────────────────────────────────
+
+
+class StepMeasurement(BaseModel):
+    """One completed step's observed elapsed time and final unit count.
+
+    The record belongs on :class:`Project`, the stable current-index snapshot,
+    rather than a job that the next index has to search for. It stays bounded by
+    the declared plan: one measurement per step, never per file, node, or page.
+    """
+
+    model_config = _CFG
+
+    seconds: float = Field(ge=0)
+    units: int | None = Field(default=None, ge=0)
+
+    @classmethod
+    def from_record(
+        cls, record: StepRecord, now: datetime
+    ) -> StepMeasurement | None:
+        """Project one completed non-skipped ledger record into a measurement.
+
+        Cost: ``O(1)``. The clock arrives from the caller for testability. A
+        skipped resumed phase has no fresh cost, so it must not replace an earlier
+        measurement with a near-zero duration.
+        """
+        if record.state != "done":
+            return None
+        seconds = record.elapsed_seconds(now)
+        if seconds is None or seconds < 0:
+            return None
+        return cls(seconds=seconds, units=record.total)
+
+    def blended_with(self, observed: StepMeasurement) -> StepMeasurement:
+        """Blend a newer reading into this one. Cost: ``O(1)``.
+
+        The previous reading keeps 75% of the result and the newest completed run
+        supplies 25%, which damps one-off noise without making calibration stale.
+        When both readings count units, blend their rates projected onto the new
+        count — otherwise a doubled repository would inherit half its time.
+        """
+        if self.units and observed.units:
+            prior_at_new_size = (self.seconds / self.units) * observed.units
+            seconds = (prior_at_new_size * 0.75) + (observed.seconds * 0.25)
+        else:
+            seconds = (self.seconds * 0.75) + (observed.seconds * 0.25)
+        return StepMeasurement(seconds=seconds, units=observed.units)
 
 
 class Project(BaseModel):
@@ -94,6 +141,43 @@ class Project(BaseModel):
     # the question was never recorded for this project, which reads as unknown
     # and never as a healthy pass.
     resolution: GraphResolution | None = None
+    # The prior completed index's observed step costs. One row per declared step,
+    # never per repository unit, so loading a project stays ``O(one record)``.
+    step_measurements: dict[str, StepMeasurement] = Field(
+        default_factory=dict, alias="stepMeasurements"
+    )
+
+    def measured_steps(
+        self,
+        records: list[StepRecord],
+        *,
+        declared_keys: set[str],
+        now: datetime,
+    ) -> dict[str, StepMeasurement]:
+        """Blend this run's completed records into the calibrated step costs.
+
+        Cost: ``O(declared steps)``. A 75/25 rolling blend retains most of the
+        prior reading while admitting a repository's current shape; one run is
+        noisy, but a repository can also change size between indexes. Only
+        declared, completed records participate, so resume-skipped steps retain
+        the previous reading instead of becoming falsely free.
+        """
+        measurements = {
+            key: value
+            for key, value in self.step_measurements.items()
+            if key in declared_keys
+        }
+        for record in records:
+            if record.key not in declared_keys:
+                continue
+            observed = StepMeasurement.from_record(record, now)
+            if observed is None:
+                continue
+            previous = measurements.get(record.key)
+            measurements[record.key] = (
+                observed if previous is None else previous.blended_with(observed)
+            )
+        return measurements
 
 
 # ── Platform ───────────────────────────────────────────────────────────────────
@@ -355,6 +439,17 @@ class WizardSubmission(BaseModel):
     # fails. ``None`` = inherit the configured fallback policy; a list
     # overrides it for this job only.
     fallback_models: list[str] | None = Field(default=None, alias="fallbackModels")
+    # Embedding model this project's vectors are built and searched with.
+    # ``None`` = inherit the deployment default (``wiki.embedding.model``), which
+    # is what every project indexed before this field existed carries.
+    #
+    # It is per-PROJECT rather than per-job because the write side and the read
+    # side have to agree: two embedding models rarely share a vector width, and a
+    # store holding both returns wrong neighbours rather than erroring. Changing
+    # it is therefore a full rebuild, which nothing here has to arrange —
+    # ``IndexFingerprint.embedding_model`` already records the model a run
+    # actually embedded with, and a mismatch against it forces the full path.
+    embedding_model: str | None = Field(default=None, alias="embeddingModel")
     # Free-text operator guidance appended to the indexer's playbook.
     # ``None`` = no guidance.
     custom_instructions: str | None = Field(default=None, alias="customInstructions")
@@ -466,6 +561,11 @@ class ProjectSettings(BaseModel):
     # silently dropped from every index after the first — including for a project
     # that was first indexed with one.
     fallback_models: list[str] | None = Field(default=None, alias="fallbackModels")
+    # Embedding model the next index builds this project's vectors with, and that
+    # every read of them must embed its query with. ``None`` = inherit the
+    # deployment default. Same round-trip obligation as the ladder above; see
+    # ``WizardSubmission.embedding_model`` for why it is per-project.
+    embedding_model: str | None = Field(default=None, alias="embeddingModel")
     # Operator guidance appended to the indexer playbook on the next index, and
     # the external MCP servers attached to it. Both carry the SAME round-trip
     # obligation the ladder above spells out — a value this record cannot carry
@@ -522,6 +622,7 @@ class ProjectSettings(BaseModel):
             fallbackModels=(
                 list(sub.fallback_models) if sub.fallback_models is not None else None
             ),
+            embeddingModel=sub.embedding_model,
             customInstructions=sub.custom_instructions,
             mcpServers=(
                 dict(sub.mcp_servers) if sub.mcp_servers is not None else None
@@ -551,6 +652,7 @@ class ProjectSettings(BaseModel):
             fallbackModels=(
                 list(self.fallback_models) if self.fallback_models is not None else None
             ),
+            embeddingModel=self.embedding_model,
             customInstructions=self.custom_instructions,
             mcpServers=(
                 dict(self.mcp_servers) if self.mcp_servers is not None else None
@@ -1122,6 +1224,11 @@ class IndexingJob(BaseModel):
     # running count with no knowable total" — a real status line but not a
     # fraction. ``unit`` is the plural noun the reader renders ("files",
     # "nodes", "entities"); absent, a consumer falls back to a generic label.
+    # The durable per-step model. It is bounded by DECLARED steps, never by
+    # repository units, so every snapshot read stays ``O(1)`` in repository
+    # size. It supersedes the legacy triple below, retained only so an in-flight
+    # job and older clients keep working during the migration.
+    progress: ProgressLedger | None = Field(default=None)
     phase_progress_current: int | None = Field(default=None, alias="phaseProgressCurrent")
     phase_progress_total: int | None = Field(default=None, alias="phaseProgressTotal")
     phase_progress_unit: str | None = Field(default=None, alias="phaseProgressUnit")

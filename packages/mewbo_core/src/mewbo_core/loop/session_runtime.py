@@ -1117,6 +1117,7 @@ class SessionRuntime:
         hook_manager=None,
         mode: str | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -1170,6 +1171,14 @@ class SessionRuntime:
         run_arguments: dict[str, Any] = dict(locals())
         run_arguments.pop("self", None)
         run_id = self._mint_run_id(session_id)
+        # A caller-supplied invocation_id wins; otherwise seed the Langfuse
+        # trace id from the run id we just minted, so each run gets its own
+        # trace instead of every run of a session collapsing onto one. The
+        # snapshot above already captured the unresolved (possibly None)
+        # value, so a goal-retry replay mints its OWN distinct run/trace id
+        # rather than inheriting this one.
+        if invocation_id is None:
+            invocation_id = run_id
         msg_queue: queue.Queue[str] = queue.Queue()
         interrupt_event = threading.Event()
 
@@ -1268,6 +1277,7 @@ class SessionRuntime:
                 mode=mode,
                 should_cancel=cancel_event.is_set,
                 allowed_tools=allowed_tools,
+                denied_tools=denied_tools,
                 strict_tool_scope=strict_tool_scope,
                 capability_mode=capability_mode,
                 skill_instructions=skill_instructions,
@@ -1310,6 +1320,7 @@ class SessionRuntime:
                 mode=mode,
                 should_cancel=cancel_event.is_set,
                 allowed_tools=allowed_tools,
+                denied_tools=denied_tools,
                 strict_tool_scope=strict_tool_scope,
                 capability_mode=capability_mode,
                 skill_instructions=skill_instructions,
@@ -1402,6 +1413,7 @@ class SessionRuntime:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -1451,6 +1463,7 @@ class SessionRuntime:
             mode=mode,
             should_cancel=should_cancel,
             allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
             strict_tool_scope=strict_tool_scope,
             capability_mode=capability_mode,
             skill_instructions=skill_instructions,
@@ -1485,6 +1498,7 @@ class SessionRuntime:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -1524,6 +1538,7 @@ class SessionRuntime:
             mode=mode,
             should_cancel=should_cancel,
             allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
             strict_tool_scope=strict_tool_scope,
             capability_mode=capability_mode,
             skill_instructions=skill_instructions,

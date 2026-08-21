@@ -25,10 +25,15 @@ from mewbo_api.apps.models import (
     AppUpdatedEvent,
     AppVersion,
     CollectionSpec,
+    CsvResult,
+    FailureBudget,
+    JsonResult,
     PipelineIssue,
     PipelineRun,
     PipelineSpec,
+    TextResult,
     WorkspaceRef,
+    XmlResult,
 )
 from pydantic import ValidationError
 
@@ -183,6 +188,26 @@ def test_pipeline_spec_defaults():
     assert ps.on_demand is True
     assert ps.tools_allowlist == []
     assert ps.cursor == {}
+    assert ps.writes == ()
+
+
+def test_app_spec_rejects_pipeline_write_to_undeclared_collection():
+    with pytest.raises(ValidationError, match="unknown collection"):
+        _app_spec(
+            pipelines=[
+                PipelineSpec(name="ingest", wake_prompt="go", on_demand=True, writes=("records",))
+            ]
+        )
+
+
+def test_app_spec_accepts_pipeline_write_to_declared_collection():
+    spec = _app_spec(
+        collections=[CollectionSpec(name="records", json_schema={"type": "object"})],
+        pipelines=[
+            PipelineSpec(name="ingest", wake_prompt="go", on_demand=True, writes=("records",))
+        ],
+    )
+    assert spec.pipelines[0].writes == ("records",)
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +617,98 @@ def test_unwritten_collections_false_while_still_running():
 
 
 # ---------------------------------------------------------------------------
+# Result specs + render tier
+# ---------------------------------------------------------------------------
+
+
+class TestResultSpecs:
+    def test_json_validates_and_renders_json(self):
+        spec = JsonResult(json_schema={"type": "object", "required": ["title"]})
+        output = {"title": "Digest"}
+        spec.validate_output(output)
+        assert spec.render(output) == ('{"title": "Digest"}', "application/json")
+        with pytest.raises(ValueError, match="JSON result"):
+            spec.validate_output({})
+
+    def test_csv_validates_declared_columns_and_renders_them_in_order(self):
+        spec = CsvResult(columns=["title", "count"])
+        output = [{"count": 2, "title": "Digest", "ignored": "x"}]
+        spec.validate_output(output)
+        assert spec.render(output) == ("title,count\r\nDigest,2\r\n", "text/csv")
+        with pytest.raises(ValueError, match="missing column 'count'"):
+            spec.validate_output([{"title": "Digest"}])
+
+    def test_xml_validates_mapping_and_list_and_renders_each_shape(self):
+        spec = XmlResult(root="items", item="item")
+        mapping = {"title": "Digest"}
+        rows = [{"title": "First"}, {"title": "Second"}]
+        spec.validate_output(mapping)
+        spec.validate_output(rows)
+        assert spec.render(mapping) == ("<items><title>Digest</title></items>", "application/xml")
+        assert spec.render(rows) == (
+            "<items><item><title>First</title></item><item><title>Second</title></item></items>",
+            "application/xml",
+        )
+        with pytest.raises(ValueError, match="mapping or a list"):
+            spec.validate_output("not XML data")
+
+    def test_text_validates_and_renders_plain_text(self):
+        spec = TextResult()
+        spec.validate_output("ready")
+        assert spec.render("ready") == ("ready", "text/plain")
+        with pytest.raises(ValueError, match="must be a string"):
+            spec.validate_output({"body": "ready"})
+
+
+def test_render_tier_requires_code_and_a_result_and_does_not_expect_writes():
+    with pytest.raises(ValidationError, match="not mode='code'"):
+        PipelineSpec(
+            name="p", wake_prompt="w", on_demand=True, tier="render", result={"media": "text"}
+        )
+    with pytest.raises(ValidationError, match="declares no `result`"):
+        PipelineSpec(
+            name="p", wake_prompt="w", on_demand=True, mode="code", entrypoint="pipelines/p.py",
+            tier="render",
+        )
+    pipeline = PipelineSpec(
+        name="p", wake_prompt="w", on_demand=True, mode="code", entrypoint="pipelines/p.py",
+        tier="render", result={"media": "text"},
+    )
+    assert pipeline.expects_writes() is False
+
+
+# ---------------------------------------------------------------------------
+# Pipeline failure budget
+# ---------------------------------------------------------------------------
+
+
+def _failed_run(key: str, *, started_at: datetime) -> PipelineRun:
+    run = PipelineRun.open(run_key=key, app_id="app-1", pipeline_name="ingest", now=started_at)
+    run.close(now=started_at, status="failed", error="boom")
+    return run
+
+
+def test_failure_budget_dispatches_exactly_at_the_threshold_and_not_afterward():
+    budget = FailureBudget(consecutive_failures=2, window_seconds=300)
+    newest = _failed_run("new", started_at=NOW)
+    older = _failed_run("old", started_at=NOW - timedelta(seconds=1))
+    oldest = _failed_run("older", started_at=NOW - timedelta(seconds=2))
+    assert PipelineRun.should_dispatch_failure([newest], budget, now=NOW) is False
+    assert PipelineRun.should_dispatch_failure([newest, older], budget, now=NOW) is True
+    assert PipelineRun.should_dispatch_failure([newest, older, oldest], budget, now=NOW) is False
+
+
+def test_failure_budget_resets_on_success_and_ignores_failures_outside_its_window():
+    budget = FailureBudget(consecutive_failures=2, window_seconds=60)
+    failed = _failed_run("failed", started_at=NOW - timedelta(seconds=1))
+    success = _open_run(run_key="success", now=NOW)
+    success.close(now=NOW, status="succeeded")
+    stale = _failed_run("stale", started_at=NOW - timedelta(seconds=61))
+    assert PipelineRun.should_dispatch_failure([success, failed], budget, now=NOW) is False
+    assert PipelineRun.should_dispatch_failure([failed, stale], budget, now=NOW) is False
+
+
+# ---------------------------------------------------------------------------
 # AppReadToken — expiry with injected NOW
 # ---------------------------------------------------------------------------
 
@@ -723,6 +840,30 @@ class TestNewIntegrityViolations:
         prior = _ledger_run("r1", {"digest": 3}, minute=0)
         run = _ledger_run("r2", {"digest": 3}, minute=10)
         assert run.new_integrity_violations(["records", "digest"], prior_runs=[prior]) == []
+
+    def test_declared_output_is_reported_on_the_first_empty_run(self):
+        # The bootstrap hole: no previous run could establish the historical
+        # baseline, but this pipeline expressly promises to materialize 'records'.
+        run = _ledger_run("r1", {}, minute=0)
+        assert run.new_integrity_violations(
+            ["records"], prior_runs=[], expected_writes=["records"]
+        ) == ["records"]
+
+    def test_declared_empty_output_is_edge_triggered(self):
+        r1 = _ledger_run("r1", {}, minute=0)
+        r2 = _ledger_run("r2", {}, minute=10)
+        assert r1.new_integrity_violations(
+            ["records"], prior_runs=[], expected_writes=["records"]
+        ) == ["records"]
+        assert r2.new_integrity_violations(
+            ["records"], prior_runs=[r1], expected_writes=["records"]
+        ) == []
+
+    def test_declared_output_stays_silent_for_a_cache_hit(self):
+        run = _ledger_run("r1", {}, minute=0, cache="hit")
+        assert run.new_integrity_violations(
+            ["records"], prior_runs=[], expected_writes=["records"]
+        ) == []
 
     def test_regressed_collection_is_reported(self):
         prior = _ledger_run("r1", {"records": 5}, minute=0)

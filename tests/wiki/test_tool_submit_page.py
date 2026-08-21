@@ -90,6 +90,39 @@ def test_submit_page_persists_and_increments(tmp_path: Path) -> None:
     assert "pages_total" in res2.content
 
 
+def test_page_aggregate_stays_running_until_every_planned_page_lands(tmp_path: Path) -> None:
+    """The first page advances the aggregate rather than completing the phase."""
+    import mewbo_graph.plugins.wiki.submit_page as mod
+    from mewbo_graph.plugins.wiki.submit_page import WikiSubmitPageTool
+
+    store = _store(tmp_path)
+    store.create_job(_job("job-pages", "org/repo"))
+    store.attach_job_session("job-pages", "sess-pages")
+    store.save_job_plan("job-pages", [
+        {"id": "one"},
+        {"id": "two"},
+        {"id": "three"},
+    ])
+    tool = WikiSubmitPageTool(session_id="sess-pages")
+
+    with patch.object(mod, "_resolve_runtime", return_value=_fake_runtime(store)):
+        asyncio.run(tool.handle(_make_action_step(_page_input("one"))))
+        job = store.get_job("job-pages")
+        assert job is not None and job.progress is not None
+        first = job.progress.find("pages.write")
+        assert first is not None
+        assert (first.state, first.current, first.total) == ("running", 1, 3)
+
+        asyncio.run(tool.handle(_make_action_step(_page_input("two"))))
+        asyncio.run(tool.handle(_make_action_step(_page_input("three"))))
+
+    job = store.get_job("job-pages")
+    assert job is not None and job.progress is not None
+    completed = job.progress.find("pages.write")
+    assert completed is not None
+    assert (completed.state, completed.current, completed.total) == ("done", 3, 3)
+
+
 # ── Test 2: re-submit same pageId does not increment counter ──────────────────
 
 

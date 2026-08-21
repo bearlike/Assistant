@@ -212,6 +212,19 @@ class TestWikiDefaults:
         data = resp.get_json()
         assert "depth" not in data
 
+    def test_defaults_expose_the_configured_embedding_model(self, client) -> None:
+        """The picker gets the deployment default without inventing proxy choices."""
+        c, _, _ = client
+
+        def _fake_get(*keys, default=""):
+            if keys == ("wiki", "embedding", "model"):
+                return "openai/text-embedding-3-large"
+            return default
+
+        with patch("mewbo_core.config.get_config_value", side_effect=_fake_get):
+            resp = c.get("/v1/wiki/defaults", headers=_h())
+        assert resp.get_json()["embeddingModel"] == "openai/text-embedding-3-large"
+
     def test_defaults_qa_model_falls_back_to_model(self, client) -> None:
         c, _, _ = client
 

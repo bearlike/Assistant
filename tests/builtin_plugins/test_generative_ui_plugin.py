@@ -92,13 +92,21 @@ class TestManifest:
         # included, caps that gate) and the tool never reaches a root agent.
         assert entry["unconditional"] is True
 
-    def test_the_plugin_contributes_no_agentdef_or_skill(self):
-        """Capability gating has two enforcement surfaces; this plugin only has
-        one to gate. The catalog surface (``filter_by_capabilities`` over
-        AgentDefs and skills) is vacuous here BECAUSE the bundle ships neither —
-        assert that rather than leave the reader to assume it."""
+    def test_the_plugin_contributes_a_skill_but_no_agentdef(self):
+        """Capability gating has two enforcement surfaces, and this bundle now
+        uses both.
+
+        The catalog surface (``filter_by_capabilities`` over AgentDefs and
+        skills) used to be vacuous here because the bundle shipped neither. It
+        ships a skill now, so that surface is live: the skill inherits the
+        manifest's ``generative_ui`` gate and stays out of the catalogue on a
+        surface that can render nothing. There is still no AgentDef, because
+        ``present_ui`` is called by the root rather than delegated — that is
+        the distinction from the widget bundle, which ships one."""
         assert not (_plugin_root() / "agents").exists()
-        assert not (_plugin_root() / "skills").exists()
+        skills = sorted(p.name for p in (_plugin_root() / "skills").iterdir())
+        assert skills == ["generative-ui"]
+        assert (_plugin_root() / "skills/generative-ui/SKILL.md").is_file()
 
     def test_the_plugin_is_discovered_from_the_shipped_builtin_root(self):
         from mewbo_core.tooling.plugins import discover_builtin_plugins
@@ -251,7 +259,7 @@ class TestToolContract:
         tool = PresentUiTool(session_id="s1", event_logger=None)
         declared = getattr(tool, "max_result_chars", None)
         assert isinstance(declared, int) and not isinstance(declared, bool)
-        assert declared == 8_000
+        assert declared == 12_000
         assert declared != DEFAULT_SESSION_TOOL_MAX_RESULT_CHARS
 
 
@@ -267,7 +275,7 @@ class TestHandle:
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
         result = asyncio.run(
-            tool.handle(_step(spec=SIMPLE_TREE, summary="build status"))
+            tool.handle(_step(**SIMPLE_TREE, summary="build status"))
         )
 
         assert len(events) == 1
@@ -284,7 +292,7 @@ class TestHandle:
         same tree the console gets — never a second thing the model authored."""
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
-        asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         assert events[0]["payload"]["alt_text"] == (
             GenerativeUISpec.model_validate(SIMPLE_TREE).to_text()
         )
@@ -293,18 +301,21 @@ class TestHandle:
 
     def test_the_result_is_a_receipt_not_an_echo(self):
         """The model just authored the tree; handing it back would spend context
-        on what it already knows."""
+        on what it already knows. What the receipt DOES carry is the panel's
+        measured state and the composition affordances — the facts the next
+        call needs and the model does not otherwise have."""
         tool = PresentUiTool(session_id="s1", event_logger=None)
-        result = asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        result = asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         assert "Status" not in result.content
-        assert "component" not in result.content
-        assert len(result.content) < 200
+        assert len(result.content) < 500
         assert "2 nodes" in result.content
+        assert "depth 1" in result.content
+        assert "append" in result.content
 
     def test_a_minted_ui_id_matches_the_frozen_pattern(self):
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
-        asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         ui_id = events[0]["payload"]["ui_id"]
         assert len(ui_id) == 12
         assert ui_id.startswith("gui-")
@@ -313,40 +324,60 @@ class TestHandle:
     def test_two_calls_mint_distinct_ids(self):
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
-        asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
-        asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
+        asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         assert events[0]["payload"]["ui_id"] != events[1]["payload"]["ui_id"]
 
     def test_a_supplied_ui_id_is_reused_so_the_panel_upserts(self):
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
         asyncio.run(
-            tool.handle(_step(spec=SIMPLE_TREE, summary="s", ui_id="gui-0123abcd"))
+            tool.handle(_step(**SIMPLE_TREE, summary="s", ui_id="gui-0123abcd"))
         )
         assert events[0]["payload"]["ui_id"] == "gui-0123abcd"
 
     @pytest.mark.parametrize(
-        "ui_id", ["nope", "gui-XYZ", "gui-0123abc", "gui-0123abcde", "0123abcd"]
+        "ui_id", ["0123abcd", "ab", "has space", "-leading-dash", "x" * 65]
     )
     def test_a_malformed_ui_id_is_refused(self, ui_id):
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
         result = asyncio.run(
-            tool.handle(_step(spec=SIMPLE_TREE, summary="s", ui_id=ui_id))
+            tool.handle(_step(**SIMPLE_TREE, summary="s", ui_id=ui_id))
         )
         assert result.content.startswith("ERROR: invalid present_ui args")
         assert events == []
+
+    @pytest.mark.parametrize(
+        # The ids real models AUTHORED and were refused for under the old
+        # ``gui-`` hex pattern — the pattern never prevented collision (models
+        # fabricated matching hex), it only prevented readable ids.
+        "ui_id",
+        ["vscode-cheatsheet", "gui-team-dir", "gui-demo-001", "team-directory"],
+    )
+    def test_a_model_authored_readable_ui_id_is_accepted(self, ui_id):
+        events: list[dict] = []
+        tool = PresentUiTool(session_id="s1", event_logger=events.append)
+        result = asyncio.run(
+            tool.handle(_step(**SIMPLE_TREE, summary="s", ui_id=ui_id))
+        )
+        assert events[0]["payload"]["ui_id"] == ui_id
+        assert ui_id in result.content
 
     @pytest.mark.parametrize(
         "bad_input",
         [
             {},
             {"summary": "s"},
-            {"spec": SIMPLE_TREE},
-            {"spec": SIMPLE_TREE, "summary": ""},
-            {"spec": {"root": []}, "summary": "s"},
-            {"spec": SIMPLE_TREE, "summary": "s", "theme": "dark"},
-            {"spec": {"root": [{"component": "Nope"}]}, "summary": "s"},
+            SIMPLE_TREE,
+            {**SIMPLE_TREE, "summary": ""},
+            {"root": [], "summary": "s"},
+            {**SIMPLE_TREE, "summary": "s", "theme": "dark"},
+            {"root": [{"component": "Nope"}], "summary": "s"},
+            # The wrapper that is GONE. A caller still sending the old shape
+            # must be REFUSED, not silently accepted through some leftover
+            # tolerance — `extra="forbid"` is what makes the removal real.
+            {"spec": SIMPLE_TREE, "summary": "s"},
         ],
     )
     def test_invalid_args_return_a_correctable_error_and_emit_nothing(self, bad_input):
@@ -367,7 +398,7 @@ class TestHandle:
 
         events: list[dict] = []
         tool = PresentUiTool(session_id="s1", event_logger=events.append)
-        result = asyncio.run(tool.handle(_step(spec={"root": [node]}, summary="deep")))
+        result = asyncio.run(tool.handle(_step(root=[node], summary="deep")))
         assert result.content.startswith("ERROR: invalid present_ui args")
         assert events == []
 
@@ -384,12 +415,12 @@ class TestHandle:
             raise RuntimeError("store is down")
 
         tool = PresentUiTool(session_id="s1", event_logger=boom)
-        result = asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        result = asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         assert result.content.startswith("Presented UI gui-")
 
     def test_no_event_logger_degrades_silently(self):
         tool = PresentUiTool(session_id="s1", event_logger=None)
-        result = asyncio.run(tool.handle(_step(spec=SIMPLE_TREE, summary="s")))
+        result = asyncio.run(tool.handle(_step(**SIMPLE_TREE, summary="s")))
         assert result.content.startswith("Presented UI gui-")
 
 
@@ -428,11 +459,468 @@ class TestPayload:
 
     def test_rejects_a_malformed_ui_id(self):
         with pytest.raises(ValidationError):
-            GenerativeUIPayload(**self._valid(ui_id="widget-1"))
+            GenerativeUIPayload(**self._valid(ui_id="1-starts-with-digit"))
 
 
 class TestArgs:
     def test_summary_is_required_and_capped(self):
         with pytest.raises(ValidationError):
-            PresentUiArgs(spec=SIMPLE_TREE, summary="x" * 201)
-        assert PresentUiArgs(spec=SIMPLE_TREE, summary=" x " * 1).summary == "x"
+            PresentUiArgs(**SIMPLE_TREE, summary="x" * 201)
+        assert PresentUiArgs(**SIMPLE_TREE, summary=" x " * 1).summary == "x"
+
+
+# ---------------------------------------------------------------------------
+# The regression corpus: payloads two real small models actually sent
+# ---------------------------------------------------------------------------
+
+
+# Verbatim shapes lifted from two traced sessions on two unrelated small models
+# (a 26B MoE and a 9B), both of which had already retrieved the FULL untruncated
+# tool schema. Held here rather than described in prose because a rejection is
+# only useful if it is useful against what models really send — a hand-invented
+# bad payload is a guess about the failure, and these are the failure.
+#
+# 13 calls, 8 rejected. Neither model repeated a byte-identical payload, so the
+# doom-loop guard (identical input AND identical result) could never fire: each
+# retry varied the guess. That is why the CORRECTION has to arrive with the
+# rejection — nothing upstream was going to stop the loop.
+REAL_REJECTED_PAYLOADS = {
+    # Both models reached for `$defs` KEY names after failing to dereference
+    # `$ref`. One of them searched `tool_search select:AlertNode` first.
+    "defs_class_name_as_key": {
+        "AlertNode": {"body": "x", "title": "t", "variant": "info"},
+        "summary": "s",
+    },
+    "root_as_an_object": {
+        "root": {"body": "x", "component": "Alert", "variant": "info"},
+        "summary": "s",
+    },
+    "root_as_an_object_with_children": {
+        "root": {"children": [{"component": "Text", "value": "x"}]},
+        "summary": "s",
+    },
+    "a_node_nested_inside_a_leaf": {
+        "root": [{"component": "Alert", "body": "x", "badge": {"label": "T"}}],
+        "summary": "s",
+    },
+    "node_fields_spread_onto_the_wrapper": {
+        "component": "Stack",
+        "gap": "lg",
+        "root": [{"component": "Text", "value": "x"}],
+        "summary": "s",
+    },
+    # A nested node with no resolvable `component`, which is what the
+    # discriminator reports as `union_tag_not_found` — distinct from naming a
+    # tag that does not exist, and the arm a model reaches by copying a sibling
+    # and dropping the one field that identifies it.
+    "a_child_node_with_no_component_key": {
+        "root": [{"component": "Card", "children": [{"title": "Alert Variants"}]}],
+        "summary": "s",
+    },
+}
+
+
+class TestRealModelFailures:
+    """Every shape a traced model sent is still refused, and refused USEFULLY.
+
+    Two properties, and the second is the one that was missing. Refusal alone
+    was already true and did not help: a model handed only a pydantic path
+    infers the contract from a sequence of refusals, which one of these sessions
+    did out loud and got WRONG — it announced a shape it had already disproved
+    and sent it. So the correct shape has to travel with the refusal.
+    """
+
+    @pytest.mark.parametrize("name", sorted(REAL_REJECTED_PAYLOADS))
+    def test_the_shape_is_still_refused_and_emits_nothing(self, name):
+        events: list[dict] = []
+        tool = PresentUiTool(session_id="s1", event_logger=events.append)
+        result = asyncio.run(tool.handle(_step(**REAL_REJECTED_PAYLOADS[name])))
+        assert result.content.startswith("ERROR: invalid present_ui args")
+        assert events == []
+
+    @pytest.mark.parametrize("name", sorted(REAL_REJECTED_PAYLOADS))
+    def test_the_refusal_carries_the_correct_shape_and_the_vocabulary(self, name):
+        tool = PresentUiTool(session_id="s1", event_logger=None)
+        content = asyncio.run(tool.handle(_step(**REAL_REJECTED_PAYLOADS[name]))).content
+        # The canonical call, so the caller need not derive it.
+        assert '{"root": [{"component": "Alert", "body": "..."}]' in content
+        # And every component, so picking the next one needs no second attempt.
+        assert content.endswith(GenerativeUISpec.component_guide())
+        assert len(content) <= PresentUiTool.max_result_chars, (
+            "The rejection is the one large result this tool produces; if it "
+            "exceeds the declared cap the correction is truncated mid-sentence, "
+            "which is the failure the cap was sized to prevent."
+        )
+
+    def test_a_rejection_never_teaches_a_python_class_name(self):
+        """The names a rejection offers must be the names validation accepts.
+
+        ``AlertNode`` is what the schema's ``$defs`` used to be keyed by, and it
+        is precisely what one traced model copied into a payload. A correction
+        that reintroduces it would teach the original mistake.
+        """
+        tool = PresentUiTool(session_id="s1", event_logger=None)
+        content = asyncio.run(tool.handle(_step(root="nonsense", summary="s"))).content
+        assert "- Alert:" in content
+        assert "AlertNode" not in content
+
+
+# ---------------------------------------------------------------------------
+# The rejection closes the gap: every error, and the offending node rewritten
+# ---------------------------------------------------------------------------
+
+
+class TestRejectionShowsTheCorrectedNode:
+    def _content(self, payload: dict) -> str:
+        tool = PresentUiTool(session_id="s1", event_logger=None)
+        return asyncio.run(tool.handle(_step(**payload))).content
+
+    def test_every_error_is_reported_with_its_path_not_just_the_first(self):
+        content = self._content(
+            {
+                "summary": "s",
+                "root": [
+                    {"component": "Text", "valu": "typo"},
+                    {"component": "Badge"},
+                ],
+            }
+        )
+        assert "Every problem, not just the first" in content
+        # Both nodes' failures surface together, each with a path a model can
+        # follow into its own payload.
+        assert "root[0]" in content
+        assert "root[1]" in content
+        assert "label" in content  # Badge's missing required field, named
+
+    def test_the_offending_node_is_rewritten_to_the_declared_shape(self):
+        content = self._content(
+            {
+                "summary": "s",
+                "root": [
+                    {
+                        "component": "KeyValue",
+                        "items": [["only-one-element"]],
+                        "invented": True,
+                    }
+                ],
+            }
+        )
+        assert "Your node at root[0], rewritten to the declared shape" in content
+        assert "unknown key(s) invented dropped" in content
+        # The corrected node is real JSON in the declared shape.
+        assert '{"component": "KeyValue", "items": [{"label": "...", "value": "..."}]}' in content
+
+    def test_a_correct_field_survives_the_rewrite_verbatim(self):
+        """The model's OWN values are kept wherever they validate — the rewrite
+        fixes the one wrong thing rather than blanking the node."""
+        content = self._content(
+            {
+                "summary": "s",
+                "root": [{"component": "Alert", "body": "Deploy is blocked.", "variant": "nope"}],
+            }
+        )
+        assert '"body": "Deploy is blocked."' in content
+        assert '"variant": "info"' in content  # skeleton = first legal literal
+
+
+# ---------------------------------------------------------------------------
+# Observed near-miss aliases, end to end through handle()
+# ---------------------------------------------------------------------------
+
+
+class TestObservedNearMissAliases:
+    """Each alias is justified by a rejected call ON RECORD, never invented.
+
+    The tree stays strict everywhere else — TestRealModelFailures above pins
+    that the genuinely-wrong shapes are still refused.
+    """
+
+    def _emit(self, payload: dict) -> tuple[str, list[dict]]:
+        events: list[dict] = []
+        tool = PresentUiTool(session_id="s1", event_logger=events.append)
+        content = asyncio.run(tool.handle(_step(**payload))).content
+        return content, events
+
+    def test_text_text_lands_as_value(self):
+        content, events = self._emit(
+            {"summary": "s", "root": [{"component": "Text", "text": "hello"}]}
+        )
+        assert not content.startswith("ERROR"), content
+        assert events[0]["payload"]["spec"]["root"][0]["props"]["value"] == "hello"
+
+    def test_table_singular_row_column_land_as_plurals(self):
+        content, events = self._emit(
+            {
+                "summary": "s",
+                "root": [{"component": "Table", "column": ["A"], "row": [["1"]]}],
+            }
+        )
+        assert not content.startswith("ERROR"), content
+        props = events[0]["payload"]["spec"]["root"][0]["props"]
+        assert props["columns"] == ["A"]
+        assert props["rows"] == [["1"]]
+
+    def test_a_two_element_list_lands_as_a_keyvalue_item(self):
+        """The observed `[["Server Load", "34%"]]` shape — order is display
+        order, so the pair carries exactly the declared content."""
+        content, events = self._emit(
+            {
+                "summary": "s",
+                "root": [{"component": "KeyValue", "items": [["Server Load", "34%"]]}],
+            }
+        )
+        assert not content.startswith("ERROR"), content
+        items = events[0]["payload"]["spec"]["root"][0]["props"]["items"]
+        assert items == [{"label": "Server Load", "value": "34%"}]
+
+    def test_a_number_lands_as_a_cell_string(self):
+        content, events = self._emit(
+            {
+                "summary": "s",
+                "root": [{"component": "Table", "columns": ["load"], "rows": [[34.5]]}],
+            }
+        )
+        assert not content.startswith("ERROR"), content
+        assert events[0]["payload"]["spec"]["root"][0]["props"]["rows"] == [["34.5"]]
+
+    def test_a_boolean_cell_is_still_refused(self):
+        """`bool` is an `int` subclass; rendering it as "True" would be an
+        invented cell, not a recovery — the coercion must not admit it."""
+        content, events = self._emit(
+            {
+                "summary": "s",
+                "root": [{"component": "Table", "columns": ["ok"], "rows": [[True]]}],
+            }
+        )
+        assert content.startswith("ERROR")
+        assert events == []
+
+    def test_both_spellings_at_once_are_still_refused(self):
+        """An alias fires only when the canonical key is ABSENT — a call
+        carrying both must fail extra="forbid", never have one silently win."""
+        content, events = self._emit(
+            {
+                "summary": "s",
+                "root": [{"component": "Text", "text": "a", "value": "b"}],
+            }
+        )
+        assert content.startswith("ERROR")
+        assert "text" in content
+        assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Incremental composition: append / update on ONE panel
+# ---------------------------------------------------------------------------
+
+
+SKELETON = {
+    "summary": "team directory",
+    "ui_id": "team-directory",
+    "root": [
+        {"component": "Heading", "value": "Team"},
+        {"component": "Card", "id": "members", "title": "Members", "children": []},
+    ],
+}
+
+
+class TestIncrementalComposition:
+    def _tool(self) -> tuple[PresentUiTool, list[dict]]:
+        events: list[dict] = []
+        return PresentUiTool(session_id="s1", event_logger=events.append), events
+
+    def _call(self, tool: PresentUiTool, payload: dict) -> str:
+        return asyncio.run(tool.handle(_step(**payload))).content
+
+    def test_append_into_a_named_container_emits_the_full_merged_tree(self):
+        """The wire contract is UNCHANGED: every event carries the complete
+        `{"root": [...]}` tree, so replay and both timeline builders see an
+        ordinary replace-by-ui_id event and `to_text` degrades the whole
+        panel. Only the model's per-call payload got small."""
+        tool, events = self._tool()
+        self._call(tool, SKELETON)
+        content = self._call(
+            tool,
+            {
+                "summary": "team directory",
+                "ui_id": "team-directory",
+                "operation": "append",
+                "target": "members",
+                "root": [{"component": "Badge", "label": "Alice"}],
+            },
+        )
+        assert not content.startswith("ERROR"), content
+        assert len(events) == 2
+        merged = events[1]["payload"]["spec"]["root"]
+        assert merged[1]["children"][0]["props"]["label"] == "Alice"
+        # alt_text is the WHOLE merged panel, not the delta.
+        assert "Team" in events[1]["payload"]["alt_text"]
+        assert "[Alice]" in events[1]["payload"]["alt_text"]
+
+    def test_append_without_a_target_lands_after_the_roots(self):
+        tool, events = self._tool()
+        self._call(tool, SKELETON)
+        self._call(
+            tool,
+            {
+                "summary": "team directory",
+                "ui_id": "team-directory",
+                "operation": "append",
+                "root": [{"component": "Divider"}],
+            },
+        )
+        assert events[1]["payload"]["spec"]["root"][2]["component"] == "Divider"
+
+    def test_update_replaces_the_addressed_container(self):
+        tool, events = self._tool()
+        self._call(tool, SKELETON)
+        self._call(
+            tool,
+            {
+                "summary": "team directory",
+                "ui_id": "team-directory",
+                "operation": "update",
+                "target": "members",
+                "root": [
+                    {
+                        "component": "Stack",
+                        "id": "members",
+                        "children": [{"component": "Badge", "label": "Bob"}],
+                    }
+                ],
+            },
+        )
+        merged = events[1]["payload"]["spec"]["root"]
+        assert merged[1]["component"] == "Stack"
+        assert merged[1]["children"][0]["props"]["label"] == "Bob"
+
+    def test_the_receipt_reports_size_depth_and_addressable_containers(self):
+        tool, _ = self._tool()
+        content = self._call(tool, SKELETON)
+        assert "2 nodes" in content
+        assert "depth 1" in content
+        assert "Addressable containers: members." in content
+        assert 'operation="append"' in content
+
+    def test_append_to_an_unknown_panel_refuses_and_teaches_replace(self):
+        tool, events = self._tool()
+        content = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "ghost-panel",
+                "operation": "append",
+                "root": [{"component": "Divider"}],
+            },
+        )
+        assert content.startswith("ERROR")
+        assert 'operation="replace"' in content
+        assert events == []
+
+    def test_append_to_an_unknown_target_names_the_addressable_ids(self):
+        tool, events = self._tool()
+        self._call(tool, SKELETON)
+        content = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "team-directory",
+                "operation": "append",
+                "target": "nope",
+                "root": [{"component": "Divider"}],
+            },
+        )
+        assert content.startswith("ERROR")
+        assert "members" in content
+        assert "unchanged" in content
+        assert len(events) == 1  # nothing new emitted
+
+    def test_update_demands_exactly_one_node_and_a_target(self):
+        tool, _ = self._tool()
+        self._call(tool, SKELETON)
+        two = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "team-directory",
+                "operation": "update",
+                "target": "members",
+                "root": [{"component": "Divider"}, {"component": "Divider"}],
+            },
+        )
+        assert two.startswith("ERROR") and "exactly ONE node" in two
+        untargeted = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "team-directory",
+                "operation": "update",
+                "root": [{"component": "Divider"}],
+            },
+        )
+        assert untargeted.startswith("ERROR") and "target" in untargeted
+
+    def test_append_without_a_ui_id_is_refused(self):
+        tool, events = self._tool()
+        content = self._call(
+            tool,
+            {"summary": "s", "operation": "append", "root": [{"component": "Divider"}]},
+        )
+        assert content.startswith("ERROR")
+        assert "ui_id" in content
+        assert events == []
+
+    def test_a_duplicate_container_id_is_refused(self):
+        """Addressing must be unambiguous — a duplicated id would land an
+        append on whichever copy the walk meets first."""
+        tool, events = self._tool()
+        content = self._call(
+            tool,
+            {
+                "summary": "s",
+                "root": [
+                    {"component": "Card", "id": "twin", "children": []},
+                    {"component": "Stack", "id": "twin", "children": []},
+                ],
+            },
+        )
+        assert content.startswith("ERROR")
+        assert "twin" in content
+        assert events == []
+
+    def test_a_merge_that_breaks_a_tree_limit_leaves_the_panel_unchanged(self):
+        from mewbo_core.builtin_plugins.generative_ui.nodes import MAX_TREE_DEPTH
+
+        deep: dict = {"component": "Stack", "id": "lvl0", "children": []}
+        cursor = deep
+        for level in range(1, MAX_TREE_DEPTH - 1):
+            child: dict = {"component": "Stack", "id": f"lvl{level}", "children": []}
+            cursor["children"].append(child)
+            cursor = child
+        tool, events = self._tool()
+        self._call(tool, {"summary": "s", "ui_id": "deep-panel", "root": [deep]})
+        content = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "deep-panel",
+                "operation": "append",
+                "target": f"lvl{MAX_TREE_DEPTH - 2}",
+                "root": [{"component": "Card", "children": [{"component": "Divider"}]}],
+            },
+        )
+        assert content.startswith("ERROR") and "unchanged" in content
+        assert len(events) == 1
+        # The panel state really is unchanged: a legal append still lands.
+        follow_up = self._call(
+            tool,
+            {
+                "summary": "s",
+                "ui_id": "deep-panel",
+                "operation": "append",
+                "target": "lvl0",
+                "root": [{"component": "Divider"}],
+            },
+        )
+        assert not follow_up.startswith("ERROR"), follow_up
+        assert len(events) == 2

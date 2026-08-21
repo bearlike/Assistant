@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import abc
 import json
+import math
 import shutil
 import struct
 import threading
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
@@ -42,6 +43,7 @@ from mewbo_graph.entities.types import (
     EntityRelation,
 )
 
+from .events import WikiJobEvent
 from .memory_types import (
     DocPageNote,
     EntityKey,
@@ -116,6 +118,11 @@ class JobPatch:
     disjoint fields stop colliding at all.
     """
 
+    # ``progress`` follows the same named-field rule: its write is disjoint from
+    # ``cancel_job`` writing ``status``, so neither can revert the other. Fresh
+    # fan-out reporters can race on the ledger field itself and lose one step
+    # update; that bounded loss heals on the next report and is acceptable beside
+    # the unacceptable alternative of reverting an unrelated field.
     fields: dict[str, Any]
 
     @classmethod
@@ -434,9 +441,26 @@ class WikiStoreBase(abc.ABC):
             candidates = [j for j in candidates if j.status in wanted]
         return candidates[0] if candidates else None
 
-    @abc.abstractmethod
     def append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
-        """Append *event* to the job event log; return the monotonic idx."""
+        """Validate then append one job event; return its monotonic index.
+
+        The discriminated event model is the durable trust boundary: both the
+        JSON and Mongo timelines, and therefore SSE, receive one known wire
+        shape. Concrete drivers only own their atomic append mechanics.
+
+        Cost: ``O(1)``.
+        """
+        payload = WikiJobEvent.parse(event).stored_payload()
+        return self._append_job_event(job_id, payload)
+
+    def _append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
+        """Append already-validated *event* with driver-specific atomicity.
+
+        Kept concrete so lightweight store subclasses that implement the
+        long-standing public ``append_job_event`` contract remain instantiable.
+        Production drivers override this hook; the base has no durable timeline.
+        """
+        raise NotImplementedError
 
     @abc.abstractmethod
     def load_job_events(
@@ -689,8 +713,9 @@ class WikiStoreBase(abc.ABC):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        """Upsert code-graph nodes."""
+        """Upsert code-graph nodes, reporting completed persistence batches."""
         raise NotImplementedError("Graph backend is not implemented on this driver")
 
     def upsert_edges(
@@ -700,8 +725,9 @@ class WikiStoreBase(abc.ABC):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        """Upsert code-graph edges."""
+        """Upsert code-graph edges, reporting completed persistence batches."""
         raise NotImplementedError("Graph backend is not implemented on this driver")
 
     def upsert_embeddings(
@@ -1555,8 +1581,8 @@ class JsonWikiStore(WikiStoreBase):
                 jobs.append(job)
         return sorted(jobs, key=lambda j: j.phase_started_at or "", reverse=True)
 
-    def append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
-        """Append *event* to the job event log; return the monotonic idx."""
+    def _append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
+        """Append one validated event to this JSON job timeline. Cost: ``O(1)``."""
         return self._append_event("jobs", job_id, event)
 
     def load_job_events(
@@ -2010,13 +2036,21 @@ class JsonWikiStore(WikiStoreBase):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        """Upsert graph nodes for *slug*; dedup by node_id, stamp attribution."""
+        """Upsert graph nodes for *slug*; dedup by node_id, stamp attribution.
+
+        Cost: ``O(nodes)`` — offline. The JSON driver writes one atomic file, so
+        one non-empty input is one persistence batch.
+        """
+        items = list(nodes)
         with self._lock:
             existing = {n.node_id: n for n in self._load_graph_nodes(self._nodes_path(slug))}
-            for node in nodes:
+            for node in items:
                 existing[node.node_id] = self._stamp_attribution(node, commit_sha, job_id)
             self._write_jsonl(self._nodes_path(slug), list(existing.values()))
+        if items and on_progress is not None:
+            on_progress(1, 1)
 
     def upsert_edges(
         self,
@@ -2025,18 +2059,26 @@ class JsonWikiStore(WikiStoreBase):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        """Upsert graph edges for *slug*; dedup by (source, target, type)."""
+        """Upsert graph edges for *slug*; dedup by (source, target, type).
+
+        Cost: ``O(edges)`` — offline. The JSON driver writes one atomic file, so
+        one non-empty input is one persistence batch.
+        """
+        items = list(edges)
         with self._lock:
             existing = {
                 (e.source, e.target, e.type): e
                 for e in self._load_jsonl(self._edges_path(slug), GraphEdge)
             }
-            for edge in edges:
+            for edge in items:
                 existing[(edge.source, edge.target, edge.type)] = self._stamp_attribution(
                     edge, commit_sha, job_id
                 )
             self._write_jsonl(self._edges_path(slug), list(existing.values()))
+        if items and on_progress is not None:
+            on_progress(1, 1)
 
     def upsert_embeddings(
         self,
@@ -3010,8 +3052,8 @@ class MongoWikiStore(WikiStoreBase):
             jobs.append(IndexingJob.model_validate(_clean_for_model(doc, IndexingJob)))
         return sorted(jobs, key=lambda j: j.phase_started_at or "", reverse=True)
 
-    def append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
-        """Append *event* to the job event log; return the monotonic idx."""
+    def _append_job_event(self, job_id: str, event: dict[str, Any]) -> int:
+        """Append one validated event to this Mongo job timeline. Cost: ``O(1)``."""
         idx = self._atomic_next_idx("wiki_jobs", "job_id", job_id)
         self._col("wiki_job_events").insert_one({"job_id": job_id, "idx": idx, **event})
         return idx
@@ -3393,6 +3435,9 @@ class MongoWikiStore(WikiStoreBase):
         self,
         collection: Any,
         ops: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+        *,
+        total_batches: int | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         """Apply ``(filter, document)`` ``$set`` upserts in bounded unordered batches.
 
@@ -3421,15 +3466,22 @@ class MongoWikiStore(WikiStoreBase):
         from pymongo import UpdateOne
 
         batch: dict[tuple[tuple[str, Any], ...], Any] = {}
+        completed = 0
         for filt, doc in ops:
             batch[tuple(sorted(filt.items()))] = UpdateOne(
                 filt, {"$set": doc}, upsert=True
             )
             if len(batch) >= self._BULK_BATCH_SIZE:
                 collection.bulk_write(list(batch.values()), ordered=False)
+                completed += 1
+                if on_progress is not None and total_batches is not None:
+                    on_progress(completed, total_batches)
                 batch = {}
         if batch:
             collection.bulk_write(list(batch.values()), ordered=False)
+            completed += 1
+            if on_progress is not None and total_batches is not None:
+                on_progress(completed, total_batches)
 
     def upsert_nodes(
         self,
@@ -3438,6 +3490,7 @@ class MongoWikiStore(WikiStoreBase):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         """Upsert graph nodes for *slug*; dedup by (slug, node_id), stamp attribution.
 
@@ -3445,6 +3498,11 @@ class MongoWikiStore(WikiStoreBase):
         ``_bulk_upsert``, so the round-trip count is ``O(nodes / batch)``.
         """
         self._ensure_graph_indexes()
+        total_batches = (
+            math.ceil(len(nodes) / self._BULK_BATCH_SIZE)
+            if isinstance(nodes, Collection)
+            else None
+        )
         self._bulk_upsert(
             self._col("wiki_graph_nodes"),
             (
@@ -3454,6 +3512,8 @@ class MongoWikiStore(WikiStoreBase):
                 )
                 for node in nodes
             ),
+            total_batches=total_batches,
+            on_progress=on_progress,
         )
 
     def upsert_edges(
@@ -3463,6 +3523,7 @@ class MongoWikiStore(WikiStoreBase):
         *,
         commit_sha: str | None = None,
         job_id: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         """Upsert graph edges for *slug*; dedup by (slug, source, target, type).
 
@@ -3470,6 +3531,11 @@ class MongoWikiStore(WikiStoreBase):
         ``_bulk_upsert``, so the round-trip count is ``O(edges / batch)``.
         """
         self._ensure_graph_indexes()
+        total_batches = (
+            math.ceil(len(edges) / self._BULK_BATCH_SIZE)
+            if isinstance(edges, Collection)
+            else None
+        )
         self._bulk_upsert(
             self._col("wiki_graph_edges"),
             (
@@ -3484,6 +3550,8 @@ class MongoWikiStore(WikiStoreBase):
                 )
                 for edge in edges
             ),
+            total_batches=total_batches,
+            on_progress=on_progress,
         )
 
     def upsert_embeddings(

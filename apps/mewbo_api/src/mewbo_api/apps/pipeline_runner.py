@@ -178,7 +178,12 @@ from mewbo_api.apps.plugin.linter import (
     format_findings,
 )
 
-from .models import PIPELINE_TIMEOUT_CEILING_SECONDS, PipelineResult
+from .models import (
+    PIPELINE_ALLOWED_EXEC,
+    PIPELINE_TIMEOUT_CEILING_SECONDS,
+    PipelineEvidence,
+    PipelineResult,
+)
 from .store import CollectionCapExceeded
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -341,19 +346,32 @@ class PipelineExecutionError(Exception):
     ``docs_written`` carries what the run had ALREADY written when it failed, so
     the ledger records a partial write rather than an empty one — a failure is not
     a guarantee that nothing landed, and the ``PipelineResult`` a caller would
-    otherwise read the counts off is only ever produced on success.
-    :meth:`AppPipelineRunner.execute` fills it from the run's own
-    :class:`PipelineContext`; a failure raised BEFORE a context exists (params,
-    lint, entrypoint) leaves it empty, which is then the truth.
+    otherwise read the counts off is only ever produced on success. ``evidence``
+    carries the same run's bounded `ctx.glob`/`ctx.read_file` observations, so a
+    caller can see what the code DID reach before it failed. The runner fills
+    both from the run's own :class:`PipelineContext`; a failure raised BEFORE a
+    context exists (params, lint, entrypoint) leaves them empty, which is then
+    the truth.
     """
 
     def __init__(
-        self, code: str, message: str, *, docs_written: dict[str, int] | None = None
+        self,
+        code: str,
+        message: str,
+        *,
+        docs_written: dict[str, int] | None = None,
+        evidence: PipelineEvidence | None = None,
     ) -> None:
-        """Bind the failure ``code`` bucket + human ``message`` (the ``str()`` is both)."""
+        """Bind failure details plus partial writes and bounded execution evidence.
+
+        The evidence follows the same rule as ``docs_written``: a failure after a
+        context exists is not a promise that neither I/O observation nor a write
+        occurred. Failures before context construction retain the empty default.
+        """
         self.code = code
         self.message = message
         self.docs_written: dict[str, int] = dict(docs_written or {})
+        self.evidence = evidence or PipelineEvidence()
         super().__init__(f"{code}: {message}")
 
 
@@ -529,6 +547,7 @@ class PipelineExecutor:
         pipeline: PipelineSpec,
         workspace_root: Path,
         redactor: SecretRedactor,
+        allowed_binaries: frozenset[str] = PIPELINE_ALLOWED_EXEC,
         default_timeout_seconds: float = _DEFAULT_EXEC_TIMEOUT_SECONDS,
         max_output_bytes: int = _MAX_EXEC_OUTPUT_BYTES,
     ) -> None:
@@ -536,13 +555,16 @@ class PipelineExecutor:
         self._pipeline = pipeline
         self._workspace_root = workspace_root
         self._redactor = redactor
+        self._allowed_binaries = allowed_binaries
         self._default_timeout_seconds = default_timeout_seconds
         self._max_output_bytes = max_output_bytes
 
     def run(self, argv: Sequence[str], *, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Authorize, spawn, and bound one call; return ``{returncode, stdout, stderr}``."""
         try:
-            self._pipeline.check_exec_allowed(argv)
+            self._pipeline.check_exec_allowed(
+                argv, allowed_binaries=self._allowed_binaries
+            )
         except ValueError as exc:
             raise PipelineExecutionError("exec", str(exc)) from None
         command = self._hardened_argv(list(argv))
@@ -825,10 +847,17 @@ class PipelineContext:
         dry_run: bool,
         llm_step: Callable[[PipelineContext, str, dict[str, Any], int], dict[str, Any]]
         | None = None,
+        rehearse: bool = False,
+        allowed_exec_binaries: frozenset[str] = PIPELINE_ALLOWED_EXEC,
         llm_cache_salt: str | None = None,
         exec_timeout_seconds: float = _DEFAULT_EXEC_TIMEOUT_SECONDS,
     ) -> None:
-        """Capture params/clock + the workspace root, data store, dry-run flag, llm step."""
+        """Capture params/clock + the workspace root, data store, execution flags, and I/O policy.
+
+        A rehearsal retains every dry-run mutation guard while permitting its declared
+        subprocess leg. Submit verification is the only caller that opts into it: a
+        preview must never make that choice on a caller's behalf.
+        """
         self.params = dict(params)
         self.now = now
         self._app = app
@@ -836,6 +865,8 @@ class PipelineContext:
         self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self._data_store = data_store
         self._dry_run = dry_run
+        self._rehearse = rehearse
+        self._allowed_exec_binaries = allowed_exec_binaries
         self._exec_timeout_seconds = exec_timeout_seconds
         self._llm_step = llm_step
         # The source identity salt the runner threads into the ``ctx.llm`` cache key
@@ -921,18 +952,17 @@ class PipelineContext:
         *timeout_seconds* can only TIGHTEN the pipeline's own declared
         ``timeout_seconds`` ceiling, never exceed it.
 
-        REFUSED under ``dry_run`` — unlike :meth:`llm`, which is read-only
-        w.r.t. the world and so may run. A subprocess is not: ``git push`` /
-        `tea pr create` reach a real remote, and ``AppLifecycle.submit``
-        dry-runs EVERY code pipeline as its submit-time verifier, so admitting
-        exec here would let merely submitting an app mutate a remote nobody
-        asked it to touch. The ``dry_run`` code is one the verifier classifies
-        as an artifact, so a pipeline that shells out still verifies cleanly.
+        REFUSED under an ordinary ``dry_run`` — unlike :meth:`llm`, which is
+        read-only w.r.t. the world and so may run. A subprocess is not: ``git push`` /
+        `tea pr create` reach a real remote. Submit verification needs to exercise
+        the live-tool leg that this refusal would otherwise skip, so its explicit
+        ``rehearse`` state retains every dry-run mutation guard while allowing the
+        declared subprocess. A preview never opts into that state.
         """
         self.ensure_side_effects_allowed()
         if self._workspace_root is None:
             raise PipelineExecutionError("workspace", "no workspace is bound to this app")
-        if self._dry_run:
+        if self._dry_run and not self._rehearse:
             raise PipelineExecutionError(
                 "dry_run",
                 "ctx.exec does not run under a dry run — a subprocess can reach a real "
@@ -942,6 +972,7 @@ class PipelineContext:
             pipeline=self._pipeline,
             workspace_root=self._workspace_root,
             redactor=get_secret_redactor(),
+            allowed_binaries=self._allowed_exec_binaries,
             default_timeout_seconds=self._exec_timeout_seconds,
         ).run(argv, timeout_seconds=timeout_seconds)
 
@@ -1061,6 +1092,7 @@ class AppPipelineRunner:
         llm_invoke: Callable[[str, dict[str, Any], int], dict[str, Any]] | None = None,
         timeout_seconds: float | None = None,
         max_output_bytes: int = _DEFAULT_MAX_OUTPUT_BYTES,
+        allowed_exec_binaries: frozenset[str] = PIPELINE_ALLOWED_EXEC,
     ) -> None:
         """Capture the injected collaborators.
 
@@ -1096,6 +1128,7 @@ class AppPipelineRunner:
         self._cache_lock = threading.Lock()
         self._timeout_seconds = timeout_seconds
         self._max_output_bytes = max_output_bytes
+        self._allowed_exec_binaries = allowed_exec_binaries
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -1128,9 +1161,10 @@ class AppPipelineRunner:
     ) -> dict[str, Any]:
         """Resolve ``(app_id, pipeline_name)`` and execute — the plugin Protocol seam.
 
-        Returns ``{output, evaluated_at, docs_written, cache_hit}`` (the shape the
-        ``run_pipeline`` SessionTool renders); raises :class:`PipelineExecutionError`
-        on any failure (the tool turns its message into agent-visible feedback).
+        Returns ``{output, evaluated_at, docs_written, evidence, cache_hit}``
+        (the shape the ``run_pipeline`` SessionTool renders); raises
+        :class:`PipelineExecutionError` on any failure (the tool turns its message
+        plus bounded partial evidence into agent-visible feedback).
         """
         app = self._app_store.get(app_id)
         if app is None:
@@ -1143,6 +1177,7 @@ class AppPipelineRunner:
             "output": result.output,
             "evaluated_at": result.evaluated_at,
             "docs_written": dict(result.docs_written),
+            "evidence": result.evidence.model_dump(mode="json"),
             "cache_hit": result.cache == "hit",
         }
 
@@ -1156,6 +1191,7 @@ class AppPipelineRunner:
         *,
         now: datetime | None = None,
         dry_run: bool = False,
+        rehearse: bool = False,
     ) -> PipelineResult:
         """Validate, (cache-check), execute, enforce the output, and return the result.
 
@@ -1164,9 +1200,13 @@ class AppPipelineRunner:
         ``dry_run`` exercises the IDENTICAL path (params validation, ``ctx``
         construction, ``run`` execution) but performs NO durable write and BYPASSES
         both caches — a "test it before you ship" preview whose ``docs_written``
-        counts what a real run WOULD write.
+        counts what a real run WOULD write. ``rehearse`` has the same mutation and
+        cache guards while allowing declared ``ctx.exec`` calls, so submit
+        verification exercises the live-tool leg that a preview must not invoke.
+        The two states are mutually exclusive.
 
-        Two cache tiers, per ``pipeline.cache_mode`` (both bypassed by ``dry_run``):
+        Two cache tiers, per ``pipeline.cache_mode`` (both bypassed by either
+        suppressed-write state):
         ``"ttl"`` serves a result for ``cache_ttl_seconds``; ``"source"`` is
         read-through liveness — it records the files/globs the run read and serves
         the cache only while their stat fingerprint is unchanged, IGNORING
@@ -1174,6 +1214,10 @@ class AppPipelineRunner:
         or a size change busts it; the first run has no manifest and always executes).
         """
         now = now or self._clock()
+        if dry_run and rehearse:
+            raise PipelineExecutionError(
+                "execution_state", "dry_run and rehearse cannot both be enabled"
+            )
         if pipeline.mode != "code":
             raise PipelineExecutionError(
                 "mode", f"pipeline {pipeline.name!r} is not a code pipeline"
@@ -1182,9 +1226,10 @@ class AppPipelineRunner:
         params = self._validate_params(pipeline, params)
         phash = self.params_hash(params)
         source_mode = pipeline.cache_mode == "source"
+        write_suppressed = dry_run or rehearse
 
         # TTL tier — time-driven. "source" mode ignores cache_ttl_seconds entirely.
-        use_ttl_cache = pipeline.cache_ttl_seconds > 0 and not dry_run and not source_mode
+        use_ttl_cache = pipeline.cache_ttl_seconds > 0 and not write_suppressed and not source_mode
         if use_ttl_cache:
             cached = self._cache_get(app, pipeline, phash, now)
             if cached is not None:
@@ -1202,7 +1247,7 @@ class AppPipelineRunner:
         # prompt string alone could not). ``None`` prior ⇒ a stable empty-manifest
         # salt (the first source-mode run has nothing to be stale against).
         source_salt: str | None = None
-        if source_mode and not dry_run:
+        if source_mode and not write_suppressed:
             entry = self._source_cache_get(app, pipeline, phash)
             prior_globs = _resolve_globs(ws_path, entry.glob_patterns) if entry else {}
             prior_reads = entry.read_paths if entry else frozenset()
@@ -1214,17 +1259,7 @@ class AppPipelineRunner:
                 )
             source_salt = current_fp
 
-        source = app.frontend.files.get(pipeline.entrypoint) if pipeline.entrypoint else None
-        if source is None:
-            raise PipelineExecutionError(
-                "entrypoint",
-                f"entrypoint {pipeline.entrypoint!r} is not among the app bundle files",
-            )
-        findings = lint_pipeline(source)
-        if findings:
-            raise PipelineExecutionError(
-                "lint", "pipeline code was rejected:\n" + format_findings(findings)
-            )
+        source = self._load_entrypoint(app, pipeline.entrypoint)
 
         # The watchdog bound: the pipeline's DECLARED ceiling, unless a global
         # override is set on the runner (a deployment cap / a test's sub-second wall).
@@ -1254,12 +1289,20 @@ class AppPipelineRunner:
             now=now,
             workspace_root=workspace_root,
             data_store=self._app_data,
-            dry_run=dry_run,
+            dry_run=write_suppressed,
+            rehearse=rehearse,
             llm_step=partial(self._run_llm, app, pipeline, now),
+            allowed_exec_binaries=self._allowed_exec_binaries,
             llm_cache_salt=source_salt,
         )
         try:
             output = self._run_entrypoint(source, pipeline.entrypoint or "<pipeline>", ctx, timeout)
+            try:
+                pipeline.validate_result(output)
+            except ValueError as exc:
+                # A PipelineResult means success only; rendering an invalid typed result
+                # would turn a shape break into silently wrong caller-visible data.
+                raise PipelineExecutionError("result", str(exc)) from None
             output = self._enforce_output(output)
         except PipelineExecutionError as exc:
             # A failure is not a promise that nothing landed: a pipeline that
@@ -1270,11 +1313,17 @@ class AppPipelineRunner:
             # both the ctx and every failure the run can raise.
             if not exc.docs_written:
                 exc.docs_written = dict(ctx.docs_written)
+            if not exc.evidence.globs and not exc.evidence.read_paths:
+                exc.evidence = PipelineEvidence.from_observations(
+                    glob_results=ctx.glob_results,
+                    read_paths=ctx.read_paths,
+                    workspace=workspace_root,
+                )
             raise
 
         if use_ttl_cache:
             self._cache_put(app, pipeline, phash, output, now)
-        if source_mode and not dry_run:
+        if source_mode and not write_suppressed:
             # Post-run fingerprint consumes the globs RECORDED at glob time (no
             # re-walk); the manifest stores the patterns so the next run's pre-check
             # can re-glob them to catch a NEW matching file.
@@ -1284,8 +1333,88 @@ class AppPipelineRunner:
                 ctx.read_paths, frozenset(ctx.glob_results), fingerprint,
             )
         return PipelineResult(
-            output=output, evaluated_at=now, cache="miss", docs_written=dict(ctx.docs_written)
+            output=output,
+            evaluated_at=now,
+            cache="miss",
+            docs_written=dict(ctx.docs_written),
+            evidence=PipelineEvidence.from_observations(
+                glob_results=ctx.glob_results,
+                read_paths=ctx.read_paths,
+                workspace=workspace_root,
+            ),
         )
+
+    def verify(
+        self,
+        app: AppSpec,
+        pipeline: PipelineSpec,
+        result: PipelineResult,
+        *,
+        now: datetime,
+    ) -> None:
+        """Run the optional verifier against one successful result under its watchdog.
+
+        A verifier observes a completed result through the same curated namespace as
+        ``run``. Its context always suppresses durable mutation; it rehearses the
+        verifier's declared subprocess leg so its execution checks are exercised.
+        """
+        verifier = pipeline.verifier
+        if verifier is None:
+            return
+        try:
+            source = self._load_entrypoint(app, verifier.entrypoint)
+            workspace_root = self._workspace_resolver(app)
+            declared_timeout = min(verifier.timeout_seconds, PIPELINE_TIMEOUT_CEILING_SECONDS)
+            if declared_timeout != verifier.timeout_seconds:
+                logging.warning(
+                    "app {} pipeline {}: verifier timeout_seconds={} exceeds the {}s ceiling; "
+                    "clamping this verification to {}s",
+                    app.app_id,
+                    pipeline.name,
+                    verifier.timeout_seconds,
+                    PIPELINE_TIMEOUT_CEILING_SECONDS,
+                    declared_timeout,
+                )
+            timeout = min(
+                declared_timeout,
+                self._timeout_seconds if self._timeout_seconds is not None else declared_timeout,
+            )
+            ctx = PipelineContext(
+                app=app,
+                pipeline=pipeline,
+                params={},
+                now=now,
+                workspace_root=workspace_root,
+                data_store=self._app_data,
+                dry_run=True,
+                rehearse=True,
+                llm_step=partial(self._run_llm, app, pipeline, now),
+                allowed_exec_binaries=self._allowed_exec_binaries,
+            )
+            self._run_entrypoint(
+                source,
+                verifier.entrypoint,
+                ctx,
+                timeout,
+                function_name="verify",
+                args=(result.output, ctx),
+            )
+        except PipelineExecutionError as exc:
+            raise PipelineExecutionError("verifier", exc.message) from None
+
+    def _load_entrypoint(self, app: AppSpec, entrypoint: str | None) -> str:
+        """Resolve and lint one bundle entrypoint before curated execution."""
+        source = app.frontend.files.get(entrypoint) if entrypoint else None
+        if source is None:
+            raise PipelineExecutionError(
+                "entrypoint", f"entrypoint {entrypoint!r} is not among the app bundle files"
+            )
+        findings = lint_pipeline(source)
+        if findings:
+            raise PipelineExecutionError(
+                "lint", "pipeline code was rejected:\n" + format_findings(findings)
+            )
+        return source
 
     # -- params -------------------------------------------------------------
 
@@ -1321,17 +1450,25 @@ class AppPipelineRunner:
     # -- execution + output -------------------------------------------------
 
     def _run_entrypoint(
-        self, source: str, filename: str, ctx: PipelineContext, timeout_seconds: float
+        self,
+        source: str,
+        filename: str,
+        ctx: PipelineContext,
+        timeout_seconds: float,
+        *,
+        function_name: str = "run",
+        args: tuple[Any, ...] | None = None,
     ) -> Any:
-        """Exec the pipeline in a curated namespace under the wall-clock watchdog.
+        """Exec one curated entrypoint under the wall-clock watchdog.
 
-        The whole ``exec`` + ``run(params, ctx)`` call runs on a daemon worker
-        thread joined with *timeout_seconds* (the pipeline's declared ceiling or the
-        runner's override), so module-level code that loops is bounded too — not
-        only the ``run`` body. See the watchdog honesty note (an uncooperative loop
-        lingers; control still returns).
+        The whole ``exec`` + entrypoint call runs on a daemon worker thread joined
+        with *timeout_seconds* (the pipeline's declared ceiling or the runner's
+        override), so module-level code that loops is bounded too — not only the
+        callable body. The verifier reuses this exact path to prevent its loader,
+        lint, namespace, or timeout policy from drifting from ``run``.
         """
         box: dict[str, Any] = {}
+        call_args = args if args is not None else (dict(ctx.params), ctx)
 
         def _target() -> None:
             try:
@@ -1341,12 +1478,17 @@ class AppPipelineRunner:
                 }
                 compiled = compile(source, filename, "exec")
                 exec(compiled, namespace)  # noqa: S102 - curated builtins + guarded import + lint-gated
-                run = namespace.get("run")
-                if not callable(run):
-                    raise PipelineExecutionError(
-                        "entrypoint", f"{filename!r} must define `def run(params, ctx)`"
+                entrypoint = namespace.get(function_name)
+                if not callable(entrypoint):
+                    signature = (
+                        "`def run(params, ctx)`"
+                        if function_name == "run"
+                        else "`def verify(result, ctx)`"
                     )
-                box["output"] = run(dict(ctx.params), ctx)
+                    raise PipelineExecutionError(
+                        "entrypoint", f"{filename!r} must define {signature}"
+                    )
+                box["output"] = entrypoint(*call_args)
             except BaseException as exc:  # noqa: BLE001 - captured to re-raise on the caller thread
                 box["error"] = exc
 

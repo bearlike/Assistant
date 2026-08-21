@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import importlib.resources
 import json
-import re
 from pathlib import Path
 
 import pytest
 from mewbo_core.agents.hypervisor import AgentStatus
-from mewbo_core.builtin_plugins.generative_ui.nodes import GenerativeUISpec
 from mewbo_core.tooling.plugins import discover_builtin_plugins
 from mewbo_core.tooling.session_tools import DEFAULT_SESSION_TOOL_MAX_RESULT_CHARS
 from mewbo_core.tooling.skills import SkillRegistry
@@ -191,25 +189,9 @@ def test_agent_lifecycle_vocabulary_matches(skill_text: str) -> None:
         assert f"`{state}`" in skill_text
 
 
-def test_present_ui_component_vocabulary_matches(skill_text: str) -> None:
-    """Every component the union admits is listed, and nothing that is not."""
-    from mewbo_core.builtin_plugins.generative_ui import nodes
-
-    live = {
-        member.model_fields["component"].default
-        for member in nodes.GenerativeUINodeUnion.__args__[0].__args__
-    }
-    # The vocabulary paragraph — from the line that opens it to the next blank
-    # line, so a re-wrap does not silently drop half the names from the check.
-    lines = skill_text.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("`Text` ·"))
-    end = next(i for i in range(start, len(lines)) if not lines[i].strip())
-    listed = set(re.findall(r"`([A-Za-z]+)`", "\n".join(lines[start:end])))
-    assert listed == live
-
-
-def test_present_ui_example_is_valid(skill_text: str) -> None:
-    """The worked example must parse — a broken example teaches a broken shape."""
-    block = skill_text.split("```json\n", 1)[1].split("```", 1)[0]
-    spec = GenerativeUISpec.model_validate(json.loads(block))
-    assert spec.to_text()
+# The two present_ui guards that used to live here moved with their subject.
+# The panel vocabulary and the worked example are now owned by the
+# generative-ui skill, and pinned by tests/test_generative_ui_vocabulary.py
+# — which additionally compares the union against the console's renderer
+# allowlist. Restating either check here would be a second source of truth
+# for a fact that already has one.

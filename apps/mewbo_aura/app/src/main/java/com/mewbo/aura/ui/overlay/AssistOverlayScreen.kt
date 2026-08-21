@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -23,23 +22,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,12 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -66,15 +55,12 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.mewbo.aura.data.model.ChatItem
 import com.mewbo.aura.ui.aurora.AuroraEdgeGlow
-import com.mewbo.aura.ui.aurora.EdgeGlowState
 import com.mewbo.aura.ui.aurora.OverlayScrim
 import com.mewbo.aura.ui.chat.ChatIcons
-import com.mewbo.aura.ui.chat.ChatTranscript
 import com.mewbo.aura.ui.chat.RunPhase
 import com.mewbo.aura.ui.common.ErrorCard
 import com.mewbo.aura.ui.composer.AuraComposer
@@ -87,7 +73,6 @@ import com.mewbo.aura.ui.theme.AuraShape
 import com.mewbo.aura.ui.theme.AuraSpacing
 import com.mewbo.aura.ui.theme.AuraType
 import com.mewbo.aura.ui.theme.LocalAssistantExtras
-import com.mewbo.aura.ui.theme.VectorGlyphFill
 import com.mewbo.aura.voice.AssistUiState
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -413,268 +398,6 @@ private fun runPhaseFor(state: AssistUiState): RunPhase = when (state) {
     else -> RunPhase.Idle
 }
 
-/**
- * §7.0's bottom-anchored edge-glow choreography, decoupled from [AssistUiState] itself (this is
- * pure UI timing, screenshot-verified per the task brief, not something [AssistTurnMachine] should
- * model). Runs the 450ms ignition sweep exactly once, the first time [state] leaves [AssistUiState.Idle],
- * then tracks state continuously afterward.
- */
-@Composable
-private fun rememberEdgeGlowState(state: AssistUiState, reducedMotion: Boolean): EdgeGlowState {
-    var igniting by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(1f) }
-    val wasIdle = remember { mutableStateOf(true) }
-    val isIdle = state is AssistUiState.Idle
-
-    LaunchedEffect(isIdle) {
-        if (wasIdle.value && !isIdle) {
-            if (reducedMotion) {
-                progress = 1f // M8: static bloom frame, no growth animation.
-            } else {
-                igniting = true
-                val steps = 30
-                repeat(steps + 1) { i ->
-                    progress = i / steps.toFloat()
-                    delay(AuraMotion.edgeSweepMs.toLong() / steps)
-                }
-                igniting = false
-            }
-        }
-        wasIdle.value = isIdle
-    }
-
-    return when {
-        isIdle -> EdgeGlowState.Hidden
-        igniting -> EdgeGlowState.Igniting(progress)
-        // READY is the resting "shown, nothing typed yet" state - reuses the same ambient
-        // "edge alive" breathe (0 rms) Listening uses, since nothing is actually listening yet.
-        state is AssistUiState.Ready -> EdgeGlowState.Listening(0f)
-        state is AssistUiState.Listening -> EdgeGlowState.Listening(state.rmsDb)
-        state is AssistUiState.Sending -> EdgeGlowState.Thinking
-        // ACTIVE GENERATION stays in the CONTRACTED Thinking profile (bloom hugs the pill, no
-        // corner reach) - mapping it to the WIDE ambient Listening breathe would invert the
-        // listening-vs-generating relationship on screen. Settling to done RESTS instead of
-        // hiding: a low, static bottom pool signals "the assistant is still present" for as long
-        // as the overlay stays on screen, rather than going dark the instant the reply finishes.
-        // Error stays Hidden (§6.12 "failure is quiet" - unchanged below).
-        state is AssistUiState.Streaming && !state.done -> EdgeGlowState.Thinking
-        state is AssistUiState.Streaming -> EdgeGlowState.Resting
-        state is AssistUiState.Error -> EdgeGlowState.Hidden // §6.12: failure is quiet, no aurora treatment.
-        else -> EdgeGlowState.Hidden // unreachable - every AssistUiState variant is covered above;
-        // a boolean-condition `when` can't prove that itself the way `when(state)` could.
-    }
-}
-
-/** Bloom envelope: snaps to 1 the moment the overlay leaves Idle (its alpha rides
- * [AuroraEdgeGlow]'s own visible ramp), holds through the 450ms ignite, then exhales to 0 over
- * [AuraMotion.bloomSettleMs] (FastOutSlowIn). Reduced motion never raises it; [AuroraEdgeGlow]
- * forces 0 too. The Idle reset is DELAYED by [OVERLAY_GLOW_DISMISS_MS] so a mid-bloom dismissal
- * fades WITH the glow's own hold-frame dismiss fade instead of snapping the perimeter to 0 a frame
- * early. A rapid re-invocation restarts this effect and cancels that pending reset harmlessly -
- * `wasIdle` is committed BEFORE the delay, so the ignition branch above still snaps the bloom back
- * to 1 on the next pass regardless. */
-@Composable
-private fun rememberPerimeterBloom(state: AssistUiState, reducedMotion: Boolean): State<Float> {
-    val bloom = remember { Animatable(0f) }
-    val isIdle = state is AssistUiState.Idle
-    val wasIdle = remember { mutableStateOf(true) }
-    LaunchedEffect(isIdle) {
-        if (wasIdle.value && !isIdle && !reducedMotion) {
-            bloom.snapTo(1f)
-            delay(AuraMotion.edgeSweepMs.toLong())
-            bloom.animateTo(0f, tween(AuraMotion.bloomSettleMs, easing = FastOutSlowInEasing))
-        }
-        // Commit wasIdle BEFORE the suspending Idle reset below: if a rapid re-invocation restarts
-        // this effect mid-delay, the pending snapTo(0) is cancelled, but wasIdle is already recorded,
-        // so the ignition branch snaps the bloom to 1 on that next pass — the cancelled reset is a
-        // no-op either way.
-        wasIdle.value = isIdle
-        if (isIdle) {
-            delay(OVERLAY_GLOW_DISMISS_MS.toLong())
-            bloom.snapTo(0f)
-        }
-    }
-    return bloom.asState()
-}
-
-/**
- * the Streaming-state response card (reference-app-parity pattern), recovered from the
- * pre-v4 `ResponseSheet` (`git show f7e505a:.../ui/overlay/AssistOverlayScreen.kt` - itemsFor/
- * runPhaseFor mapping, same idea, new contract) with measured geometry replacing the old full-bleed
- * 0.75-height sheet: this is a floating CARD (side margins, all-four-corner radius, a gap above the
- * composer pill), not a sheet flush against it. Content is the SAME shared [ChatTranscript] every
- * other surface renders (module CLAUDE.md "never fork chat rendering") - only the container chrome
- * (drag handle, controls row) is new here. Thumbs/share controls are deliberately absent (no
- * backend semantics for either yet - documented deviation, not an oversight).
- */
-@Composable
-private fun ResponseCard(
-    items: List<ChatItem>,
-    runPhase: RunPhase,
-    speaking: Boolean,
-    onToggleSpeak: () -> Unit,
-    onExpand: () -> Unit,
-    maxHeight: Dp,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = AuraSpacing.ResponseCard.sideMargin)
-            .heightIn(max = maxHeight)
-            .clip(RoundedCornerShape(AuraShape.radiusCard))
-            .background(color = AuraColors.surfaceOverlayPill)
-            // swallow taps that land on the card's own body so the outside-tap-to-dismiss
-            // layer beneath the overlay never fires for a tap ON the response — only genuinely
-            // outside-the-content taps dismiss (the SAME "content Surface blocks the scrim" contract
-            // Material's own ModalBottomSheet relies on; this card isn't a Surface, so it opts in
-            // explicitly). Placed AFTER the side-margin padding, so the card's own margins stay
-            // "outside" and still dismiss. detectTapGestures consumes only the DOWN of a tap, so the
-            // card's drag handle (swipe-up = expand) and the ChatTranscript's vertical scroll — both
-            // movement-based — are untouched.
-            .pointerInput(Unit) { detectTapGestures {} },
-    ) {
-        ResponseCardDragHandle(
-            onExpand = onExpand,
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .fillMaxWidth(),
-        )
-
-        // onRetry/onNotice/onReadAloudToggle/speakingKey: the overlay has no toast host or
-        // per-message TTS wiring - it has a conversation-level speaker badge instead (below), and a
-        // client-side AssistUiState.Error never reaches this card at all (its own top-level inline
-        // ErrorCard handles that, see AssistOverlayScreen) - a documented gap, not an unwired one.
-        // sessionEnded = false is correct BY CONSTRUCTION, not an unwired gap: this card only
-        // ever renders `beginTurn`'s FIRST turn, which always opens a BRAND-NEW session
-        // (`sessionId ?: createSession()`, voice/AssistTurnMachine) - and a fresh session can never
-        // be terminated (`terminate_session` stamps `terminated_at` set-once). Every path that
-        // could reach an ALREADY-terminated session (continueLastSession/expand/pullUpToApp) hands
-        // off to the app's ChatSurface, which owns the terminal state (composer disabled, no Retry).
-        ChatTranscript(
-            items = items,
-            runPhase = runPhase,
-            onRetry = {},
-            sessionEnded = false,
-            speakingKey = null,
-            onNotice = {},
-            onReadAloudToggle = {},
-            // (parity gate): shrink-wrap a short reply instead of always
-            // rendering at the card's own heightIn(max) ceiling - see ChatTranscript's own KDoc.
-            fillParent = false,
-            // the overlay renders a widget's compact SUMMARY card, never the
-            // interactive Pyodide WebView (booting a Python kernel in a small floating overlay is
-            // wrong). Tapping the summary reuses the SAME expand/handoff the card's own controls use,
-            // opening the interactive widget on the app's ChatSurface.
-            allowRichWidgets = false,
-            onOpenWidgetInApp = onExpand,
-            sessionId = null,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        ResponseCardControls(
-            speaking = speaking,
-            onToggleSpeak = onToggleSpeak,
-            onExpand = onExpand,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AuraSpacing.Composer.gapTight, vertical = AuraSpacing.Composer.gapTight / 2),
-        )
-    }
-}
-
-/** Centered pill, drag-UP fires [onExpand] - the touch zone is a fixed
- * [RESPONSE_CARD_HANDLE_TOUCH_HEIGHT]-tall strip pinned to the card's own top edge
- * ([Alignment.TopCenter]) rather than [minimumInteractiveComponentSize]'s symmetric expansion,
- * which would bleed the hit area above the card's rounded top corner. */
-@Composable
-private fun ResponseCardDragHandle(onExpand: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .height(RESPONSE_CARD_HANDLE_TOUCH_HEIGHT)
-            .pointerInput(Unit) {
-                // PointerInputScope implements Density - .toPx() is directly callable here without
-                // needing an outer LocalDensity capture.
-                val thresholdPx = HANDLE_DRAG_EXPAND_THRESHOLD_DP.toPx()
-                var accumulated = 0f
-                var triggered = false
-                detectVerticalDragGestures(
-                    onDragStart = { accumulated = 0f; triggered = false },
-                    onDragEnd = { accumulated = 0f; triggered = false },
-                    onDragCancel = { accumulated = 0f; triggered = false },
-                ) { change, dragAmount ->
-                    if (triggered) return@detectVerticalDragGestures
-                    accumulated += dragAmount
-                    if (accumulated <= -thresholdPx) {
-                        triggered = true
-                        change.consume()
-                        onExpand()
-                    }
-                }
-            },
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(top = AuraSpacing.ResponseCard.dragHandleTopOffset)
-                .size(width = AuraSpacing.ResponseCard.dragHandleWidth, height = AuraSpacing.ResponseCard.dragHandleHeight)
-                .background(color = AuraColors.textSecondary, shape = AuraShape.radiusPill),
-        )
-    }
-}
-
-/** Read-aloud badge + expand control, right-aligned - deliberately NOT
- * thumbs/share (no backend semantics for either, documented deviation). */
-@Composable
-private fun ResponseCardControls(
-    speaking: Boolean,
-    onToggleSpeak: () -> Unit,
-    onExpand: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OverlayBareIconButton(
-            icon = ChatIcons.VolumeUp,
-            description = if (speaking) "Stop reading aloud" else "Read aloud",
-            tint = if (speaking) AuraColors.accentPrimary else AuraColors.iconPrimary,
-            onClick = onToggleSpeak,
-            size = AuraSpacing.ResponseCard.speakerBadgeSize,
-        )
-        OverlayBareIconButton(
-            icon = ExpandGlyph,
-            description = "Expand",
-            tint = AuraColors.iconPrimary,
-            onClick = onExpand,
-        )
-    }
-}
-
-/** Shared bare (containerless) icon touch target - the response card's speaker badge/expand
- * control and the post-turn mic re-entry glyph (Rev reference frame 4: "outline glyph post-turn,
- * NOT the filled circle") all reduce to this one shape, DRY per module CLAUDE.md. */
-@Composable
-private fun OverlayBareIconButton(
-    icon: ImageVector,
-    description: String,
-    tint: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    size: Dp = AuraSpacing.Composer.iconSize,
-) {
-    Box(
-        modifier = modifier
-            .minimumInteractiveComponentSize()
-            .clickable(onClickLabel = description, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(imageVector = icon, contentDescription = description, tint = tint, modifier = Modifier.size(size))
-    }
-}
-
 /** The post-turn voice-follow-up affordance - a bare glyph, not
  * [ComposerOverlayMicCircle]'s filled circle (reference frame 4 shows the outline glyph here, the
  * filled circle is READY's own trailing slot only). Wired to the same [AssistOverlayCallbacks.onStartListening]
@@ -689,27 +412,6 @@ private fun BareMicButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         onClick = onClick,
         modifier = modifier,
     )
-}
-
-/** Hand-rolled "expand"/open-in-full glyph (opposing corner brackets) - `material-icons-extended`
- * isn't in the dependency catalog (see `ui/chat/ChatIcons.kt`'s own header) and this concept has no
- * `material-icons-core` analog; two stroked L-brackets at opposing corners mirrors that file's own
- * StopTile/ContentCopy simplification convention rather than pulling in a new dependency for one
- * glyph. Declared here (not in `ui/chat/ChatIcons.kt`, out of this lane's file ownership) since it's
- * only ever used by [ResponseCardControls]. */
-private val ExpandGlyph: ImageVector by lazy {
-    ImageVector.Builder(name = "Expand", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-        .path(fill = null, stroke = SolidColor(VectorGlyphFill), strokeLineWidth = 1.6f) {
-            moveTo(9f, 3f)
-            horizontalLineTo(3f)
-            verticalLineTo(9f)
-        }
-        .path(fill = null, stroke = SolidColor(VectorGlyphFill), strokeLineWidth = 1.6f) {
-            moveTo(15f, 21f)
-            horizontalLineTo(21f)
-            verticalLineTo(15f)
-        }
-        .build()
 }
 
 @Composable
@@ -956,14 +658,6 @@ private val OVERLAY_EDGE_PADDING = 16.dp
 private val ANNOUNCER_NODE_SIZE_DP = 1.dp
 private val COMPOSER_ENTRANCE_SLIDE_DP = 24f // §7.0: "slide up 24dp"
 
-// no matching AuraSpacing token for either - same convention AuraComposer.kt's own
-// AttachmentChipIconSize established for a genuinely missing, non-measured (interaction-design, not
-// visual-spec) value. RESPONSE_CARD_HANDLE_TOUCH_HEIGHT is pinned to the card's own top edge
-// (Alignment.TopCenter) rather than using minimumInteractiveComponentSize's symmetric expansion,
-// which would bleed the hit area above the card's rounded top corner.
-private val RESPONSE_CARD_HANDLE_TOUCH_HEIGHT = 32.dp
-private val HANDLE_DRAG_EXPAND_THRESHOLD_DP = 24.dp
-
 // Pull-up commit distance for the composer pill. Deliberately larger
 // than the response card's 24dp handle threshold: the WHOLE pill translates here (not a dedicated
 // 32dp handle strip), so a more committed pull avoids accidental handoffs while scrolling/typing.
@@ -976,7 +670,9 @@ private val PILL_PULL_UP_THRESHOLD_DP = 48.dp
 // TOGETHER — the glow neither outlives the pill (ghost light) nor vanishes first (pop). Uses
 // AuroraEdgeGlow's hold-frame fade (never a uniform snap - §7.15). FloatingComposerBar's own exit
 // tween reads this SAME constant (not a parallel formula) so the two can't drift apart.
-private val OVERLAY_GLOW_DISMISS_MS =
+// `internal` rather than private: OverlayAnimations.kt's rememberPerimeterBloom delays its Idle
+// reset by this same window, which is the whole point of there being ONE constant.
+internal val OVERLAY_GLOW_DISMISS_MS =
     ((AuraMotion.barSlideSettleMs - AuraMotion.barSlideStartMs) / AuraMotion.dismissSpeedMultiplier).toInt()
 
 // [R5] The overlay is the ONLY surface that lights up the full multi-hue aurora: it

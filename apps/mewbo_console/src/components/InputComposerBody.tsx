@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Mic,
   ArrowUp,
   ArrowUpRight,
   ClipboardList,
@@ -12,6 +11,7 @@ import {
 } from 'lucide-react';
 import { QueryMode } from '../types';
 import { cn } from '../lib/utils';
+import { MicButton } from './MicButton';
 import { Button } from './ui/button';
 import { composerInputCls } from './ui/composer-shell';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
@@ -385,9 +385,7 @@ export function InputComposerBody(props: InputComposerBodyProps) {
 
         <div className={`flex items-center flex-shrink-0 ${p.toolbarRightGap}`}>
           {showVoice && !isRunning && (
-            <Button variant="ghost" size="sm" iconOnly aria-label="Voice input" title="Voice input">
-              <Mic className="h-4 w-4" />
-            </Button>
+            <MicButton value={inputValue} onChange={onInputChange} disabled={isSubmitting} />
           )}
           {showStop && isRunning && (
             <StopWithConfirm

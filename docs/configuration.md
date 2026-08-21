@@ -19,7 +19,7 @@ Runtime environment settings.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `envmode` | string | `dev` | Free-text label for this deployment (e.g. dev, staging, prod). Its only effect is being stamped onto every Langfuse trace as the `release` tag, so you can filter and compare traces across environments. |
+| `envmode` | string | `dev` | Free-text label for this deployment (e.g. dev, staging, prod). It becomes the Langfuse tracing `environment`, so traces from one deployment can be filtered and compared without staging traffic polluting production aggregates. Lowercased and punctuation-stripped on the way out, since Langfuse rejects other shapes. The trace `release` is the running Mewbo version and is not set here. |
 | `log_level` | string | `DEBUG` | Logging verbosity. One of DEBUG, INFO, WARNING, ERROR, CRITICAL. |
 | `log_style` | string | `""` | Override for the CLI's terminal log format; prefer cli_log_style. Only the literal value 'dark' has any effect (dims the log line style for a dark background); anything else uses the plain format. Takes priority over cli_log_style when set; leave empty to use that instead. |
 | `cli_log_style` | string | `dark` | CLI terminal log format: only the literal value 'dark' has any effect (dims the log line style for a dark background); any other value uses the plain format. Overridden by runtime.log_style when that's set. |
@@ -84,6 +84,33 @@ Context window selection and event filtering.
 | `selection_threshold` | number | `0.8` | Relevance score threshold (0.0-1.0) for the context selector to keep an event. |
 | `selection_enabled` | boolean | `true` | Enable LLM-based context event selection. When false, all recent events are used. |
 | `context_selector_model` | string | `""` | Model ID for context selection. Falls back to llm.default_model when empty. |
+
+## Speech
+
+Top-level key: `speech`
+
+Which gateway models handle speech, and which gateway serves them.
+
+The three connection fields are all optional and all empty by default,
+because the common deployment has one gateway: speech falls back to
+``llm.api_base``/``llm.api_key`` whenever these are blank, so an install
+that never writes a ``speech`` block still works. They exist for the
+deployment that genuinely splits the two, which is a real shape — a
+self-hosted synthesis backend beside a hosted chat provider — and refusing
+to represent it would only push the operator into running one gateway they
+do not want.
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `api_base` | string | `""` | Base URL of the gateway that serves the speech models. Leave it empty to use the same gateway as the language models.<br><br>Set this only when speech is served somewhere other than the endpoint under Language Model, such as a synthesis service running beside a hosted chat provider. |
+| `api_key` | string |  | Key for the speech gateway. Leave it empty to reuse the language model key.<br><br>Only needed alongside a separate speech endpoint above. Setting one here without the other is almost always a mistake, because the key is then sent to the language model gateway that already had one. ⚠️ |
+| `timeout` | number | `90.0` | Seconds to wait for the speech gateway before giving up.<br><br>Synthesis is not instant and scales with the length of the text: a sentence takes about half a second and a paragraph about four, so a short timeout cuts off long answers. Raising it has a cost too, because a request that is going to fail holds a server slot for the whole wait. |
+| `tts` | Text to speech |  | Reading an answer aloud. |
+| `tts.model` | string | `supertonic-3` | Model that turns text into audio. Leave it empty to turn read aloud off.<br><br>This is a model id your LLM gateway advertises, and speech models are a separate family from the chat models the answer itself runs on. A chat model named here is refused by the gateway at the moment someone presses play, not when this page is saved. |
+| `tts.voice` | string | `nova` | Voice the reader speaks in. Type the name your gateway knows it by.<br><br>This was once a fixed list of eleven, which was wrong for a self-hosted gateway: a backend can carry its own trained voice style, and a name absent from that list was refused here before the gateway ever saw it. The gateway decides what a voice is. A name it does not know fails the request when someone presses play, the same way an unknown model does. |
+| `tts.response_format` | string | `wav` | Audio format the gateway returns. WAV is the safe default and FLAC is the same audio in a smaller file.<br><br>Only these two are accepted. Asking for MP3, Opus, AAC or raw PCM fails the request, so they are not offered here. |
+| `stt` | Speech to text |  | Turning a recording into text. |
+| `stt.model` | string | `nova-3` | Model that transcribes a recording. Leave it empty to turn dictation off.<br><br>This is a model id your LLM gateway advertises. Transcription models are separate from both chat models and the text-to-speech model above, so the id here will not appear in the model picker used for answers. |
 
 ## Token Budget
 
@@ -191,9 +218,11 @@ REST API authentication.
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `master_token` | string | `msk-strong-password` | Bearer token required for all REST API requests. Change from the default before deploying. The `MEWBO_MASTER_API_TOKEN` environment variable OVERRIDES whatever is set here: when it is present, the API and the MCP server both use it and this value is never consulted — which is the case in every containerised deployment. To keep the token out of this file and say so plainly, set this to `${MEWBO_MASTER_API_TOKEN}`. Any value may name an environment variable that way, and a name that is not set in the environment is refused at startup rather than read as empty. ⚠️ |
-| `allow_external_cwd` | boolean | `false` | Allow callers to anchor sessions in an arbitrary host path via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. Off by default; enable only for trusted external workspace managers that manage their own worktrees. |
+| `allow_external_cwd` | boolean | `false` | Allow callers to anchor sessions in arbitrary host paths via the `cwd` field on POST /api/sessions and POST /api/sessions/{id}/query. A directory belonging to a configured project, managed project or worktree, or registered repository checkout is always accepted, as is a re-send of the session's own bound directory; this flag governs host paths a caller names that the server does not already own. |
 | `max_concurrent_streams` | integer | `6` | How many Server-Sent Events streams the server keeps open at once. A stream holds one of the server's request threads for as long as it stays open rather than for the work it does, so without a bound enough of them starve every other endpoint and the server stops answering at all. Past this many, a new stream is refused with a retryable 503 and the rest of the API keeps serving. Keep it below the worker's thread count so ordinary requests always have headroom; 0 removes the bound. |
 | `apps_token_secret` | string |  | Signing secret for Mewbo Apps render tokens — the short-lived, app-scoped read tokens the served app frontend presents on the read-only data/system endpoints. Set this to sign (and rotate) app tokens independently of the master token; when left empty it falls back to the master token, logging one startup warning. ⚠️ |
+| `apps_exec_binaries` | list[string] |  | Command-line programs a Mewbo App's code pipeline may run. A pipeline must still declare the ones it needs, so this is a ceiling the deployment sets rather than a grant: a program absent here cannot be reached however the pipeline is written. Widening it is an operator decision — pipeline code runs in-process, so a program added here runs with the API server's own file and network access, and a program that can be steered into running other programs effectively grants a shell. |
+| `apps_max_concurrent_pipelines` | integer | `4` | How many Mewbo App pipelines may execute at once. A pipeline runs synchronously and holds one of the server's request threads for its whole duration, so without a bound enough concurrent invocations starve every other endpoint. Past this many, an invocation is refused with a retryable 429 and the rest of the API keeps serving. 0 removes the bound. |
 | `auth` | Authentication |  | Identity & access management (opt-in; off by default). Configures authenticators, roles, and sessions. Documented in `docs/authentication.md`. |
 | `auth.enabled` | boolean | `false` | Master switch for identity & access management. When off (the default), every request resolves to the built-in full-power identity and the server behaves exactly as it did before IAM. Turn on only after configuring at least one authenticator. |
 | `auth.authenticators` | list[Authenticator] |  | Ordered list of identity sources (local API keys, OIDC, trusted reverse-proxy headers, LDAP, SAML). Each entry is an object whose `kind` field selects the authenticator type, plus that type's own settings. Validated in full at server startup; an invalid entry stops the server from booting. Each authenticator type's own settings are documented in `docs/authentication.md`. |
@@ -378,9 +407,7 @@ Plugin system configuration.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `enabled` | boolean | `true` | Turn the whole plugin system on, including Mewbo's own built-in suites such as `widget_builder`.
-
-While this is off, no plugin contributes anything to the agent, whether it is built in or installed from a marketplace: no agent definitions, no skills, no hooks, no MCP tools. The `enabled_plugins` and `marketplaces` settings below are ignored entirely until you turn it back on. |
+| `enabled` | boolean | `true` | Turn the whole plugin system on, including Mewbo's own built-in suites such as `widget_builder`.<br><br>While this is off, no plugin contributes anything to the agent, whether it is built in or installed from a marketplace: no agent definitions, no skills, no hooks, no MCP tools. The `enabled_plugins` and `marketplaces` settings below are ignored entirely until you turn it back on. |
 | `enabled_plugins` | list[string] |  | Plugin names to enable. Empty = all installed plugins. Format: 'plugin-name' or 'plugin-name@marketplace'. |
 | `marketplaces` | list[string] |  | Marketplace catalogs holding a marketplace.json plugin index, on any git host. Each entry is a full git URL (https/ssh/git, or scp-style git@host:owner/repo), a 'host/owner/repo' shorthand, or a bare 'owner/repo' (cloned from marketplace_default_host). |
 | `marketplace_default_host` | string | `github.com` | Default git host for bare 'owner/repo' marketplace entries. Full URLs and 'host/owner/repo' entries ignore this. |
@@ -403,33 +430,15 @@ builds one).
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `enabled` | boolean | `false` | Turn the trigger watcher on. Nothing fires until you do.
-
-A trigger is how Mewbo starts a session later, on its own, with nobody watching: at a set time, on a repeating schedule, or when a CI run finishes, a pull request changes, or a webhook calls in. The watcher is the background loop that notices those moments and wakes the session that asked to be woken. While it is off, the trigger routes still work, so a session can arm a trigger and you can list, pause, or cancel it, but no trigger ever fires. Armed triggers simply wait until you turn the watcher on. |
-| `tick_interval_seconds` | number | `5.0` | How often the watcher wakes up to look at the schedule, in seconds.
-
-On each pass it expires the triggers whose deadline has gone by and fires the time and cron triggers that have come due. A shorter interval wakes a session closer to the moment it asked for; a longer one costs the server less. This is also the cadence at which the forge poll below gets a chance to run. |
-| `poll_interval_seconds` | number | `60.0` | How often the watcher asks the forge about CI runs and pull requests, in seconds.
-
-Time and cron triggers can be judged from the clock alone, but `ci.workflow` and `forge.pr` triggers cannot: the watcher has to call the forge's REST API to see what changed. Those calls are rate-limited and cost a round trip each, so they run on this deliberately coarser cadence rather than on every pass. Raise it if you are bumping into API limits; lower it if you want CI results picked up sooner. |
-| `max_consecutive_failures` | integer | `5` | How many errors in a row one trigger may hit before it is given up on.
-
-When a fire or a forge poll raises, the watcher records the error on the trigger and leaves it armed, so a passing outage never throws away a schedule. Once a trigger has failed this many times back to back without a single success in between, the watcher stops retrying it and moves it to `failed`. Any success resets the count to zero. |
-| `max_armed_per_session` | integer | `20` | The most triggers one session may have armed at the same time.
-
-Triggers are armed by the agent from inside a session, so this ceiling is what keeps a single session from filling the schedule with wakes. An attempt to arm one past the limit is refused, and the agent is told why. Cancelling a trigger, or letting one finish, frees the slot again. |
-| `max_fires_cap` | integer | `100` | The ceiling on how many times any single trigger may fire.
-
-A repeating trigger, a cron schedule for instance, can name its own `max_fires` limit when it is armed. This is the ceiling on that request: an attempt to arm a trigger asking for more is refused. A trigger that reaches its own limit completes and stops firing. |
-| `default_expiry_days` | number | `7.0` | How long an armed trigger lives when it names no expiry of its own, in days.
-
-Every trigger expires eventually, so that a wake nobody remembers arming cannot linger forever. When the agent arms one without setting an expiry date, this many days from the moment of arming is stamped on it. Once that moment passes, the watcher expires the trigger instead of firing it. |
-| `cron_min_interval_seconds` | integer | `60` | The shortest gap allowed between two fires of a cron trigger, in seconds.
-
-A cron expression can be written to fire far more often than a session is worth waking, so this is the floor. When a cron trigger is armed, the gap between its first two fires is measured, and a schedule tighter than this is rejected there and then rather than being throttled later. |
-| `webhook_payload_max_bytes` | integer | `200000` | How much of an incoming webhook body the woken session gets to see, in bytes.
-
-A webhook can carry a large payload, and all of it becomes context the session has to read. A body bigger than this is truncated rather than rejected: the call still fires the trigger, the session receives the first part of the body, and it is told the payload was cut short. When a signature is configured, it is checked against the whole body before any truncation happens. |
+| `enabled` | boolean | `false` | Turn the trigger watcher on. Nothing fires until you do.<br><br>A trigger is how Mewbo starts a session later, on its own, with nobody watching: at a set time, on a repeating schedule, or when a CI run finishes, a pull request changes, or a webhook calls in. The watcher is the background loop that notices those moments and wakes the session that asked to be woken. While it is off, the trigger routes still work, so a session can arm a trigger and you can list, pause, or cancel it, but no trigger ever fires. Armed triggers simply wait until you turn the watcher on. |
+| `tick_interval_seconds` | number | `5.0` | How often the watcher wakes up to look at the schedule, in seconds.<br><br>On each pass it expires the triggers whose deadline has gone by and fires the time and cron triggers that have come due. A shorter interval wakes a session closer to the moment it asked for; a longer one costs the server less. This is also the cadence at which the forge poll below gets a chance to run. |
+| `poll_interval_seconds` | number | `60.0` | How often the watcher asks the forge about CI runs and pull requests, in seconds.<br><br>Time and cron triggers can be judged from the clock alone, but `ci.workflow` and `forge.pr` triggers cannot: the watcher has to call the forge's REST API to see what changed. Those calls are rate-limited and cost a round trip each, so they run on this deliberately coarser cadence rather than on every pass. Raise it if you are bumping into API limits; lower it if you want CI results picked up sooner. |
+| `max_consecutive_failures` | integer | `5` | How many errors in a row one trigger may hit before it is given up on.<br><br>When a fire or a forge poll raises, the watcher records the error on the trigger and leaves it armed, so a passing outage never throws away a schedule. Once a trigger has failed this many times back to back without a single success in between, the watcher stops retrying it and moves it to `failed`. Any success resets the count to zero. |
+| `max_armed_per_session` | integer | `20` | The most triggers one session may have armed at the same time.<br><br>Triggers are armed by the agent from inside a session, so this ceiling is what keeps a single session from filling the schedule with wakes. An attempt to arm one past the limit is refused, and the agent is told why. Cancelling a trigger, or letting one finish, frees the slot again. |
+| `max_fires_cap` | integer | `100` | The ceiling on how many times any single trigger may fire.<br><br>A repeating trigger, a cron schedule for instance, can name its own `max_fires` limit when it is armed. This is the ceiling on that request: an attempt to arm a trigger asking for more is refused. A trigger that reaches its own limit completes and stops firing. |
+| `default_expiry_days` | number | `7.0` | How long an armed trigger lives when it names no expiry of its own, in days.<br><br>Every trigger expires eventually, so that a wake nobody remembers arming cannot linger forever. When the agent arms one without setting an expiry date, this many days from the moment of arming is stamped on it. Once that moment passes, the watcher expires the trigger instead of firing it. |
+| `cron_min_interval_seconds` | integer | `60` | The shortest gap allowed between two fires of a cron trigger, in seconds.<br><br>A cron expression can be written to fire far more often than a session is worth waking, so this is the floor. When a cron trigger is armed, the gap between its first two fires is measured, and a schedule tighter than this is rejected there and then rather than being throttled later. |
+| `webhook_payload_max_bytes` | integer | `200000` | How much of an incoming webhook body the woken session gets to see, in bytes.<br><br>A webhook can carry a large payload, and all of it becomes context the session has to read. A body bigger than this is truncated rather than rejected: the call still fires the trigger, the session receives the first part of the body, and it is told the payload was cut short. When a signature is configured, it is checked against the whole body before any truncation happens. |
 
 ## Channels
 

@@ -10,7 +10,12 @@ from mewbo_core.common import MockSpeaker, get_logger, pydantic_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from mewbo_graph.plugins.wiki._base import WikiSessionTool, _err_result
-from mewbo_graph.plugins.wiki._ctx import _clone_dir_for, emit_log, emit_phase
+from mewbo_graph.plugins.wiki._ctx import (
+    ProgressReporter,
+    _clone_dir_for,
+    emit_log,
+    emit_phase,
+)
 from mewbo_graph.plugins.wiki._platform_api import (
     api_get_json_with_chain,
     github_api_base,
@@ -21,6 +26,10 @@ from mewbo_graph.plugins.wiki.clone import (  # noqa: F401 — _resolve_runtime 
 )
 from mewbo_graph.plugins.wiki.grounder import _DEFAULT_GROUNDER_PATHS
 from mewbo_graph.plugins.wiki.mermaid import MermaidValidator
+from mewbo_graph.plugins.wiki.step_plans import (
+    PHASE_STEPS,
+    planned_steps_for_slug,
+)
 from mewbo_graph.wiki.credentials import CredentialScope
 
 if TYPE_CHECKING:
@@ -94,6 +103,9 @@ class WikiFinalizeTool(WikiSessionTool):
         if isinstance(args, MockSpeaker):
             return args
 
+        progress = ProgressReporter(ctx)
+        progress.declare(planned_steps_for_slug(ctx.store, ctx.slug, "finalize"))
+
         # 3. Verify landingPageId exists in the persisted pages, then drop
         # stale pages from prior runs that aren't in this run's plan. Without
         # this, re-indexing accumulates slug-drifted duplicates ("Auth and
@@ -101,15 +113,18 @@ class WikiFinalizeTool(WikiSessionTool):
         # each LLM run picks slightly different page ids for the same topics.
         # The committed plan (from wiki_commit_plan) is the source of truth
         # for what should remain after this run.
-        plan = ctx.store.get_job_plan(ctx.job_id) or []
-        plan_ids: set[str] = {entry.get("id", "") for entry in plan if entry.get("id")}
-        if plan_ids:
-            keep = plan_ids | {args.landingPageId}
-            dropped = ctx.store.prune_pages(ctx.slug, keep)
-            if dropped:
-                emit_log(ctx, f"Dropped {dropped} stale page(s) not in this run's plan")
-        pages = ctx.store.list_pages(ctx.slug)
-        page_count = len(pages)
+        with progress.step("finalize.reconcile_pages"):
+            plan = ctx.store.get_job_plan(ctx.job_id) or []
+            plan_ids: set[str] = {
+                entry.get("id", "") for entry in plan if entry.get("id")
+            }
+            if plan_ids:
+                keep = plan_ids | {args.landingPageId}
+                dropped = ctx.store.prune_pages(ctx.slug, keep)
+                if dropped:
+                    emit_log(ctx, f"Dropped {dropped} stale page(s) not in this run's plan")
+            pages = ctx.store.list_pages(ctx.slug)
+            page_count = len(pages)
 
         # 3b. Outcome assertion: an index that wrote NO pages produced no wiki.
         # ``page_count`` was computed, persisted onto the Project and logged as
@@ -155,38 +170,47 @@ class WikiFinalizeTool(WikiSessionTool):
         # Gating per BLOCK, not per page, is load-bearing: every affected page
         # observed carried exactly one bad diagram among otherwise-good ones, so
         # rejecting whole pages would discard sound work for no reason.
-        rejection = MermaidValidator().review((p.id, p.body) for p in pages)
-        if rejection is not None:
-            emit_log(ctx, rejection.error.message)
-            return MockSpeaker(content=str(rejection.model_dump()))
+        with progress.step("finalize.validate_diagrams", total=page_count) as step:
+            validator = MermaidValidator()
+            rejection = None
+            for page in step.count(pages, total=page_count):
+                rejection = validator.review(((page.id, page.body),))
+                if rejection is not None:
+                    break
+            if rejection is not None:
+                emit_log(ctx, rejection.error.message)
+                return MockSpeaker(content=str(rejection.model_dump()))
 
         # 4. Resolve identity from the persisted submission. The wizard
         # is the canonical source: it carries the explicit platform, the
         # full repo URL (host + path), and the language. We do NOT do
         # any URL-host → platform guessing here — that breaks for any
         # enterprise/self-hosted instance the heuristic doesn't know.
-        submission = _load_submission(ctx)
-        if not submission:
-            return _err_result(
-                "internal",
-                "wiki submission is missing — cannot finalize without canonical identity",
-            )
-        repo_url = submission.get("repoUrl") or ""
-        source = submission.get("platform") or ""
-        lang = submission.get("language") or "en"
-        if not source:
-            return _err_result(
-                "validation",
-                "submission.platform is required",
-            )
-        host = _host_from_url(repo_url)
+        with progress.step("finalize.resolve_metadata"):
+            submission = _load_submission(ctx)
+            if not submission:
+                return _err_result(
+                    "internal",
+                    "wiki submission is missing — cannot finalize without canonical identity",
+                )
+            repo_url = submission.get("repoUrl") or ""
+            source = submission.get("platform") or ""
+            lang = submission.get("language") or "en"
+            if not source:
+                return _err_result(
+                    "validation",
+                    "submission.platform is required",
+                )
+            host = _host_from_url(repo_url)
 
-        # The description a reindex persists: a user's edited description wins,
-        # else the platform's public API, else whatever the previous successful run
-        # wrote (a token-less refresh against a private host fetches ""). All three
-        # tiers live in ``_resolve_project_desc`` — the read-preserve seam this and
-        # ``GraphOnlyIndexer`` share, so a rebuilt Project can't wipe an edit.
-        desc = _resolve_project_desc(ctx.store, ctx.slug, repo_url=repo_url, platform=source)
+            # The description a reindex persists: a user's edited description wins,
+            # else the platform's public API, else whatever the previous successful run
+            # wrote (a token-less refresh against a private host fetches ""). All three
+            # tiers live in ``_resolve_project_desc`` — the read-preserve seam this and
+            # ``GraphOnlyIndexer`` share, so a rebuilt Project can't wipe an edit.
+            desc = _resolve_project_desc(
+                ctx.store, ctx.slug, repo_url=repo_url, platform=source
+            )
 
         # 5. Read git snapshot off the IndexingJob (written by clone) and
         #    detect grounder presence on the still-mounted clone dir. Both
@@ -208,23 +232,25 @@ class WikiFinalizeTool(WikiSessionTool):
         # as a real error (distinct from "error after the graph was built",
         # which already lands as failed with a populated graph). Soft-gated:
         # a graph-less install (no backend) is not blocked here.
-        if not _graph_is_populated(ctx):
-            err = (
-                "cannot finalize: the knowledge graph is empty or unreadable — "
-                "the graph build did not run, produced no nodes, or the store "
-                "could not be queried to confirm it"
-            )
-            ctx.store.append_job_event(ctx.job_id, {
-                "type": "error",
-                "error": {"code": "validation", "message": err},
-            })
-            ctx.store.update_job(ctx.job_id, status="failed", current_file=None)
-            return _err_result("validation", err)
+        with progress.step("finalize.verify_graph"):
+            if not _graph_is_populated(ctx):
+                err = (
+                    "cannot finalize: the knowledge graph is empty or unreadable — "
+                    "the graph build did not run, produced no nodes, or the store "
+                    "could not be queried to confirm it"
+                )
+                ctx.store.append_job_event(ctx.job_id, {
+                    "type": "error",
+                    "error": {"code": "validation", "message": err},
+                })
+                ctx.store.update_job(ctx.job_id, status="failed", current_file=None)
+                return _err_result("validation", err)
 
         # 6. Build and persist the Project record (upsert).
         from mewbo_graph.wiki.types import Project  # noqa: PLC0415
 
         indexed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        prior_project = ctx.store.get_project(ctx.slug)
         project = Project(
             slug=ctx.slug,
             source=source,
@@ -242,17 +268,21 @@ class WikiFinalizeTool(WikiSessionTool):
             maintainerEdited=maintainer_edited,
             fingerprint=fingerprint,
             resolution=resolution,
+            stepMeasurements=_measurements_for_finalize(
+                prior_project, job.progress if job is not None else None
+            ),
         )
         # create_project is upsert in both backends — no duplicate error.
-        ctx.store.create_project(project)
+        with progress.step("finalize.persist_project"):
+            ctx.store.create_project(project)
 
-        # 7. Update job to complete.
-        ctx.store.update_job(
-            ctx.job_id,
-            status="complete",
-            landing_page_id=args.landingPageId,
-            current_file=None,
-        )
+            # 7. Update job to complete.
+            ctx.store.update_job(
+                ctx.job_id,
+                status="complete",
+                landing_page_id=args.landingPageId,
+                current_file=None,
+            )
 
         # 7b. Supersede older non-terminal jobs for this slug. Earlier attempts
         # that halted or were interrupted stay non-terminal (scanning /
@@ -261,42 +291,76 @@ class WikiFinalizeTool(WikiSessionTool):
         # the gallery (the FE suppresses a completed tile while its slug has an
         # active job). A completed index makes those attempts moot; mark them
         # terminally failed so the completed project surfaces immediately.
-        _supersede_stale_jobs(ctx)
+        with progress.step("finalize.supersede"):
+            _supersede_stale_jobs(ctx)
 
-        # 7c. Supersede prior-commit ARTIFACTS. ``upsert_nodes`` never deletes by
-        # slug, so without this reap the store would be the UNION of every commit
-        # ever indexed — a file deleted months ago still served to retrieval, and
-        # ``node_count`` meaningless as "the graph for this commit". Every
-        # node/edge/entity carries its commit, so a completed index reaps every
-        # OTHER commit's graph + entity artifacts for the slug (``None``-stamped
-        # rows — QA-minted entities — are preserved). Pages are already pruned to
-        # this run's plan above, so they are not swept here. Best-effort: a store
-        # hiccup here must not undo the index that just succeeded.
-        if commit_sha:
-            try:
-                reaped = ctx.store.supersede_graph_artifacts(
-                    ctx.slug, keep_commit_sha=commit_sha
-                )
-                total = sum(reaped.values())
-                if total:
-                    emit_log(
-                        ctx,
-                        f"Superseded {total} artifact(s) from prior commits "
-                        f"({reaped})",
+            # 7c. Supersede prior-commit ARTIFACTS. ``upsert_nodes`` never deletes by
+            # slug, so without this reap the store would be the UNION of every commit
+            # ever indexed — a file deleted months ago still served to retrieval, and
+            # ``node_count`` meaningless as "the graph for this commit". Every
+            # node/edge/entity carries its commit, so a completed index reaps every
+            # OTHER commit's graph + entity artifacts for the slug (``None``-stamped
+            # rows — QA-minted entities — are preserved). Pages are already pruned to
+            # this run's plan above, so they are not swept here. Best-effort: a store
+            # hiccup here must not undo the index that just succeeded.
+            if commit_sha:
+                try:
+                    reaped = ctx.store.supersede_graph_artifacts(
+                        ctx.slug, keep_commit_sha=commit_sha
                     )
-            except Exception as exc:  # pragma: no cover — best-effort cleanup
-                logging.info(
-                    "wiki_finalize: superseding prior-commit artifacts failed ({})", exc
-                )
+                    total = sum(reaped.values())
+                    if total:
+                        emit_log(
+                            ctx,
+                            f"Superseded {total} artifact(s) from prior commits "
+                            f"({reaped})",
+                        )
+                except Exception as exc:  # pragma: no cover — best-effort cleanup
+                    logging.info(
+                        "wiki_finalize: superseding prior-commit artifacts failed ({})", exc
+                    )
 
         # 8. Emit finalize phase + complete event.
-        emit_phase(ctx, "finalize")
-        emit_log(ctx, f"Wiki ready: {page_count} pages, landing on {args.landingPageId}")
-        ctx.store.append_job_event(ctx.job_id, {
-            "type": "complete",
-            "landingPageId": args.landingPageId,
-            "pageCount": page_count,
-        })
+        with progress.step("finalize.publish"):
+            emit_phase(ctx, "finalize")
+            emit_log(ctx, f"Wiki ready: {page_count} pages, landing on {args.landingPageId}")
+            ctx.store.append_job_event(ctx.job_id, {
+                "type": "complete",
+                "landingPageId": args.landingPageId,
+                "pageCount": page_count,
+            })
+
+        # A completed job must report fraction 1.0. Most declared steps close
+        # through their own ``with progress.step(...)`` scope, but a fan-out
+        # reported via ``ProgressReporter.report`` (the ``enrich`` mint loop)
+        # opens a step with no closing scope at all, and a phase this run
+        # genuinely never reached (a resumed job whose plan/pages skip fires
+        # BEFORE the tool that would have set a total or entered a step)
+        # otherwise stays ``pending`` forever. This is the ONE place every
+        # agent-driven run shape passes through, so it is where the whole
+        # ledger is settled.
+        # Settling closes the ledger; it does NOT close the question. A step
+        # left unreported while its own phase completed means one
+        # implementation of that phase reported nothing, and `settle` warns on
+        # the timeline itself rather than relying on each of its four call
+        # sites to remember — the defect that hid an uninstrumented second scan
+        # implementation until a finished job was read off a deployment.
+        progress.settle()
+
+        # ``publish`` finishes after the original Project upsert, so fold the
+        # whole closed ledger once more. A calibration write is best-effort: it
+        # improves the following estimate but must not invalidate this index.
+        try:
+            completed_job = ctx.store.get_job(ctx.job_id)
+            if completed_job is not None:
+                calibrated = project.model_copy(update={
+                    "step_measurements": _measurements_for_finalize(
+                        prior_project, completed_job.progress
+                    )
+                })
+                ctx.store.create_project(calibrated)
+        except Exception:
+            pass
 
         # Signal the loop to terminate: no post-finalize LLM turn needed. There
         # is no ephemeral clone-token cache to forget — the durable credential
@@ -316,6 +380,39 @@ class WikiFinalizeTool(WikiSessionTool):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _measurements_for_finalize(
+    project: Any, ledger: Any, *, now: datetime.datetime | None = None
+) -> dict[str, Any]:
+    """Return the current project's calibrated measurements after this ledger.
+
+    Cost: ``O(declared steps)``. Only declared ``done`` records update the
+    snapshot; skipped resume phases retain their prior reading, because their
+    near-zero elapsed time describes reused work rather than its actual cost.
+    """
+    if ledger is None:
+        return getattr(project, "step_measurements", {}) if project is not None else {}
+    from mewbo_graph.wiki.types import Project  # noqa: PLC0415
+
+    declared_keys = {spec.key for specs in PHASE_STEPS.values() for spec in specs}
+    prior = project
+    if prior is None:
+        # The method belongs on Project, but a first index has no project row to
+        # receive it yet. A minimal in-memory row supplies the same empty prior.
+        prior = Project(
+            slug="",
+            source="git",
+            lang="",
+            indexedAt="",
+            pages=0,
+            desc="",
+        )
+    return prior.measured_steps(
+        ledger.steps,
+        declared_keys=declared_keys,
+        now=now or datetime.datetime.now(datetime.timezone.utc),
+    )
 
 
 def _host_from_url(url: str) -> str | None:

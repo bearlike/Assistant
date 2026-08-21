@@ -1,25 +1,43 @@
 #@doc
-# * This workflow builds Mewbo Aura (apps/mewbo_aura) debug + release APKs and
-#   attaches them to the Gitea/GitHub release that triggered it.
+# * Builds Mewbo Aura (apps/mewbo_aura) and attaches its APKs to the release
+#   for a tag, on whichever forge is running the workflow.
 #
-# Flavor: builds the `public` distribution flavor ONLY (assemblePublicDebug /
-# assemblePublicRelease). The `enterprise` flavor bakes the private root CA
-# and is built locally + attached to Gitea by hand (its cert is gitignored and never
-# available here) — so every CI artifact, including the GitHub mirror's, is CA-free.
+# Flavors, and the one that never leaves the self-hosted forge
+#   public      — built and attached on BOTH forges.
+#   enterprise  — built and attached on the self-hosted forge ONLY. It bakes a
+#                 private trust anchor and a private release-feed address, both
+#                 supplied as secrets. Every step of that leg carries the same
+#                 `github.server_url != 'https://github.com'` guard, so it
+#                 cannot execute on github.com even under workflow_dispatch.
 #
-# Triggered on `release: published` (or manually via workflow_dispatch with an
-# explicit tag, for re-running against an already-published release).
+# Triggers, and why there are three
+#   push of an `aura-*` tag  — the reliable one. Measured: every release-event
+#                              run since aura-0.0.16.0 simply never fired,
+#                              while the workflow file and its `on:` block were
+#                              byte-identical at each of those tags. A trigger
+#                              that does not fire produces no failure to notice.
+#   release: published       — kept, because it is the right event and it does
+#                              fire on github.com.
+#   workflow_dispatch        — re-run against an already-published tag.
+# All three can fire for one tag, so everything downstream is idempotent: the
+# release is created only if absent, and an asset is deleted before it is
+# uploaded rather than POSTed on top of itself.
 #
-# Signing: passes AURA_KEYSTORE_B64 / AURA_KEYSTORE_PASSWORD / AURA_KEY_ALIAS /
-# AURA_KEY_PASSWORD through as env so a configured repo secret upgrades the
-# release APK's signature automatically — see app/build.gradle.kts. With no
-# secrets configured, the build still succeeds (debug-keystore fallback).
+# Memory. The Gradle daemon inherited -Xmx4096m from the project's
+# gradle.properties and every self-hosted run died as "Gradle build daemon
+# disappeared unexpectedly" — a 4 GiB heap inside a job container capped at
+# 2.5 GiB with no swap is an OOM kill by construction, not a flake. The
+# overrides below fit the smallest runner rather than the largest, and Kotlin
+# compiles in-process so a second JVM never doubles the footprint.
 
 name: Android Release
 
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "aura-*"
   workflow_dispatch:
     inputs:
       tag:
@@ -28,30 +46,30 @@ on:
         type: string
 
 concurrency:
-  # ONE global group, not per-tag: all runs share the persistent /opt/hostedtoolcache volume, and
-  # two concurrent runs provisioning the same SDK dir raced (colliding unzip/mv → mangled repo
-  # metadata → "Failed to find package"; caught live when two tags were dispatched together).
-  # Releases are rare — full serialization is the simple correct answer.
-  group: android-release
+  # ONE global group, not per-tag: all runs share the persistent
+  # /opt/hostedtoolcache volume, and two concurrent runs provisioning the same
+  # SDK dir raced (colliding unzip/mv → mangled repo metadata → "Failed to find
+  # package"; caught live when two tags were dispatched together). Releases are
+  # rare — full serialization is the simple correct answer.
+  # SHARED with android-ci.yml: the race is over the toolcache volume, not over
+  # releases, so every Android workflow must sit in this one group or the
+  # serialization has a hole. Renaming this group means renaming it there too.
+  group: android-toolcache
   cancel-in-progress: false
 
 permissions:
   contents: write
 
-defaults:
-  run:
-    working-directory: apps/mewbo_aura
-
 jobs:
   build:
     name: Build + attach APKs
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     env:
       # /opt/hostedtoolcache is the runner's PERSISTENT `act-toolcache` docker volume — the only
-      # real cache on this Gitea runner: actions/cache is a no-op here (the action itself warns
-      # "only supported on GHES >= 3.5" and never restores). JDK/SDK/Gradle all live there so
-      # every run after the first skips provisioning entirely.
+      # real cache on this runner: actions/cache is a no-op here (the runner sets cache.enabled
+      # false, and the action itself warns "only supported on GHES >= 3.5" and never restores).
+      # JDK/SDK/Gradle all live there so every run after the first skips provisioning entirely.
       ANDROID_HOME: /opt/hostedtoolcache/android-sdk
       GRADLE_USER_HOME: /opt/hostedtoolcache/gradle-home
       AURA_KEYSTORE_B64: ${{ secrets.AURA_KEYSTORE_B64 }}
@@ -59,6 +77,30 @@ jobs:
       AURA_KEY_ALIAS: ${{ secrets.AURA_KEY_ALIAS }}
       AURA_KEY_PASSWORD: ${{ secrets.AURA_KEY_PASSWORD }}
     steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          TAG="$RELEASE_TAG"
+          [ -n "$TAG" ] || TAG="$INPUT_TAG"
+          if [ -z "$TAG" ] && [ "$REF_TYPE" = "tag" ]; then TAG="$REF_NAME"; fi
+          test -n "$TAG" || { echo "no release tag resolved" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # The enterprise flavor's trust anchor and release-feed address are
+          # private. This is the one gate; every enterprise step reads it.
+          if [ "$SERVER_URL" = "https://github.com" ]; then
+            echo "enterprise=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enterprise=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -66,18 +108,29 @@ jobs:
           # executes this file from main but must still compile the tagged commit — without this
           # pin, a rerun attached main-content APKs under an older tag's name (caught live on the
           # 0.0.20-debug rerun).
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
-
-      - name: Resolve release tag
-        id: tag
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then TAG="${{ inputs.tag }}"; fi
-          test -n "$TAG" || { echo "no release tag resolved" >&2; exit 1; }
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          ref: ${{ steps.tag.outputs.tag }}
 
       - name: Ensure jq is available
         run: command -v jq >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
+
+      - name: Refuse an enterprise build with no credentials
+        if: steps.tag.outputs.enterprise == 'true'
+        env:
+          CA_B64: ${{ secrets.AURA_ENTERPRISE_CA_B64 }}
+          UPDATE_API_ROOT: ${{ secrets.AURA_UPDATE_API_ROOT }}
+        run: |
+          set -euo pipefail
+          # Say which secret is missing and stop. The alternative — skipping the
+          # enterprise leg when its inputs are absent — publishes a release that
+          # looks complete and quietly carries no enterprise APK.
+          missing=""
+          [ -n "$CA_B64" ] || missing="$missing AURA_ENTERPRISE_CA_B64"
+          [ -n "$UPDATE_API_ROOT" ] || missing="$missing AURA_UPDATE_API_ROOT"
+          if [ -n "$missing" ]; then
+            echo "the enterprise flavor cannot be built without:$missing" >&2
+            echo "set them as Actions secrets on this repository, or the enterprise APK will never publish." >&2
+            exit 1
+          fi
 
       - name: Provision Temurin JDK 21 (persistent toolcache, skipped when present)
         # Tarball straight into the persistent toolcache — one download EVER, vs the old
@@ -121,35 +174,104 @@ jobs:
             "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
           fi
 
-      - name: Build public debug + release APKs
-        # PUBLIC flavor only — the `enterprise` flavor's CA cert isn't available in CI and must
-        # never ship to GitHub. One invocation for both build types (shared configuration +
-        # parallel task graph); org.gradle.caching reuses task outputs across runs via the
-        # persistent GRADLE_USER_HOME above (wrapper dist + dependency cache + build cache all
-        # survive).
-        run: ./gradlew :app:assemblePublicDebug :app:assemblePublicRelease -Dorg.gradle.caching=true
+      - name: Pin Node for the console build
+        # The runner image's own npm refuses dependency install scripts unless
+        # they have been approved, and it says so as a WARNING — the install
+        # reports success, then the build dies claiming a package it depends on
+        # cannot be found. That reads as a broken lockfile and is not one: the
+        # same lockfile installs and builds cleanly on the version pinned here.
+        # Pinning also means a runner-image bump cannot silently change how this
+        # bundle is produced.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-      - name: Rename artifacts
-        id: artifacts
+      - name: Build the console widget-host bundle
+        # apps/mewbo_console/dist/widget-host is a generated asset source for
+        # EVERY Aura variant. A release build fails outright without it; a debug
+        # build only warns — and since a published Aura artifact is
+        # `enterpriseDebug`, skipping this step ships an APK whose stlite widget
+        # renderer is silently absent. That is the failure mode this step exists
+        # to prevent, not a speed-up.
+        working-directory: apps/mewbo_console
+        env:
+          # A job container's writable layer is RAM on this runner — its Docker
+          # daemon keeps its storage on a tmpfs — so every byte the install
+          # writes is charged to the same cgroup the build's heap comes out of.
+          # Measured: the build alone peaks near 2 GiB, the dependency tree is
+          # another 1.4 GB on disk, and the two together do not fit under the
+          # job's ceiling even though either alone does. Hence a bounded V8 heap
+          # and a cache dropped before the build rather than after it.
+          NODE_OPTIONS: --max-old-space-size=2048
         run: |
           set -euo pipefail
-          TAG="${{ steps.tag.outputs.tag }}"
-          DEBUG_NAME="aura-${TAG}-debug.apk"
-          RELEASE_NAME="aura-${TAG}-release.apk"
-          cp app/build/outputs/apk/public/debug/app-public-debug.apk "$DEBUG_NAME"
-          cp app/build/outputs/apk/public/release/app-public-release.apk "$RELEASE_NAME"
-          echo "debug_name=$DEBUG_NAME" >> "$GITHUB_OUTPUT"
-          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          npm ci --no-audit --no-fund
+          npm cache clean --force
+          npm run build
+          test -d dist/widget-host || { echo "console build produced no dist/widget-host" >&2; exit 1; }
+          # The dependency tree has done its job and is 1.4 GB of the same
+          # budget Gradle is about to need for its own build tree. On a runner
+          # whose filesystem is RAM that is not tidiness, it is the difference
+          # between the Android build fitting and being killed.
+          rm -rf node_modules
+          du -sh dist/widget-host
 
-      - name: Upload APKs as release assets
+      - name: Build public debug + release APKs
+        working-directory: apps/mewbo_aura
+        # The jvmargs value is quoted as ONE argument on purpose: it contains a
+        # space, and an unquoted expansion would hand Gradle `-XX:...` as its
+        # own flag, which it rejects.
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assemblePublicDebug :app:assemblePublicRelease \
+            "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8" \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.caching=true \
+            --no-daemon --max-workers=2
+
+      - name: Build the enterprise APK
+        # enterpriseDebug, deliberately: a published Aura artifact has always
+        # been the debug build type, and the in-app updater matches assets on
+        # the `-enterprise-debug.apk` suffix. See apps/mewbo_aura/CLAUDE.md.
+        if: steps.tag.outputs.enterprise == 'true'
+        working-directory: apps/mewbo_aura
+        env:
+          AURA_ENTERPRISE_CA_B64: ${{ secrets.AURA_ENTERPRISE_CA_B64 }}
+          AURA_UPDATE_API_ROOT: ${{ secrets.AURA_UPDATE_API_ROOT }}
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleEnterpriseDebug \
+            "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8" \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.caching=true \
+            --no-daemon --max-workers=2
+
+      - name: Collect the APKs
+        id: artifacts
+        working-directory: apps/mewbo_aura
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/aura-artifacts"
+          # Gradle already names each output `aura-<version>-<flavor>-<buildType>.apk`,
+          # which is exactly the scheme the in-app updater matches on. Copy the
+          # names through rather than inventing new ones — a rename here is how
+          # an asset stops being installable without anything failing.
+          found=0
+          while IFS= read -r apk; do
+            cp "$apk" "$GITHUB_WORKSPACE/aura-artifacts/"
+            echo "collected $(basename "$apk")"
+            found=$((found + 1))
+          done < <(find app/build/outputs/apk -type f -name 'aura-*.apk')
+          test "$found" -gt 0 || { echo "no APKs were produced" >&2; exit 1; }
+          echo "count=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the APKs to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SERVER_URL: ${{ github.server_url }}
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
           TAG: ${{ steps.tag.outputs.tag }}
-          DEBUG_NAME: ${{ steps.artifacts.outputs.debug_name }}
-          RELEASE_NAME: ${{ steps.artifacts.outputs.release_name }}
         run: |
           set -euo pipefail
           # Gitea act_runner may leave github.api_url empty; derive it the same
@@ -162,17 +284,50 @@ jobs:
               api="${SERVER_URL%/}/api/v1"
             fi
           fi
+          # A self-hosted forge behind a private CA is invisible to curl's system
+          # trust store: the runner exports that CA for node and for git, and
+          # nothing else. Measured across this workflow's history, 9 runs failed
+          # here alone with "SSL certificate problem: unable to get local issuer
+          # certificate" — after the APKs had already been built. Trust the CA
+          # narrowly rather than disabling verification, so public HTTPS in this
+          # same step stays verified.
+          auth=(-H "Authorization: token $GH_TOKEN")
+          if [ -n "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r "${NODE_EXTRA_CA_CERTS}" ]; then
+            auth+=(--cacert "${NODE_EXTRA_CA_CERTS}")
+          fi
 
-          release_id=$(curl --fail-with-body --silent --show-error \
-            -H "Authorization: token $GH_TOKEN" \
+          release_id=$(curl --silent --show-error "${auth[@]}" \
             "$api/repos/$REPOSITORY/releases/tags/$TAG" | jq -r '.id // empty')
-          test -n "$release_id" || { echo "could not resolve release id for tag $TAG" >&2; exit 1; }
 
-          for pair in "$DEBUG_NAME" "$RELEASE_NAME"; do
-            curl --fail-with-body --silent --show-error \
-              -H "Authorization: token $GH_TOKEN" \
+          # A tag push arrives before anybody has drafted a release for it, so
+          # create one rather than failing. Idempotent by construction: this
+          # branch is only reached when the lookup above found nothing.
+          if [ -z "$release_id" ]; then
+            echo "no release for $TAG yet — creating one."
+            release_id=$(curl --fail-with-body --silent --show-error "${auth[@]}" \
+              -H "Content-Type: application/json" -X POST \
+              --data "$(jq -n --arg tag "$TAG" '{tag_name: $tag, name: $tag, draft: false, prerelease: false}')" \
+              "$api/repos/$REPOSITORY/releases" | jq -r '.id // empty')
+          fi
+          test -n "$release_id" || { echo "could not resolve or create a release for $TAG" >&2; exit 1; }
+
+          existing=$(curl --silent --show-error "${auth[@]}" \
+            "$api/repos/$REPOSITORY/releases/$release_id/assets")
+
+          for apk in "$GITHUB_WORKSPACE"/aura-artifacts/*.apk; do
+            name=$(basename "$apk")
+            # Delete first. Both forges reject a second asset under a name that
+            # already exists, so without this a re-run — or the second of two
+            # triggers firing for one tag — fails on work it has already done.
+            old=$(jq -r --arg n "$name" '[.[] | select(.name == $n)][0].id // empty' <<<"$existing")
+            if [ -n "$old" ]; then
+              curl --fail-with-body --silent --show-error "${auth[@]}" \
+                -X DELETE "$api/repos/$REPOSITORY/releases/$release_id/assets/$old" >/dev/null
+              echo "replaced $name"
+            fi
+            curl --fail-with-body --silent --show-error "${auth[@]}" \
               -H "Content-Type: application/vnd.android.package-archive" \
               -X POST \
-              "$api/repos/$REPOSITORY/releases/$release_id/assets?name=$pair" \
-              --data-binary "@$pair" | jq -r '"uploaded \(.name // "'"$pair"'")"'
+              "$api/repos/$REPOSITORY/releases/$release_id/assets?name=$name" \
+              --data-binary "@$apk" | jq -r '"uploaded \(.name // "'"$name"'")"'
           done

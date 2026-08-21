@@ -1,6 +1,7 @@
 package com.mewbo.aura.data.device
 
 import android.Manifest
+import com.mewbo.aura.data.device.shizuku.DeviceControlGate
 import javax.inject.Inject
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -64,9 +65,39 @@ fun interface DeviceToolGate {
 class DeviceToolCatalog @Inject constructor(
     private val permissionChecker: DevicePermissionChecker,
     private val gate: DeviceToolGate,
+    private val controlGate: DeviceControlGate,
 ) {
     suspend fun availableTools(): List<DeviceToolDefinition> =
-        filterAvailable(ALL, permissionChecker, gate.disabledToolIds())
+        filterAvailable(
+            ALL,
+            permissionChecker,
+            gate.disabledToolIds(),
+            deviceControlReady = controlGate.isReady(),
+        )
+
+    /**
+     * Whether this session should advertise the `device_control` CAPABILITY.
+     *
+     * **The capability and the tools must be decided by the SAME predicate.**
+     * They were not: the capability was computed from the user's toggles alone
+     * while the tools additionally required Shizuku to be live, so a device with
+     * the toggles on and the service down advertised the playbook skill for
+     * tools it never sent. The agent then activated `device-control`, searched
+     * for `device_ui`, found nothing, and had to walk the failure back to a user
+     * watching their phone — a capability catalogue that lies is worse than one
+     * that is merely empty.
+     *
+     * Asking it through `availableTools()` makes that divergence structurally
+     * impossible: the answer is derived from the very list that goes on the
+     * wire, so the two cannot disagree without the list itself being wrong.
+     *
+     * **[LIFECYCLE_TOOL_IDS] deliberately do not count.** They can be on the
+     * wire with Shizuku absent, and a playbook whose every step names a tool
+     * this session did not send is the exact failure above, restated. The
+     * start tool's own description carries what a session in that state needs.
+     */
+    suspend fun advertisesDeviceControl(): Boolean =
+        availableTools().any { it.toolId in CONTROL_TOOL_IDS }
 
     companion object {
         val ALL: List<DeviceToolDefinition> = listOf(
@@ -122,14 +153,27 @@ class DeviceToolCatalog @Inject constructor(
             // --- SMS + media ---
             DeviceToolDefinition(
                 toolId = "device_read_latest_sms",
-                description = "Read the most recent SMS message(s) from the inbox, optionally filtered by sender. " +
-                    "Message bodies and phone numbers are personal data - only use when the user has clearly asked to check their texts.",
+                description = "Read one page of SMS messages, newest first, including the user's own sent " +
+                    "replies so a conversation reads in order. `count` is the PAGE SIZE (default 10, max 50), " +
+                    "NOT a per-conversation total: with no `sender_filter` a page spans the whole mailbox, so " +
+                    "a long conversation can be entirely absent from it. Pass `sender_filter` — a " +
+                    "case-insensitive substring of the phone number or sender address — to read ONE " +
+                    "conversation, and `offset` to page further back through older messages in whatever the " +
+                    "page covers. Each message carries `direction`: \"inbound\" is what the other party sent, " +
+                    "\"outbound\" is what the user sent. `has_more: true` in the result means older messages " +
+                    "exist that you have NOT seen — page or narrow before answering, never summarise as if " +
+                    "the page were everything. Message bodies and phone numbers are personal data - only use " +
+                    "when the user has clearly asked to check their texts.",
                 parameters = buildJsonObject {
                     put("type", "object")
                     put(
                         "properties",
                         buildJsonObject {
-                            put("count", integerSchema(minimum = 1, maximum = 5))
+                            // `count`/`offset` come from the SHARED window, never hand-written
+                            // here - that is what keeps the advertised bound equal to the
+                            // enforced one, and keeps a future call-log read from inventing
+                            // `limit`/`start` for the same idea.
+                            DeviceReadWindow.SMS.schemaProperties().forEach { (key, schema) -> put(key, schema) }
                             put("sender_filter", stringSchema())
                         },
                     )
@@ -177,7 +221,118 @@ class DeviceToolCatalog @Inject constructor(
                     put("required", JsonArray(listOf(JsonPrimitive("search_mode"))))
                 },
             ),
+            // --- Device control (Shizuku, shell UID) ---
+            // THREE tools, not nine: the action space is multiplexed behind an
+            // `action` enum. A tool schema is re-sent at full price on every
+            // LLM call, so nine schemas would be a permanent tax; three is a
+            // ~2/3 cut for the same capability. Each description carries the
+            // CONTRACT (what it does, what the arguments mean, the
+            // index-addressing rule) compressed but never empty — the model
+            // reads it on every call and must stay able to use the tool if the
+            // plugin's playbook has fallen out of context. The PROCEDURE lives
+            // in that playbook, which is cached at ~10% of the price.
+            DeviceToolDefinition(
+                toolId = "device_ui",
+                description = "Observe the screen. action='elements' returns a numbered list of " +
+                    "interactive/text elements — cheap, and the DEFAULT observation. " +
+                    "action='screenshot' returns an image, which costs roughly as much as the whole " +
+                    "tool surface per call, so use it only when layout or visual state actually " +
+                    "matters. Elements are addressed by their index `i` in device_action.",
+                parameters = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("action", enumSchema("elements", "screenshot"))
+                        },
+                    )
+                    put("required", JsonArray(listOf(JsonPrimitive("action"))))
+                },
+            ),
+            DeviceToolDefinition(
+                toolId = "device_action",
+                description = "Act on the screen, then return the settled element list so the next " +
+                    "step needs no separate observation. Targets are addressed by element index " +
+                    "(`index`), never coordinates. action: tap | swipe | type | key | launch | wait. " +
+                    "tap/type need `index`; type also needs `text`; swipe needs `direction` " +
+                    "(up|down|left|right); key needs `key` (back|home|recents|enter); launch needs " +
+                    "`package_name`. A stale index returns a structured error — re-observe and retry.",
+                parameters = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject {
+                            put("action", enumSchema("tap", "swipe", "type", "key", "launch", "wait"))
+                            put("index", integerSchema(minimum = 0))
+                            put("text", stringSchema())
+                            put("direction", enumSchema("up", "down", "left", "right"))
+                            put("key", enumSchema("back", "home", "recents", "enter"))
+                            put("package_name", stringSchema())
+                        },
+                    )
+                    put("required", JsonArray(listOf(JsonPrimitive("action"))))
+                },
+            ),
+            DeviceToolDefinition(
+                toolId = "device_shell",
+                description = "Run a shell command on the device at shell UID (2000). The escape " +
+                    "hatch for what the structured tools do not cover — prefer device_ui and " +
+                    "device_action, which carry the addressing contract. Returns combined " +
+                    "stdout and stderr.",
+                parameters = buildJsonObject {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        buildJsonObject { put("command", stringSchema()) },
+                    )
+                    put("required", JsonArray(listOf(JsonPrimitive("command"))))
+                },
+            ),
+            // The lifecycle pair. NOT gated on Shizuku being live, unlike the
+            // three above: naming the cause of a refusal is the whole value
+            // here, and a tool withheld because the thing it would explain is
+            // missing explains nothing.
+            DeviceToolDefinition(
+                toolId = "device_control_start",
+                description = "Take control of this device's screen. Call it BEFORE device_ui, " +
+                    "device_action or device_shell — they refuse until control is active. " +
+                    "Returns an outcome: 'granted', 'already_active', or a refusal naming what " +
+                    "the user must do (install Shizuku, start it, or authorise Aura in it). " +
+                    "Safe to call again.",
+                parameters = emptyObjectSchema(),
+            ),
+            DeviceToolDefinition(
+                toolId = "device_control_stop",
+                description = "Release control of this device's screen. Call it as soon as the " +
+                    "task is done — an active grant holds a live connection open and shows the " +
+                    "user a persistent notification. Idempotent.",
+                parameters = emptyObjectSchema(),
+            ),
         )
+
+        /** The device-control tools, gated on Shizuku rather than on an Android
+         * runtime permission — so they are filtered by [DeviceControlGate], not
+         * by [DevicePermissionChecker]. Default-OFF, unlike the other nine:
+         * driving a user's phone is opt-in. */
+        val CONTROL_TOOL_IDS: Set<String> =
+            setOf("device_ui", "device_action", "device_shell")
+
+        /**
+         * The grant's own start/stop pair.
+         *
+         * A THIRD gating class, because they answer for the other three rather
+         * than being one of them: they ride the user's screen-control opt-in
+         * (no opt-in, no lifecycle) but NOT Shizuku's liveness and NOT the grant
+         * itself. Gating them on Shizuku would delete the only surface that can
+         * say WHY Shizuku is unusable; gating them on the grant would make a
+         * grant unobtainable and unreleasable.
+         *
+         * They carry no Settings switch of their own on purpose — a user who
+         * could disable the gate while leaving the tools it guards enabled has
+         * a control that reads backwards.
+         */
+        val LIFECYCLE_TOOL_IDS: Set<String> =
+            setOf("device_control_start", "device_control_stop")
 
         private fun emptyObjectSchema(): JsonObject = buildJsonObject {
             put("type", "object")
@@ -186,7 +341,9 @@ class DeviceToolCatalog @Inject constructor(
 
         private fun stringSchema(): JsonObject = buildJsonObject { put("type", "string") }
 
-        private fun integerSchema(minimum: Int, maximum: Int? = null): JsonObject = buildJsonObject {
+        /** `internal` rather than private so [DeviceReadWindow] emits the SAME `count`/`offset`
+         * schema shape every paged read advertises, instead of a second hand-written copy. */
+        internal fun integerSchema(minimum: Int, maximum: Int? = null): JsonObject = buildJsonObject {
             put("type", "integer")
             put("minimum", minimum)
             if (maximum != null) put("maximum", maximum)
@@ -200,15 +357,25 @@ class DeviceToolCatalog @Inject constructor(
         /** Pure filter, split out of [availableTools] so it's directly testable: a tool survives iff
          * its [DeviceToolDefinition.requiredPermission] is granted (or absent) AND it is not in
          * [disabledToolIds] (the user's per-tool Settings toggle). [disabledToolIds]
-         * defaults empty so pre-toggle call sites (and the permission-only tests) read unchanged. */
+         * defaults empty so pre-toggle call sites (and the permission-only tests) read unchanged.
+         *
+         * [LIFECYCLE_TOOL_IDS] ride the screen-control OPT-IN only: if the user has left every
+         * control tool switched off they have not asked to have their phone driven, so the pair
+         * that would offer it is pure context cost. Everything else about their availability is
+         * deliberately absent — see [LIFECYCLE_TOOL_IDS]. */
         internal fun filterAvailable(
             definitions: List<DeviceToolDefinition>,
             checker: DevicePermissionChecker,
             disabledToolIds: Set<String> = emptySet(),
-        ): List<DeviceToolDefinition> =
-            definitions.filter {
+            deviceControlReady: Boolean = false,
+        ): List<DeviceToolDefinition> {
+            val controlOptedIn = CONTROL_TOOL_IDS.any { it !in disabledToolIds }
+            return definitions.filter {
                 (it.requiredPermission == null || checker.isGranted(it.requiredPermission)) &&
-                    it.toolId !in disabledToolIds
+                    it.toolId !in disabledToolIds &&
+                    (it.toolId !in CONTROL_TOOL_IDS || deviceControlReady) &&
+                    (it.toolId !in LIFECYCLE_TOOL_IDS || controlOptedIn)
             }
+        }
     }
 }

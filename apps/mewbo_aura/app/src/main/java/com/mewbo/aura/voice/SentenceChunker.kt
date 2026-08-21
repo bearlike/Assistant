@@ -17,11 +17,18 @@ class SentenceChunker(private val messageId: String) {
 
     /** Called with the CURRENT full streaming buffer; returns newly-completed sentences. */
     fun push(buffer: String): List<Utterance> {
+        val start = resumePoint(buffer)
         lastBuffer = buffer
-        val start = consumed.coerceAtMost(buffer.length)
         val remainder = buffer.substring(start)
         val boundaries = findBoundaries(remainder)
-        if (boundaries.isEmpty()) return emptyList()
+        // Commit the cursor even with nothing to emit. A shrinking buffer moves the
+        // resume point BACKWARDS, and leaving the old value behind is what stranded
+        // the tail: the next push, and flush(), would both resume past the end of
+        // the text they were handed and return nothing at all.
+        if (boundaries.isEmpty()) {
+            consumed = start
+            return emptyList()
+        }
 
         val utterances = mutableListOf<Utterance>()
         var localStart = 0
@@ -33,7 +40,40 @@ class SentenceChunker(private val messageId: String) {
         return utterances
     }
 
-    /** End-of-message remainder, e.g. a final clause with no trailing punctuation. */
+    /**
+     * Where to resume reading [buffer], given what has already been spoken.
+     *
+     * Position-based while the cursor is still IN RANGE, and that is deliberate:
+     * a reconciliation that rewrites text already spoken aloud must not re-speak
+     * it, because the listener cannot un-hear the first version. Only when the
+     * replacement is shorter than [consumed] is the offset meaningless — it points
+     * past the end of the string it is being applied to — and clamping it to the
+     * new length is what silently read a corrected ending, or an entire final
+     * answer, as already-spoken.
+     *
+     * In that case alone the cursor moves back to where the two buffers diverge, so
+     * a pure truncation (a trimmed trailing space) still resumes at the end and
+     * says nothing, while a genuine rewrite speaks only its changed tail. Resetting
+     * to zero would read the whole reply out a second time.
+     *
+     * Cost class: `O(buffer length)`, the same pass [findBoundaries] already makes.
+     */
+    private fun resumePoint(buffer: String): Int {
+        if (consumed <= buffer.length) return consumed
+        val shared = minOf(buffer.length, lastBuffer.length)
+        var agreed = 0
+        while (agreed < shared && buffer[agreed] == lastBuffer[agreed]) agreed++
+        return agreed
+    }
+
+    /**
+     * End-of-message remainder, e.g. a final clause with no trailing punctuation.
+     *
+     * Reads from [consumed] directly rather than re-deriving a resume point: every
+     * path into [lastBuffer] already committed its cursor against that exact
+     * string, so the offset is valid here by construction. The `coerceAtMost` is
+     * kept only as a bound against an empty buffer.
+     */
     fun flush(): Utterance? {
         val start = consumed.coerceAtMost(lastBuffer.length)
         val raw = lastBuffer.substring(start)

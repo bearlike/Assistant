@@ -121,7 +121,7 @@ describe("SettingsSection — a failed save must not announce success", () => {
 });
 
 describe("SettingsSection — a sibling edit must not clobber an untouched secret", () => {
-  // Reproduces Gitea #509: an operator edited an unrelated model field and
+  // Reproduces a reported defect: an operator edited an unrelated model field and
   // saved, and the PATCH carried `llm.api_key: ""` over a live credential.
   // Root cause lives one layer below the widget: RJSF fills a MISSING
   // property with its JSON-schema `default` the instant a SIBLING field's

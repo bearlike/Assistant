@@ -1,5 +1,6 @@
 {
   "name": "wiki",
+  "display_name": "Codebase Wiki",
   "description": "AI-generated documentation backend for code repositories.",
   "version": "0.1.0",
   "author": "Mewbo",

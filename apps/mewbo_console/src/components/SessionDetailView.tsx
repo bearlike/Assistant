@@ -491,6 +491,9 @@ export function SessionDetailView({
         isStarting={isStarting}
         streamingText={streamingText}
         onShowActiveTrace={handleShowLiveTrace}
+        activePhase={throughput.phase}
+        activeTokPerSec={throughput.tokPerSec}
+        activeStepStartTs={throughput.stepStartTs}
         onApprovePlan={handleApprovePlan}
         onAnswerQuestion={handleAnswerQuestion}
         onRetryFrom={handleRetryFrom}
@@ -511,8 +514,10 @@ export function SessionDetailView({
 
       <div className="relative z-10">
         <InputBar mode="detail" sessionId={session.session_id} sessionContext={effectiveContext} onSubmit={async (query, newContext, mode, attachments) => {
-          const mergedContext = { ...effectiveContext, ...newContext };
-          await send(query, mergedContext, mode, attachments);
+          // InputBar emits exactly the overrides this turn may declare. Replaying
+          // the persisted context here resurrects purpose-bound fields it
+          // deliberately omitted (for example an app's project binding).
+          await send(query, newContext, mode, attachments);
           resume();
         }} onStop={async () => {
           await stop();

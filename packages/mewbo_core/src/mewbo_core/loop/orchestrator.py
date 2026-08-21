@@ -307,6 +307,7 @@ class Orchestrator:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -340,6 +341,7 @@ class Orchestrator:
                 mode=mode,
                 should_cancel=should_cancel,
                 allowed_tools=allowed_tools,
+                denied_tools=denied_tools,
                 strict_tool_scope=strict_tool_scope,
                 capability_mode=capability_mode,
                 skill_instructions=skill_instructions,
@@ -367,6 +369,7 @@ class Orchestrator:
         mode: str | None = None,
         should_cancel: Callable[[], bool] | None = None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -407,6 +410,16 @@ class Orchestrator:
         effective_caps = self._session_capabilities(session_id, allowed_tools=allowed_tools)
         if effective_caps:
             derive_context["client_capabilities"] = list(effective_caps)
+        # An explicit caller-supplied user_id always wins. Otherwise, the real
+        # principal — stamped into the context payload by the API's
+        # ``_stamp_principal_subject`` whenever auth is enabled — is the
+        # honest identity for tracing. Leave it None (never the session id)
+        # when no principal exists, so the seam's own anonymous fallback
+        # applies instead of silently aliasing user_id to session_id.
+        if user_id is None:
+            principal_subject = derive_context.get("principal_subject")
+            if isinstance(principal_subject, str) and principal_subject:
+                user_id = principal_subject
         provenance = TraceProvenance.derive(
             tags=self._session_store.tags_for_session(session_id),
             context=derive_context,
@@ -419,6 +432,12 @@ class Orchestrator:
                 user_id=user_id,
                 invocation_id=invocation_id,
                 source_platform=source_platform,
+                # The trace name identifies the KIND of turn, never this
+                # execution of it: a name carrying a turn index, a session id
+                # or the query text mints a fresh name per run and every
+                # saved filter, evaluator and dashboard stops matching. The
+                # surface is a bounded set, so it stays groupable.
+                trace_name=f"turn:{source_platform or 'unknown'}",
                 tags=list(provenance.tags),
                 metadata=provenance.metadata,
             ):
@@ -431,6 +450,7 @@ class Orchestrator:
                     mode=mode,
                     should_cancel=should_cancel,
                     allowed_tools=allowed_tools,
+                    denied_tools=denied_tools,
                     strict_tool_scope=strict_tool_scope,
                     capability_mode=capability_mode,
                     skill_instructions=skill_instructions,
@@ -455,6 +475,7 @@ class Orchestrator:
         mode: str | None,
         should_cancel: Callable[[], bool] | None,
         allowed_tools: list[str] | None = None,
+        denied_tools: list[str] | None = None,
         strict_tool_scope: bool = False,
         capability_mode: str = "all",
         skill_instructions: str | None = None,
@@ -585,7 +606,10 @@ class Orchestrator:
                     # / etc. Caller is responsible for including any core
                     # tool it actually needs in ``allowed_tools``.
                     tool_specs = filter_specs(
-                        tool_specs, allowed=allowed_tools, capability_mode=capability_mode
+                        tool_specs,
+                        allowed=allowed_tools,
+                        denied=denied_tools,
+                        capability_mode=capability_mode,
                     )
                 else:
                     # Permissive mode (FE default): ``allowed_tools`` only
@@ -594,18 +618,22 @@ class Orchestrator:
                     tool_specs = filter_specs(
                         tool_specs,
                         allowed=allowed_tools + builtin_ids,
+                        denied=denied_tools,
                         capability_mode=capability_mode,
                     )
-            elif capability_mode != "all":
+            elif capability_mode != "all" or denied_tools:
                 # No allowlist, but a ROOT capability ceiling applies (a role
-                # narrowed a session to ``read_only``). Apply the coarse
-                # privilege gate to the registry specs so a read-only session
-                # binds only read-tier tools + ``always_load`` — mirroring the
-                # per-tier filter a spawned child gets. Guarded on the non-"all"
-                # tier so an unrestricted session skips ``filter_specs``
-                # entirely, and so ``agent.default_denied_tools`` is never
-                # applied to an unscoped session.
-                tool_specs = filter_specs(tool_specs, capability_mode=capability_mode)
+                # narrowed a session to ``read_only``) or the caller named an
+                # explicit deny. Apply the coarse privilege gate + deny to the
+                # registry specs so a read-only session binds only read-tier
+                # tools + ``always_load`` — mirroring the per-tier filter a
+                # spawned child gets. Guarded so an unrestricted, undenied
+                # session skips ``filter_specs`` entirely, and so
+                # ``agent.default_denied_tools`` is never applied to a session
+                # that named neither a ceiling nor a deny.
+                tool_specs = filter_specs(
+                    tool_specs, denied=denied_tools, capability_mode=capability_mode
+                )
 
             # Resolve session capabilities once so every downstream lookup
             # (slash-command skill activation, sub-agent catalog, activate_skill
@@ -689,6 +717,7 @@ class Orchestrator:
                     # — INCLUDING strict_tool_scope, or a permissive FE root's
                     # {{ tools }} catalog drops schedule_trigger the agent holds.
                     allowed_tools=allowed_tools,
+                    denied_tools=denied_tools,
                     extra_session_tools=extra_session_tools,
                     provenance=provenance,
                     strict_tool_scope=strict_tool_scope,
@@ -703,6 +732,12 @@ class Orchestrator:
                 # root agents that need them. ``None`` still means "no
                 # plugin session tools" for plain user sessions.
                 allowed_tools=allowed_tools,
+                # Deny wins over everything else the loop's session-tool gates
+                # admit — the unconditional auto-surface and the capability
+                # auto-surface included. Same list this run's registry specs
+                # were just filtered by, so a denied tool id is off BOTH
+                # surfaces, not just one of them.
+                denied_tools=denied_tools,
                 # Whether ``allowed_tools`` is authoritative (strict) or a
                 # permissive MCP ceiling — mirrors the ``filter_specs`` branch
                 # above so the loop's spawn_agent gate reads the same intent.
@@ -806,7 +841,7 @@ class Orchestrator:
             # when absent, so a run that hit no wall carries no key.
             if state.blocked_code:
                 completion_payload["blocked_code"] = state.blocked_code
-            self._attach_failure_record(completion_payload, task_queue, state.done_reason)
+            self._attach_failure_record(completion_payload, task_queue, state)
             self._session_store.append_event(
                 session_id,
                 {"type": "completion", "payload": completion_payload},
@@ -927,42 +962,68 @@ class Orchestrator:
         self,
         payload: CompletionPayload,
         task_queue: TaskQueue,
-        done_reason: str | None,
+        state: OrchestrationState,
     ) -> None:
         """Attach the bounded failure record to a terminal completion payload.
 
         ``task_queue.last_error`` is a STICKY diagnostic — a mid-run tool
-        failure the model recovered from still leaves it set. It is CLAMPED
+        failure the run continued past still leaves it set. It is CLAMPED
         whenever set, whatever the outcome: its readers do not check
         ``done_reason`` (the scg map-job persists it onto the job record, the
         CLI prints it on /retry|/continue|/edit), so gating the clamp let a run
         that recovered and finished clean carry a raw multi-KB provider page out
         to them.
 
-        The payload keys are NOT withheld on ``done_reason == "completed"``,
-        tempting as it is to keep error residue off a successful run's wire.
-        The runs such a rule silences are overwhelmingly the LAUNDERED ones — a
-        halt presenting as success — and withholding the one field able to
+        ``error`` is WITHHELD on a run whose terminal status is ``completed``,
+        because that ONE key is what a client renders as a user-facing error
+        card. A tool call that failed and was recovered from is not a session
+        failure, and emitting it as one puts an error card under a complete,
+        correct answer — which is exactly what it did. This is the same rule the
+        no-sticky-string branch below already applied; it is stated once here
+        and applied to both.
+
+        The RECORD is still carried on such a run: ``last_error`` and
+        ``error_detail`` both ride the payload, and no client renders a card on
+        either. That is what keeps the auditability guarantee intact — the runs
+        a blanket withhold would silence are overwhelmingly the LAUNDERED ones
+        (a halt presenting as success), and dropping the one field able to
         contradict the status is what turns a wrong status into an unfalsifiable
         one. A status is only worth trusting if the record can be used to check
-        it.
+        it, so the record stays and only the render trigger goes.
+
+        The gate reads ``OrchestrationState.terminal_status`` rather than
+        comparing ``done_reason`` here: that projection also folds in
+        ``verified is False`` and the cancelled/unachieved vocabularies, and a
+        second copy of it at this call site could only ever drift from it. Note
+        ``done_reason == "error"`` never reaches here — the path that mints it
+        raises, and its handler builds its own failure payload.
+
+        ``blocked_code`` is consulted INDEPENDENTLY of that projection, exactly
+        as the status layer and the console already consult it. A run that died
+        against a credential, a network path or a quota deliberately keeps
+        ``done_reason == "completed"`` and carries the wall only in that field,
+        so ``terminal_status`` calls it a success — and gating on the projection
+        alone withheld the error from precisely the runs a user most needs to
+        see, silently, since a client that reads neither field then renders a
+        clean success.
 
         A run that stopped short leaving NO sticky string (a doom-loop halt, a
         spent budget, a failed ground-truth check) still gets a structured
-        record here — but only the additive ``error_detail``, never the flat
-        keys: those are what a client renders as an error card, and a halt that
-        produced a wrap-up answer is not an error to put in front of a user.
+        record here — but only the additive ``error_detail``, never ``error``,
+        for the same reason: a halt that produced a wrap-up answer is not an
+        error to put in front of a user.
         """
         if task_queue.last_error:
             run_error = RunError.from_message(task_queue.last_error, model=self._error_model)
             brief = run_error.brief()
             task_queue.last_error = brief
-            payload["error"] = brief
             payload["last_error"] = brief
             payload["error_detail"] = run_error.model_dump(mode="json")
-        elif done_reason in UNACHIEVED_DONE_REASONS:
+            if state.terminal_status() != "completed" or state.blocked_code is not None:
+                payload["error"] = brief
+        elif state.done_reason in UNACHIEVED_DONE_REASONS:
             payload["error_detail"] = RunError.from_message(
-                f"Run ended without reaching its goal ({done_reason}).",
+                f"Run ended without reaching its goal ({state.done_reason}).",
                 model=self._error_model,
             ).model_dump(mode="json")
 
@@ -1152,6 +1213,7 @@ class Orchestrator:
         extra_session_tools: list[SessionTool] | None,
         strict_tool_scope: bool,
         capability_mode: str = "all",
+        denied_tools: list[str] | None = None,
     ) -> tuple[str, ...]:
         """The tool ids an operator's template sees in ``InstructionContext.tools``.
 
@@ -1192,7 +1254,9 @@ class Orchestrator:
                 # {{ tools }} catalog drifts from what the agent holds:
                 # a permissive FE root genuinely holds schedule_trigger, and a
                 # role-narrowed root drops the write-tier session tools its
-                # ``capability_mode`` withholds.
+                # ``capability_mode`` withholds. ``denied_tools`` for the same
+                # reason — the drift law this method exists to enforce.
+                denied_tools=denied_tools,
                 strict_tool_scope=strict_tool_scope,
                 capability_mode=capability_mode,
             )
@@ -1211,6 +1275,7 @@ class Orchestrator:
         provenance: TraceProvenance | None,
         strict_tool_scope: bool,
         capability_mode: str = "all",
+        denied_tools: list[str] | None = None,
     ) -> str | None:
         """Render the operator's custom system instructions for this run.
 
@@ -1259,6 +1324,7 @@ class Orchestrator:
                 extra_session_tools=extra_session_tools,
                 strict_tool_scope=strict_tool_scope,
                 capability_mode=capability_mode,
+                denied_tools=denied_tools,
             ),
             # ``project`` is absent for a managed worktree too, not just for an
             # unscoped session: ``TraceProvenance._facets_from_context`` routes a

@@ -41,6 +41,24 @@ async def _successful_loop_run_with_stale_error(*_args, **_kwargs):
     return task_queue, state
 
 
+async def _halted_loop_run_with_error(*_args, **_kwargs):
+    """A run that stopped short of its goal AND left a sticky error.
+
+    Reaches ``_attach_failure_record`` (unlike ``_failing_loop_run``, which
+    raises and is served by the handler's own payload), so it is the only
+    fixture that exercises the non-``completed`` arm of the terminal-status
+    gate — i.e. that withholding ``error`` from a success did not withhold it
+    from a genuine failure too.
+    """
+    task_queue = TaskQueue(action_steps=[])
+    task_queue.task_result = ""
+    task_queue.last_error = _STALE_ERROR
+    state = OrchestrationState(goal="go")
+    state.done = True
+    state.done_reason = "halted_no_progress"
+    return task_queue, state
+
+
 class TestFormatAssistantClosure:
     """Direct coverage for the closure formatter."""
 
@@ -129,17 +147,20 @@ class TestRunFailureEmitsClosure:
 
 
 class TestCompletionPayloadErrorGating:
-    """A sticky ``last_error`` is now CARRIED, bounded, even on a clean run."""
+    """A sticky ``last_error`` is CARRIED and bounded on a clean run — but the
+    render-triggering ``error`` key is withheld from one."""
 
     def test_successful_completion_still_reports_its_sticky_error(self, tmp_path) -> None:
-        """The emission is NOT gated on ``done_reason``.
+        """The RECORD is carried on a success; the error CARD trigger is not.
 
-        Withholding the error keys on a "completed" run keeps stale residue off
-        a successful wire, but it silences overwhelmingly the LAUNDERED runs — a
-        halt or an unmet outcome presenting as success — and dropping the one
-        field that could contradict the status is what makes a wrong status
-        unfalsifiable. The record is carried; the status derivation stays the
-        honesty layer above it.
+        ``error`` is the one key a client renders as a user-facing error card,
+        so emitting it from recovered-tool residue put an error under a
+        complete, correct answer. Withholding it does not weaken the honesty
+        guarantee that kept these keys unconditional: ``last_error`` and
+        ``error_detail`` still ride the payload, so a LAUNDERED run — a halt
+        presenting as success — is still contradicted by its own record. Only
+        the render trigger goes; the status derivation stays the honesty layer
+        above it.
         """
         orch, store = _make_orchestrator(tmp_path)
         session_id = store.create_session()
@@ -149,9 +170,32 @@ class TestCompletionPayloadErrorGating:
 
         payload = _completion_events(store, session_id)[0]["payload"]
         assert payload["done_reason"] == "completed"
-        # Carried, and bounded through RunError like every other emission path.
-        assert payload["last_error"] == payload["error"]
+        # The card trigger is absent — this is the whole point.
+        assert "error" not in payload
+        # ...but the record is carried, and bounded through RunError like every
+        # other emission path, so the status stays falsifiable.
+        assert payload["last_error"] == _STALE_ERROR
         assert payload["error_detail"]["kind"] == "tool_failure"
+
+    def test_unachieved_completion_with_sticky_error_still_carries_error(self, tmp_path) -> None:
+        """Withholding ``error`` from a SUCCESS must not withhold it from a halt.
+
+        This is the arm ``test_non_success_completion_keeps_error`` cannot
+        reach: that one raises, so the exception handler builds the payload and
+        ``_attach_failure_record`` never runs. A halt returns normally, so this
+        is the only fixture that puts a non-``completed`` terminal status
+        through the gate.
+        """
+        orch, store = _make_orchestrator(tmp_path)
+        session_id = store.create_session()
+
+        with patch.object(ToolUseLoop, "run", _halted_loop_run_with_error):
+            orch.run(user_query="go", session_id=session_id, max_iters=1)
+
+        payload = _completion_events(store, session_id)[0]["payload"]
+        assert payload["done_reason"] == "halted_no_progress"
+        assert payload["error"] == _STALE_ERROR
+        assert payload["last_error"] == _STALE_ERROR
 
     def test_non_success_completion_keeps_error(self, tmp_path) -> None:
         """A non-"completed" done_reason must still carry the error keys."""

@@ -162,6 +162,31 @@ export function reasonFrom(err: unknown): string {
   return message;
 }
 
+/**
+ * Extract the machine-readable `code` from the API's structured refusal
+ * envelope (`{"error": {code, reason, retryable}}`), or `""` when the failure
+ * carries none. The sibling of {@link reasonFrom}: that one reads what to SHOW
+ * a user, this one reads what to BRANCH on.
+ *
+ * Only a STRING code is returned. `code` is `int | str` on the wire — the
+ * app-level 404 handler emits the numeric status — and a caller branching here
+ * is always matching a semantic token (`speech_capacity_exhausted`,
+ * `session_terminated`), never a status it can read off `Response.status`
+ * anyway. Collapsing the numeric case to `""` keeps every call site a plain
+ * string compare instead of teaching each one both shapes.
+ */
+export function codeFrom(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  if (!message) return "";
+  try {
+    const parsed = JSON.parse(message) as { error?: { code?: unknown } };
+    return typeof parsed?.error?.code === "string" ? parsed.error.code : "";
+  } catch {
+    /* not JSON — an ordinary Error carries no envelope */
+    return "";
+  }
+}
+
 /** Read a `Response` as JSON; throws (via `readError`'s message logic) on non-2xx. */
 export async function readJson<T>(response: Response): Promise<T> {
   const { text, data } = await parseBody(response);

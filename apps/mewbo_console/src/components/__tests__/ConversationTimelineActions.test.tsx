@@ -11,9 +11,27 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import { ConversationTimeline } from "../ConversationTimeline";
 import type { TimelineEntry } from "../../types";
+
+// The footer's read-aloud button probes the server for speech support, so the
+// strip now needs a query client in scope. Answering "no speech" keeps these
+// tests pinned to the overflow menu they were written against.
+vi.mock("../../api/speech", () => ({
+  fetchSpeechCapability: vi.fn().mockResolvedValue({ synthesis: false, transcription: false, maxAudioBytes: null, maxTextChars: null }),
+  synthesizeSpeech: vi.fn(),
+}));
+
+/** A fresh client per render, so no probe result leaks between tests. */
+function queryWrapper() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
 
 // jsdom lacks IntersectionObserver — TurnScroller observes rows on mount.
 class IntersectionObserverStub {
@@ -72,6 +90,7 @@ describe("ConversationTimeline — turn overflow menu (retry / branch / fork)", 
         onForkFrom={vi.fn()}
         onForkSession={vi.fn()}
       />,
+      { wrapper: queryWrapper() },
     );
     const { user, menu } = await openTurnMenu();
     await user.click(
@@ -91,6 +110,7 @@ describe("ConversationTimeline — turn overflow menu (retry / branch / fork)", 
         onForkFrom={onForkFrom}
         onForkSession={vi.fn()}
       />,
+      { wrapper: queryWrapper() },
     );
     const { user, menu } = await openTurnMenu();
     await user.click(
@@ -110,6 +130,7 @@ describe("ConversationTimeline — turn overflow menu (retry / branch / fork)", 
         onForkFrom={vi.fn()}
         onForkSession={onForkSession}
       />,
+      { wrapper: queryWrapper() },
     );
     const { user, menu } = await openTurnMenu();
     await user.click(
@@ -129,6 +150,7 @@ describe("ConversationTimeline — turn overflow menu (retry / branch / fork)", 
         onForkFrom={vi.fn()}
         onForkSession={vi.fn()}
       />,
+      { wrapper: queryWrapper() },
     );
     const { menu } = await openTurnMenu();
     expect(

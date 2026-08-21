@@ -14,6 +14,7 @@ by current code can never reach the path only a legacy file takes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,9 @@ DECLARED_KNOBS = (
     "read_only",
     "capability",
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_manifest(path: Path, tools: list[dict[str, Any]]) -> str:
@@ -277,6 +281,180 @@ class TestListingDegradesStructurally:
         listing = {"kind": "dir", "path": "pkg", "entries": ["a.py", "b.py"]}
 
         assert json.loads(loop._fitted_json(listing, 2000)) == listing
+
+
+class TestDirectlyBoundToolCaps:
+    """The population with no ToolSpec and no SessionTool to declare on.
+
+    ``_bind_model`` binds several tools directly, so ``get_spec`` returns
+    ``None`` for every one of them and ``_result_char_cap`` fell through to the
+    2000-char class default — the same accident the session-tool arm above was
+    added to fix, left open for a third population.
+
+    Measured on the deployed stack, session ``bb7f59d5…``: the ``generative-ui``
+    skill reached the model as 2000 of its 4008 characters and ``mewbo-harness``
+    as 2000 of 4180. Nothing surfaced it, because the EVENT snapshot carries its
+    own far larger cap — the store held both bodies complete, so every human
+    surface showed the full text while the model had read half.
+    """
+
+    @staticmethod
+    def _build_loop() -> ToolUseLoop:
+        from test_tool_use_loop import (  # noqa: PLC0415 — sibling test helpers
+            _allow_all_policy,
+            _make_agent_context,
+            _make_hook_manager,
+            _make_registry,
+            _make_spec,
+        )
+
+        with patch("mewbo_core.loop.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            return ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=_make_registry(_make_spec("aider_list_dir_tool", "List")),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+
+    def test_activate_skill_is_not_capped_at_the_shell_default(self) -> None:
+        """A skill body is authored content, not unbounded command output."""
+        from mewbo_core.tooling.skills import (  # noqa: PLC0415 — the owning module
+            ACTIVATE_SKILL_MAX_RESULT_CHARS,
+        )
+
+        cap = self._build_loop()._result_char_cap("activate_skill")
+
+        assert cap == ACTIVATE_SKILL_MAX_RESULT_CHARS
+        # Named explicitly: the whole defect was this value, and asserting only
+        # equality with the constant would still pass if someone set it to 2000.
+        assert cap > 2000
+
+    def test_every_shipped_skill_body_fits_that_cap(self) -> None:
+        """The cap is only real if the bodies it exists for actually fit it.
+
+        Reads the built-in ``SKILL.md`` files off disk rather than a literal, so
+        a suite that grows a skill past the cap fails on the skill that broke
+        it. The largest body today is ~7 KB against a 200 KB ceiling; this is a
+        tripwire for a future skill that balloons, not a tight fit.
+        """
+        skills_root = (
+            REPO_ROOT / "packages/mewbo_core/src/mewbo_core/builtin_plugins"
+        )
+        bodies = sorted(skills_root.glob("*/skills/*/SKILL.md"))
+        assert bodies, (
+            "Found no built-in SKILL.md files. If the layout moved, fix this "
+            "glob — an empty parse would let this pass while checking nothing."
+        )
+        cap = self._build_loop()._result_char_cap("activate_skill")
+        for body in bodies:
+            size = len(body.read_text(encoding="utf-8"))
+            assert size <= cap, (
+                f"{body.relative_to(REPO_ROOT)} is {size} characters against an "
+                f"activate_skill cap of {cap}, so a model activating it would "
+                f"read a windowed body and follow a partial contract."
+            )
+
+    def test_an_undeclared_directly_bound_tool_still_gets_the_default(self) -> None:
+        """Silence keeps meaning 2000 — only a declared tool opts out.
+
+        The fix must not widen the default for the whole population: the spawn
+        family and friends return short status lines, and raising their ceiling
+        would spend context on results that never approach it.
+        """
+        assert self._build_loop()._result_char_cap("spawn_agent") == 2000
+
+
+class TestStringResultsAreWindowed:
+    """A capped STRING result keeps both ends, as the engine documents.
+
+    ``_windowed`` existed, was reached only through ``_fitted_json``'s dict
+    fields, and every plain-string tool result was cut head-first with a bare
+    ``[truncated]`` — while the ``mewbo-harness`` skill told the model, in the
+    engine's own voice, that results are "windowed, not head-truncated". A
+    documented invariant that the code does not hold is worse than no
+    documentation: it is what lets a model treat a bounded read as a complete
+    one, which is precisely what the omission marker exists to prevent.
+    """
+
+    @staticmethod
+    def _build_loop() -> ToolUseLoop:
+        return TestDirectlyBoundToolCaps._build_loop()
+
+    def test_the_tail_survives_the_cut(self) -> None:
+        """The verdict of a command lives at its END."""
+        text = "START-BANNER\n" + ("filler line\n" * 4000) + "FATAL: the answer\n"
+        assert len(text) > 2000
+
+        fitted = self._build_loop()._windowed(text, 2000)
+
+        assert "FATAL: the answer" in fitted, (
+            "The tail was dropped, so a traceback's verdict never reaches the "
+            "model — the exact failure head-only truncation causes."
+        )
+        assert fitted.startswith("START-BANNER"), "The head identifies WHAT ran."
+        assert "characters omitted" in fitted
+        assert len(fitted) <= 2000
+
+    def test_a_result_that_fits_is_returned_verbatim(self) -> None:
+        """No marker on a complete result, or every read reads as partial."""
+        assert self._build_loop()._windowed("short", 2000) == "short"
+
+    def test_the_real_dispatch_path_windows_a_long_string_result(self) -> None:
+        """The seam, not the helper — ``_windowed`` was never WIRED to strings.
+
+        The two tests above pass against the defective tree, because
+        ``_windowed`` was always correct; what was wrong is that the string arm
+        of the cut never called it. Only driving ``_execute_tool_call`` can tell
+        those apart, which is why this one exists alongside them.
+        """
+        from mewbo_core.common import MockSpeaker  # noqa: PLC0415
+        from test_tool_use_loop import (  # noqa: PLC0415 — sibling test helpers
+            _allow_all_policy,
+            _make_agent_context,
+            _make_hook_manager,
+            _make_registry,
+        )
+
+        verdict = "FATAL: the answer the caller asked for"
+        text = "START-BANNER\n" + ("filler line\n" * 4000) + verdict
+
+        class _Tool:
+            def run(self, _action_step: Any) -> MockSpeaker:
+                return MockSpeaker(content=text)
+
+        spec = ToolSpec(
+            tool_id="long_string_tool",
+            name="long_string_tool",
+            description="Returns a long plain string.",
+            factory=_Tool,
+            enabled=True,
+            kind="local",
+            metadata={"schema": {"type": "object", "properties": {}}},
+        )
+        with patch("mewbo_core.loop.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = MagicMock()
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=_make_registry(spec),
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            result = asyncio.run(
+                loop._execute_tool_call(
+                    {"id": "call-1", "name": "long_string_tool", "args": {}},
+                    loop._tool_registry.list_specs(),
+                )
+            )
+
+        assert len(result.content) < len(text), "The result was not capped at all."
+        assert verdict in result.content, (
+            "The model-facing result was cut head-first, so the command's "
+            "verdict never reached it — while mewbo-harness documents windowing."
+        )
+        assert "characters omitted" in result.content
 
 
 class TestLimitMismatches:

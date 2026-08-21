@@ -10,7 +10,7 @@ ARG BASE_IMAGE
 FROM $BASE_IMAGE
 
 # In lockstep with pyproject.toml and the other images — see Dockerfile.base.
-ARG VERSION="0.0.13"
+ARG VERSION="0.0.14"
 
 LABEL org.opencontainers.image.title="Mewbo API" \
       org.opencontainers.image.description="REST API for the Mewbo task-agent assistant" \
@@ -102,11 +102,18 @@ RUN chmod +x /app/docker/entrypoint.sh
 # UV_LINK_MODE=copy: the wheel cache is a build-time mount, so the venv must
 # not hardlink into it.
 ARG WIKI_EXTRAS=0
+# SPEECH_EXTRAS defaults ON: the speech routes are useless without the library,
+# and unlike the wiki stack it pulls no heavy native deps — litellm and httpx
+# are already in the api's own dependency closure, so the extra costs the image
+# nothing. Set to 0 for a deployment that deliberately serves no speech; the
+# namespace then never mounts and /api/speech answers 404.
+ARG SPEECH_EXTRAS=1
 RUN if ! command -v uv >/dev/null 2>&1; then pip install --no-cache-dir uv; fi
 ENV UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package mewbo-api \
-        $( [ "$WIKI_EXTRAS" = "1" ] && printf -- '--extra wiki' )
+        $( [ "$WIKI_EXTRAS" = "1" ] && printf -- '--extra wiki' ) \
+        $( [ "$SPEECH_EXTRAS" = "1" ] && printf -- '--extra speech' )
 ENV PATH="/app/.venv/bin:$PATH"
 
 # SCIP symbol indexers (Python precise symbol resolution) — only baked in when

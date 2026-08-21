@@ -1,10 +1,10 @@
 {
   "function": {
-    "description": "Render a structured UI panel in the conversation.\n\nUse this to SHOW structured information \u2014 a status board, a comparison\ntable, a set of results \u2014 instead of describing it in prose. Compose the\npanel from the listed components; each one carries its own typed fields.\nKeep it small: a panel is a summary a reader takes in at a glance, not a\ndocument.\n\nNon-visual clients receive an automatic plain-text rendering, so never\nrepeat the panel's contents in your reply. Say what it shows and move on.",
+    "description": "Render a structured UI panel in the conversation.\n\nUse this to SHOW structured information \u2014 a status board, a comparison\ntable, a set of results \u2014 instead of describing it in prose. Keep it small:\na panel is a summary a reader takes in at a glance, not a document.\n\n`root` is a LIST of component objects. Each object names its type in\n`component` and carries that type's fields beside it. Only `Card` and\n`Stack` may hold `children`, and either may carry an `id` so a later call\ncan address it.\n\nBuild a rich panel INCREMENTALLY: present a small skeleton first, then\n`operation=\"append\"` more nodes onto it (or into a named container) call\nby call. Small calls are far more likely to arrive intact than one large\ntree.\n\nNon-visual clients receive an automatic plain-text rendering, so restating\nthe panel's contents in your reply adds nothing. Say what it shows and move\non \u2014 though a reader who asked HOW something works is asking about the\npanel, not for a copy of it, and answering that is not a restatement.\n\nComponents (required fields first; every field sits DIRECTLY on the node beside `component`, never nested under a type name):\n- Text: value (optional: tone)\n- Heading: value (optional: level)\n- Card: \u2014 (optional: children: [node, ...], every child carries its own `component`; id; title)\n- Stack: \u2014 (optional: children: [node, ...], every child carries its own `component`; id; direction; gap)\n- Badge: label (optional: status)\n- KeyValue: items: [{label, value}]\n- Table: columns: [str] (optional: rows: [[str]], each row exactly as long as `columns`)\n- CodeBlock: code (optional: language)\n- Alert: body (optional: title; variant)\n- Divider: \u2014\n- Link: href; label",
     "name": "present_ui",
     "parameters": {
       "$defs": {
-        "AlertNode": {
+        "Alert": {
           "additionalProperties": false,
           "description": "A callout drawing attention to one fact.",
           "properties": {
@@ -12,13 +12,11 @@
               "description": "What the reader needs to know.",
               "maxLength": 2000,
               "minLength": 1,
-              "title": "Body",
               "type": "string"
             },
             "component": {
               "const": "Alert",
               "default": "Alert",
-              "title": "Component",
               "type": "string"
             },
             "title": {
@@ -33,8 +31,7 @@
                 }
               ],
               "default": null,
-              "description": "Optional callout heading.",
-              "title": "Title"
+              "description": "Optional callout heading."
             },
             "variant": {
               "default": "info",
@@ -45,31 +42,27 @@
                 "warning",
                 "danger"
               ],
-              "title": "Variant",
               "type": "string"
             }
           },
           "required": [
             "body"
           ],
-          "title": "AlertNode",
           "type": "object"
         },
-        "BadgeNode": {
+        "Badge": {
           "additionalProperties": false,
           "description": "A short status pill.",
           "properties": {
             "component": {
               "const": "Badge",
               "default": "Badge",
-              "title": "Component",
               "type": "string"
             },
             "label": {
               "description": "The pill text (1-3 words).",
               "maxLength": 200,
               "minLength": 1,
-              "title": "Label",
               "type": "string"
             },
             "status": {
@@ -82,17 +75,15 @@
                 "info",
                 "danger"
               ],
-              "title": "Status",
               "type": "string"
             }
           },
           "required": [
             "label"
           ],
-          "title": "BadgeNode",
           "type": "object"
         },
-        "CardNode": {
+        "Card": {
           "additionalProperties": false,
           "description": "A titled surface grouping related nodes.",
           "properties": {
@@ -101,65 +92,78 @@
               "items": {
                 "discriminator": {
                   "mapping": {
-                    "Alert": "#/$defs/AlertNode",
-                    "Badge": "#/$defs/BadgeNode",
-                    "Card": "#/$defs/CardNode",
-                    "CodeBlock": "#/$defs/CodeBlockNode",
-                    "Divider": "#/$defs/DividerNode",
-                    "Heading": "#/$defs/HeadingNode",
-                    "KeyValue": "#/$defs/KeyValueNode",
-                    "Link": "#/$defs/LinkNode",
-                    "Stack": "#/$defs/StackNode",
-                    "Table": "#/$defs/TableNode",
-                    "Text": "#/$defs/TextNode"
+                    "Alert": "#/$defs/Alert",
+                    "Badge": "#/$defs/Badge",
+                    "Card": "#/$defs/Card",
+                    "CodeBlock": "#/$defs/CodeBlock",
+                    "Divider": "#/$defs/Divider",
+                    "Heading": "#/$defs/Heading",
+                    "KeyValue": "#/$defs/KeyValue",
+                    "Link": "#/$defs/Link",
+                    "Stack": "#/$defs/Stack",
+                    "Table": "#/$defs/Table",
+                    "Text": "#/$defs/Text"
                   },
                   "propertyName": "component"
                 },
                 "oneOf": [
                   {
-                    "$ref": "#/$defs/TextNode"
+                    "$ref": "#/$defs/Text"
                   },
                   {
-                    "$ref": "#/$defs/HeadingNode"
+                    "$ref": "#/$defs/Heading"
                   },
                   {
-                    "$ref": "#/$defs/CardNode"
+                    "$ref": "#/$defs/Card"
                   },
                   {
-                    "$ref": "#/$defs/StackNode"
+                    "$ref": "#/$defs/Stack"
                   },
                   {
-                    "$ref": "#/$defs/BadgeNode"
+                    "$ref": "#/$defs/Badge"
                   },
                   {
-                    "$ref": "#/$defs/KeyValueNode"
+                    "$ref": "#/$defs/KeyValue"
                   },
                   {
-                    "$ref": "#/$defs/TableNode"
+                    "$ref": "#/$defs/Table"
                   },
                   {
-                    "$ref": "#/$defs/CodeBlockNode"
+                    "$ref": "#/$defs/CodeBlock"
                   },
                   {
-                    "$ref": "#/$defs/AlertNode"
+                    "$ref": "#/$defs/Alert"
                   },
                   {
-                    "$ref": "#/$defs/DividerNode"
+                    "$ref": "#/$defs/Divider"
                   },
                   {
-                    "$ref": "#/$defs/LinkNode"
+                    "$ref": "#/$defs/Link"
                   }
                 ]
               },
               "maxItems": 200,
-              "title": "Children",
               "type": "array"
             },
             "component": {
               "const": "Card",
               "default": "Card",
-              "title": "Component",
               "type": "string"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional name for this container (e.g. 'status-card') so a later present_ui call can append into it or update it in place."
             },
             "title": {
               "anyOf": [
@@ -173,14 +177,12 @@
                 }
               ],
               "default": null,
-              "description": "Optional card heading.",
-              "title": "Title"
+              "description": "Optional card heading."
             }
           },
-          "title": "CardNode",
           "type": "object"
         },
-        "CodeBlockNode": {
+        "CodeBlock": {
           "additionalProperties": false,
           "description": "A fenced block of source code or structured output.",
           "properties": {
@@ -188,13 +190,11 @@
               "description": "The literal source, newlines and indentation intact.",
               "maxLength": 20000,
               "minLength": 1,
-              "title": "Code",
               "type": "string"
             },
             "component": {
               "const": "CodeBlock",
               "default": "CodeBlock",
-              "title": "Component",
               "type": "string"
             },
             "language": {
@@ -210,109 +210,33 @@
                 }
               ],
               "default": null,
-              "description": "Syntax-highlighting language tag, e.g. 'python'.",
-              "title": "Language"
+              "description": "Syntax-highlighting language tag, e.g. 'python'."
             }
           },
           "required": [
             "code"
           ],
-          "title": "CodeBlockNode",
           "type": "object"
         },
-        "DividerNode": {
+        "Divider": {
           "additionalProperties": false,
           "description": "A horizontal rule between sections.",
           "properties": {
             "component": {
               "const": "Divider",
               "default": "Divider",
-              "title": "Component",
               "type": "string"
             }
           },
-          "title": "DividerNode",
           "type": "object"
         },
-        "GenerativeUISpec": {
-          "additionalProperties": false,
-          "description": "A complete UI tree \u2014 the ``root`` array the renderer consumes.",
-          "properties": {
-            "root": {
-              "description": "Top-level nodes, rendered in order.",
-              "items": {
-                "discriminator": {
-                  "mapping": {
-                    "Alert": "#/$defs/AlertNode",
-                    "Badge": "#/$defs/BadgeNode",
-                    "Card": "#/$defs/CardNode",
-                    "CodeBlock": "#/$defs/CodeBlockNode",
-                    "Divider": "#/$defs/DividerNode",
-                    "Heading": "#/$defs/HeadingNode",
-                    "KeyValue": "#/$defs/KeyValueNode",
-                    "Link": "#/$defs/LinkNode",
-                    "Stack": "#/$defs/StackNode",
-                    "Table": "#/$defs/TableNode",
-                    "Text": "#/$defs/TextNode"
-                  },
-                  "propertyName": "component"
-                },
-                "oneOf": [
-                  {
-                    "$ref": "#/$defs/TextNode"
-                  },
-                  {
-                    "$ref": "#/$defs/HeadingNode"
-                  },
-                  {
-                    "$ref": "#/$defs/CardNode"
-                  },
-                  {
-                    "$ref": "#/$defs/StackNode"
-                  },
-                  {
-                    "$ref": "#/$defs/BadgeNode"
-                  },
-                  {
-                    "$ref": "#/$defs/KeyValueNode"
-                  },
-                  {
-                    "$ref": "#/$defs/TableNode"
-                  },
-                  {
-                    "$ref": "#/$defs/CodeBlockNode"
-                  },
-                  {
-                    "$ref": "#/$defs/AlertNode"
-                  },
-                  {
-                    "$ref": "#/$defs/DividerNode"
-                  },
-                  {
-                    "$ref": "#/$defs/LinkNode"
-                  }
-                ]
-              },
-              "maxItems": 200,
-              "minItems": 1,
-              "title": "Root",
-              "type": "array"
-            }
-          },
-          "required": [
-            "root"
-          ],
-          "title": "GenerativeUISpec",
-          "type": "object"
-        },
-        "HeadingNode": {
+        "Heading": {
           "additionalProperties": false,
           "description": "A section heading.",
           "properties": {
             "component": {
               "const": "Heading",
               "default": "Heading",
-              "title": "Component",
               "type": "string"
             },
             "level": {
@@ -323,21 +247,42 @@
                 2,
                 3
               ],
-              "title": "Level",
               "type": "integer"
             },
             "value": {
               "description": "The heading text.",
               "maxLength": 200,
               "minLength": 1,
-              "title": "Value",
               "type": "string"
             }
           },
           "required": [
             "value"
           ],
-          "title": "HeadingNode",
+          "type": "object"
+        },
+        "KeyValue": {
+          "additionalProperties": false,
+          "description": "A definition list of short label/value pairs.",
+          "properties": {
+            "component": {
+              "const": "KeyValue",
+              "default": "KeyValue",
+              "type": "string"
+            },
+            "items": {
+              "description": "The rows, in display order.",
+              "items": {
+                "$ref": "#/$defs/KeyValueItem"
+              },
+              "maxItems": 20,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
           "type": "object"
         },
         "KeyValueItem": {
@@ -348,13 +293,11 @@
               "description": "The field name.",
               "maxLength": 200,
               "minLength": 1,
-              "title": "Label",
               "type": "string"
             },
             "value": {
               "description": "The field value.",
               "maxLength": 500,
-              "title": "Value",
               "type": "string"
             }
           },
@@ -362,58 +305,27 @@
             "label",
             "value"
           ],
-          "title": "KeyValueItem",
           "type": "object"
         },
-        "KeyValueNode": {
-          "additionalProperties": false,
-          "description": "A definition list of short label/value pairs.",
-          "properties": {
-            "component": {
-              "const": "KeyValue",
-              "default": "KeyValue",
-              "title": "Component",
-              "type": "string"
-            },
-            "items": {
-              "description": "The rows, in display order.",
-              "items": {
-                "$ref": "#/$defs/KeyValueItem"
-              },
-              "maxItems": 20,
-              "minItems": 1,
-              "title": "Items",
-              "type": "array"
-            }
-          },
-          "required": [
-            "items"
-          ],
-          "title": "KeyValueNode",
-          "type": "object"
-        },
-        "LinkNode": {
+        "Link": {
           "additionalProperties": false,
           "description": "A hyperlink.",
           "properties": {
             "component": {
               "const": "Link",
               "default": "Link",
-              "title": "Component",
               "type": "string"
             },
             "href": {
               "description": "Absolute http, https or mailto URL.",
               "maxLength": 2000,
               "minLength": 1,
-              "title": "Href",
               "type": "string"
             },
             "label": {
               "description": "The link text.",
               "maxLength": 200,
               "minLength": 1,
-              "title": "Label",
               "type": "string"
             }
           },
@@ -421,10 +333,9 @@
             "href",
             "label"
           ],
-          "title": "LinkNode",
           "type": "object"
         },
-        "StackNode": {
+        "Stack": {
           "additionalProperties": false,
           "description": "A flex row or column of nodes.",
           "properties": {
@@ -433,64 +344,62 @@
               "items": {
                 "discriminator": {
                   "mapping": {
-                    "Alert": "#/$defs/AlertNode",
-                    "Badge": "#/$defs/BadgeNode",
-                    "Card": "#/$defs/CardNode",
-                    "CodeBlock": "#/$defs/CodeBlockNode",
-                    "Divider": "#/$defs/DividerNode",
-                    "Heading": "#/$defs/HeadingNode",
-                    "KeyValue": "#/$defs/KeyValueNode",
-                    "Link": "#/$defs/LinkNode",
-                    "Stack": "#/$defs/StackNode",
-                    "Table": "#/$defs/TableNode",
-                    "Text": "#/$defs/TextNode"
+                    "Alert": "#/$defs/Alert",
+                    "Badge": "#/$defs/Badge",
+                    "Card": "#/$defs/Card",
+                    "CodeBlock": "#/$defs/CodeBlock",
+                    "Divider": "#/$defs/Divider",
+                    "Heading": "#/$defs/Heading",
+                    "KeyValue": "#/$defs/KeyValue",
+                    "Link": "#/$defs/Link",
+                    "Stack": "#/$defs/Stack",
+                    "Table": "#/$defs/Table",
+                    "Text": "#/$defs/Text"
                   },
                   "propertyName": "component"
                 },
                 "oneOf": [
                   {
-                    "$ref": "#/$defs/TextNode"
+                    "$ref": "#/$defs/Text"
                   },
                   {
-                    "$ref": "#/$defs/HeadingNode"
+                    "$ref": "#/$defs/Heading"
                   },
                   {
-                    "$ref": "#/$defs/CardNode"
+                    "$ref": "#/$defs/Card"
                   },
                   {
-                    "$ref": "#/$defs/StackNode"
+                    "$ref": "#/$defs/Stack"
                   },
                   {
-                    "$ref": "#/$defs/BadgeNode"
+                    "$ref": "#/$defs/Badge"
                   },
                   {
-                    "$ref": "#/$defs/KeyValueNode"
+                    "$ref": "#/$defs/KeyValue"
                   },
                   {
-                    "$ref": "#/$defs/TableNode"
+                    "$ref": "#/$defs/Table"
                   },
                   {
-                    "$ref": "#/$defs/CodeBlockNode"
+                    "$ref": "#/$defs/CodeBlock"
                   },
                   {
-                    "$ref": "#/$defs/AlertNode"
+                    "$ref": "#/$defs/Alert"
                   },
                   {
-                    "$ref": "#/$defs/DividerNode"
+                    "$ref": "#/$defs/Divider"
                   },
                   {
-                    "$ref": "#/$defs/LinkNode"
+                    "$ref": "#/$defs/Link"
                   }
                 ]
               },
               "maxItems": 200,
-              "title": "Children",
               "type": "array"
             },
             "component": {
               "const": "Stack",
               "default": "Stack",
-              "title": "Component",
               "type": "string"
             },
             "direction": {
@@ -500,7 +409,6 @@
                 "vertical",
                 "horizontal"
               ],
-              "title": "Direction",
               "type": "string"
             },
             "gap": {
@@ -511,14 +419,27 @@
                 "md",
                 "lg"
               ],
-              "title": "Gap",
               "type": "string"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional name for this container (e.g. 'status-card') so a later present_ui call can append into it or update it in place."
             }
           },
-          "title": "StackNode",
           "type": "object"
         },
-        "TableNode": {
+        "Table": {
           "additionalProperties": false,
           "description": "A small tabular dataset.",
           "properties": {
@@ -531,13 +452,11 @@
               },
               "maxItems": 8,
               "minItems": 1,
-              "title": "Columns",
               "type": "array"
             },
             "component": {
               "const": "Table",
               "default": "Table",
-              "title": "Component",
               "type": "string"
             },
             "rows": {
@@ -550,24 +469,21 @@
                 "type": "array"
               },
               "maxItems": 50,
-              "title": "Rows",
               "type": "array"
             }
           },
           "required": [
             "columns"
           ],
-          "title": "TableNode",
           "type": "object"
         },
-        "TextNode": {
+        "Text": {
           "additionalProperties": false,
           "description": "A paragraph of plain prose.",
           "properties": {
             "component": {
               "const": "Text",
               "default": "Text",
-              "title": "Component",
               "type": "string"
             },
             "tone": {
@@ -577,30 +493,92 @@
                 "default",
                 "muted"
               ],
-              "title": "Tone",
               "type": "string"
             },
             "value": {
               "description": "The paragraph text.",
               "maxLength": 2000,
               "minLength": 1,
-              "title": "Value",
               "type": "string"
             }
           },
           "required": [
             "value"
           ],
-          "title": "TextNode",
           "type": "object"
         }
       },
       "additionalProperties": false,
-      "description": "Render a structured UI panel in the conversation.\n\nUse this to SHOW structured information \u2014 a status board, a comparison\ntable, a set of results \u2014 instead of describing it in prose. Compose the\npanel from the listed components; each one carries its own typed fields.\nKeep it small: a panel is a summary a reader takes in at a glance, not a\ndocument.\n\nNon-visual clients receive an automatic plain-text rendering, so never\nrepeat the panel's contents in your reply. Say what it shows and move on.",
+      "description": "Render a structured UI panel in the conversation.\n\nUse this to SHOW structured information \u2014 a status board, a comparison\ntable, a set of results \u2014 instead of describing it in prose. Keep it small:\na panel is a summary a reader takes in at a glance, not a document.\n\n`root` is a LIST of component objects. Each object names its type in\n`component` and carries that type's fields beside it. Only `Card` and\n`Stack` may hold `children`, and either may carry an `id` so a later call\ncan address it.\n\nBuild a rich panel INCREMENTALLY: present a small skeleton first, then\n`operation=\"append\"` more nodes onto it (or into a named container) call\nby call. Small calls are far more likely to arrive intact than one large\ntree.\n\nNon-visual clients receive an automatic plain-text rendering, so restating\nthe panel's contents in your reply adds nothing. Say what it shows and move\non \u2014 though a reader who asked HOW something works is asking about the\npanel, not for a copy of it, and answering that is not a restatement.",
       "properties": {
-        "spec": {
-          "$ref": "#/$defs/GenerativeUISpec",
-          "description": "The panel's component tree."
+        "operation": {
+          "default": "replace",
+          "description": "How `root` lands on the addressed panel. 'replace' (default) redraws the whole panel. 'append' ADDS the nodes in `root` to an existing panel \u2014 after its current nodes, or inside the container named by `target` \u2014 so a rich panel is built across several small calls instead of one large one. 'update' replaces the ONE container named by `target` with the single node in `root`.",
+          "enum": [
+            "replace",
+            "append",
+            "update"
+          ],
+          "type": "string"
+        },
+        "root": {
+          "description": "Top-level nodes, rendered in order.",
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "Alert": "#/$defs/Alert",
+                "Badge": "#/$defs/Badge",
+                "Card": "#/$defs/Card",
+                "CodeBlock": "#/$defs/CodeBlock",
+                "Divider": "#/$defs/Divider",
+                "Heading": "#/$defs/Heading",
+                "KeyValue": "#/$defs/KeyValue",
+                "Link": "#/$defs/Link",
+                "Stack": "#/$defs/Stack",
+                "Table": "#/$defs/Table",
+                "Text": "#/$defs/Text"
+              },
+              "propertyName": "component"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "$ref": "#/$defs/Heading"
+              },
+              {
+                "$ref": "#/$defs/Card"
+              },
+              {
+                "$ref": "#/$defs/Stack"
+              },
+              {
+                "$ref": "#/$defs/Badge"
+              },
+              {
+                "$ref": "#/$defs/KeyValue"
+              },
+              {
+                "$ref": "#/$defs/Table"
+              },
+              {
+                "$ref": "#/$defs/CodeBlock"
+              },
+              {
+                "$ref": "#/$defs/Alert"
+              },
+              {
+                "$ref": "#/$defs/Divider"
+              },
+              {
+                "$ref": "#/$defs/Link"
+              }
+            ]
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "type": "array"
         },
         "summary": {
           "description": "One short line naming what the panel shows, e.g. 'CI status for main'.",
@@ -608,10 +586,12 @@
           "minLength": 1,
           "type": "string"
         },
-        "ui_id": {
+        "target": {
           "anyOf": [
             {
-              "pattern": "^gui-[0-9a-f]{8}$",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
               "type": "string"
             },
             {
@@ -619,11 +599,24 @@
             }
           ],
           "default": null,
-          "description": "Omit to create a new panel. Pass the id returned by an earlier present_ui call to REPLACE that panel in place instead of adding another one below it."
+          "description": "A container id (the `id` you gave a Card/Stack) that `append` adds into, or that `update` replaces. Only for append/update."
+        },
+        "ui_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Omit to create a new panel. Pass the id returned by an earlier present_ui call to address that panel instead of adding another one below it. A readable id you author yourself (e.g. 'team-directory') is also accepted when creating."
         }
       },
       "required": [
-        "spec",
+        "root",
         "summary"
       ],
       "type": "object"

@@ -83,6 +83,7 @@ const PROJECT: Project = {
 /** Every field editable — the ordinary git project case. */
 const ALL_EDITABLE = {
   model: true,
+  embeddingModel: true,
   ref: true,
   depth: true,
   language: true,
@@ -96,6 +97,7 @@ const ALL_EDITABLE = {
 const SETTINGS: GitProjectSettings = {
   slug: SLUG,
   model: "anthropic/claude-sonnet-5",
+  embeddingModel: "openai/text-embedding-3-small",
   ref: "develop",
   depth: "concise",
   language: "en",
@@ -170,6 +172,9 @@ describe("ProjectSettingsDialog — DTO → form", () => {
     expect(screen.getByLabelText("Depth")).toHaveValue("concise");
     expect(screen.getByLabelText("Language")).toHaveValue("en");
     expect(screen.getByLabelText("Filter mode")).toHaveValue("include");
+    expect(screen.getByLabelText("Embedding model")).toHaveValue(
+      "openai/text-embedding-3-small",
+    );
     expect(screen.getByLabelText(/directories to include/i)).toHaveValue(
       "src\napps",
     );
@@ -235,6 +240,34 @@ describe("ProjectSettingsDialog — dirty-subset PATCH", () => {
     expect(updateProject).toHaveBeenCalledWith(SLUG, {
       dirs: ["src", "packages"],
     });
+  });
+
+  it("sends a selected embedding model and never echoes an untouched one", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await awaitSeeded();
+
+    const field = screen.getByLabelText("Embedding model");
+    await user.clear(field);
+    await user.type(field, "openai/text-embedding-3-large");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(updateProject).toHaveBeenCalledTimes(1));
+    expect(updateProject).toHaveBeenCalledWith(SLUG, {
+      embeddingModel: "openai/text-embedding-3-large",
+    });
+  });
+
+  it("clears the embedding model back to the deployment default", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await awaitSeeded();
+
+    await user.clear(screen.getByLabelText("Embedding model"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(updateProject).toHaveBeenCalledTimes(1));
+    expect(updateProject).toHaveBeenCalledWith(SLUG, { embeddingModel: null });
   });
 
   it("clears a pinned branch back to the default as an explicit null", async () => {

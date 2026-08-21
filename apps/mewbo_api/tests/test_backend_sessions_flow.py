@@ -18,6 +18,7 @@ import io
 import time
 
 from mewbo_api import backend
+from mewbo_core.session.session_provenance import SessionTag
 from mewbo_core.session.session_store import SessionStore
 
 # ---------------------------------------------------------------------------
@@ -450,6 +451,33 @@ class TestSessionQuery:
             json={"query": "hello", "project": "managed:nonexistent-uuid-xyz"},
         )
         assert resp.status_code == 400
+
+    def test_bound_session_ignores_an_invalid_echoed_project(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A refused project override cannot make an app session un-runnable."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        bad_project = "not-a-catalog-project"
+        backend.runtime.tag_session(sid, SessionTag.app("legacy-app"))
+        backend._session_specs.save(
+            sid,
+            backend.SessionSpec(origin=backend.SessionOrigin.APPS, project=bad_project),
+        )
+        captured = {}
+        monkeypatch.setattr(
+            backend.runtime, "start_async", lambda **kw: captured.update(kw) or f"{sid}:r1"
+        )
+
+        resp = client.post(
+            f"/api/sessions/{sid}/query",
+            headers=auth_headers,
+            json={"query": "continue", "context": {"project": bad_project}},
+        )
+
+        assert resp.status_code == 202, resp.get_json()
+        assert captured["cwd"] == backend.session_temp_dir(sid)
+        assert backend._session_specs.load(sid).project == bad_project
 
 
 # ---------------------------------------------------------------------------
@@ -1229,6 +1257,42 @@ class TestSessionRecovery:
         assert body["accepted"] is True
         # F3: the recover response carries the run_id minted by start_async.
         assert body["run_id"] == f"{sid}:r2"
+
+    def test_recovery_uses_temp_directory_for_legacy_bound_project(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        """A historical invalid app binding cannot permanently brick recovery."""
+        _reset_backend(tmp_path, monkeypatch)
+        sid = backend.session_store.create_session()
+        backend.runtime.tag_session(sid, SessionTag.app("legacy-app"))
+        backend._session_specs.save(
+            sid,
+            backend.SessionSpec(
+                origin=backend.SessionOrigin.APPS,
+                project="not-a-catalog-project",
+            ),
+        )
+        backend.session_store.append_event(
+            sid, {"type": "user", "payload": {"text": "q"}}
+        )
+        captured = {}
+        monkeypatch.setattr(
+            backend.runtime, "resolve_recovery_query", lambda *a, **k: "q"
+        )
+        monkeypatch.setattr(
+            backend.runtime,
+            "start_async",
+            lambda **kw: captured.update(kw) or f"{sid}:r2",
+        )
+
+        resp = client.post(
+            f"/api/sessions/{sid}/recover",
+            headers=auth_headers,
+            json={"action": "retry"},
+        )
+
+        assert resp.status_code == 202, resp.get_json()
+        assert captured["cwd"] == backend.session_temp_dir(sid)
 
     def test_recovery_value_error_returns_400(self, client, auth_headers, tmp_path, monkeypatch):
         _reset_backend(tmp_path, monkeypatch)

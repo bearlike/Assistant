@@ -276,6 +276,7 @@ exclude_docs: |
   superpowers/
   includes/
   hooks/
+  AGENTS.md
   CLAUDE.md
   assets/img-src/
 

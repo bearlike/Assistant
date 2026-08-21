@@ -112,10 +112,18 @@ data class ComposerScope(
     private val resolvedActiveToolIds: Set<String>
         get() = activeToolIds ?: defaultActiveToolIds
 
-    /** `true` once the resolved set diverges from every tool's own catalog default - the signal
-     * that gates [mcpToolsForContext] (task brief: untouched -> omit the field entirely). */
+    /** `true` once the user's explicit set diverges from every tool's own catalog default - the
+     * signal that gates [mcpToolsForContext] (task brief: untouched -> omit the field entirely).
+     *
+     * **The "equals the default, so omit it again" arm is only sound once [tools] has LOADED**, and
+     * that guard is load-bearing rather than defensive. [defaultActiveToolIds] derives from the
+     * catalog, so before it arrives the default reads as the EMPTY set - which made an explicit
+     * "every tool off" ([activeToolIds] empty) compare equal to it and report not-narrowed, sending
+     * no ceiling at all. That is the same fail-open [mcpToolsForContext]'s wire seam closes, one
+     * layer up: a selection hydrated from the session's own persisted `mcp_tools` is re-declared
+     * verbatim while the catalog is still in flight, never silently widened back to everything. */
     val toolsNarrowed: Boolean
-        get() = activeToolIds != null && activeToolIds != defaultActiveToolIds
+        get() = activeToolIds != null && (tools == null || activeToolIds != defaultActiveToolIds)
 
     val toolsSummaryLabel: String
         get() = if (toolsNarrowed) "${resolvedActiveToolIds.size} of ${tools?.size ?: 0} on" else "All tools"
@@ -146,8 +154,14 @@ data class ComposerScope(
         return group.count { it.toolId in resolvedActiveToolIds } to group.size
     }
 
-    /** `context.mcp_tools` value - omitted entirely (`null`) unless the user narrowed (task brief:
-     * untouched means the backend binds every tool, builtins + MCP). */
+    /**
+     * `context.mcp_tools` value, THREE-STATE - `null` omits the key (untouched: the backend binds
+     * every tool, builtins + MCP), an EMPTY list declares a ceiling of zero, a non-empty list
+     * declares exactly those. Empty is a real answer here, never a stand-in for `null`: the seam
+     * that writes it ([com.mewbo.aura.data.repo.buildSessionContext]) tests `!= null` rather than
+     * truthiness, so "I turned every tool off" survives to the wire as `[]` instead of arriving as
+     * silence and re-binding the whole registry.
+     */
     fun mcpToolsForContext(): List<String>? = if (toolsNarrowed) resolvedActiveToolIds.toList() else null
 
     companion object {
@@ -174,7 +188,14 @@ data class ComposerScope(
         /** Display/section order for tool [ToolSummary.scope] provenance — most user-relevant first
          * (a project's own tools before shared system/plugin/core ones). Drives both the scope-row
          * facet order ([activeToolFacets]) and the tool picker's scope-section grouping. */
-        val FACET_ORDER = listOf("project", "system", "plugin", "builtin")
+        val FACET_ORDER = listOf("project", "device", "system", "plugin", "builtin")
+
+        /** The scope tag carried by client-declared `device_*` tools. They never come
+         * from `GET api/tools` — the client DECLARES them per query — so this is
+         * stamped locally rather than read off the wire. Second in [FACET_ORDER]
+         * because a tool that acts on the user's own phone is the one they most need
+         * to see. */
+        const val FACET_DEVICE = "device"
 
         /** Bucket for a null/unrecognized [ToolSummary.scope] — the older-backend fallback. */
         const val FACET_OTHER = "other"

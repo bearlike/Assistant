@@ -165,6 +165,27 @@ class ComposerScopeTest {
         assertEquals(setOf(toolA.toolId, toolB.toolId, toolC.toolId), scope.mcpToolsForContext()?.toSet())
     }
 
+    @Test
+    fun `an explicit empty selection stays narrowed while the catalog hasn't loaded`() {
+        // The hydration path: ChatViewModel.bind reads a session's persisted `mcp_tools: []` into
+        // activeToolIds before refreshComposerScope has resolved the catalog. defaultActiveToolIds
+        // derives FROM that catalog, so with tools == null it reads as the empty set - and an
+        // un-guarded "equals the default" test would have compared equal, reported not-narrowed,
+        // and re-widened the session to every tool on its next send.
+        val scope = ComposerScope(tools = null, activeToolIds = emptySet())
+
+        assertTrue(scope.toolsNarrowed)
+        assertEquals(emptyList<String>(), scope.mcpToolsForContext())
+    }
+
+    @Test
+    fun `a narrowed selection hydrated before the catalog is re-declared verbatim`() {
+        val scope = ComposerScope(tools = null, activeToolIds = setOf(toolB.toolId))
+
+        assertTrue(scope.toolsNarrowed)
+        assertEquals(listOf(toolB.toolId), scope.mcpToolsForContext())
+    }
+
     // --- activeToolCount (pre-session scope indicator) ---
 
     @Test

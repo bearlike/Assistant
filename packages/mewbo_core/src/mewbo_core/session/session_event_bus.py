@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from collections.abc import Callable
 
 from mewbo_core.common import get_logger
@@ -36,6 +37,13 @@ logger = get_logger(name="core.session_event_bus")
 # Per-subscriber queue depth. Generous enough to absorb a burst of tool events
 # while a slow client catches up; overflow drops the oldest (see ``publish``).
 _DEFAULT_QUEUE_MAXSIZE = 2000
+
+# How long a detached executor's timestamp is kept at all. It bounds the memory
+# the recollection costs — an entry older than this can no longer satisfy any
+# plausible grace window, so keeping it would only grow a map that nothing
+# prunes. Comfortably above every caller's window (the device bridge asks for
+# 5s); raise it here, not at a call site, if one ever needs longer.
+_EXECUTOR_SEEN_RETENTION_S = 60.0
 
 EventObserver = Callable[[str, EventRecord], None]
 
@@ -48,12 +56,25 @@ class Subscription:
     published event wakes it immediately (no polling).
     """
 
-    __slots__ = ("session_id", "queue")
+    __slots__ = ("session_id", "queue", "executor")
 
-    def __init__(self, session_id: str, maxsize: int = _DEFAULT_QUEUE_MAXSIZE) -> None:
-        """Create a subscription with a bounded mailbox queue."""
+    def __init__(
+        self,
+        session_id: str,
+        maxsize: int = _DEFAULT_QUEUE_MAXSIZE,
+        *,
+        executor: bool = False,
+    ) -> None:
+        """Create a subscription with a bounded mailbox queue.
+
+        *executor* marks a consumer that can FULFIL a client-declared call, not
+        merely read the stream. Default ``False`` — a plain reader is the
+        common case, and a consumer that has not said it can execute must never
+        be counted as one.
+        """
         self.session_id = session_id
         self.queue: queue.Queue[EventRecord] = queue.Queue(maxsize=maxsize)
+        self.executor = executor
 
 
 class SessionEventBus:
@@ -64,30 +85,74 @@ class SessionEventBus:
     observer never holds the lock against concurrent subscribes.
     """
 
-    def __init__(self) -> None:
-        """Initialize empty subscriber and observer registries."""
+    def __init__(self, *, monotonic: Callable[[], float] = time.monotonic) -> None:
+        """Initialize empty subscriber and observer registries.
+
+        *monotonic* is the clock the executor grace window measures against,
+        injected as a FIELD so a test drives a window with no sleeping and
+        without patching a stdlib module every other thread in the process
+        shares.
+        """
         self._lock = threading.Lock()
         self._subs: dict[str, set[Subscription]] = {}
         self._observers: list[EventObserver] = []
+        self._monotonic = monotonic
+        # session_id -> when its last executor subscription detached. Bounded by
+        # ``_EXECUTOR_SEEN_RETENTION_S``; see ``_stamp_executor_detach_locked``.
+        self._executor_seen: dict[str, float] = {}
 
     # -- subscription lifecycle --------------------------------------------
 
-    def subscribe(self, session_id: str, maxsize: int = _DEFAULT_QUEUE_MAXSIZE) -> Subscription:
-        """Register a new subscriber for *session_id* and return its handle."""
-        sub = Subscription(session_id, maxsize=maxsize)
+    def subscribe(
+        self,
+        session_id: str,
+        maxsize: int = _DEFAULT_QUEUE_MAXSIZE,
+        *,
+        executor: bool = False,
+    ) -> Subscription:
+        """Register a new subscriber for *session_id* and return its handle.
+
+        Pass ``executor=True`` only for a consumer that can fulfil a
+        client-declared tool call (the device client). Server-internal
+        consumers and read-only viewers leave it ``False``.
+        """
+        sub = Subscription(session_id, maxsize=maxsize, executor=executor)
         with self._lock:
             self._subs.setdefault(session_id, set()).add(sub)
         return sub
 
     def unsubscribe(self, session_id: str, sub: Subscription) -> None:
-        """Remove *sub*; prune the session's set once it is empty."""
+        """Remove *sub*; prune the session's set once it is empty.
+
+        Removing an EXECUTOR also stamps when it left, which is the whole basis
+        of :meth:`has_executor`'s grace window — the departure is the only moment
+        the bus can record, since a subscription that is gone leaves nothing to
+        ask afterwards.
+        """
         with self._lock:
             subs = self._subs.get(session_id)
             if subs is None:
                 return
+            if sub in subs and sub.executor:
+                self._stamp_executor_detach_locked(session_id)
             subs.discard(sub)
             if not subs:
                 self._subs.pop(session_id, None)
+
+    def _stamp_executor_detach_locked(self, session_id: str) -> None:
+        """Record an executor's departure and drop the stamps nothing can use.
+
+        Caller MUST hold ``_lock``. ``O(stamped sessions)``, and that set is what
+        the sweep bounds: without it the map would keep one entry per session
+        that ever ran a device tool, for the life of the process.
+        """
+        now = self._monotonic()
+        self._executor_seen = {
+            sid: seen
+            for sid, seen in self._executor_seen.items()
+            if now - seen <= _EXECUTOR_SEEN_RETENTION_S
+        }
+        self._executor_seen[session_id] = now
 
     def register_observer(self, callback: EventObserver) -> None:
         """Register a best-effort observer invoked on every publish."""
@@ -95,23 +160,49 @@ class SessionEventBus:
             self._observers.append(callback)
 
     def has_subscribers(self, session_id: str) -> bool:
-        """True when at least one live SSE subscriber is attached to *session_id*.
+        """True when any live SSE subscriber is attached to *session_id*.
 
-        Reads existing internal subscriber-map state — additive, no change to
-        publish/subscribe behavior. A cheap presence check for a caller that
-        wants to short-circuit work nobody can receive (e.g. a device-tool
-        dispatch with no client listening, rather than burning a full
-        timeout).
-
-        KNOWN LIMITATION: a subscriber is not necessarily an EXECUTOR — any
-        SSE consumer counts, including a read-only console viewer watching
-        the same session with no ability to fulfil a device-tool call. This
-        converts the common "no client attached at all" case into an
-        instant, honest error; it is not proof that a device-tool-capable
-        client is present.
+        "Is anyone reading" — never "can anyone answer". A consumer that can
+        FULFIL a client-declared call is a different and narrower question, and
+        it has its own method: keeping it a flag on this one produced two
+        spellings of one rule, and the answers must not be able to drift.
         """
         with self._lock:
             return bool(self._subs.get(session_id))
+
+    def has_executor(self, session_id: str, *, grace_s: float = 0.0) -> bool:
+        """True when a consumer that can FULFIL a call is attached — or just was.
+
+        **A subscriber is not an executor, and that distinction was a real
+        30-second stall, twice over.** The old answer counted any SSE consumer:
+        a read-only console tab, a server-internal run streamer, or an assist
+        overlay that renders a run without servicing its tools. Presence passed,
+        the call was appended, nobody answered, and the dispatcher burned its
+        whole budget. A consumer must SAY it can execute; silence reads as
+        "cannot".
+
+        **And a reconnect gap is not an absence.** The flag rides one SSE
+        request, so the subscription dies with it — and these streams are
+        deliberately short-lived (the generator gives its slot back the moment a
+        session stops running). So a strict liveness read says "no executor"
+        while the client is between connections, which is the false negative that
+        makes an honest refusal a wrong one. *grace_s* admits an executor that
+        DETACHED that recently; the caller owns the number, because only it knows
+        what its own clients' reconnect ladders cost.
+
+        Two bounds, both load-bearing: the window covers only a session that
+        genuinely HAD an executor (one that never attached is refused with no
+        delay), and it is remembered for at most
+        ``_EXECUTOR_SEEN_RETENTION_S``. ``O(subscribers of one session)``.
+        """
+        with self._lock:
+            subs = self._subs.get(session_id)
+            if subs and any(sub.executor for sub in subs):
+                return True
+            if grace_s <= 0.0:
+                return False
+            seen = self._executor_seen.get(session_id)
+            return seen is not None and (self._monotonic() - seen) <= grace_s
 
     # -- fan-out ------------------------------------------------------------
 

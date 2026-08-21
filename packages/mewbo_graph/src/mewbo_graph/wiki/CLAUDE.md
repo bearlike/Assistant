@@ -160,7 +160,56 @@ A single-threaded test cannot fail on any of this;
 `tests/wiki/test_store_job_concurrency.py` parks one writer mid-update on an event and lets a
 rival finish inside the window, against both drivers.
 
-## Progress — one clearing invariant, two cadences that must stay separate
+## Progress — a declared plan of steps, not a shared register
+
+**The ledger is the model; the triple is a compatibility shim.** A phase is not
+one unit of work — `graph` is nine steps with three different units, and only
+three of them can be counted at all. `IndexingJob.progress` holds a
+`ProgressLedger` (`mewbo_core.contracts.progress`, whose `contracts/CLAUDE.md`
+owns the contract's reasoning); `plugins/wiki/step_plans.py` declares each
+phase's steps as data, and `ProgressReporter` (`plugins/wiki/_ctx.py`) is the ONE
+writer.
+
+**Work runs inside a scope, and that is what makes coverage checkable.**
+
+```python
+with progress.step("graph.resolve_scip_index"):
+    parsed = _apply_resolver(...)
+```
+
+Entering writes `running` plus the step's OWN origin; leaving writes `done`; an
+exception writes `failed` with bounded text and re-raises, so a step is never
+left running because its body threw. `emit_log` stamps the open step onto the
+event, so a log line written with no step open is work outside the ledger —
+`tests/wiki/test_progress_ledger_coverage.py` fails on it. That gate is the
+point: the previous model's tests proved the *emitter* worked and could not fail
+for an entire phase going silent.
+
+**Why this replaced a single triple.** The `graph` phase's two writers bracketed
+its dominant cost, so the parse loop's terminal `advance(N, N, force=True)` stood
+through the resolver, the whole-graph validation and the edge persist. Nothing
+but `emit_phase` cleared it, and that had already fired — so a reader saw a
+finished count, a bar at its phase ceiling and a time-remaining of exactly zero,
+for an hour. **A stale terminal count is indistinguishable from completion**, and
+that is worse than silence, which at least looks stalled.
+
+**Do not thread a counter into a blocking call to "fix" an opaque stretch.** The
+resolver indexes one project root on this repository, so a per-root counter emits
+a single unit and the hour stays silent. It is an uncountable step with a start
+time, and that is the honest shape.
+
+`PhaseProgress` survives as the write CADENCE of an open step (5s), not as the
+progress mechanism. The `phase_progress_*` triple is still written, derived from
+the active COUNTED step, purely so a job already in flight and an un-migrated
+client keep working — it is no longer the model, and nothing new should read it.
+
+**Two ledger writers can lose each other's step update; that direction is
+accepted.** The enrich fan-out reaches the reporter from a fresh tool instance
+per mint. A lost update is bounded and self-heals on the next write, whereas
+reverting a concurrent writer's FIELD does not — which is why this stays a
+named-field write and never grows a lock. See "Updating the job snapshot" above.
+
+## The clearing invariant the triple still leans on
 
 `emit_phase` is the ONE writer of `IndexingJob.phase`, and it CLEARS
 `phase_progress_current`/`_total`/`_unit` on every transition. That clear is the invariant every

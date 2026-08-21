@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EventRecord } from '../types';
 import { getActiveStreamText, getActiveTurn } from '../utils/timeline';
+import { readNumber } from '../utils/payload';
 
 /** No new events for this long (ms) ⇒ the run reads as stalled. */
 const STALL_MS = 15_000;
@@ -12,6 +13,15 @@ export interface Throughput {
   tokPerSec: number;
   /** Coarse activity label, or undefined to let the caller default. */
   phase?: string;
+  /**
+   * `ts` of the active turn's current STEP — the most recent root (depth 0)
+   * `llm_call_start`. Deliberately never cleared by that call's matching
+   * `llm_call_end`: a step is "the call plus whatever tool dispatch follows
+   * it", so the clock keeps running through the `Running tool` phase and
+   * only resets when the NEXT root call starts. Undefined once the turn has
+   * closed (no open turn) or before the first root call has started.
+   */
+  stepStartTs?: string;
 }
 
 /** Tail-of-feed signals a phase is classified from (recomputed on new events). */
@@ -25,6 +35,8 @@ interface PhaseSignal {
    * that it is still working, not quiet in a way that means trouble.
    */
   toolCallOutstanding: boolean;
+  /** See {@link Throughput.stepStartTs}. */
+  stepStartTs?: string;
 }
 
 /**
@@ -83,6 +95,7 @@ export function useThroughput(events: EventRecord[], running: boolean): Throughp
     // its `tool_call_id` rather than a single flag — one settling must not
     // clear the "still running" read for a sibling call still in flight.
     const outstandingToolCalls = new Set<string>();
+    let stepStartTs: string | undefined;
     for (const ev of turn.events) {
       if (ev.type === 'context' || ev.type === 'title_update') continue;
       lastType = ev.type;
@@ -93,8 +106,14 @@ export function useThroughput(events: EventRecord[], running: boolean): Throughp
         if (ev.type === 'tool_call') outstandingToolCalls.add(callId);
         else if (ev.type === 'tool_result') outstandingToolCalls.delete(callId);
       }
+      // Root call only — a sub-agent's own call cycle says nothing about how
+      // long THIS step (the one the active row renders) has been running.
+      // Never cleared on the matching `llm_call_end`; see `stepStartTs` doc.
+      if (ev.type === 'llm_call_start' && (readNumber(ev.payload, 'depth') ?? 0) === 0) {
+        stepStartTs = ev.ts;
+      }
     }
-    return { lastType, lastMs, toolCallOutstanding: outstandingToolCalls.size > 0 };
+    return { lastType, lastMs, toolCallOutstanding: outstandingToolCalls.size > 0, stepStartTs };
   }, [events]);
 
   const outRef = useRef(0);
@@ -126,5 +145,11 @@ export function useThroughput(events: EventRecord[], running: boolean): Throughp
     return () => clearInterval(id);
   }, [running]);
 
-  return { tokPerSec: Math.round(rate), phase: classifyPhase(running, signal) };
+  return {
+    tokPerSec: Math.round(rate),
+    phase: classifyPhase(running, signal),
+    // Only meaningful while a turn is actually open — mirrors `phase`'s own
+    // `!running || !signal` gate so a caller never has to re-derive it.
+    stepStartTs: running ? signal?.stepStartTs : undefined,
+  };
 }

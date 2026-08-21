@@ -16,9 +16,11 @@ retrofit = "3.0.0"
 markdownRenderer = "0.43.0"
 coil3 = "3.5.0"
 datastorePreferences = "1.2.1"
+shizuku = "13.1.5"
 junit4 = "4.13.2"
 kotlinxCoroutinesTest = "1.11.0"
 turbine = "1.2.1"
+robolectric = "4.16.1"
 
 [libraries]
 # Compose
@@ -63,10 +65,21 @@ coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp"
 # Settings / storage
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 
+# Shizuku — the shell-UID (2000) service backing device control. `api` is the
+# client half (permission + bindUserService); `provider` is the ContentProvider
+# the Shizuku server reaches at app start to learn our uid.
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
+
 # Test
 junit4 = { group = "junit", name = "junit", version.ref = "junit4" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+# The ONLY test dependency that can see a window. Every other suite here is plain-JVM and
+# therefore blind to `WindowManager.addView`, `Settings.canDrawOverlays` and the overlay
+# lifecycle - which is how a release shipped with the device-control glow permanently invisible
+# and every gate green. Scoped deliberately narrow: see ui/control/DeviceControlOverlayTest.
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

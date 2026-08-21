@@ -290,6 +290,55 @@ describe("IdeContainers.create", () => {
   });
 });
 
+describe("IdeContainers.ensureImage", () => {
+  const inputs = {
+    sessionId: SID,
+    workspacePath: "/srv/workspaces/project-a",
+    password: "s3cret-token_ABCDEFGH",
+    createdAt: NOW,
+    expiresAt: new Date(NOW.getTime() + 3600_000),
+  };
+
+  it("does not pull when the daemon already has the image", async () => {
+    docker.imagePresent = true;
+    await containers.create(inputs);
+    expect(docker.pulled).toEqual([]);
+  });
+
+  it("pulls the configured image when the daemon has never seen it", async () => {
+    docker.imagePresent = false;
+    await containers.create(inputs);
+    expect(docker.pulled).toEqual(["codercom/code-server:4.99.1"]);
+    // The create/start that follows must see the pull as already done.
+    expect(docker.created).toHaveLength(1);
+  });
+
+  it("logs the pull so a cold-image launch is diagnosable, not just slow", async () => {
+    docker.imagePresent = false;
+    await containers.create(inputs);
+    expect(logs.some((line) => line.includes("pulling missing image"))).toBe(true);
+    expect(logs.some((line) => line.includes("pulled codercom/code-server:4.99.1"))).toBe(true);
+  });
+
+  it("maps a pull failure through the same daemon-refusal classification as create", async () => {
+    docker.imagePresent = false;
+    docker.pullFailure = Object.assign(new Error("manifest unknown"), { statusCode: 404 });
+    const failure = await containers.create(inputs).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(BrokerError);
+    expect((failure as BrokerError).status).toBe(502);
+    expect((failure as BrokerError).code).toBe("docker_error");
+  });
+
+  it("is safe to call directly, independent of create — the boot-time preflight path", async () => {
+    docker.imagePresent = false;
+    await containers.ensureImage();
+    expect(docker.pulled).toEqual(["codercom/code-server:4.99.1"]);
+    docker.pulled.length = 0;
+    await containers.ensureImage();
+    expect(docker.pulled).toEqual([]);
+  });
+});
+
 describe("IdeContainers.inspect and remove", () => {
   it("reports absent, running and exited", async () => {
     expect(await containers.inspect(SID)).toBe("absent");

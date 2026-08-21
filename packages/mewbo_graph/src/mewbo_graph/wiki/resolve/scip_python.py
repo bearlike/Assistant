@@ -33,11 +33,11 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from ..graph import _stable_id
 from ..types import ExternalNode, GraphEdge, GraphNode
@@ -81,6 +81,42 @@ class ScipIndexProducer(Protocol):
         ...
 
 
+ProgressCallback = Callable[[str, int, int], None]
+
+
+_INDEX_STAGE = "index"
+_READ_STAGE = "read"
+_DEFINITIONS_STAGE = "definitions"
+_OCCURRENCES_STAGE = "occurrences"
+
+
+class _ScipIndexRun:
+    """One successful index subprocess awaiting its separate JSON read."""
+
+    def __init__(self, directory: tempfile.TemporaryDirectory[str], index_path: Path) -> None:
+        self._directory = directory
+        self.index_path = index_path
+
+    def close(self) -> None:
+        """Remove the temporary SCIP output after its JSON pass completes."""
+        self._directory.cleanup()
+
+
+@runtime_checkable
+class ScipIndexStages(Protocol):
+    """The split production interface that exposes the two subprocess legs."""
+
+    def index(
+        self, project_root: Path, project_name: str, extra_paths: Sequence[Path]
+    ) -> _ScipIndexRun | None:
+        """Run ``scip-python index`` and retain its output for a later read."""
+        ...
+
+    def read(self, run: _ScipIndexRun) -> dict[str, Any] | None:
+        """Run ``scip print --json`` over a previously produced index."""
+        ...
+
+
 class SubprocessScipProducer:
     """Default producer: shells out to ``scip-python`` + ``scip``.
 
@@ -112,12 +148,29 @@ class SubprocessScipProducer:
         self, project_root: Path, project_name: str, extra_paths: Sequence[Path]
     ) -> dict[str, Any] | None:
         """Index *project_root* and return its SCIP document, or ``None`` on failure."""
-        with tempfile.TemporaryDirectory(prefix="mewbo-scip-") as tmp:
-            out = Path(tmp) / "index.scip"
-            with self._pyright_config(project_root, extra_paths):
-                if not self._run_index(project_root, project_name, out):
-                    return None
-            return self._read_json(out)
+        run = self.index(project_root, project_name, extra_paths)
+        if run is None:
+            return None
+        try:
+            return self.read(run)
+        finally:
+            run.close()
+
+    def index(
+        self, project_root: Path, project_name: str, extra_paths: Sequence[Path]
+    ) -> _ScipIndexRun | None:
+        """Run ``scip-python index`` and retain output for the JSON read pass."""
+        directory = tempfile.TemporaryDirectory(prefix="mewbo-scip-")
+        out = Path(directory.name) / "index.scip"
+        with self._pyright_config(project_root, extra_paths):
+            if self._run_index(project_root, project_name, out):
+                return _ScipIndexRun(directory, out)
+        directory.cleanup()
+        return None
+
+    def read(self, run: _ScipIndexRun) -> dict[str, Any] | None:
+        """Read one retained SCIP index through ``scip print --json``."""
+        return self._read_json(run.index_path)
 
     @contextmanager
     def _pyright_config(self, project_root: Path, extra_paths: Sequence[Path]):
@@ -294,19 +347,54 @@ class ScipPythonResolver:
     # ── Orchestration ───────────────────────────────────────────────────
 
     def resolve(
-        self, repo_root: Path, nodes: Sequence[GraphNode]
+        self,
+        repo_root: Path,
+        nodes: Sequence[GraphNode],
+        *,
+        on_progress: ProgressCallback | None = None,
     ) -> ResolutionResult:
-        """Run scip-python per project root and map the result onto *nodes*."""
+        """Run SCIP legs and map their documents onto *nodes*.
+
+        Cost: ``O(repo)`` offline. Progress is an injected callback because this
+        resolver sits below the plugin-layer job reporter.
+        """
+        report = on_progress or (lambda _stage, _current, _total: None)
         repo_root = repo_root.resolve()
         roots = self.discover_roots(repo_root)
-        import_roots = {r: self._import_root(r) for r in roots}
+        import_roots = {root: self._import_root(root) for root in roots}
         indexes: list[tuple[Path, dict[str, Any]]] = []
-        for root in roots:
-            extra = [import_roots[o] for o in roots if o != root]
-            index = self._producer.produce(root, self._project_name(root), extra)
-            if index is not None:
-                indexes.append((root, index))
-        return self._build_result(repo_root, indexes, nodes, project_roots=len(roots))
+        staged = self._producer if isinstance(self._producer, ScipIndexStages) else None
+        if staged is None:
+            for current, root in enumerate(roots, start=1):
+                extra = [import_roots[other] for other in roots if other != root]
+                index = self._producer.produce(root, self._project_name(root), extra)
+                report(_INDEX_STAGE, current, len(roots))
+                if index is not None:
+                    indexes.append((root, index))
+                report(_READ_STAGE, current, len(roots))
+        else:
+            runs: list[tuple[Path, _ScipIndexRun]] = []
+            for current, root in enumerate(roots, start=1):
+                extra = [import_roots[other] for other in roots if other != root]
+                run = staged.index(root, self._project_name(root), extra)
+                report(_INDEX_STAGE, current, len(roots))
+                if run is not None:
+                    runs.append((root, run))
+            for current, (root, run) in enumerate(runs, start=1):
+                try:
+                    index = staged.read(run)
+                finally:
+                    run.close()
+                report(_READ_STAGE, current, len(runs))
+                if index is not None:
+                    indexes.append((root, index))
+        return self._build_result(
+            repo_root,
+            indexes,
+            nodes,
+            project_roots=len(roots),
+            on_progress=report,
+        )
 
     @staticmethod
     def discover_roots(repo_root: Path) -> list[Path]:
@@ -378,25 +466,34 @@ class ScipPythonResolver:
         nodes: Sequence[GraphNode],
         *,
         project_roots: int,
+        on_progress: ProgressCallback,
     ) -> ResolutionResult:
-        """Index definitions across all roots, then resolve every reference."""
+        """Index definitions across all roots, then resolve every reference.
+
+        Cost: ``O(documents in indexed roots)`` offline. The two document walks
+        count exactly because every SCIP document is loaded before either begins.
+        """
         self._index_nodes(nodes)
+        documents = [
+            (self._repo_prefix(repo_root, root), doc)
+            for root, index in indexes
+            for doc in index.get("documents", [])
+        ]
+        total_documents = len(documents)
         symbols = _SymbolIndex()
         # Pass 1 — definitions across every indexed root.
-        for project_root, index in indexes:
-            prefix = self._repo_prefix(repo_root, project_root)
-            for doc in index.get("documents", []):
-                self._index_definitions(repo_root, prefix, doc, symbols)
+        for current, (prefix, doc) in enumerate(documents, start=1):
+            self._index_definitions(repo_root, prefix, doc, symbols)
+            on_progress(_DEFINITIONS_STAGE, current, total_documents)
         # Pass 2 — references + inheritance relationships.
         counters = _Counters()
         edges = _EdgeAccumulator(self._slug)
         externals = _ExternalRegistry(self._slug)
-        for project_root, index in indexes:
-            prefix = self._repo_prefix(repo_root, project_root)
-            for doc in index.get("documents", []):
-                self._resolve_document(
-                    repo_root, prefix, doc, symbols, edges, externals, counters
-                )
+        for current, (prefix, doc) in enumerate(documents, start=1):
+            self._resolve_document(
+                repo_root, prefix, doc, symbols, edges, externals, counters
+            )
+            on_progress(_OCCURRENCES_STAGE, current, total_documents)
         return ResolutionResult(
             edges=edges.edges(),
             externals=externals.nodes(),

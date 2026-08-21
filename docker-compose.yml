@@ -22,13 +22,13 @@ services:
           cpus: '0.5'
 
   api:
-    image: ghcr.io/bearlike/mewbo-api:latest
-    pull_policy: build
+    image: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-api:${MEWBO_TAG:-latest}
+    pull_policy: ${MEWBO_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/Dockerfile.api
       args:
-        BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+        BASE_IMAGE: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-base:${MEWBO_TAG:-latest}
         WIKI_EXTRAS: "1"
         # scip-python + scip Go CLI for precise Python symbol resolution in the
         # wiki code-graph indexer. ON: the indexer now shells out to them —
@@ -141,13 +141,13 @@ services:
           memory: 1G
 
   mewbo-mcp:
-    image: ghcr.io/bearlike/mewbo-mcp:latest
-    pull_policy: build
+    image: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-mcp:${MEWBO_TAG:-latest}
+    pull_policy: ${MEWBO_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/Dockerfile.mcp
       args:
-        BASE_IMAGE: ghcr.io/bearlike/mewbo-base:latest
+        BASE_IMAGE: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-base:${MEWBO_TAG:-latest}
     network_mode: host
     user: "${MEWBO_HOST_UID:-1000}:${MEWBO_HOST_GID:-1000}"
     # MEWBO_MASTER_API_TOKEN is read from .env (same file the api service uses)
@@ -195,8 +195,8 @@ services:
           cpus: '0.25'
 
   console:
-    image: ghcr.io/bearlike/mewbo-console:latest
-    pull_policy: always
+    image: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-console:${MEWBO_TAG:-latest}
+    pull_policy: ${MEWBO_PULL_POLICY:-always}
     build:
       context: .
       dockerfile: docker/Dockerfile.console
@@ -235,8 +235,8 @@ services:
           cpus: '0.1'
 
   mewbo-ide:
-    image: ghcr.io/bearlike/mewbo-ide:latest
-    pull_policy: build
+    image: ${MEWBO_REGISTRY:-ghcr.io/bearlike}/mewbo-ide:${MEWBO_TAG:-latest}
+    pull_policy: ${MEWBO_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/Dockerfile.ide

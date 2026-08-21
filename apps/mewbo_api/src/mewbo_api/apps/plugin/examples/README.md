@@ -34,6 +34,24 @@ Because of that, the rules differ from the widget builder:
 `email_organizer/SUBMIT.md` shows the exact `submit_app` call — the two collection
 schemas and the cron pipeline `wake_prompt` — that turns those files into a live app.
 
+## Pipeline cookbook
+
+`recipes/` is a short scenario cookbook for server-side code pipelines. Each directory pairs a
+manifest fragment with runnable pipeline source. Read the closest scenario before inventing a
+pipeline shape; every recipe declares samples and an output contract so a bad assumption reaches
+the submit-time check instead of becoming a green, empty run.
+
+| Request shape | Start with |
+|---|---|
+| Fetch current CLI data whenever the app reads | `recipes/cli-json/` or `recipes/cli-text/` (`tier="render"`) |
+| Rebuild stored data when workspace files change | `recipes/files-to-collection/` (`tier="materialize"`, `cache_mode="source"`) |
+| Classify or summarize source text | `recipes/llm-transform/` (bounded `ctx.llm`) |
+| Let a served app submit a form | `recipes/user-input/` (`user_writable`) |
+| Check a relation JSON Schema cannot express | `recipes/verifier/` (`verify(result, ctx)`) |
+
+Choose `cli-json` only when the CLI actually emits JSON; use `cli-text` when it does not. Choose a
+live render pipeline for current, read-time data and a materialize pipeline for a durable snapshot.
+
 ## Reusable components
 
 `components/` holds copy-paste page components (a data table, a metric header, a

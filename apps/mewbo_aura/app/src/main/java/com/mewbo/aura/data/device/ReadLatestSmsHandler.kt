@@ -2,45 +2,47 @@ package com.mewbo.aura.data.device
 
 import java.time.Instant
 import javax.inject.Inject
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** `device_read_latest_sms` - `count` clamped to 1..5 (schema default 1), `sender_filter` a
- * case-insensitive substring match against [SmsMessageRow.from]. Reads a bounded pool from
- * [inboxReader] (already newest-first) and applies both as pure Kotlin over that pool - the
- * decision logic under test in [ReadLatestSmsHandlerTest], independent of the real
- * `ContentResolver`. Never logs a row's `from`/`body` - see [ContentResolverSmsInboxReader]'s doc. */
+/**
+ * `device_read_latest_sms` - one page of the mailbox, newest-first, both directions.
+ *
+ * **The truncation signal is the point of this handler, not the messages.** A read that returns a
+ * well-formed page with no way to tell it apart from the whole set is worse than one that fails:
+ * measured, a global 5-message window answered a question about a 52-message conversation with
+ * five unrelated marketing texts, and nothing in the response said so.
+ *
+ * That contract is deliberately NOT owned here - it lives in [DeviceReadPage] so the call-log and
+ * contacts readers adopt it verbatim instead of each inventing a way to say "there is more". This
+ * class owns only what is specific to SMS: reading the right table (both directions), narrowing to
+ * one conversation, and rendering a row.
+ *
+ * Cost: `O(count)` rows in the response, hard-bounded by [DeviceReadWindow.SMS]; the read itself is
+ * `O(collection)` in the provider (see [SmsInboxReader.queryMessages]) and paged by `offset`.
+ *
+ * Never logs a row's address/body - see [ContentResolverSmsInboxReader]'s doc.
+ */
 class ReadLatestSmsHandler @Inject constructor(
     private val inboxReader: SmsInboxReader,
 ) : DeviceToolHandler {
     override val toolId: String = "device_read_latest_sms"
 
     override suspend fun execute(args: JsonObject): JsonObject {
-        val count = (args.optArgInt("count") ?: DEFAULT_COUNT).coerceIn(MIN_COUNT, MAX_COUNT)
-        val senderFilter = args.optArgString("sender_filter")?.trim()
+        val page = DeviceReadWindow.SMS.pageFrom(args)
+        val senderFilter = args.optArgString("sender_filter")?.trim()?.takeIf { it.isNotEmpty() }
 
-        val pool = inboxReader.queryInbox(INBOX_POOL_SIZE)
-        val filtered = if (senderFilter.isNullOrEmpty()) pool else pool.filter { it.from.contains(senderFilter, ignoreCase = true) }
-        val messages = filtered.take(count).map { row ->
+        val fetched = inboxReader.queryMessages(senderFilter, page.offset, page.fetchLimit)
+        // No `total`: an exact one costs a second count over the whole mailbox on every call, and
+        // `has_more` already answers the question that nearly produced a wrong answer.
+        return page.envelope("messages", fetched) { row ->
             buildJsonObject {
-                put("from", row.from)
+                put("address", row.address)
+                put("direction", if (row.outbound) "outbound" else "inbound")
                 put("body", row.body)
-                put("received_at", Instant.ofEpochMilli(row.receivedAtEpochMillis).toString())
+                put("timestamp", Instant.ofEpochMilli(row.timestampEpochMillis).toString())
             }
         }
-        return buildJsonObject { put("messages", JsonArray(messages)) }
-    }
-
-    private companion object {
-        const val DEFAULT_COUNT = 1
-        const val MIN_COUNT = 1
-        const val MAX_COUNT = 5
-
-        /** Pool size the [inboxReader] pulls before this handler's own filter/count logic runs -
-         * generous enough that a sender filter still has plenty of newest-first candidates to
-         * match against, without scanning the entire inbox on every call. */
-        const val INBOX_POOL_SIZE = 200
     }
 }

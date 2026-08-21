@@ -8,7 +8,9 @@
  * (the console standardized on named-only exports).
  */
 
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
+
+import { WikiErrorBoundary } from "@/components/WikiErrorBoundary";
 
 import { ConfigureWizard } from "./ConfigureWizard";
 import { GraphOutlineScreen } from "./GraphOutlineScreen";
@@ -54,32 +56,38 @@ export function WikiApp() {
     }
   }, [route]);
 
+  let screen: ReactNode;
   switch (route.kind) {
     case "landing":
-      return <LandingScreen />;
+      screen = <LandingScreen />;
+      break;
     case "configure":
-      return <ConfigureWizard initialUrl={route.url} initialRepo={route.repo} />;
+      screen = <ConfigureWizard initialUrl={route.url} initialRepo={route.repo} />;
+      break;
     case "welcome":
-      return (
+      screen = (
         <WelcomeScreen
           slug={route.slug ?? DEFAULT_WIKI_SLUG}
           platform={route.platform}
         />
       );
+      break;
     case "indexing":
-      return (
+      screen = (
         <IndexingScreen
           jobId={route.jobId}
           slug={route.slug}
           platform={route.platform}
         />
       );
+      break;
     case "page":
-      return (
+      screen = (
         <WikiScreen pageId={route.pageId} slug={route.slug} platform={route.platform} />
       );
+      break;
     case "qa":
-      return (
+      screen = (
         <QAScreen
           question={route.question}
           pageId={route.pageId}
@@ -88,13 +96,18 @@ export function WikiApp() {
           answerId={route.answer}
         />
       );
+      break;
     case "graph":
-      return (
+      screen = (
         <KnowledgeGraph3DScreen slug={route.slug} platform={route.platform} />
       );
+      break;
     case "outline":
-      return (
+      screen = (
         <GraphOutlineScreen slug={route.slug} platform={route.platform} />
       );
+      break;
   }
+
+  return <WikiErrorBoundary>{screen}</WikiErrorBoundary>;
 }

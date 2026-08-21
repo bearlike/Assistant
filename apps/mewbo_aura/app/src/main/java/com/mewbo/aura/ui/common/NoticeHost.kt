@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.mewbo.aura.ui.theme.AuraColors
+import com.mewbo.aura.ui.theme.AuraMotion
 import com.mewbo.aura.ui.theme.AuraShape
 import com.mewbo.aura.ui.theme.AuraSpacing
 import com.mewbo.aura.ui.theme.AuraType
@@ -44,13 +45,6 @@ class NoticeController {
     internal fun dismiss() {
         current = null
     }
-
-    internal companion object {
-        // Spec §6.9 gives "auto-dismiss 4s" as prose, not a token - AuraMotion is the proper home
-        // for a named duration constant but is out of this task's file ownership; flagged in the
-        // task report as a gap for W1-A to absorb.
-        const val DISMISS_DELAY_MS = 4_000L
-    }
 }
 
 val LocalNoticeController = compositionLocalOf<NoticeController> {
@@ -60,7 +54,7 @@ val LocalNoticeController = compositionLocalOf<NoticeController> {
 /**
  * Bottom-anchored pill (spec §6.9): full-width minus [AuraSpacing.toastWidthInset], `listItem` text
  * at `textSecondary`, [AuraColors.surfaceNotice] fill, fade+slide in/out. Auto-dismisses itself
- * after [NoticeController.DISMISS_DELAY_MS] - callers only ever call [NoticeController.show].
+ * after [AuraMotion.transientDismissMs] - callers only ever call [NoticeController.show].
  */
 @Composable
 fun NoticeHost(controller: NoticeController, modifier: Modifier = Modifier) {
@@ -72,7 +66,7 @@ fun NoticeHost(controller: NoticeController, modifier: Modifier = Modifier) {
     LaunchedEffect(current) {
         if (current != null) {
             lastText = current
-            delay(NoticeController.DISMISS_DELAY_MS)
+            delay(AuraMotion.transientDismissMs)
             controller.dismiss()
         }
     }

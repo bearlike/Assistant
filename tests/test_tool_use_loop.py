@@ -1079,6 +1079,68 @@ class TestThinkingOnlyContentPlaceholder:
         # Sanity: real text still passes through.
         assert ToolUseLoop._extract_text_content([{"type": "text", "text": "hello"}]) == "hello"
 
+    def test_reasoning_model_bare_string_answer_wrapped_as_text_block(self):
+        """A reasoning model's answer arrives as a bare string list element.
+
+        A reasoning model returns
+        ``[{"type": "thinking", ...}, "the answer"]`` — thinking blocks plus
+        the answer as a BARE STRING, not a proper content part. Stripping
+        only the thinking dicts left ``["the answer"]`` in history, which a
+        strict OpenAI-shaped backend (self-hosted Ollama behind LiteLLM)
+        rejects on replay with 400 "invalid message format". The bare string
+        must be normalised into a ``{"type": "text", ...}`` block.
+        """
+        spec = _make_spec("shell_tool", "Run shell commands")
+        registry = _make_registry(spec)
+
+        reasoning_turn = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "pondering...", "signature": "sig"},
+                "I'll explore the codebase to understand the question",
+            ],
+            tool_calls=[{"name": "shell_tool", "args": {"input": "x"}, "id": "call_r"}],
+        )
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=[reasoning_turn, _text_response("done")])
+        bound = MagicMock()
+        bound.ainvoke = fake_model.ainvoke
+
+        mock_tool = MagicMock()
+        mock_speaker = MagicMock()
+        mock_speaker.content = "ok"
+        mock_tool.run.return_value = mock_speaker
+
+        with (
+            patch("mewbo_core.loop.tool_use_loop.build_chat_model") as mock_build,
+            patch.object(registry, "get", return_value=mock_tool),
+        ):
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            asyncio.run(loop.run("do it", tool_specs=[spec], context=_make_context()))
+
+        # The second ainvoke call replays the first turn in history — every
+        # element of its content must be a dict (no bare string survives).
+        second_call_messages = fake_model.ainvoke.call_args_list[1].args[0]
+        replayed = [
+            m
+            for m in second_call_messages
+            if isinstance(m, AIMessage) and isinstance(m.content, list) and m.content
+        ]
+        assert replayed, "expected the reasoning turn to be replayed in history"
+        for message in replayed:
+            for block in message.content:
+                assert isinstance(block, dict), f"bare non-dict content block: {block!r}"
+        assert {
+            "type": "text",
+            "text": "I'll explore the codebase to understand the question",
+        } in replayed[0].content
+
 
 # ---------------------------------------------------------------------------
 # LLM call timeout ceiling (Fix B)
@@ -2587,6 +2649,55 @@ class TestToolUseLoopStreaming:
         # Token accounting survives streaming (load-bearing for).
         end = [e for e in events if e.get("type") == "llm_call_end" and e["payload"].get("success")]
         assert end and end[-1]["payload"]["output_tokens"] == 5
+
+        # ``duration_ms`` rides on every successful end, never negative — a
+        # near-instant mocked call may legitimately round down to 0.
+        assert isinstance(end[-1]["payload"]["duration_ms"], int)
+        assert end[-1]["payload"]["duration_ms"] >= 0
+
+    def test_llm_call_end_duration_ms_brackets_the_whole_call(self):
+        """``duration_ms`` measures real wall time, not a zeroed stub value.
+
+        The mocked ``ainvoke`` sleeps briefly so the captured duration has
+        something real to reflect — no clock patching, an actual ``asyncio.sleep``
+        the loop awaits like any slow provider call.
+        """
+        spec = _make_spec()
+        registry = _make_registry(spec)
+        events: list[dict] = []
+
+        async def _slow_ainvoke(*_args, **_kwargs):
+            await asyncio.sleep(0.02)
+            return _text_response("slow answer")
+
+        bound = MagicMock()  # default MagicMock.astream yields nothing -> ainvoke path
+        bound.ainvoke = AsyncMock(side_effect=_slow_ainvoke)
+
+        with patch("mewbo_core.loop.tool_use_loop.build_chat_model") as mock_build:
+            mock_build.return_value = MagicMock()
+            mock_build.return_value.bind_tools.return_value = bound
+
+            loop = ToolUseLoop(
+                agent_context=_make_agent_context(event_logger=events.append),
+                tool_registry=registry,
+                permission_policy=_allow_all_policy(),
+                hook_manager=_make_hook_manager(),
+            )
+            tq, state = asyncio.run(
+                loop.run("ping", tool_specs=[spec], context=_make_context())
+            )
+
+        assert state.done_reason == "completed"
+        ends = [
+            e["payload"]
+            for e in events
+            if e.get("type") == "llm_call_end" and e["payload"].get("success")
+        ]
+        assert len(ends) == 1
+        # A generous lower bound (well under the 20ms sleep) absorbs scheduler
+        # jitter while still proving the clock bracketed the real await, not a
+        # constant.
+        assert ends[0]["duration_ms"] >= 10
 
     def test_falls_back_to_ainvoke_when_stream_unavailable(self):
         """A bound model with no usable stream (e.g. a stubbed MagicMock whose

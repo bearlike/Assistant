@@ -32,12 +32,16 @@ import secrets
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mewbo_core.common import get_logger
+from mewbo_core.contracts.types import EventRecord
 from mewbo_core.loop.session_runtime import SessionRuntime
 from mewbo_core.session.session_event_bus import get_session_event_bus
+from mewbo_core.tooling.client_tools import ClientToolSpec
+from pydantic import ValidationError
 
 logging = get_logger(name="api.device_tools")
 
@@ -46,6 +50,45 @@ DEVICE_TOOL_TIMEOUT_S = 30.0
 
 A module-level constant (not a default arg) so tests can monkeypatch it —
 ``dispatch`` re-reads the module global on every call.
+"""
+
+DEVICE_EXECUTOR_GRACE_S = 5.0
+"""How long a DETACHED executor still counts as reachable.
+
+The subscription dies with the SSE request that carried the flag, and that
+request is short-lived by design: the stream generator picks a blocking timeout
+of ``0.0`` whenever the session is not running, so it closes in milliseconds and
+the client reconnects. Between turns — and for the first moments of a new one —
+the bus therefore reads zero executors while the phone is sitting right there.
+Refusing on that reading is a false negative of exactly the shape the ask-user
+dispatcher declines to risk at all (``apps/mewbo_api/CLAUDE.md``).
+
+**Five seconds is derived from the two clients' own reconnect ladders, not
+picked.** Aura re-opens after ``INITIAL_BACKOFF_MS = 500`` on a healthy close
+and doubles from there; the console waits 3 s to re-subscribe and 1 s before its
+first retry. Five seconds covers a healthy reconnect on both, plus Aura's first
+three failed-connect steps (0.5 + 1 + 2), and stops short of the deep backoff
+(8 s, 15 s) where the client has bigger problems than one tool call.
+
+The window is bounded on both sides, which is what keeps the fast-fail property
+the error message depends on:
+
+- A client that NEVER attached gets no window at all — the bus only remembers an
+  executor it actually saw — so a headless re-engage is still refused at entry
+  with nothing appended.
+- A wrong "yes" now costs the window plus one poll tick (~5.2 s), not the 30 s
+  call budget: presence is re-checked every tick, so the refusal lands as soon as
+  the window closes.
+
+It also SHRINKS the pre-existing window in which we report a call undeliverable
+that the client later executes anyway: a reconnect resumes from an INCLUSIVE
+``?after=`` cursor, and a call appended during the gap is by definition newer
+than the cursor the client left with, so the ``device_tool_call`` event still
+reaches it (the client's own ledger de-dupes the replay). Waiting out the
+reconnect converts most of those into an answer instead of a false refusal.
+
+A module-level constant for the same reason as the timeout above: ``dispatch``
+re-reads it on every call, so a test can shorten it without sleeping.
 """
 
 _POLL_INTERVAL_S = 0.2
@@ -65,6 +108,116 @@ delete the entry in that window, and the dispatcher would see a vanished
 result and report a spurious internal error — the model might then retry the
 tool call, duplicating a real-world side effect (e.g. a second SMS send).
 """
+
+
+class DeviceToolBinding:
+    """Which client-declared device tools are in force for a run.
+
+    ``device_tools`` is not a ``SessionSpec`` field: it rides the request-context
+    merge, so the only durable record of it is a ``context`` event, and every
+    later run has to read that record back. The question a re-drive asks is *"what
+    is this session's device-tool declaration"* — NOT *"what does its newest
+    context event happen to say"*. Answering the first with the second makes every
+    writer of a context event a silent de-registration, and none of the three in
+    the tree (``approve_plan``'s ``{"mode": "act"}``, ``reinject_recovery_context``'s
+    gating keys, the fork route's provenance stamp) has any reason to know device
+    tools exist.
+
+    So the read is narrowed with ``payload_key=``, the same protection ``project``
+    already carries — see ``latest_event_of_type``'s docstring for the measured
+    hazard (15 of 204 sessions with a ``project`` had a NEWER context event
+    without one). Silence about the key is silence, not a revocation; an EXPLICIT
+    declaration — including an empty list — still decides.
+
+    Cost: ``O(1)`` when the payload in hand carries the key (the ordinary
+    ``/query``, which re-advertises), else one narrowed store read — ``O(1)`` on
+    Mongo, ``O(one session)`` on the JSON driver. Never a transcript fold.
+
+    The store read is injected as a FIELD, late-bound by the caller for the same
+    reason ``SessionSpecStore``'s collaborators are: the suite swaps the runtime
+    wholesale, and a bound method captured at import would keep answering from the
+    store that existed then.
+    """
+
+    CONTEXT_KEY = "device_tools"
+
+    def __init__(
+        self,
+        *,
+        latest_event_of_type: Callable[[str, str, str], EventRecord | None],
+    ) -> None:
+        """Bind the narrowed ``(session_id, event_type, payload_key)`` store read."""
+        self._latest_event_of_type = latest_event_of_type
+
+    def specs_for(
+        self, session_id: str, context_payload: Mapping[str, object]
+    ) -> list[ClientToolSpec]:
+        """Validate the declaration in force for *session_id* into specs.
+
+        Raises ``ValueError`` (a request-path caller maps it to 400) on a
+        malformed entry, or on a duplicate ``tool_id`` within one declaration — a
+        client-declared tool that fails validation must never silently vanish from
+        the run, and ``SessionToolRegistry.build_for`` resolves session tools by id
+        (first match wins), so a silent duplicate would leave the second
+        declaration invisible rather than rejected.
+        """
+        raw = self.declaration_for(session_id, context_payload)
+        if not isinstance(raw, list) or not raw:
+            return []
+        specs: list[ClientToolSpec] = []
+        seen_ids: set[str] = set()
+        for entry in raw:
+            try:
+                spec = ClientToolSpec.model_validate(entry)
+            except ValidationError as exc:
+                raise ValueError(f"Invalid device tool declaration: {exc}") from exc
+            if spec.tool_id in seen_ids:
+                raise ValueError(f"Duplicate device tool_id declared: {spec.tool_id!r}")
+            seen_ids.add(spec.tool_id)
+            specs.append(spec)
+        return specs
+
+    def declaration_for(
+        self, session_id: str, context_payload: Mapping[str, object]
+    ) -> object | None:
+        """The raw declaration in force: the payload in hand, else the record.
+
+        A payload that CARRIES the key answers on its own — the request declaring
+        the tools is the common path and must not pay a store read to re-answer
+        what it is holding. A payload silent on the key falls through to the
+        session's newest context event that carries one.
+        """
+        if self.CONTEXT_KEY in context_payload:
+            return context_payload[self.CONTEXT_KEY]
+        event = self._latest_event_of_type(session_id, "context", self.CONTEXT_KEY)
+        payload = event.get("payload") if event else None
+        if isinstance(payload, dict):
+            return payload.get(self.CONTEXT_KEY)
+        return None
+
+
+def _unavailable(tool_id: str) -> dict[str, Any]:
+    """The ``device_unavailable`` envelope, naming the cause and the cure.
+
+    The message is the model's ONLY signal here, and it is relayed to a person
+    who is holding the phone. "No client is attached to the event stream"
+    describes our transport to someone who never agreed to know we have one;
+    worse, the usual cause is mundane and fixable — the app lost foreground
+    because the agent itself launched another app. Say that, and say what to do
+    about it, or every recovery has to be guessed.
+    """
+    return {
+        "status": "error",
+        "error": {
+            "code": "device_unavailable",
+            "message": (
+                f"The Mewbo Aura app is not currently reachable, so device tool "
+                f"'{tool_id}' could not be delivered. This usually means Aura lost "
+                "foreground — opening another app can do it. Ask the user to reopen "
+                "Aura, then retry."
+            ),
+        },
+    }
 
 
 @dataclass
@@ -213,30 +366,24 @@ class ApiDeviceToolDispatcher:
         """Deliver a device-tool call to the client and await its result.
 
         Short-circuits to a ``device_unavailable`` error IMMEDIATELY — no
-        event append, no wait — when nobody is subscribed to the session's
-        SSE stream (``SessionEventBus.has_subscribers``): the common case of
-        a re-engage/recover with no client attached would otherwise burn the
-        full ``DEVICE_TOOL_TIMEOUT_S`` for a call that was never
-        deliverable. See ``has_subscribers``'s docstring for the known
-        limitation (a subscriber is not necessarily an executor).
+        event append, no wait — when no executor is attached to the session's
+        SSE stream and none was attached within ``DEVICE_EXECUTOR_GRACE_S``
+        (``SessionEventBus.has_executor``): the common case of a
+        re-engage/recover with no client attached would otherwise burn the
+        full ``DEVICE_TOOL_TIMEOUT_S`` for a call that was never deliverable.
+        The window is what keeps a mid-reconnect client — the ordinary state
+        BETWEEN turns, since the stream self-closes the moment a session stops
+        running — from reading as an absent one; see the constant's docstring
+        for where five seconds comes from.
 
         Otherwise appends one ``device_tool_call`` event carrying a fresh
         single-use ``call_token``, then polls a ``threading.Event`` (the
         repo's verified cross-thread idiom — see module docstring) until the
         client resolves it or ``DEVICE_TOOL_TIMEOUT_S`` elapses.
         """
-        if not get_session_event_bus().has_subscribers(session_id):
-            return {
-                "status": "error",
-                "error": {
-                    "code": "device_unavailable",
-                    "message": (
-                        f"No client is attached to session {session_id}'s "
-                        f"event stream; device tool '{tool_id}' cannot be "
-                        "delivered."
-                    ),
-                },
-            }
+        bus = get_session_event_bus()
+        if not bus.has_executor(session_id, grace_s=DEVICE_EXECUTOR_GRACE_S):
+            return _unavailable(tool_id)
 
         call_id = uuid.uuid4().hex
         call_token = secrets.token_urlsafe(24)
@@ -259,6 +406,19 @@ class ApiDeviceToolDispatcher:
 
         while not event.is_set() and time.time() < expires_at:
             await asyncio.sleep(_POLL_INTERVAL_S)
+            # Re-check presence EVERY tick, not just at entry. The client can
+            # go away mid-wait — which is exactly what happens when the tool
+            # being dispatched launches another app and backgrounds ours — and
+            # without this the dispatcher waits out its whole budget for a
+            # result nobody is left to send. The grace window is re-applied
+            # here rather than consumed at entry, so a client that drops mid-
+            # wait gets the same seconds to come back that one dropping between
+            # turns does, and the refusal still lands an order of magnitude
+            # inside the 30s budget.
+            if not event.is_set() and not bus.has_executor(
+                session_id, grace_s=DEVICE_EXECUTOR_GRACE_S
+            ):
+                return _unavailable(tool_id)
 
         if not event.is_set():
             # Leave the entry for opportunistic reaping (it is already past
@@ -319,10 +479,12 @@ def reset_pending_calls_for_tests() -> DevicePendingCalls:
 
 
 __all__ = [
+    "DEVICE_EXECUTOR_GRACE_S",
     "DEVICE_TOOL_CALL_EVENT",
     "DEVICE_TOOL_TIMEOUT_S",
     "ApiDeviceToolDispatcher",
     "DevicePendingCalls",
+    "DeviceToolBinding",
     "ResolveOutcome",
     "get_pending_calls",
     "reset_pending_calls_for_tests",

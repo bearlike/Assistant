@@ -1,11 +1,16 @@
-.PHONY: ssm-bootstrap redeploy bootstrap lint lint-fix typecheck precommit-install vendor-aider openapi docs docs-build aura-apk aura-release aura-install demo-build demo-up demo-seed demo-shots-web demo-down demo test-mongo
+.PHONY: ssm-bootstrap redeploy bootstrap lint lint-fix typecheck precommit-install vendor-aider openapi docs docs-build aura-apk aura-release aura-install demo-build demo-stage demo-sync demo-up demo-seed demo-shots-web demo-down demo test-mongo
 
 VENV ?= .venv
 DOCS_ADDR ?= 0.0.0.0:8000
 ANDROID_HOME ?= $(HOME)/android-sdk
 AURA_DIR := apps/mewbo_aura
 AURA_SERIAL ?= localhost:5555
-DEMO_COMPOSE := docker compose -f demo/docker-compose.demo.yml --env-file demo/demo.env
+DEMO_HOST_UID ?= $(shell id -u)
+DEMO_HOST_GID ?= $(shell id -g)
+DEMO_REPO_VOLUME ?= mewbo-demo-repo
+DEMO_COMPOSE := DEMO_HOST_UID=$(DEMO_HOST_UID) DEMO_HOST_GID=$(DEMO_HOST_GID) \
+	DEMO_REPO_VOLUME=$(DEMO_REPO_VOLUME) docker compose \
+	-f demo/docker-compose.demo.yml --env-file demo/demo.env
 TEST_COMPOSE := docker compose -f tests/docker-compose.test.yml
 
 ssm-bootstrap:
@@ -84,13 +89,26 @@ aura-release:
 aura-install: aura-apk
 	adb -s $(AURA_SERIAL) install -r $(AURA_DIR)/app/build/outputs/apk/debug/app-debug.apk
 
-# Demo-as-code — an ephemeral, isolated stack (own bridge
-# network, no data volumes) for scripted screen-capture. Never touches the
-# root docker-compose.yml stack or its ports/network. See demo/CLAUDE.md.
+# Demo-as-code — an ephemeral, isolated stack (own bridge network) for
+# scripted screen-capture. A temporary repo volume is staged from this checkout
+# so remote Docker daemons see the same files without host-path bind mounts.
+# Never touches the root docker-compose.yml stack or its ports/network.
+# See demo/CLAUDE.md.
 demo-build:
-	$(DEMO_COMPOSE) build
+	docker build -f docker/Dockerfile.base -t mewbo-base:demo .
+	$(DEMO_COMPOSE) build api console
 
-demo-up:
+demo-stage:
+	-docker volume rm $(DEMO_REPO_VOLUME)
+	docker volume create $(DEMO_REPO_VOLUME)
+	tar -C $(CURDIR) -cf - . | docker run --rm -i \
+		-v $(DEMO_REPO_VOLUME):/work alpine:3.22 tar -C /work -xf -
+
+demo-sync:
+	docker run --rm -v $(DEMO_REPO_VOLUME):/work:ro alpine:3.22 \
+		tar -C /work -cf - docs/assets/img-src docs/assets/img | tar -C $(CURDIR) -xf -
+
+demo-up: demo-stage demo-build
 	$(DEMO_COMPOSE) up -d --wait mongo api console
 
 demo-seed:
@@ -109,14 +127,13 @@ demo-shots-web:
 # shots-cache-init across cycles; name the profiles so they're torn down too.
 demo-down:
 	$(DEMO_COMPOSE) --profile seed --profile shots down -v --remove-orphans
+	-docker volume rm $(DEMO_REPO_VOLUME)
 
-# Captures land in docs/assets/img-src; the docs reference docs/assets/img.
-# This is the transform between them — it composites every full-window capture
-# onto a 16:9 wallpaper canvas and copies the rest through. Pure host-side
-# Pillow, no container: by the time demo-shots-web returns, the bytes are
-# already at their final host path via the shots service's repo bind-mount.
-# Safe to re-run; it reads sources and never its own output.
+# Captures are synced from the temporary repo volume into docs/assets/img-src;
+# the docs reference docs/assets/img. This is the transform between them — it
+# composites every full-window capture onto a 16:9 wallpaper canvas and copies
+# the rest through. Safe to re-run; it reads sources and never its own output.
 demo-frame:
 	uv run --package mewbo-demo-framer mewbo-demo-frame
 
-demo: demo-up demo-seed demo-shots-web demo-frame
+demo: demo-up demo-seed demo-shots-web demo-sync demo-frame

@@ -82,7 +82,7 @@ async def generate_session_title(events: list[EventRecord]) -> str | None:
 
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from mewbo_core.llm.llm import build_chat_model
+        from mewbo_core.llm.llm import build_chat_model, response_text
 
         excerpt_parts: list[str] = []
         if user_text:
@@ -102,18 +102,7 @@ async def generate_session_title(events: list[EventRecord]) -> str | None:
                 HumanMessage(content=user_payload),
             ]
         )
-        raw = response.content if hasattr(response, "content") else str(response)
-        # Reasoning models return a list of content blocks
-        # (e.g. [{'type': 'thinking', ...}, {'type': 'text', 'text': '...'}]).
-        # Extract the first text block.
-        if isinstance(raw, list):
-            raw = next(
-                (b["text"] for b in raw if isinstance(b, dict) and b.get("type") == "text"),
-                "",
-            )
-        if not isinstance(raw, str):
-            raw = str(raw)
-        return _clean_title(raw)
+        return _clean_title(response_text(response))
     except Exception as exc:
         logger.warning("Title generation failed: {}: {}", type(exc).__name__, exc)
         return None

@@ -1,0 +1,142 @@
+#@doc
+# * PR gate for Mewbo Aura (apps/mewbo_aura): lints and unit-tests the `public`
+#   distribution flavor ONLY. The `enterprise` flavor needs a private CA cert
+#   that CI does not have (see android-release.yml) — never build/test it here.
+#
+# One job, not two: `:app:lintPublicDebug` and `:app:testPublicDebugUnitTest`
+# would otherwise provision JDK/SDK into the SAME persistent
+# `/opt/hostedtoolcache` volume in parallel, which is exactly the race
+# android-release.yml's concurrency comment documents (colliding unzip/mv →
+# mangled repo metadata → "Failed to find package"). Sequential steps in one
+# job reuse the already-provisioned toolcache for the second step for free.
+
+name: Android CI
+
+on:
+  pull_request:
+    paths:
+      - "apps/mewbo_aura/**"
+      - ".github/workflows/android-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# TWO axes, and the outer one is not about this PR at all.
+#
+# Per-PR cancellation is what you want for signal (a new commit supersedes the
+# old run), but it CANNOT be the concurrency group: every Android job on this
+# runner provisions into the same persistent /opt/hostedtoolcache volume, and
+# two concurrent provisioners race on the SDK dir — colliding unzip/mv, mangled
+# repo metadata, "Failed to find package". That is why android-release.yml
+# serializes on ONE global group rather than per-tag; a per-PR group here would
+# re-open the same race between two PRs, and between a PR and a release.
+#
+# So: share the release workflow's global group. Two Android runs never overlap.
+# cancel-in-progress stays FALSE — a PR run must never kill a release build.
+#
+# ⚠️ The cost is NOT "concurrent PRs queue" — it is sharper than that. A group
+# holds at most ONE pending run, so with a release building and PR A waiting, PR
+# B's arrival CANCELS A. A cancelled check is neither a pass nor a failure, so
+# nobody re-runs it; the PR simply has no Android signal until someone notices.
+# Accepted deliberately: PR volume here is low, and a missing gate you can see is
+# better than the toolcache race, which corrupts the SDK for every later run.
+# Re-push to re-trigger. If this starts biting, the fix is a per-PR group plus a
+# lockfile around the provisioning step only — NOT dropping the shared group.
+concurrency:
+  group: android-toolcache
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: apps/mewbo_aura
+
+jobs:
+  lint-and-test:
+    name: Lint + unit test (public flavor)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      # Same persistent toolcache volume as android-release.yml, so a JDK/SDK
+      # already provisioned by a release run (or an earlier CI run) is reused
+      # instead of re-downloaded.
+      ANDROID_HOME: /opt/hostedtoolcache/android-sdk
+      GRADLE_USER_HOME: /opt/hostedtoolcache/gradle-home
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Provision Temurin JDK 21 (persistent toolcache, skipped when present)
+        run: |
+          set -euo pipefail
+          JDK_DIR=/opt/hostedtoolcache/temurin-21-jdk
+          if [ ! -x "$JDK_DIR/bin/java" ]; then
+            curl -fsSL -o /tmp/jdk.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+            mkdir -p "$JDK_DIR"
+            tar -xzf /tmp/jdk.tar.gz -C "$JDK_DIR" --strip-components=1
+            rm /tmp/jdk.tar.gz
+          fi
+          echo "JAVA_HOME=$JDK_DIR" >> "$GITHUB_ENV"
+          echo "$JDK_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Provision Android SDK (persistent toolcache, skipped when present)
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-37.0" ] || [ ! -d "$ANDROID_HOME/build-tools/37.0.0" ]; then
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            cd "$ANDROID_HOME/cmdline-tools"
+            rm -rf latest cmdline-tools.zip
+            curl -fsSL -o cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+            unzip -q cmdline-tools.zip
+            mv cmdline-tools latest
+            rm cmdline-tools.zip
+            (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          fi
+
+      # Both Gradle invocations below cap the JVM the same way android-release.yml
+      # does, and for the same measured reason: the project's gradle.properties
+      # asks for -Xmx4096m, while a job container here is capped at 2.5 GiB with
+      # no swap, so the daemon is OOM-killed by construction and the build
+      # reports only "Gradle build daemon disappeared unexpectedly". The jvmargs
+      # value is quoted as ONE argument because it contains a space — unquoted,
+      # Gradle receives `-XX:...` as its own flag and rejects it.
+      - name: Lint (public flavor)
+        run: |
+          set -euo pipefail
+          ./gradlew :app:lintPublicDebug \
+            "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8" \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.caching=true \
+            --no-daemon --max-workers=2
+
+      - name: Unit tests (public flavor; test sources are flavor-agnostic)
+        run: |
+          set -euo pipefail
+          ./gradlew :app:testPublicDebugUnitTest \
+            "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8" \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.caching=true \
+            --no-daemon --max-workers=2
+
+      - name: Upload lint report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-report
+          path: apps/mewbo_aura/app/build/reports/lint-results-publicDebug.html
+          retention-days: 7
+          # warn, not ignore: a drifted report path must be visible, not a silent green.
+          if-no-files-found: warn
+
+      - name: Upload unit test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-results
+          path: |
+            apps/mewbo_aura/app/build/reports/tests/testPublicDebugUnitTest
+            apps/mewbo_aura/app/build/test-results/testPublicDebugUnitTest
+          retention-days: 7
+          # warn, not ignore: a drifted report path must be visible, not a silent green.
+          if-no-files-found: warn

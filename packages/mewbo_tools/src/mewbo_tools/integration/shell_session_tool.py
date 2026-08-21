@@ -39,7 +39,13 @@ class ShellSessionTool(AbstractTool):
         try:
             args = ShellSessionArgs.model_validate(argument)
         except ValidationError as exc:
-            return speaker(content=f"Invalid arguments: {exc.errors()[0]['msg']}")
+            # Every error with its field path, plus the expected field set —
+            # `errors()[0]["msg"]` alone drops `loc`, and "Extra inputs are not
+            # permitted" with no field name is unactionable (the caller can
+            # only drop keys at random). See ShellSessionArgs.explain_errors.
+            return speaker(
+                content=f"Invalid arguments: {ShellSessionArgs.explain_errors(exc)}"
+            )
 
         try:
             return speaker(content=self._dispatch(args))

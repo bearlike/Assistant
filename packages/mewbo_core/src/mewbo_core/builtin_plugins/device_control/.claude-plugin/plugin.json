@@ -1,0 +1,8 @@
+{
+  "name": "device-control",
+  "display_name": "Device Control",
+  "description": "Observe→act playbook for driving an Android device through the device_ui / device_action tools.",
+  "version": "0.1.0",
+  "author": "Mewbo",
+  "requires-capabilities": ["device_control"]
+}

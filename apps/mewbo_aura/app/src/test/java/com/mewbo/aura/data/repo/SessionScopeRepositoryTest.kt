@@ -1,9 +1,18 @@
 package com.mewbo.aura.data.repo
 
 import com.mewbo.aura.data.api.AuraApi
+import com.mewbo.aura.data.device.DeviceControlSession
+import com.mewbo.aura.data.device.shizuku.DeviceControlBinder
+import com.mewbo.aura.data.device.shizuku.DeviceControlGate
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatus
+import com.mewbo.aura.data.device.shizuku.DeviceControlStatusSource
+import com.mewbo.aura.data.device.DeviceToolGate
+import com.mewbo.aura.data.device.DevicePermissionChecker
+import com.mewbo.aura.data.device.DeviceToolCatalog
 import com.mewbo.aura.data.api.ToolDto
 import com.mewbo.aura.data.api.ToolsResponseDto
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -32,7 +41,7 @@ class SessionScopeRepositoryTest {
         `when`(api.getTools(null)).thenReturn(
             ToolsResponseDto(tools = listOf(tool("github_search", kind = "mcp", scope = "project"))),
         )
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         val result = repo.tools()
 
@@ -50,7 +59,7 @@ class SessionScopeRepositoryTest {
                 ),
             ),
         )
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         val result = repo.tools()
 
@@ -63,7 +72,7 @@ class SessionScopeRepositoryTest {
         `when`(api.getTools(null)).thenReturn(
             ToolsResponseDto(tools = listOf(tool("shell", kind = "builtin", scope = "builtin"))),
         )
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         val result = repo.tools()
 
@@ -76,7 +85,7 @@ class SessionScopeRepositoryTest {
         `when`(api.getTools(null)).thenReturn(
             ToolsResponseDto(tools = listOf(tool("edit", kind = "builtin", scope = null))),
         )
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         val result = repo.tools()
 
@@ -95,7 +104,7 @@ class SessionScopeRepositoryTest {
                 ),
             ),
         )
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         val result = repo.tools()
 
@@ -106,7 +115,7 @@ class SessionScopeRepositoryTest {
     fun `a cancellation while fetching tools propagates rather than degrading to null`() = runTest {
         val api = mock(AuraApi::class.java)
         `when`(api.getTools(null)).thenThrow(CancellationException("cancelled"))
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         try {
             repo.tools()
@@ -120,8 +129,24 @@ class SessionScopeRepositoryTest {
     fun `a non-cancellation failure degrades to null`() = runTest {
         val api = mock(AuraApi::class.java)
         `when`(api.getTools(null)).thenThrow(RuntimeException("network error"))
-        val repo = SessionScopeRepository(api)
+        val repo = SessionScopeRepository(api, emptyDeviceCatalog(), idleControlSession())
 
         assertNull(repo.tools())
     }
+
+    /** No device tools, so these cases still assert ONLY the server catalog. The
+     * device rows are stamped locally and covered by their own test. */
+    /** Never grants, so [SessionScopeRepository.deviceToolsChanged] is inert here — these
+     * cases assert the server catalog only. */
+    private fun idleControlSession() = DeviceControlSession(
+        DeviceControlStatusSource { MutableStateFlow(DeviceControlStatus.NotInstalled) },
+        DeviceControlBinder { false },
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+    )
+
+    private fun emptyDeviceCatalog() = DeviceToolCatalog(
+        DevicePermissionChecker { false },
+        DeviceToolGate { DeviceToolCatalog.ALL.map { it.toolId }.toSet() },
+        DeviceControlGate { false },
+    )
 }

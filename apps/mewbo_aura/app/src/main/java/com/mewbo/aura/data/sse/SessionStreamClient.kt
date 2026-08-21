@@ -44,11 +44,24 @@ class SessionStreamClient @Inject constructor(
     fun stream(sessionId: String): Flow<SessionEvent> = callbackFlow {
         var backoffMs = INITIAL_BACKOFF_MS
         var terminated = false
+        // Newest `ts` delivered so far, replayed to the server as `?after=` on every RECONNECT (never
+        // on the first connect, which wants the whole backlog). See [connectOnce] for why an
+        // inclusive cursor is safe here when a client-side one would not be.
+        var afterTs: String? = null
 
         while (isActive && !terminated) {
             try {
-                connectOnce(sessionId) { event ->
+                connectOnce(sessionId, afterTs) { event ->
                     trySend(event)
+                    // A `device_tool_call` deliberately does NOT advance the cursor, and this is the
+                    // one place the trimming can lose work rather than merely repeat it. Receiving
+                    // that event is not the same as ANSWERING it: dispatch is asynchronous, so a
+                    // connection dying between the two leaves a call the model is still waiting on.
+                    // Full replay used to be what recovered it; a cursor past the call removes that
+                    // net and the model waits out its timeout instead. Holding the cursor at the
+                    // newest call means every reconnect re-delivers it, and `DeviceToolCallLedger`
+                    // makes the repeat a no-op — the same idempotence full replay always relied on.
+                    if (event.ts.isNotBlank() && event !is SessionEvent.DeviceToolCall) afterTs = event.ts
                     if (event is SessionEvent.StreamEnd) terminated = true
                 }
                 backoffMs = INITIAL_BACKOFF_MS
@@ -65,12 +78,25 @@ class SessionStreamClient @Inject constructor(
         awaitClose { }
     }
 
-    private suspend fun connectOnce(sessionId: String, onEvent: (SessionEvent) -> Unit) {
+    /**
+     * One SSE connection. [afterTs] trims the once-only backlog replay to that timestamp or later;
+     * `null` (the first connect) asks for the whole backlog.
+     *
+     * **The server's `after` is INCLUSIVE, and that is exactly why using it does not contradict this
+     * class's no-client-side-cursor rule.** The rejected design was a client-side strictly-greater
+     * filter, which silently DROPS an event sharing a timestamp with the last one seen. Asking the
+     * server for "this timestamp or later" cannot lose an event: everything sharing the cursor's `ts`
+     * is re-sent, and the duplicates that creates are handled where they always were — by
+     * `TranscriptReducer`'s content-key dedupe. Nothing is filtered here; the cursor narrows the
+     * server's WORK, not the client's view of it.
+     */
+    private suspend fun connectOnce(sessionId: String, afterTs: String?, onEvent: (SessionEvent) -> Unit) {
         val baseUrl = settingsStore.baseUrl.first().trimEnd('/')
         val apiKey = settingsStore.apiKey.first().orEmpty()
         val url = "$baseUrl/api/sessions/$sessionId/stream".toHttpUrlOrNull()
             ?.newBuilder()
             ?.addQueryParameter("api_key", apiKey)
+            ?.apply { if (!afterTs.isNullOrBlank()) addQueryParameter("after", afterTs) }
             ?.build()
             ?: throw IOException("Invalid base URL: $baseUrl")
 
