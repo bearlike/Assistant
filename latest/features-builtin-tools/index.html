@@ -1923,6 +1923,8 @@
 They read files, edit them, run shell commands, list directories, query language servers, move the
 session between projects, put a question back to you, and fetch the schemas of tools that were
 deferred to save context.</p>
+<p>A connected client can also contribute tools of its own for the length of a session — that is how
+a session reaches an Android phone. See <a href="#client-declared">Tools a client brings with it</a>.</p>
 <p>For setup, see <a href="../getting-started/">Getting Started</a>. For permissions and approval modes, see
 <a href="../terminal/interface/">The Interface</a>.</p>
 <h2 id="tool-catalog">Tool catalog<a class="headerlink" href="#tool-catalog" title="Permanent link">&para;</a></h2>
@@ -1996,6 +1998,22 @@ deferred to save context.</p>
 <code>switch_project</code>, each under the conditions its section names below. Every tool returns a <abbr title="JavaScript Object Notation">JSON</abbr> payload tagged with <code>kind</code>, and the
 shapes are listed under
 <a href="../core-orchestration/#built-in-tools">Architecture Overview → Built-in tools</a>.</p>
+<h2 id="client-declared">Tools a client brings with it<a class="headerlink" href="#client-declared" title="Permanent link">&para;</a></h2>
+<p>The catalog above is what the server carries. A <strong>client</strong> can add tools of its own for the length
+of a session, and the server runs no code for them: it delivers the call down the session's live
+stream, the client executes it, and the client posts the result back.</p>
+<p>The Android app is the one that does this today. It offers <code>device_*</code> tools that act on the phone
+itself — reading the time or battery, setting an alarm, sending a text, and, once you turn it on,
+seeing and using the screen. Which of them a session gets depends on what that phone currently
+permits, so the list is decided per session rather than per deployment.</p>
+<p>Two consequences worth knowing. A device tool exists only while a client is attached to serve it,
+so it is absent from a session driven by a trigger or the <abbr title="Application Programming Interface">API</abbr>. And a permission you have not
+granted means the tool is never offered at all — the model is not told about a tool it would only
+fail to call.</p>
+<ul>
+<li><a href="../android/device-tools/">Device Tools</a> — the full list, what each needs, and the screen-control gate.</li>
+<li><a href="../api/device-tools/">Device Tool Bridge</a> — the wire contract a client implements to offer its own.</li>
+</ul>
 <hr />
 <h2 id="read_file">read_file<a class="headerlink" href="#read_file" title="Permanent link">&para;</a></h2>
 <p><code>read_file</code> returns a line-windowed slice of a file, numbered from 1 like <code>cat -n</code> output.
@@ -2050,7 +2068,7 @@ Repeated reads of the same slice are deduplicated, so identical content never co
 </div>
 
 <p>The backend follows the active model unless you pin it with
-<a href="../configuration/#agent"><code>agent.edit_tool</code></a> in <a href="https://github.com/bearlike/Assistant/blob/3227d66f/configs/app.example.json" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>configs/app.json</span></a>.</p>
+<a href="../configuration/#agent"><code>agent.edit_tool</code></a> in <a href="https://github.com/bearlike/Assistant/blob/023abd2d/configs/app.example.json" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>configs/app.json</span></a>.</p>
 <h3 id="search_replace_block-aider-style">search_replace_block (Aider-style)<a class="headerlink" href="#search_replace_block-aider-style" title="Permanent link">&para;</a></h3>
 <p><code>aider_edit_block_tool</code> parses <code>SEARCH/REPLACE</code> blocks from a freeform text payload and applies
 them atomically. Claude models default here.</p>
@@ -2332,10 +2350,10 @@ vocabulary component by component and is the page to read before asking for one.
 </thead>
 <tbody>
 <tr>
-<td><code>spec</code></td>
-<td>object</td>
+<td><code>root</code></td>
+<td>array</td>
 <td>Yes</td>
-<td>The component tree, a <code>root</code> array of typed nodes</td>
+<td>The component tree: a top-level array of typed nodes, with no wrapper object around it</td>
 </tr>
 <tr>
 <td><code>summary</code></td>
@@ -2347,7 +2365,19 @@ vocabulary component by component and is the page to read before asking for one.
 <td><code>ui_id</code></td>
 <td>string</td>
 <td>No</td>
-<td>The id returned by an earlier call. Pass it to replace that panel in place instead of adding another one below it</td>
+<td>The id of the panel being addressed. Omit to create a new panel; the agent may author a readable id of its own</td>
+</tr>
+<tr>
+<td><code>operation</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>replace</code> (default) redraws the whole panel; <code>append</code> adds the nodes in <code>root</code> to an existing panel; <code>update</code> swaps the one container named by <code>target</code> for the single node in <code>root</code></td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td>string</td>
+<td>No</td>
+<td>A container id (the <code>id</code> given to a <code>Card</code> or <code>Stack</code>) that <code>append</code> adds into or <code>update</code> replaces</td>
 </tr>
 </tbody>
 </table></div>
@@ -2359,6 +2389,10 @@ vocabulary component by component and is the page to read before asking for one.
   two are alternatives rather than layers, and a panel is the cheaper one.</li>
 <li><strong>The call does not end the turn</strong>, so the agent presents a panel mid-run and still writes its
   closing reply.</li>
+<li><strong>A rich panel is built across several small calls, not one large one.</strong> A <code>Card</code> or <code>Stack</code>
+  may carry an <code>id</code>, and later calls append into or update that container by name. Every emitted
+  event still carries the complete tree, so other clients and replay see ordinary panel
+  replacements.</li>
 <li><strong>It is bound only when the client advertises the <code>generative_ui</code> capability.</strong> The console does,
   on every request. A <abbr title="Command Line Interface">CLI</abbr>, email or chat session never binds the tool, which is why every panel also
   carries the plain-text rendering computed when it was presented.</li>
@@ -2430,7 +2464,7 @@ arrive as a compact list. The model searches for what the task needs, the matche
 as an ordinary tool result, and only those tools are rebound. Deferral covers <abbr title="Model Context Protocol">MCP</abbr> tools and any
 built-in marked deferrable. <code>tool_search</code> itself is always bound, so it is reachable on turn one.
 The runner lives in
-<a href="https://github.com/bearlike/Assistant/blob/3227d66f/packages/mewbo_tools/src/mewbo_tools/integration/tool_search.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>tool_search.py</span></a>.</p>
+<a href="https://github.com/bearlike/Assistant/blob/023abd2d/packages/mewbo_tools/src/mewbo_tools/integration/tool_search.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>tool_search.py</span></a>.</p>
 <h3 id="parameters_6">Parameters<a class="headerlink" href="#parameters_6" title="Permanent link">&para;</a></h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -4026,6 +4060,14 @@ force one backend.</p>
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#tool-catalog');">
                 Tool catalog
+            </a>
+            
+            
+            <a href="#client-declared"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#client-declared');">
+                Tools a client brings with it
             </a>
             
             

@@ -596,6 +596,11 @@
         "schedule": {
           "description": "The declared schedule union (time.cron/time.at), or null for on-demand.",
           "type": "object"
+        },
+        "tier": {
+          "description": "'materialize' writes durable data; 'render' produces a declared response.",
+          "example": "materialize",
+          "type": "string"
         }
       },
       "type": "object"
@@ -2064,6 +2069,16 @@
           "example": "Multi-agent code review.",
           "type": "string"
         },
+        "display_name": {
+          "description": "Human-readable label. Falls back to `name` for a plugin whose manifest sets no `display_name`.",
+          "example": "Code Review",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether the configured plugin selection makes this plugin available.",
+          "example": true,
+          "type": "boolean"
+        },
         "has_hooks": {
           "example": false,
           "type": "boolean"
@@ -3183,7 +3198,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate), `skill`, and `fallback_models`.",
           "type": "object"
         },
         "mode": {
@@ -3483,7 +3498,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `skill`, and `fallback_models`.",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate), `skill`, and `fallback_models`.",
           "type": "object"
         },
         "mode": {
@@ -4336,7 +4351,7 @@
           "type": "array"
         },
         "context": {
-          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, and `mcp_tools` (tool allowlist).",
+          "description": "Free-form context object persisted with the session. Recognized keys include `project`, `model`, `mcp_tools` (tool allowlist), and `denied_tools` (tool denylist \u2014 purely subtractive, applies over every other gate).",
           "type": "object"
         },
         "fork_from": {
@@ -5423,7 +5438,7 @@
   "info": {
     "description": "Everything the Mewbo web console can do is available over plain HTTP. Create sessions and send queries. Stream events live. Run multi-source searches. Get schema-constrained answers for pipelines. Every endpoint below is generated from the running server, so this reference is always current with the code.\n\n## Base URL\n\nA self-hosted stack serves the API on port `5125` by default:\n\n```\nhttp://localhost:5125\n```\n\nReplace the host with wherever your stack runs. The request samples on this page use this base URL.\n\n## Authentication\n\nEvery endpoint expects an API key in the `X-API-KEY` header:\n\n```bash\ncurl -H \"X-API-KEY: $MEWBO_API_KEY\" http://localhost:5125/api/models\n```\n\nTwo kinds of keys work. The master token from `configs/app.json` (`api.master_token`) always works, and it is the only key allowed to mint others via `POST /api/keys`. Minted keys work everywhere else and can be revoked individually, so give each integration its own.\n\nBrowsers cannot set headers on `EventSource` connections. Server-sent event endpoints therefore also accept the key as a query parameter: `?api_key=<key>`.\n\n## Make your first request\n\nThree calls take you from nothing to a live agent run:\n\n```bash\n# 1. Create a session\ncurl -X POST http://localhost:5125/api/sessions \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" -d '{}'\n# -> {\"session_id\": \"9e2d47c1...\"}\n\n# 2. Send it a query\ncurl -X POST http://localhost:5125/api/sessions/9e2d47c1.../query \\\n  -H \"X-API-KEY: $MEWBO_API_KEY\" -H \"Content-Type: application/json\" \\\n  -d '{\"query\": \"Summarize the open pull requests.\"}'\n\n# 3. Watch the run live\ncurl -N \"http://localhost:5125/api/sessions/9e2d47c1.../stream?api_key=$MEWBO_API_KEY\"\n```\n\nThe stream closes when the run finishes. The full transcript stays available through `GET /api/sessions/{session_id}/events`.\n\nThe session lifecycle is four steps, all keyed by the same `session_id`:\n\n1. **Create** \u2014 `POST /api/sessions` returns a `session_id`.\n2. **Query** \u2014 `POST /api/sessions/{session_id}/query` starts a run.\n3. **Watch** \u2014 `GET /api/sessions/{session_id}/stream` pushes events live    over SSE until the run reaches a terminal state.\n4. **Replay** \u2014 `GET /api/sessions/{session_id}/events` returns the full    transcript at any time afterwards.\n\n## Long-running work\n\nSearches, structured runs, and indexing jobs can outlive a single request. These endpoints return a run or job id right away, then settle into one terminal status \u2014 `completed`, `failed`, or `cancelled`. The pattern is the same for all of them:\n\n1. **Start** \u2014 call the create endpoint; it returns a run or job id    immediately. Structured run handles have the form `<session_id>:r<seq>`,    so the part before the first colon is always a session you can stream.\n2. **Follow** \u2014 either poll the matching `GET .../{run_id}` endpoint, or    subscribe to its `GET .../{run_id}/events` SSE stream.\n3. **Read** \u2014 once the status is terminal, the poll stops and the stream    closes; the run carries its result.\n\nFor Agentic Search specifically, pick a workspace with `GET /api/agentic_search/workspaces`, start a run with `POST /api/agentic_search/runs`, follow it with the steps above, and read the cited answer with its sources off the terminal run.\n\n## Streaming\n\nEndpoints ending in `/stream` or `/events` speak [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). Connect once and keep reading. Events are pushed the moment they happen; there is no polling interval to tune.\n\n## Errors\n\nFailures return a JSON body, never an HTML page. Expect `{\"message\": \"...\"}` on auth and validation errors, and `{\"error\": {\"code\", \"reason\", \"retryable\"}}` from the structured and search surfaces. Unknown routes return the same JSON envelope with a 404.\n\n## Related guides\n\nThe [Web Console + API](../clients-web-api/) guide covers concepts like capability negotiation and sharing. [Building a Client](../developer-guide/) walks through a minimal integration. The Agentic Wiki has its own HTTP surface under `/v1/wiki/*`, documented in the [Agentic Wiki](../features-wiki/) guide.\n",
     "title": "Mewbo API",
-    "version": "0.0.13"
+    "version": "0.0.14"
   },
   "paths": {
     "/api/agentic_search/runs": {
@@ -6571,6 +6586,7 @@
     },
     "/api/apps/{app_id}/pipelines/{name}": {
       "get": {
+        "description": "Cost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
         "operationId": "get_app_pipeline_invoke",
         "responses": {
           "200": {
@@ -6607,6 +6623,12 @@
             "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
             "schema": {
               "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
             }
           },
           "502": {
@@ -6647,7 +6669,7 @@
         }
       ],
       "post": {
-        "description": "Requires a WRITE-scoped token.",
+        "description": "Requires a WRITE-scoped token.\n\nCost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
         "operationId": "post_app_pipeline_invoke",
         "parameters": [
           {
@@ -6694,6 +6716,12 @@
             "description": "The pipeline is mode='agentic' \u2014 not invocable synchronously.",
             "schema": {
               "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
             }
           },
           "502": {
@@ -6803,6 +6831,94 @@
           "Apps"
         ]
       }
+    },
+    "/api/apps/{app_id}/pipelines/{name}/result": {
+      "get": {
+        "description": "Cost class: `O(pipeline execution)`. A nonzero execution bound permits\nonly that many synchronous pipeline calls; the next caller gets 429\nrather than waiting behind a request thread.",
+        "operationId": "get_app_pipeline_result",
+        "produces": [
+          "application/json",
+          "text/csv",
+          "application/xml",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "The pipeline output rendered in its declared media type."
+          },
+          "400": {
+            "description": "Malformed, missing, or invalid request body or parameters.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError400"
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError401"
+            }
+          },
+          "403": {
+            "description": "Not permitted: a protected field, a disabled feature, or a master-token-only action.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError403"
+            }
+          },
+          "404": {
+            "description": "The referenced resource does not exist.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError404"
+            }
+          },
+          "409": {
+            "description": "The pipeline is agentic or declares no result renderer.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError409"
+            }
+          },
+          "429": {
+            "description": "Every synchronous pipeline execution slot is occupied.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError429"
+            }
+          },
+          "502": {
+            "description": "The pipeline or its declared renderer failed.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError502"
+            }
+          },
+          "503": {
+            "description": "No pipeline runner is configured on this deployment.",
+            "schema": {
+              "$ref": "#/definitions/AppsMessageError503"
+            }
+          }
+        },
+        "security": [
+          {
+            "apikey": []
+          }
+        ],
+        "summary": "Render a pipeline result in its declared media type",
+        "tags": [
+          "Apps"
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "app_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "in": "path",
+          "name": "name",
+          "required": true,
+          "type": "string"
+        }
+      ]
     },
     "/api/apps/{app_id}/rearm": {
       "parameters": [
@@ -7763,11 +7879,11 @@
     },
     "/api/plugins": {
       "get": {
-        "description": "List each installed plugin with its version, source marketplace, scope, and component counts (skills, agents, commands, MCP servers, hooks). Browse installable plugins via GET /api/plugins/marketplace.\nReturns each installed plugin with its version, source marketplace,\nscope, and component counts: skills, agents, commands, MCP servers,\nand hooks.",
+        "description": "List each available built-in or installed plugin with its display name, version, source marketplace, scope, enabled state, and component counts (skills, agents, commands, MCP servers, hooks). Browse installable plugins via GET /api/plugins/marketplace.\nO(collection) in the configured plugin collection. Returns the same\nbuilt-in and enabled installed plugin components the session loader binds,\nwithout reading the components of each listed plugin again.",
         "operationId": "get_plugin_list",
         "responses": {
           "200": {
-            "description": "Installed plugin list.",
+            "description": "Available plugin list.",
             "schema": {
               "$ref": "#/definitions/PluginsListResponse"
             }
@@ -7784,7 +7900,7 @@
             "apikey": []
           }
         ],
-        "summary": "List installed plugins",
+        "summary": "List available plugins",
         "tags": [
           "Plugins"
         ]
@@ -8053,7 +8169,7 @@
         ]
       },
       "post": {
-        "description": "Create an empty session and return its `session_id`. Optionally bind a project, apply a lookup `session_tag`, and persist initial context (e.g. the model). Clients may declare capabilities via the `X-Mewbo-Capabilities` header (comma separated). Run queries with POST /api/sessions/{session_id}/query. An explicit `cwd` requires `api.allow_external_cwd`.\nCreates an empty session and returns its `session_id`. Optionally\nbinds a project, applies a lookup tag, and persists initial context\nsuch as the model to use. Clients may declare capabilities via the\n`X-Mewbo-Capabilities` header (comma separated). Run queries against\nthe session with POST /api/sessions/{session_id}/query.",
+        "description": "Create an empty session and return its `session_id`. Optionally bind a project, apply a lookup `session_tag`, and persist initial context (e.g. the model). Clients may declare capabilities via the `X-Mewbo-Capabilities` header (comma separated). Run queries with POST /api/sessions/{session_id}/query. `api.allow_external_cwd` governs only a path the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.\nCreates an empty session and returns its `session_id`. Optionally\nbinds a project, applies a lookup tag, and persists initial context\nsuch as the model to use. Clients may declare capabilities via the\n`X-Mewbo-Capabilities` header (comma separated). Run queries against\nthe session with POST /api/sessions/{session_id}/query.",
         "operationId": "post_sessions",
         "parameters": [
           {
@@ -8085,7 +8201,7 @@
             }
           },
           "403": {
-            "description": "An explicit `cwd` was supplied but `api.allow_external_cwd` is disabled.",
+            "description": "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.",
             "schema": {
               "$ref": "#/definitions/ApiErrorEnvelope403"
             }
@@ -9336,7 +9452,7 @@
             }
           },
           "403": {
-            "description": "An explicit `cwd` was supplied but `api.allow_external_cwd` is off.",
+            "description": "`api.allow_external_cwd` rejects only a supplied `cwd` the server does not already own; configured, managed, worktree, repository-checkout, and session-bound directories are accepted.",
             "schema": {
               "$ref": "#/definitions/ApiErrorEnvelope403"
             }

@@ -656,6 +656,7 @@
 </div>
 
 <p>Aura lets the assistant take real actions on your phone. During a conversation it can check the time and battery, set alarms and timers, get your attention, and read or send text messages.</p>
+<p>It can also see your screen and use it, so you can ask for something that takes several steps in another app. That part is off until you turn it on, and it needs a separate app called Shizuku. <a href="#screen-control">Screen control</a> covers what it needs and how to start it.</p>
 <h2 id="round-trip">How a device tool call works<a class="headerlink" href="#round-trip" title="Permanent link">&para;</a></h2>
 <p>Nothing runs on the phone unless the assistant asks for it during a live conversation. When a session starts, Aura tells the server which device tools it can offer, and that list depends on what your phone currently allows. The server delivers a call down the session's live stream, Aura runs it locally, and Aura posts the result back. The <a href="../../api/device-tools/">Device Tool Bridge</a> owns that wire contract.</p>
 <p>Whichever surface is following the conversation runs the call, so a question asked from the assist overlay is served exactly as it is in the app.</p>
@@ -667,13 +668,13 @@
 <li>A tool that needs a permission you have not granted is not offered to the server. The assistant cannot call a tool it was never told about.</li>
 <li>Granting the Android permission enables the tool. Revoking it takes the tool away again.</li>
 </ul>
-<p>Only messaging needs a permission. Grant the Android SMS permissions from Aura's Settings, or by accepting the system prompt when it appears.</p>
+<p>Only messaging and screen control need a permission. Grant the Android SMS permissions from Aura's Settings, or by accepting the system prompt when it appears. Screen control asks for its permission through Shizuku instead, which works the same way: without the grant, the tools are not offered.</p>
 <div class="admonition note">
 <p class="admonition-title">You are in control through Android</p>
 <p>Manage what the assistant can reach the same way you manage any app, in Android's own permission settings.</p>
 </div>
 <h2 id="tools">Available tools<a class="headerlink" href="#tools" title="Permanent link">&para;</a></h2>
-<p>The catalog of every tool this build carries lives in <a href="https://github.com/bearlike/Assistant/blob/3227d66f/apps/mewbo_aura/app/src/main/java/com/mewbo/aura/data/device/DeviceToolCatalog.kt" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>DeviceToolCatalog.kt</span></a>.</p>
+<p>The catalog of every tool this build carries lives in <a href="https://github.com/bearlike/Assistant/blob/023abd2d/apps/mewbo_aura/app/src/main/java/com/mewbo/aura/data/device/DeviceToolCatalog.kt" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>DeviceToolCatalog.kt</span></a>.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -728,11 +729,75 @@
 <td>Sends a text message to a recipient.</td>
 <td>Send SMS</td>
 </tr>
+<tr>
+<td>Take and release control</td>
+<td>Asks for control of the screen, then hands it back. The three tools below refuse until control is active.</td>
+<td><a href="#screen-control">Screen control</a></td>
+</tr>
+<tr>
+<td>See the screen</td>
+<td>Lists what is on screen, or takes a screenshot.</td>
+<td><a href="#screen-control">Shizuku</a></td>
+</tr>
+<tr>
+<td>Tap, swipe and type</td>
+<td>Taps an element, swipes, types text, presses back or home, or opens an app.</td>
+<td><a href="#screen-control">Shizuku</a></td>
+</tr>
+<tr>
+<td>Run shell commands</td>
+<td>Runs a command on the phone at the shell account's level of access.</td>
+<td><a href="#screen-control">Shizuku</a></td>
+</tr>
 </tbody>
 </table></div>
 <div class="admonition warning">
 <p class="admonition-title">Sending a text is irreversible</p>
 <p>The Send a text tool sends a real SMS, which cannot be recalled and may cost money through your carrier. Never grant the Android Send SMS permission and the assistant is never offered the tool.</p>
+</div>
+<h2 id="screen-control">Screen control<a class="headerlink" href="#screen-control" title="Permanent link">&para;</a></h2>
+<p>Screen control is what lets you ask for a whole task rather than a single fact. Opening an app, finding a setting, filling something in: the assistant looks at what is on screen, acts on it, then looks again.</p>
+<p>It works differently from the other tools, in three ways worth knowing before you turn it on.</p>
+<h3 id="it-needs-shizuku-and-shizuku-needs-restarting-after-every-reboot">It needs Shizuku, and Shizuku needs restarting after every reboot<a class="headerlink" href="#it-needs-shizuku-and-shizuku-needs-restarting-after-every-reboot" title="Permanent link">&para;</a></h3>
+<p>Android does not let an ordinary app touch other apps' screens. <a href="https://shizuku.rikka.app/">Shizuku</a> is a separate free app that grants that access, using Android's own wireless debugging. You install it once and start it from inside it.</p>
+<p>Unless your phone is rooted, <strong>the Shizuku service stops every time your phone restarts</strong>, and you start it again from the Shizuku app. This is how Shizuku works and Aura cannot change it.</p>
+<p>You do not have to remember which state you are in. Aura's Settings shows it under Screen control:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>What Settings shows</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Needs Shizuku</td>
+<td>Install the Shizuku app.</td>
+</tr>
+<tr>
+<td>Start Shizuku</td>
+<td>Open Shizuku and start the service. This is the state after a restart.</td>
+</tr>
+<tr>
+<td>Tap to allow</td>
+<td>Tap the row to give Aura access.</td>
+</tr>
+<tr>
+<td>Ready</td>
+<td>Nothing. Screen control is available.</td>
+</tr>
+</tbody>
+</table></div>
+<p>When it is not ready, the assistant is simply not told these tools exist. It cannot try and fail, and it will tell you it cannot see your screen rather than guessing.</p>
+<h3 id="it-starts-switched-off">It starts switched off<a class="headerlink" href="#it-starts-switched-off" title="Permanent link">&para;</a></h3>
+<p>The other nine tools are on by default. These three are not, because they are a different kind of thing: they act on your phone directly and they read whatever is on screen while they work. Turn on the ones you want in Settings, under Screen control. Running shell commands has its own switch, separate from the other two. Taking and releasing control has no switch of its own; it comes with them.</p>
+<h3 id="watch-it-while-it-works">Watch it while it works<a class="headerlink" href="#watch-it-while-it-works" title="Permanent link">&para;</a></h3>
+<p>Screen control only runs while a conversation is live and Aura is following it, so you can see what is happening and stop it. Treat it the way you would treat handing someone your unlocked phone.</p>
+<p>Control is asked for, never assumed. The assistant takes it when it needs the screen and releases it as soon as the task is done. While it is held, the screen glows around its edges and a notification sits in your shade, each carrying a Stop that ends it at once.</p>
+<p>Two things to keep in mind. The assistant reads what is on your screen, so anything visible while it works, including a message or a notification, is something it can see. And text on screen is only ever information to it, never an instruction, no matter what that text says.</p>
+<div class="admonition warning">
+<p class="admonition-title">Shell commands are powerful</p>
+<p>The shell tool runs commands at the same level of access a computer has over USB debugging. Aura refuses the commands whose damage cannot be undone by watching and stopping, such as uninstalling apps or restarting the phone. Leave this switch off unless you want it.</p>
 </div>
 <h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
@@ -999,6 +1064,37 @@
                 onClick="deferSetActiveTocLink('#tools');">
                 Available tools
             </a>
+            
+            
+            <a href="#screen-control"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#screen-control');">
+                Screen control
+            </a>
+            
+            
+            <a href="#it-needs-shizuku-and-shizuku-needs-restarting-after-every-reboot"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#it-needs-shizuku-and-shizuku-needs-restarting-after-every-reboot');">
+                It needs Shizuku, and Shizuku needs restarting after every reboot
+            </a>
+            
+            <a href="#it-starts-switched-off"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#it-starts-switched-off');">
+                It starts switched off
+            </a>
+            
+            <a href="#watch-it-while-it-works"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3"
+                onClick="deferSetActiveTocLink('#watch-it-while-it-works');">
+                Watch it while it works
+            </a>
+            
             
             
             <a href="#next-steps"
