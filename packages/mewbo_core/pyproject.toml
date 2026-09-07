@@ -16,7 +16,7 @@ dependencies = [
   "langchain>=1.0.0,<2.0.0",
   "langchain-core>=1.2.8,<2.0.0",
   "langchain-community>=0.4.1,<0.5.0",
-  "langchain-litellm>=0.6.6,<0.7.0",
+  "langchain-litellm>=0.6.6,<0.8.0",
   "langfuse>=3.8.0,<5.0.0",
   # <1.92: litellm 1.92.0's CLIENT completion path lazily imports its own
   # proxy stack whenever `tools` are present (main.py → responses/mcp/… →
