@@ -57,7 +57,7 @@ dev = [
   "pandas>=2.3.3",
   "pre-commit==3.8.0",
   "pylint==3.3.9",
-  "pytest==8.4.2",
+  "pytest==9.1.1",
   "pytest-cov==7.1.0",
   # Parallel execution, used only through an explicit `-n <N> --dist loadfile`
   # on an invocation — never through addopts. `-n auto` is refused on purpose:
